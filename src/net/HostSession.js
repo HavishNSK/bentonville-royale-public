@@ -23,7 +23,7 @@
 // - per-client inventory when it changes (with the last action seq it reflects)
 
 import * as THREE from 'three';
-import { PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, MATCH, TAU } from '../core/config.js';
+import { PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, MATCH, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
 import { Character } from '../game/Character.js';
 import {
   SNAP_HZ, FLAG, EQUIP, SURF, encodeSnapshot, decodeState, seqNewer, rnd,
@@ -490,8 +490,10 @@ export class HostSession {
     a.ads = !!(s.flags & FLAG.ads);
     a.netEmote = !!(s.flags & FLAG.emote);
     if ((s.flags & FLAG.reloading) && !a.netReloading && a.character) {
-      const it = WEAPONS[EQUIP[s.equip]];
-      if (it) a.character.reload(it.reload);
+      const id = EQUIP[s.equip];
+      const cur = a.inventory && a.inventory.current ? a.inventory.current() : null;
+      const st = WEAPONS[id] ? weaponStats(id, cur && cur.id === id ? cur.rarity : undefined) : null;
+      if (st) a.character.reload(st.reload);
     }
     a.netReloading = !!(s.flags & FLAG.reloading);
     a.equipId = EQUIP[s.equip] || 'pickaxe';
@@ -523,14 +525,24 @@ export class HostSession {
         const it = inv.slots[m.s];
         if (!it || it.type !== 'weapon' || it.id !== m.w || !(it.mag > 0)) return;
         const w = WEAPONS[it.id];
-        if (this.time - a.lastFire < (1 / w.rate) * 0.6) return;
+        // Burst guns: rounds 2..N of a trigger pull arrive weaponShotInterval apart, but network
+        // jitter can bunch them into one host frame, so a pull is allowed `burst` messages and
+        // only the trigger-pull rate (1 / rate) is enforced between pulls.
+        const gap = this.time - a.lastFire;
+        let newPull = true;
+        if (w.burst > 1) {
+          if (gap >= (1 / w.rate) * 0.6) a.burstShots = 0;
+          else if ((a.burstShots || 0) < w.burst && gap >= 0) newPull = false;
+          else return;
+          a.burstShots = (a.burstShots || 0) + 1;
+        } else if (gap < weaponShotInterval(it.id) * 0.6) return;
         if (!Array.isArray(m.o) || !Array.isArray(m.d) || !m.d.length || m.d.length > (w.pellets || 1)) return;
         _o.set(+m.o[0], +m.o[1], +m.o[2]);
         if (!Number.isFinite(_o.x + _o.y + _o.z) || _o.distanceTo(a.pos) > 9) return;
         const dirs = m.d.map((d) => new THREE.Vector3(+d[0], +d[1], +d[2]).normalize()).filter((v) => Number.isFinite(v.x + v.y + v.z));
         if (!dirs.length) return;
         const claims = (m.c || []).map((id) => (id >= 0 && id !== a.id ? g.combat.actors.find((x) => x.id === id) || null : null));
-        a.lastFire = this.time;
+        if (newPull) a.lastFire = this.time;
         it.mag--;
         if (a.character) a.character.fire();
         g.combat.fireWeapon(a, it, _o, dirs[0], 0, { dirs, claims });
@@ -559,11 +571,14 @@ export class HostSession {
         if ((inv.mats[mat] || 0) < BUILD.cost) return;
         const st = g.structures;
         if (!st || st.at({ ...p })) return;
-        const piece = st.place({ kind: p.kind, x: +p.x, y: +p.y, z: +p.z, rot: +p.rot, key: p.key, level: p.level, valid: true }, mat, a);
+        const pl = { kind: p.kind, x: +p.x, y: +p.y, z: +p.z, rot: +p.rot, key: p.key, level: p.level, valid: true };
+        if (st.fits && !st.fits(pl)) return; // same world rule as the client's ghost (refunded by the inventory sync)
+        const piece = st.place(pl, mat, a);
         if (piece) inv.spendMats(mat, BUILD.cost);
         return;
       }
       case 'int': {
+        if (a.inBus || a.airborneDrop) return; // no looting from the bus or mid-skydive (dead actors are filtered in _onMessage)
         const loot = g.loot;
         const rec = loot && loot.byId.get(m.id);
         if (!rec || Math.hypot(rec.x - a.pos.x, rec.z - a.pos.z) > 3.6 || Math.abs(rec.y - a.pos.y) > 3) return;
@@ -656,7 +671,8 @@ export class HostSession {
     return { secs, perClient: per, snapBytesAvg: this.stats.snaps ? Math.round(this.stats.snapBytes / this.stats.snaps / Math.max(1, this.remotes.size)) : 0, ...this.stats };
   }
 
-  dispose(game) {
+  /** keepRoom: unbind from the room but leave it open (a failed start goes back to the lobby). */
+  dispose(game, { keepRoom = false } = {}) {
     this.started = false;
     this._clearRemotes(game);
     for (const [obj, k, own, v] of this._saved || []) {
@@ -665,7 +681,9 @@ export class HostSession {
     }
     this._saved = null;
     this._wrapped = false;
-    this.room.close();
+    const room = this.room;
+    room.onMessage = room.onState = room.onLeave = null; // no handlers left bound to a dead session
+    if (!keepRoom) room.close();
   }
 }
 

@@ -990,6 +990,8 @@ export class Sfx {
       panWidth: 0.85, // maximum stereo pan
       invertPan: false, // flip left/right if the world is left-handed
       musicVolume: 0.6,
+      sfxVolume: 1, // settings channel: scales one-shots + loops
+      uiVolume: 1, // settings channel: scales ui_* one-shots
       debug: false, // console.warn exceptions that public methods swallow
     };
     this._volume = 0.8;
@@ -1134,8 +1136,8 @@ export class Sfx {
     };
     this.comp = comp;
     this.master = master;
-    this.sfxBus = bus(0.9);
-    this.loopBus = bus(0.9);
+    this.sfxBus = bus(0.9 * this.config.sfxVolume);
+    this.loopBus = bus(0.9 * this.config.sfxVolume);
     this.musicBus = bus(this.config.musicVolume);
     ctx.onstatechange = () => {
       if (ctx.state === 'running') this._onRunning();
@@ -1351,6 +1353,22 @@ export class Sfx {
     } catch (e) { /* ignore */ }
   }
 
+  /** Effects channel (one-shots and ambient loops), 0..1. */
+  setSfxVolume(v) {
+    try {
+      this.config.sfxVolume = clamp(isNum(v) ? v : 0, 0, 1);
+      if (!this.ctx) return;
+      for (const b of [this.sfxBus, this.loopBus]) if (b) b.gain.setTargetAtTime(0.9 * this.config.sfxVolume, this.ctx.currentTime, 0.03);
+    } catch (e) { /* ignore */ }
+  }
+
+  /** Menu click / hover sounds, 0..1 (multiplies on top of the effects channel). */
+  setUiVolume(v) {
+    try {
+      this.config.uiVolume = clamp(isNum(v) ? v : 0, 0, 1);
+    } catch (e) { /* ignore */ }
+  }
+
   // --- listener / spatial ----------------------------------------------------
 
   /** Listener position and horizontal facing (right-handed, Y up, as in three.js). */
@@ -1419,6 +1437,7 @@ export class Sfx {
     if (last !== undefined && now - last < this.config.throttle && now >= last) return false;
 
     let gain = d.vol * (isNum(o.volume) ? Math.max(0, o.volume) : 1);
+    if (name.startsWith('ui_')) gain *= this.config.uiVolume;
     let pan = 0;
     let far = 0;
     const positional = isNum(o.x) && isNum(o.z);

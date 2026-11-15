@@ -30,6 +30,13 @@
 //   URL  ?gtilesOffset=-4         extra vertical shift in metres (after calibration)
 //   JS   window.__brGoogleTiles.setHeightOffset(m) / .calibrate()
 //
+// Composed map. public/data/bentonville-osm.json is a compact designed layout (see
+// scripts/compose-map.mjs): only the downtown core (meta.composition.core.rect) is at its
+// real position; the school islands are moved cut-outs, so real-world tiles would show the
+// wrong place there. When the map has a composition, the tiles are clipped to the core
+// rectangle and the procedural world stays visible outside it (ground and road layers are
+// clipped to the outside of the core instead of being hidden). See coreRect().
+//
 // Google Maps Platform terms: the attribution overlay (Google + the data providers of
 // every visible tile) is always on screen while tiles render; tiles are only held in
 // 3d-tiles-renderer's in-memory LRU cache (plus the browser's normal HTTP cache) and are
@@ -45,6 +52,24 @@ export const GOOGLE_TILES_DEFAULT_HEIGHT = GOOGLE_TILES_TERRAIN_ELEVATION + GOOG
 const DRACO_DECODER_PATH = 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/';
 const CALIBRATION_LIMIT = 80; // m: never move the tiles further than this automatically
 const HIDDEN_LAYER = 31;
+const _chunkBox = new THREE.Box3();
+
+/** [minX, minZ, maxX, maxZ] of the part of the map that is at its real position, or null (all of it). */
+export function coreRect(world) {
+  const c = world && world.data && world.data.meta && world.data.meta.composition;
+  const r = c && c.core && c.core.rect;
+  return Array.isArray(r) && r.length === 4 && r.every(Number.isFinite) ? r : null;
+}
+
+/** Clip planes keeping the inside of rect r (world space, y up). */
+function rectPlanes(r) {
+  return [
+    new THREE.Plane(new THREE.Vector3(1, 0, 0), -r[0]),
+    new THREE.Plane(new THREE.Vector3(-1, 0, 0), r[2]),
+    new THREE.Plane(new THREE.Vector3(0, 0, 1), -r[1]),
+    new THREE.Plane(new THREE.Vector3(0, 0, -1), r[3]),
+  ];
+}
 
 // ---------------------------------------------------------------- key
 
@@ -201,6 +226,11 @@ export class GoogleTilesView {
     this.calibration = 0; // metres added to y by auto-calibration
     this.userOffset = urlNumber('gtilesOffset') || 0;
     this.calibrations = 0;
+    // composed map: show real-world tiles only over the downtown core
+    const core = coreRect(this.world);
+    this.clipPlanes = core ? rectPlanes(core) : null;
+    this._prevLocalClipping = renderer.localClippingEnabled;
+    if (this.clipPlanes) renderer.localClippingEnabled = true;
 
     const tiles = new lib.core.TilesRenderer();
     this.tiles = tiles;
@@ -233,6 +263,7 @@ export class GoogleTilesView {
         if (o.isMesh) {
           o.castShadow = false;
           o.receiveShadow = false;
+          if (this.clipPlanes) for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m) m.clippingPlanes = this.clipPlanes;
         }
       });
     };
@@ -329,6 +360,7 @@ export class GoogleTilesView {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    if (this.clipPlanes) this.renderer.localClippingEnabled = this._prevLocalClipping;
     const t = this.tiles;
     t.removeEventListener('load-error', this._onLoadError);
     t.removeEventListener('load-model', this._onLoadModel);
@@ -357,15 +389,52 @@ export class GoogleTilesView {
 class WorldHider {
   constructor() {
     this.saved = new Map();
+    this.clipped = new Map(); // material -> [clippingPlanes, clipIntersection, clipShadows]
+    this.core = null;
+    this.outside = null; // planes whose intersection clips the INSIDE of the core
   }
 
   _hide(o) {
     if (this.saved.has(o)) return;
+    const c = this.core;
+    if (c && o.isMesh) {
+      const cx = o.userData.cx;
+      const cz = o.userData.cz;
+      let clip = true;
+      if (typeof cx === 'number' && typeof cz === 'number') {
+        // chunked meshes (buildings, trees, props): judge by the chunk's world AABB, not its
+        // centre. Fully outside the core: keep. Fully inside: hide (below). Straddling the
+        // edge: cut the core out like the map-wide meshes. Chunk materials are only shared
+        // with other world chunks, and everything inside the core is replaced by the tiles,
+        // so clipping a shared material is harmless.
+        const b = _chunkBox.makeEmpty().expandByObject(o);
+        if (b.isEmpty() || b.max.x < c[0] || b.min.x > c[2] || b.max.z < c[1] || b.min.z > c[3]) return;
+        clip = !(b.min.x >= c[0] && b.max.x <= c[2] && b.min.z >= c[1] && b.max.z <= c[3]);
+      }
+      if (clip) {
+        // map-wide meshes (ground, roads/land cover) and straddling chunks: cut the core
+        // out, keep the islands (and the shadows of what is kept)
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+          if (!m || this.clipped.has(m)) continue;
+          this.clipped.set(m, [m.clippingPlanes, m.clipIntersection, m.clipShadows]);
+          m.clippingPlanes = this.outside;
+          m.clipIntersection = true;
+          m.clipShadows = true;
+          m.needsUpdate = true;
+        }
+        return;
+      }
+    }
     this.saved.set(o, o.layers.mask);
     o.layers.set(HIDDEN_LAYER);
   }
 
   apply(game) {
+    const core = coreRect(game.world);
+    if (core && !this.core) {
+      this.core = core;
+      this.outside = rectPlanes(core).map((p) => p.clone().negate());
+    }
     const view = game.view;
     if (view && view.root) view.root.traverse((o) => this._hide(o));
     // tree / prop instancers live directly on the scene; WorldMeshes tags their chunk centre
@@ -378,6 +447,14 @@ class WorldHider {
   restore() {
     for (const [o, mask] of this.saved) o.layers.mask = mask;
     this.saved.clear();
+    for (const [m, [planes, inter, shadows]] of this.clipped) {
+      m.clippingPlanes = planes;
+      m.clipIntersection = inter;
+      m.clipShadows = shadows;
+      m.needsUpdate = true;
+    }
+    this.clipped.clear();
+    this.core = this.outside = null;
   }
 }
 

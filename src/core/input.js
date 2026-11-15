@@ -1,4 +1,12 @@
 // BENTONVILLE ROYALE — keyboard / mouse / pointer-lock state.
+//
+// Gameplay code reads remappable *actions*, never raw key codes:
+//   input.action('moveForward')   held this frame
+//   input.actionHit('reload')     went down since the last endFrame()
+// Bindings come from settings (src/ui/settings.js) via setBindings(). Mouse
+// buttons are tracked as codes 'Mouse0' (left), 'Mouse1' (middle), 'Mouse2' (right).
+
+import { DEFAULT_BINDINGS, keyLabel } from '../ui/settings.js';
 
 export class Input {
   constructor(canvas) {
@@ -12,13 +20,14 @@ export class Input {
     this.wheel = 0;
     this.enabled = true;
     this.onLockChange = null;
+    this.bindings = { ...DEFAULT_BINDINGS };
 
     this._down = (e) => {
       if (e.repeat) return;
       if (!this.enabled) return;
       this.keys.add(e.code);
       this.pressed.add(e.code);
-      if (this.locked && (e.code === 'Space' || e.code === 'Tab' || e.code.startsWith('Arrow'))) e.preventDefault();
+      if (this.locked && (e.code === 'Space' || e.code === 'Tab' || e.code.startsWith('Arrow') || this._isBound(e.code))) e.preventDefault();
     };
     this._up = (e) => this.keys.delete(e.code);
     this._mdown = (e) => {
@@ -27,9 +36,14 @@ export class Input {
         this.buttons[e.button] = true;
         this.clicked[e.button] = true;
       }
+      if (e.button < 5) {
+        this.keys.add('Mouse' + e.button);
+        this.pressed.add('Mouse' + e.button);
+      }
     };
     this._mup = (e) => {
       if (e.button < 3) this.buttons[e.button] = false;
+      if (e.button < 5) this.keys.delete('Mouse' + e.button);
     };
     this._move = (e) => {
       if (!this.locked) return;
@@ -81,6 +95,33 @@ export class Input {
 
   hit(code) {
     return this.pressed.has(code);
+  }
+
+  /** bindings: { actionId: code } (see ACTIONS in src/ui/settings.js). */
+  setBindings(bindings) {
+    this.bindings = { ...DEFAULT_BINDINGS, ...(bindings || {}) };
+  }
+
+  _isBound(code) {
+    for (const k in this.bindings) if (this.bindings[k] === code) return true;
+    return false;
+  }
+
+  /** True while the key / button bound to `name` is held. */
+  action(name) {
+    const code = this.bindings[name];
+    return !!code && this.keys.has(code);
+  }
+
+  /** True if the key / button bound to `name` went down this frame. */
+  actionHit(name) {
+    const code = this.bindings[name];
+    return !!code && this.pressed.has(code);
+  }
+
+  /** Display label of the key bound to `name` ('E', 'LMB', 'L-SHIFT'). */
+  label(name) {
+    return keyLabel(this.bindings[name]);
   }
 
   releaseAll() {

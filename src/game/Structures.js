@@ -58,6 +58,10 @@ const START_HP_FRAC = 0.2;
 const GHOST_OK = 0x5ec8ff;
 const GHOST_BAD = 0xff4848;
 const SOUND = { wood: 'build_wood', brick: 'build_stone', metal: 'build_metal' };
+// building inside enterable buildings (see fits())
+const INSIDE_CEIL_SLACK = 0.35; // a piece may reach this far into the roof slab
+const INSIDE_INSET = 0.35; // footprint sample inset (m) from the piece's edges
+const _fitPts = new Float64Array(10);
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -402,12 +406,67 @@ export class Structures {
   _valid(pl) {
     if (this.pieces.length >= BUILD.maxPieces) return false;
     if (this.slots.has(pl.key)) return false;
+    return this.fits(pl);
+  }
+
+  /**
+   * World rules only (no piece cap / slot check): the host re-checks a client's piece with
+   * this, so the client's ghost colour and the host's verdict come from the same test.
+   * Outside: not inside a building / vehicle taller than the piece's base (roofs are fine).
+   * Inside an enterable building (collider.shell): allowed below the interior ceiling when
+   * the piece fits under it and its footprint stays in the walkable interior (clear of the walls).
+   */
+  fits(pl) {
     const w = this.world;
     if (!w) return true;
+    if (!pl || !Number.isFinite(pl.x) || !Number.isFinite(pl.y) || !Number.isFinite(pl.z)) return false;
     if (!w.inBounds(pl.x, pl.z, 2)) return false;
-    // not inside a building / vehicle taller than the piece's base
     const c = w.polyAt(pl.x, pl.z);
-    return !(c && c.h > pl.y + 0.5);
+    if (!(c && c.h > pl.y + 0.5)) return true;
+    const s = c.shell;
+    if (!s || pl.y >= s.ceil) return false; // solid prism, or the solid upper floors of a tall building
+    return this._fitsInside(c, pl);
+  }
+
+  /** Does placement pl fit inside hollow building c (under the ceiling, within the outline)? */
+  _fitsInside(c, pl) {
+    const s = c.shell;
+    const top = pl.y + (pl.kind === 'floor' ? 0 : pl.kind === 'cone' ? CONE_PEAK : LEVEL);
+    if (top > s.ceil + INSIDE_CEIL_SLACK || pl.y < s.floor - LEVEL * 0.75) return false;
+    if (pl.kind === 'floor' && pl.y < s.floor + 0.5) return false; // a floor slab buried in the ground floor
+    // footprint samples (inset a little) must all be inside this building's outline
+    const w = this.world;
+    const pts = _fitPts;
+    let n = 0;
+    if (pl.kind === 'wall') {
+      const ax = Math.abs(Math.cos(pl.rot)) > 0.5; // runs along x
+      const e = HALF - INSIDE_INSET;
+      pts[n++] = pl.x + (ax ? e : 0);
+      pts[n++] = pl.z + (ax ? 0 : e);
+      pts[n++] = pl.x - (ax ? e : 0);
+      pts[n++] = pl.z - (ax ? 0 : e);
+      pts[n++] = pl.x;
+      pts[n++] = pl.z;
+    } else {
+      const e = HALF - INSIDE_INSET;
+      for (const sx of [-1, 1]) {
+        for (const sz of [-1, 1]) {
+          pts[n++] = pl.x + sx * e;
+          pts[n++] = pl.z + sz * e;
+        }
+      }
+      pts[n++] = pl.x;
+      pts[n++] = pl.z;
+    }
+    // each sample must be in this building's walkable interior: inside the outline AND clear
+    // of the wall band (a piece in a doorway or poking through the wall does not count)
+    for (let k = 0; k < n; k += 2) {
+      const x = pts[k];
+      const z = pts[k + 1];
+      if (w.polyAt(x, z) !== c) return false;
+      if (w.interiorAt && w.interiorAt(x, z) !== c) return false;
+    }
+    return true;
   }
 
   /** Show / hide the translucent ghost (blue = valid, red = blocked). `mat` is remembered in this.ghostMaterial. */

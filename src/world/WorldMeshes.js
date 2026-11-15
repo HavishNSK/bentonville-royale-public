@@ -279,7 +279,60 @@ function buildingMaterial() {
   return mat;
 }
 
-function addBuilding(chunk, b, tint) {
+const INTERIOR_WALL = { wood: 0xe9e1cf, brick: 0xd8d2c6, metal: 0xc9ccce };
+const FLOOR_COLOR = { wood: 0x9b7a55, brick: 0x8d8780, metal: 0x7b8086 };
+const CEILING_COLOR = 0xeceae4;
+
+/** Push a quad a-b-c-d (each [x, y, z]) facing normal (nx, ny, nz); winding picked from the normal. */
+function quad(chunk, a, b, c, d, nx, ny, nz, r, g, bl, wallAttr, h) {
+  const buf = chunk.buf;
+  const i0 = buf.v(a[0], a[1], a[2], nx, ny, nz, r, g, bl);
+  buf.v(b[0], b[1], b[2], nx, ny, nz, r, g, bl);
+  buf.v(c[0], c[1], c[2], nx, ny, nz, r, g, bl);
+  buf.v(d[0], d[1], d[2], nx, ny, nz, r, g, bl);
+  for (let k = 0; k < 4; k++) chunk.wall.push(...(wallAttr ? wallAttr[k] : NO_WALL));
+  chunk.bh.push(h, h, h, h);
+  // (b - a) x (c - a) against the wanted normal
+  const ux = b[0] - a[0];
+  const uy = b[1] - a[1];
+  const uz = b[2] - a[2];
+  const vx = c[0] - a[0];
+  const vy = c[1] - a[1];
+  const vz = c[2] - a[2];
+  const cx = uy * vz - uz * vy;
+  const cy = uz * vx - ux * vz;
+  const cz = ux * vy - uy * vx;
+  if (cx * nx + cy * ny + cz * nz >= 0) buf.idx.push(i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3);
+  else buf.idx.push(i0, i0 + 2, i0 + 1, i0, i0 + 3, i0 + 2);
+}
+const NO_WALL = [0, 0, -1, 0];
+
+/** Horizontal polygon (flat [x, z, ...] or [[x, z], ...]) at height y facing up (dir 1) or down (-1), with precomputed triangles. */
+function hcap(chunk, pts, tris, y, dir, hex, h) {
+  const buf = chunk.buf;
+  _c.setHex(hex);
+  const base = buf.n;
+  const n = pts.length / 2;
+  for (let i = 0; i < n; i++) {
+    buf.v(pts[i * 2], y, pts[i * 2 + 1], 0, dir, 0, _c.r, _c.g, _c.b);
+    chunk.wall.push(0, y, -1, 0);
+    chunk.bh.push(h);
+  }
+  for (const t of tris) {
+    const ax = pts[t[0] * 2];
+    const az = pts[t[0] * 2 + 1];
+    const up = (pts[t[1] * 2 + 1] - az) * (pts[t[2] * 2] - ax) - (pts[t[1] * 2] - ax) * (pts[t[2] * 2 + 1] - az);
+    if (up > 0 === dir > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
+    else buf.idx.push(base + t[0], base + t[2], base + t[1]);
+  }
+}
+
+/**
+ * Building mesh. `shell` (World collider.shell, or null for a solid prism) adds
+ * door openings, the wall thickness (an inner face), door jambs and lintels, an
+ * interior floor and ceiling. Geometry sits on y = 0 like the rest of the map.
+ */
+function addBuilding(chunk, b, tint, shell) {
   const pts = b.p;
   const n = pts.length;
   const h = b.h;
@@ -296,31 +349,36 @@ function addBuilding(chunk, b, tint) {
   const wall = chunk.wall;
   const bh = chunk.bh;
 
-  for (let i = 0; i < n; i++) {
-    const a = pts[i];
-    const c = pts[(i + 1) % n];
-    const ex = c[0] - a[0];
-    const ez = c[1] - a[1];
-    const len = Math.hypot(ex, ez);
-    if (len < 0.05) continue;
-    const nx = (-ez / len) * sign;
-    const nz = (ex / len) * sign;
-    const i0 = buf.v(a[0], 0, a[1], nx, 0, nz, wr, wg, wb);
-    buf.v(c[0], 0, c[1], nx, 0, nz, wr, wg, wb);
-    buf.v(c[0], h, c[1], nx, 0, nz, wr, wg, wb);
-    buf.v(a[0], h, a[1], nx, 0, nz, wr, wg, wb);
-    wall.push(-len / 2, 0, style, len, len / 2, 0, style, len, len / 2, h, style, len, -len / 2, h, style, len);
-    bh.push(h, h, h, h);
-    if (sign > 0) buf.idx.push(i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3);
-    else buf.idx.push(i0, i0 + 2, i0 + 1, i0, i0 + 3, i0 + 2);
-  }
-
   let tris;
   try {
     tris = THREE.ShapeUtils.triangulateShape(pts.map((p) => new THREE.Vector2(p[0], p[1])), []);
   } catch (err) {
     tris = [];
   }
+
+  if (shell) {
+    addShell(chunk, b, shell, sign, style, wr, wg, wb, tris);
+  } else {
+    for (let i = 0; i < n; i++) {
+      const a = pts[i];
+      const c = pts[(i + 1) % n];
+      const ex = c[0] - a[0];
+      const ez = c[1] - a[1];
+      const len = Math.hypot(ex, ez);
+      if (len < 0.05) continue;
+      const nx = (-ez / len) * sign;
+      const nz = (ex / len) * sign;
+      const i0 = buf.v(a[0], 0, a[1], nx, 0, nz, wr, wg, wb);
+      buf.v(c[0], 0, c[1], nx, 0, nz, wr, wg, wb);
+      buf.v(c[0], h, c[1], nx, 0, nz, wr, wg, wb);
+      buf.v(a[0], h, a[1], nx, 0, nz, wr, wg, wb);
+      wall.push(-len / 2, 0, style, len, len / 2, 0, style, len, len / 2, h, style, len, -len / 2, h, style, len);
+      bh.push(h, h, h, h);
+      if (sign > 0) buf.idx.push(i0, i0 + 1, i0 + 2, i0, i0 + 2, i0 + 3);
+      else buf.idx.push(i0, i0 + 2, i0 + 1, i0, i0 + 3, i0 + 2);
+    }
+  }
+
   _c.setHex(roofHex);
   const base = buf.n;
   for (const p of pts) {
@@ -337,6 +395,66 @@ function addBuilding(chunk, b, tint) {
     if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
     else buf.idx.push(base + t[0], base + t[2], base + t[1]);
   }
+}
+
+/** Walls with door openings + inner faces, jambs, lintels, floor and ceiling of a hollow building. */
+function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris) {
+  const pts = b.p;
+  const n = pts.length;
+  const h = b.h;
+  const inner = shell.inner;
+  const top = shell.ceilRel; // interior ceiling above the floor
+  const dh = shell.doorH;
+  _c.setHex(INTERIOR_WALL[b.mat] || INTERIOR_WALL.brick);
+  const ishade = 0.95 + hash01(b.id, 6) * 0.08;
+  const ir = _c.r * ishade;
+  const ig = _c.g * ishade;
+  const ib = _c.b * ishade;
+  // outer-wall shader attributes: x along the whole edge (so windows stay continuous), height, style, length
+  const wa = (len, f0, f1, y0, y1) => {
+    const x0 = -len / 2 + f0 * len;
+    const x1 = -len / 2 + f1 * len;
+    return [[x0, y0, style, len], [x1, y0, style, len], [x1, y1, style, len], [x0, y1, style, len]];
+  };
+  for (let i = 0; i < n; i++) {
+    const k = (i + 1) % n;
+    const a = pts[i];
+    const c = pts[k];
+    const ex = c[0] - a[0];
+    const ez = c[1] - a[1];
+    const len = Math.hypot(ex, ez);
+    if (len < 0.05) continue;
+    const nx = (-ez / len) * sign; // outward
+    const nz = (ex / len) * sign;
+    const qa = [inner[i * 2], inner[i * 2 + 1]];
+    const qc = [inner[k * 2], inner[k * 2 + 1]];
+    const O = (f, y) => [a[0] + ex * f, y, a[1] + ez * f];
+    const I = (f, y) => [qa[0] + (qc[0] - qa[0]) * f, y, qa[1] + (qc[1] - qa[1]) * f];
+    const solid = (f0, f1) => {
+      quad(chunk, O(f0, 0), O(f1, 0), O(f1, h), O(f0, h), nx, 0, nz, wr, wg, wb, wa(len, f0, f1, 0, h), h);
+      quad(chunk, I(f0, 0), I(f1, 0), I(f1, top), I(f0, top), -nx, 0, -nz, ir, ig, ib, null, h);
+    };
+    let f = 0;
+    for (const d of shell.doors) {
+      if (d.e !== i) continue;
+      if (d.f0 > f) solid(f, d.f0);
+      // above the opening: outer lintel face, inner face, underside
+      quad(chunk, O(d.f0, dh), O(d.f1, dh), O(d.f1, h), O(d.f0, h), nx, 0, nz, wr, wg, wb, wa(len, d.f0, d.f1, dh, h), h);
+      quad(chunk, I(d.f0, dh), I(d.f1, dh), I(d.f1, top), I(d.f0, top), -nx, 0, -nz, ir, ig, ib, null, h);
+      quad(chunk, O(d.f0, dh), O(d.f1, dh), I(d.f1, dh), I(d.f0, dh), 0, -1, 0, ir, ig, ib, null, h);
+      // jambs: the wall's cut ends, facing into the opening
+      const tx = ex / len;
+      const tz = ez / len;
+      quad(chunk, O(d.f0, 0), I(d.f0, 0), I(d.f0, dh), O(d.f0, dh), tx, 0, tz, wr, wg, wb, null, h);
+      quad(chunk, O(d.f1, 0), I(d.f1, 0), I(d.f1, dh), O(d.f1, dh), -tx, 0, -tz, wr, wg, wb, null, h);
+      f = d.f1;
+    }
+    if (f < 1) solid(f, 1);
+  }
+  // interior floor (just above the ground layers) and ceiling; the inner ring has the
+  // footprint's vertex order, so the footprint triangulation is reused
+  hcap(chunk, inner, tris, 0.03, 1, FLOOR_COLOR[b.mat] || FLOOR_COLOR.brick, h);
+  hcap(chunk, inner, tris, top, -1, CEILING_COLOR, h);
 }
 
 // ------------------------------------------------------------- instanced sets
@@ -441,6 +559,10 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const b = world.bounds;
   const rng = makeRng(20261114);
   const progress = (v, label) => onProgress && onProgress(v, label);
+  // Prop / scatter caps were tuned on the original 18.1 km2 downtown map; scale them
+  // with the map area so the expanded map (Phase 2) keeps the same density.
+  const areaK = Math.max(1, ((b.maxX - b.minX) * (b.maxZ - b.minZ)) / 18.1e6);
+  const cap = (n) => Math.round(n * areaK);
   const root = new THREE.Group();
   root.name = 'world';
   scene.add(root);
@@ -505,6 +627,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   tintIds('market_8th', { wall: 0xbdb3a1, roof: 0x6f7376 });
 
   const chunks = new Map();
+  const placed = []; // [chunk, map record, collider] triples
   let count = 0;
   for (const bd of data.buildings) {
     if (!bd.p || bd.p.length < 3) continue;
@@ -517,10 +640,20 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     const key = Math.floor(cx / bd.p.length / CHUNK) + ',' + Math.floor(cz / bd.p.length / CHUNK);
     let chunk = chunks.get(key);
     if (!chunk) chunks.set(key, (chunk = { buf: new Buf(), wall: [], bh: [] }));
-    addBuilding(chunk, bd, tints.get(bd.id));
-    world.addPoly(bd.p, bd.h, 'building', bd.mat, bd);
-    if (++count % 600 === 0) {
-      progress(0.15 + 0.3 * (count / data.buildings.length), 'Raising buildings');
+    placed.push(chunk, bd, world.addBuilding(bd));
+    if (++count % 2000 === 0) {
+      progress(0.15 + 0.1 * (count / data.buildings.length), 'Raising buildings');
+      await tick();
+    }
+  }
+  // doors need every building and road registered first (road-facing, not into a neighbour)
+  world.finishBuildings();
+  await tick();
+  for (let i = 0; i < placed.length; i += 3) {
+    const bd = placed[i + 1];
+    addBuilding(placed[i], bd, tints.get(bd.id), placed[i + 2].shell || null);
+    if ((i / 3) % 600 === 599) {
+      progress(0.25 + 0.2 * (i / placed.length), 'Raising buildings');
       await tick();
     }
   }
@@ -564,7 +697,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const CAR_TINTS = [0xffffff, 0xf2f2f2, 0xd9dde2, 0xff8f80, 0x8fb8ff, 0xffd98a, 0xa9e0a0, 0x9aa0a8, 0x70757c];
   let cars = 0;
   for (const a of data.areas) {
-    if (a.k !== 'parking' || cars >= 650) continue;
+    if (a.k !== 'parking' || cars >= cap(650)) continue;
     const p = a.p;
     let best = 0;
     let ang = 0;
@@ -651,14 +784,14 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
         const z = az + (dz / len) * d + (dx / len) * off * side;
         side = -side;
         if (!world.inBounds(x, z, 4) || world.blockedAt(x, z, 0.6) || world.roadAt(x, z, 0.4)) continue;
-        if (lamps < 1800 && props.has('streetlamp')) {
+        if (lamps < cap(1800) && props.has('streetlamp')) {
           const name = MAJOR.has(r.k) ? 'streetlamp_curved' : 'streetlamp';
           const rec = props.add(props.has(name) ? name : 'streetlamp', x, z, Math.atan2(dx, dz) + (side > 0 ? 0 : Math.PI));
           world.addCircle(x, z, 0.22, 6, 'prop', 'metal', 120, [rec]);
           lamps++;
           harvestables.props++;
         }
-        if (hydrants < 450 && props.has('fire_hydrant') && hash01(r.id + i * 31 + Math.floor(d), 9) < 0.3) {
+        if (hydrants < cap(450) && props.has('fire_hydrant') && hash01(r.id + i * 31 + Math.floor(d), 9) < 0.3) {
           const hx = x + (dx / len) * 6;
           const hz = z + (dz / len) * 6;
           if (!world.blockedAt(hx, hz, 0.5) && !world.roadAt(hx, hz, 0.3)) {
@@ -678,7 +811,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   let dumpsters = 0;
   if (props.has('dumpster')) {
     for (const bd of data.buildings) {
-      if (dumpsters >= 450 || bd.a < 350 || bd.mat === 'wood' || hash01(bd.id, 11) > 0.6) continue;
+      if (dumpsters >= cap(450) || bd.a < 350 || bd.mat === 'wood' || hash01(bd.id, 11) > 0.6) continue;
       const i = Math.floor(hash01(bd.id, 12) * bd.p.length);
       const a = bd.p[i];
       const c = bd.p[(i + 1) % bd.p.length];
@@ -791,13 +924,13 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   }
   progress(0.7, 'Planting trees');
   await tick();
-  for (let i = 0; i < 7000; i++) {
+  for (let i = 0, n = cap(7000); i < n; i++) {
     const x = b.minX + rng() * (b.maxX - b.minX);
     const z = b.minZ + rng() * (b.maxZ - b.minZ);
     addTree(x, z, rng() < 0.2);
   }
   // rocks and bushes
-  for (let i = 0; i < 2600; i++) {
+  for (let i = 0, n = cap(2600); i < n; i++) {
     const x = b.minX + rng() * (b.maxX - b.minX);
     const z = b.minZ + rng() * (b.maxZ - b.minZ);
     const k = world.areaAt(x, z);
@@ -825,7 +958,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
 
   const view = {
     root,
-    counts: { buildings: count, chunks: buildingMeshes.length, cars, lamps, ...harvestables },
+    counts: { buildings: count, hollow: world.counts.hollow || 0, chunks: buildingMeshes.length, cars, lamps, ...harvestables },
     /** Distance-cull chunks. `q` is a QUALITY entry. */
     update(cam, q) {
       trees.cull(cam, q.treeDist);

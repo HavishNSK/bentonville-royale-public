@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 // Downloads OpenStreetMap data for Bentonville, AR from the main OSM API
-// (/api/0.6/map, tiled), caches every raw response in data-raw/, and writes a
-// compact game-ready JSON to public/data/bentonville-osm.json.
+// (/api/0.6/map, tiled), caches every raw response in data-raw/, and writes the
+// full real-geography map JSON to data-raw/bentonville-osm-full.json.
+// scripts/compose-map.mjs then cuts the compact game map out of it
+// (public/data/bentonville-osm.json): `npm run fetch-map` runs both.
 //
 //   node scripts/fetch-map-data.mjs            # cache-first: no network if all tiles are cached
 //   node scripts/fetch-map-data.mjs --refresh  # discard the cache and download again
 //
 // Map data usage notes:
-//   - `npm run fetch-map` runs the same thing. A full download is 21 requests
-//     (20 tiles + 1 relation) and takes about a minute; do not lower PAUSE_MS or
+//   - `npm run fetch-map` runs this and then compose-map. A full download is ~75 requests
+//     (72 tiles + a few relations); MAX_REQUESTS caps one run, so a cold
+//     cache needs two runs (the second resumes). Do not lower PAUSE_MS or
 //     raise MAX_REQUESTS, and do not run it in parallel (OSM API usage policy).
 //   - With a warm cache the run is offline and deterministic: the output is
 //     byte-identical, so it is safe to re-run after changing the processing code.
-//   - data-raw/ is gitignored. Only public/data/bentonville-osm.json and
-//     credits/map-data.md are meant to be committed; both are rewritten each run
+//   - data-raw/ is gitignored. Only public/data/bentonville-osm.json (written by
+//     compose-map) and credits/map-data.md are committed; both are rewritten each run
 //     (the "Downloaded" date comes from data-raw/fetch-meta.json, not the clock).
 //   - A failed download writes no output and keeps the tiles it got; re-run to resume.
 //
@@ -35,11 +38,19 @@ const RAW_DIR = path.join(ROOT, 'data-raw');
 const TILE_DIR = path.join(RAW_DIR, 'tiles');
 const REL_DIR = path.join(RAW_DIR, 'relations');
 const RAW_META = path.join(RAW_DIR, 'fetch-meta.json');
-const OUT_FILE = path.join(ROOT, 'public', 'data', 'bentonville-osm.json');
+// Full real-geography map (gitignored). scripts/compose-map.mjs turns it into the
+// compact game map public/data/bentonville-osm.json (downtown + moved school islands).
+const OUT_FILE = path.join(ROOT, 'data-raw', 'bentonville-osm-full.json');
 const CREDITS_FILE = path.join(ROOT, 'credits', 'map-data.md');
 
-// south, west, north, east
-const BBOX = [36.355, -94.23, 36.4, -94.19];
+// south, west, north, east. Phase 2 expansion: the original downtown box
+// [36.355, -94.23, 36.4, -94.19] grown one tile row south (Bentonville High
+// School, ~36.351 -94.196) and eight tile columns west (Bentonville West High /
+// Centerton, ~36.378 -94.297). The edges sit on the original 0.01 x 0.009 tile
+// grid so the old cached tiles in data-raw/tiles are reused as-is.
+// ORIGIN stays at the Square: every existing coordinate is unchanged, and the
+// far west edge (~ -10.8 km) is well inside float32 millimetre precision.
+const BBOX = [36.346, -94.31, 36.4, -94.19];
 const ORIGIN = { lat: 36.3729, lon: -94.2088 };
 const USER_AGENT = 'osm-game-map-fetch/1.0';
 const API = 'https://api.openstreetmap.org/api/0.6';
@@ -53,7 +64,7 @@ const PAUSE_MS = 1100; // pause between requests
 const BACKOFF_MS = [15000, 45000]; // on 429 / 509 / 5xx
 const MAX_RELATION_FETCHES = 12;
 
-const LANDMARK_NAME_RE = /Walmart|Walton|Home Office|Slaughter Pen|Crystal Bridges|Momentary|Compton|Memorial Park|8th Street Market|Razorback|Courthouse|Square/i;
+const LANDMARK_NAME_RE = /Walmart|Walton|Home Office|Slaughter Pen|Crystal Bridges|Momentary|Compton|Memorial Park|8th Street Market|Razorback|Courthouse|Square|High School/i;
 const POI_KEYS = ['tourism', 'historic', 'amenity', 'shop', 'leisure', 'office'];
 
 // ---------------------------------------------------------------- fetch/cache
@@ -681,7 +692,9 @@ function overtureMatch(OV, osmKey, ring) {
 // ------------------------------------------------------------------ landmarks
 // `pats` are tried in order; the first pattern with a usable match gives the
 // position. `est` is a general-knowledge fallback used only when nothing in the
-// data matches (found:false).
+// data matches (found:false). `campus` (m): also claim building=school
+// footprints whose centroid is that close to the match (OSM maps Bentonville
+// High as a single node, not a campus polygon).
 
 const LANDMARKS = [
   { key: 'square', n: 'Bentonville Square', pats: [/bentonville (town |city |downtown )?square/i, /^(the |downtown |town )?square$/i, /confederate (monument|park)|square park/i], est: { lat: 36.3729, lon: -94.2088, r: 45 } },
@@ -694,6 +707,8 @@ const LANDMARKS = [
   { key: 'slaughter_pen', n: 'Slaughter Pen Trails', line: true, pats: [/slaughter ?pen/i], est: { lat: 36.3905, lon: -94.2125, r: 500 } },
   { key: 'compton_gardens', n: 'Compton Gardens', pats: [/^compton gardens( (and|&) (arboretum|conference center))?$/i, /compton gardens/i], est: { lat: 36.3777, lon: -94.2117, r: 110 } },
   { key: 'memorial_park', n: 'Memorial Park', pats: [/^memorial park$/i, /memorial park/i], est: { lat: 36.3765, lon: -94.1935, r: 250 } },
+  { key: 'bentonville_high', n: 'Bentonville High School', pats: [/^bentonville high school$/i, /^bentonville high$/i, /^bentonville high school\b/i], est: { lat: 36.3515, lon: -94.1965, r: 250 }, campus: 260 },
+  { key: 'bentonville_west', n: 'Bentonville West High School', pats: [/^bentonville west high school$/i, /^bentonville west high\b/i, /^bentonville west\b/i], est: { lat: 36.378, lon: -94.297, r: 250 }, campus: 260 },
   { key: 'greenway', n: 'Razorback Regional Greenway', line: true, pats: [/razorback (regional )?greenway/i], est: { lat: 36.38, lon: -94.211, r: 400 } },
 ];
 
@@ -1120,6 +1135,7 @@ function build(raw, rawMeta, OV) {
       if (b.n && matchAny([b.n])) ids.add(b.id);
       else if (polys.some((ring) => pointInPoly(bCentroid.get(b), ring))) ids.add(b.id);
       else if (!primary.poly && pointInPoly(g.c, b.p)) ids.add(b.id); // the building a point-type landmark stands in
+      else if (spec.campus && b.t === 'school' && dist(bCentroid.get(b), g.c) <= spec.campus) ids.add(b.id);
     }
     let r = 20;
     if (primary.poly) r = Math.max(...g.pts.map((p) => dist(p, g.c)));

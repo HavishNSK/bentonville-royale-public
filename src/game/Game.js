@@ -3,6 +3,7 @@
 //   const game = new Game({ canvas, uiRoot, menus, settings });
 //   await game.load(onProgress)      // map, models, world meshes (once)
 //   game.startMatch()                // drop phase -> play -> over
+//   game.startMatch(seed, { freeBuild: true })  // solo sandbox: no bots, storm off, full mats, start on the ground
 //   game.pause(on) / game.leave()    // back to the menu
 //   game.applySettings(settings)
 //
@@ -15,7 +16,7 @@
 // storm, bots, storm damage and the win check are left to the host.
 
 import * as THREE from 'three';
-import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, STORM, makeRng, clamp, damp, TAU } from '../core/config.js';
+import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, STORM, MATERIALS, makeRng, clamp, damp, TAU } from '../core/config.js';
 import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
 import { World } from '../world/World.js';
@@ -34,6 +35,7 @@ import * as LootMod from './Loot.js';
 import * as InvMod from './Inventory.js';
 import * as StructMod from './Structures.js';
 import * as BotsMod from './Bots.js';
+import { createFpsMeter } from '../ui/fpsMeter.js';
 
 const DROP_SECONDS = 15;
 const DEATH_SCREEN_DELAY = 3.5;
@@ -117,6 +119,7 @@ export class Game {
 
     this.input = new Input(canvas);
     this.input.onLockChange = (locked) => this._onLockChange(locked);
+    this.input.setBindings(this.settings.bindings); // remappable actions (src/ui/settings.js)
     this._wasLocked = false;
     canvas.addEventListener('click', () => {
       if (this.state === 'play' && !this.paused) this.input.lock();
@@ -172,6 +175,8 @@ export class Game {
     this.fx = new Effects({ scene: this.scene, camera: this.camera, quality: this.settings.quality });
     this.hud = buildHud(this.uiRoot);
     this.hud.setVisible(false);
+    const mb = mapData && mapData.meta && mapData.meta.bounds;
+    if (mb && this.hud.setFullMapAspect) this.hud.setFullMapAspect((mb.maxX - mb.minX) / (mb.maxZ - mb.minZ));
     this.minimap = new Minimap({ mapData, miniCanvas: this.hud.getMinimapCanvas(), fullCanvas: this.hud.getFullMapCanvas() });
     this._wireFullMapClicks();
 
@@ -216,8 +221,11 @@ export class Game {
 
   // ---------------------------------------------------------------- match lifecycle
 
-  startMatch(seed = (Math.random() * 1e9) | 0) {
+  startMatch(seed = (Math.random() * 1e9) | 0, opts = {}) {
     if (!this.loaded) throw new Error('load() first');
+    // free build is a solo sandbox; a multiplayer host never gets it
+    const freeBuild = !!opts.freeBuild && !(this.net && this.net.isHost);
+    this.freeBuild = freeBuild;
     this.seed = seed;
     const rng = makeRng(seed);
     this.rng = rng;
@@ -243,6 +251,7 @@ export class Game {
     const lm = this.world.landmarks[zone.key] || { x: 0, z: 0 };
     this.storm.reset(rng, { x: lm.x, z: lm.z });
     this.dropZone = zone;
+    this.hud.setStormVisible(!freeBuild);
 
     // loot inside the first circle (with margin)
     if (this.loot) this.loot.spawnMatch(rng, { area: { x: this.storm.cx, z: this.storm.cz, r: STORM.startRadius * 1.15 } });
@@ -250,6 +259,8 @@ export class Game {
     // player
     const p = this.player;
     p.reset();
+    p.god = p.invulnerable = freeBuild; // free build: nothing can end the session but Leave
+    if (freeBuild) this._refillMats();
     this.combat.register(p);
     this.dropMarker = { x: lm.x, z: lm.z };
     p.pos.set(lm.x, PLAYER.dropHeight, lm.z);
@@ -260,7 +271,7 @@ export class Game {
 
     // bots (multiplayer host: remote humans take slots first; see HostSession.prepareMatch)
     const net = this.net && this.net.isHost ? this.net : null;
-    let botCount = MATCH.bots;
+    let botCount = freeBuild ? 0 : MATCH.bots;
     const spawnOpts = {};
     if (net) {
       const plan = net.prepareMatch(this, lm);
@@ -268,12 +279,15 @@ export class Game {
       spawnOpts.idBase = plan.idBase;
     }
     this.bots.clear();
-    const names = shuffle(BOT_NAMES.slice(), rng).slice(0, botCount);
+    const names = botNames(botCount, rng);
     const dropPoints = [];
     for (let i = 0; i < botCount; i++) {
       const z = DROP_ZONES[Math.floor(rng() * DROP_ZONES.length)];
       const l = this.world.landmarks[z.key] || lm;
-      const pt = this.world.randomOpenPoint(rng, l.x * 0.5 + this.storm.cx * 0.5, l.z * 0.5 + this.storm.cz * 0.5, STORM.startRadius * 0.7);
+      // compact map: bots spread over every POI (the dormant opening storm covers the whole map)
+      const pt = l
+        ? this.world.randomOpenPoint(rng, l.x, l.z, clamp((l.r || 150) * 1.2, 120, 320))
+        : this.world.randomOpenPoint(rng, this.storm.cx, this.storm.cz, STORM.startRadius * 0.7);
       dropPoints.push({ x: pt.x, z: pt.z });
     }
     try {
@@ -282,6 +296,11 @@ export class Game {
       this._error('bots.spawn', err);
     }
     this.totalActors = 1 + (net ? net.remotes.size : 0) + this.bots.list.length;
+
+    if (freeBuild) {
+      this._startFreeBuild(lm);
+      return;
+    }
 
     this.state = 'drop';
     this.dropLeft = DROP_SECONDS;
@@ -293,6 +312,40 @@ export class Game {
     this.menus.showDropBanner(true, this.dropLeft, zone.label);
     sfx.stopMusic();
     if (net) net.matchStarted(this);
+  }
+
+  /** Free build: skip the bus and stand on open ground near the landmark. */
+  _startFreeBuild(lm) {
+    const p = this.player;
+    let x = lm.x;
+    let z = lm.z;
+    for (let i = 0; i < 40; i++) {
+      const pt = this.world.randomOpenPoint(this.rng, lm.x, lm.z, 40, 6);
+      if (!this.world.polyAt(pt.x, pt.z) && !this.world.blockedAt(pt.x, pt.z, 6)) {
+        x = pt.x;
+        z = pt.z;
+        break;
+      }
+    }
+    p.pos.set(x, this.world.groundHeight(x, z, 1e4), z);
+    p.vel.set(0, 0, 0);
+    p.mode = 'ground';
+    p.grounded = true;
+    if (p.character) p.character.root.visible = true;
+    this.state = 'play';
+    this.hud.setVisible(true);
+    this.hud.showFullMap(false);
+    this._setFullMapInteractive(false);
+    this.menus.hideAll();
+    this.menus.showDropBanner(false);
+    this.hud.announce('FREE BUILD', 'No bots, no storm, unlimited mats. Esc > Leave to exit', 3500);
+    sfx.stopMusic();
+    this.input.lock();
+  }
+
+  _refillMats() {
+    const mats = this.player.inventory.mats;
+    for (const m of MATERIALS) mats[m] = PLAYER.matCap;
   }
 
   /**
@@ -317,6 +370,8 @@ export class Game {
     this.combat.restoreWorld();
     this.combat.clear();
     this.combat.authoritative = false;
+    this.freeBuild = false;
+    this.hud.setStormVisible(true);
     if (this.structures) this.structures.clear();
     this.fx.clear();
     this.hud.clearTransient();
@@ -547,7 +602,7 @@ export class Game {
     }
 
     if (input.hit('Escape') && !input.locked && (this.state === 'play' || this.state === 'drop')) this.pause(!this.paused);
-    if (input.hit('KeyM') && this.state === 'play' && !this.paused) this.fullMapOpen = !this.fullMapOpen;
+    if (input.actionHit('map') && this.state === 'play' && !this.paused) this.fullMapOpen = !this.fullMapOpen;
 
     // a multiplayer match keeps running under the pause menu
     const live = (!this.paused || !!this.net) && (this.state === 'drop' || this.state === 'play' || this.state === 'over');
@@ -565,14 +620,15 @@ export class Game {
     if (this.state === 'drop') {
       this.dropLeft -= dt;
       this.menus.showDropBanner(true, this.dropLeft, this.dropZone.label);
-      if ((input.hit('Space') && !this.paused) || this.dropLeft <= 0) this.jump();
+      if ((input.actionHit('jump') && !this.paused) || this.dropLeft <= 0) this.jump();
       // slowly orbit the camera above the marker
       const m = this.dropMarker;
       p.pos.set(m.x, PLAYER.dropHeight, m.z);
       p.heading += dt * 0.05;
     } else {
       this.matchTime += dt;
-      if (!client) this.storm.update(dt);
+      if (!client && !this.freeBuild) this.storm.update(dt); // free build: storm stays dormant
+      if (this.freeBuild) this._refillMats();
     }
 
     if (this.state === 'play' || this.state === 'over') {
@@ -583,7 +639,7 @@ export class Game {
       } else {
         p.update(dt, NO_INPUT, this);
       }
-      if (!client) this._stormDamage(dt);
+      if (!client && !this.freeBuild) this._stormDamage(dt);
     }
 
     if (!client) {
@@ -659,7 +715,7 @@ export class Game {
         _v.set(p.pos.x, p.pos.y + 1, p.pos.z);
         this._specYaw = (this._specYaw || p.heading) + dt * 0.2;
         placeOrbitCamera(cam, this.world, _v, this._specYaw, -0.5, 8, 0);
-      } else p.updateCamera(cam, dt, this.world, CAMERA.fov);
+      } else p.updateCamera(cam, dt, this.world, this.settings.fov || CAMERA.fov);
     }
 
     // world culling a few times a second
@@ -673,7 +729,8 @@ export class Game {
     const focus = inMatch ? p.pos : cam.position;
     const stormOn = inMatch && this.state !== 'drop';
     const intensity = stormOn ? s.intensityAt(focus.x, focus.z) : 0;
-    this.atmosphere.setStorm(inMatch ? s : null);
+    // no wall while the opening storm is dormant (harmless, up to STORM.openMaxRadius wide) or in free build
+    this.atmosphere.setStorm(inMatch && !s.dormant && !this.freeBuild ? s : null);
     this.atmosphere.update(dt, { focus, stormIntensity01: intensity });
     this.fx.update(dt);
 
@@ -706,7 +763,13 @@ export class Game {
     hud.setCounts({ alive: netAlive != null ? netAlive : this.combat.aliveCount, eliminations: p.kills });
     hud.setCompass(((p.heading * 180) / Math.PI + 360) % 360);
     const s = this.storm;
-    if (this.state !== 'drop') hud.setStorm(s.hudState(p.pos.x, p.pos.z));
+    if (!this.freeBuild) {
+      // also during the drop: the storm is frozen at phase 1's full wait there, and without
+      // this the panel kept its initial 0:00
+      const hs = s.hudState(p.pos.x, p.pos.z);
+      if (this.state === 'drop') hs.outside = false; // no storm vignette over the drop map
+      hud.setStorm(hs);
+    }
 
     // location: nearest landmark we are inside
     this._locT = (this._locT || 0) - dt;
@@ -739,7 +802,8 @@ export class Game {
     const blips = this.loot ? this.loot.blips() : [];
     this.minimap.update({
       player: { x: p.pos.x, z: p.pos.z, heading: p.heading },
-      storm: this.state === 'drop' ? { cx: s.cx, cz: s.cz, r: s.r, nextCx: s.nextCx, nextCz: s.nextCz, nextR: s.nextR } : s,
+      // dormant opening storm / free build: no next ring or guide line (nextR < 0 hides them)
+      storm: s.dormant || this.freeBuild ? { cx: s.cx, cz: s.cz, r: s.r, nextCx: s.cx, nextCz: s.cz, nextR: -1 } : this.state === 'drop' ? { cx: s.cx, cz: s.cz, r: s.r, nextCx: s.nextCx, nextCz: s.nextCz, nextR: s.nextR } : s,
       fullOpen,
       marker: this.state === 'drop' ? this.dropMarker : null,
       blips,
@@ -761,6 +825,13 @@ export class Game {
   applySettings(settings) {
     this.settings = { ...this.settings, ...settings };
     sfx.setVolume(this.settings.volume);
+    // settings screen extras: channel volumes, key bindings (+ HUD keycaps)
+    if (sfx.setSfxVolume) sfx.setSfxVolume(this.settings.sfxVolume ?? 1);
+    if (sfx.setUiVolume) sfx.setUiVolume(this.settings.uiVolume ?? 1);
+    if (this.settings.musicVolume != null) sfx.setMusicVolume(this.settings.musicVolume);
+    if (typeof document !== 'undefined') createFpsMeter(document.body).setVisible(!!this.settings.showFps); // shared with the settings screen
+    if (this.input) this.input.setBindings(this.settings.bindings);
+    if (this.hud && this.hud.setKeyLabels && this.input) this.hud.setKeyLabels((a) => this.input.label(a));
     this._applyPixelRatio();
     if (this.atmosphere && this.atmosphere.quality !== this.settings.quality) this.atmosphere.setQuality(this.settings.quality);
     if (this.fx && this.fx.quality !== this.settings.quality) this.fx.setQuality(this.settings.quality);
@@ -800,10 +871,24 @@ export class Game {
       if (this.state !== 'drop') return;
       const w = this.minimap.fullClientToWorld(e.clientX, e.clientY);
       if (w && w.inBounds) {
-        this.dropMarker = { x: w.x, z: w.z };
+        this.dropMarker = this.clampDropPoint(w.x, w.z);
         sfx.play('ui_click');
       }
     });
+  }
+
+  /**
+   * Drop points must lie inside the live circle (the dormant opening storm covers the whole
+   * compact map, so any POI is fine); a click farther away is pulled onto that circle.
+   */
+  clampDropPoint(x, z) {
+    const s = this.storm;
+    const max = Math.max(STORM.startRadius, s.r || 0) * 0.98;
+    const dx = x - s.cx;
+    const dz = z - s.cz;
+    const d = Math.hypot(dx, dz);
+    if (d <= max) return { x, z };
+    return { x: s.cx + (dx / d) * max, z: s.cz + (dz / d) * max };
   }
 
   _setFullMapInteractive(on) {
@@ -951,7 +1036,7 @@ export class Game {
         const dy = y - (p.pos.y + CAMERA.pivotHeight);
         p.heading = (Math.atan2(dx, -dz) + TAU) % TAU;
         p.pitch = Math.atan2(dy, Math.hypot(dx, dz));
-        p.updateCamera(game.camera, 1, game.world, CAMERA.fov);
+        p.updateCamera(game.camera, 1, game.world, game.settings.fov || CAMERA.fov);
         return { heading: p.heading, pitch: p.pitch };
       },
       nearestBot() {
@@ -1072,7 +1157,21 @@ const NO_INPUT = {
   clicked: [false, false, false],
   down: () => false,
   hit: () => false,
+  action: () => false,
+  actionHit: () => false,
+  label: () => '',
 };
+
+/** `n` unique bot names: BOT_NAMES shuffled, then numbered repeats once they run out. */
+function botNames(n, rng) {
+  const base = shuffle(BOT_NAMES.slice(), rng);
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const round = Math.floor(i / base.length);
+    out.push(round === 0 ? base[i] : base[i % base.length] + (round + 1));
+  }
+  return out;
+}
 
 function shuffle(a, rng) {
   for (let i = a.length - 1; i > 0; i--) {

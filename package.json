@@ -8,16 +8,19 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "fetch-map": "node scripts/fetch-map-data.mjs"
+    "fetch-map": "node scripts/fetch-map-data.mjs && node scripts/compose-map.mjs",
+    "compose-map": "node scripts/compose-map.mjs",
+    "party:dev": "partykit dev",
+    "party:deploy": "partykit deploy"
   },
   "devDependencies": {
     "geotiff": "^2.1.3",
+    "partykit": "^0.0.115",
     "sharp": "^0.33.5",
     "vite": "^8.3.8"
   },
   "dependencies": {
     "3d-tiles-renderer": "0.5.3",
-    "peerjs": "1.5.5",
     "three": "^0.187.0"
   }
 }

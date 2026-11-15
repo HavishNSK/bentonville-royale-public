@@ -16,6 +16,15 @@
 // under its footprint) and an ABSOLUTE top `h` (y0 + height). Pitched roofs
 // carry roof planes (see roofPlanes()) so their walkable / hittable top follows
 // the slope; `h` is then the ridge.
+//
+// Enterable buildings: most OSM buildings are hollow shells (collider.shell,
+// planned by finishBuildings() / _planShell()). The footprint prism is kept for
+// footprint lookups (polyAt), the roof (standable, hit by rays from above) and
+// anything above the interior ceiling; below the ceiling only thin outer walls
+// collide, door openings let actors and rays through, and the interior floor is
+// the building base. Tall buildings are hollow on the ground storey only (the
+// floors above stay a solid block). Loot / spawn helpers: buildingInteriors(),
+// randomInteriorPoint(), interiorAt(), blockedAt(x, z, r, true).
 
 const CELL = 32;
 const STEP = 0.62;
@@ -26,6 +35,28 @@ const PIECE_GROUND_BAND = 2.5;
 const PIECE_TIE = 0.02;
 // Ray-vs-terrain march step (m). The DEM is a 4 m grid, so 2 m catches every ridge that matters.
 const GROUND_STEP = 2;
+
+// ---- enterable buildings (hollow shells), see addBuilding() / finishBuildings()
+// Outer wall thickness (m). Collision walls are capsules of radius SHELL_T / 2
+// running along the footprint offset inward by SHELL_T / 2.
+const SHELL_T = 0.4;
+// Door opening: clear width (m) along the wall and height (m) above the floor.
+// PLAYER.radius is 0.42, so 1.8 m leaves ~0.5 m of slack on each side.
+const DOOR_W = 1.8;
+const DOOR_H = 2.4;
+// Keep a door at least this far (m) from the wall's corners.
+const DOOR_MARGIN = 1.0;
+// Roof slab thickness (m): the interior ceiling of a single-storey shell sits this far below the roof.
+const ROOF_T = 0.35;
+// Buildings taller than this are hollow on the ground storey only: the floors above are a
+// solid block (no unreachable 20 m void). The ground storey height is h / levels, clamped.
+const SINGLE_SPACE_MAX = 7;
+const STOREY_MIN = 3.2;
+const STOREY_MAX = 4.5;
+// Footprint filters for hollowing (m^2 / m): tiny sheds stay solid prisms.
+const HOLLOW_MIN_AREA = 30;
+const HOLLOW_MIN_A_OVER_P = 1.0; // area / perimeter; ~ half the narrow width for a rectangle
+const HOLLOW_MAX_VERTS = 220;
 
 function pointInPoly(p, n, x, z) {
   let inside = false;
@@ -376,6 +407,480 @@ export class World {
     return c;
   }
 
+  // ------------------------------------------------------ enterable buildings
+
+  /**
+   * Register an OSM building (map-data record { id, p, h, lv, a, mat, n? }) as a
+   * prism collider. Every building is queued as a hollow-shell candidate; call
+   * finishBuildings() once ALL buildings and roads are registered (doors look
+   * for the nearest road and avoid opening into a neighbouring building).
+   */
+  addBuilding(bd) {
+    const c = this.addPoly(bd.p, bd.h, 'building', bd.mat, bd);
+    if (!this._shellQueue) this._shellQueue = [];
+    this._shellQueue.push(c);
+    return c;
+  }
+
+  /**
+   * Turn the queued buildings that are big enough into hollow shells (sets
+   * collider.shell, see _planShell). Returns the number of hollow buildings.
+   */
+  finishBuildings() {
+    const q = this._shellQueue || [];
+    this._shellQueue = null;
+    this._interiors = null;
+    if (!this._shells) this._shells = [];
+    for (const c of q) {
+      const s = this._planShell(c);
+      if (!s) continue;
+      c.shell = s;
+      this._shells.push(c);
+    }
+    this.counts.hollow = this._shells.length;
+    return this._shells.length;
+  }
+
+  /** Nearest road point within R of (x, z): { x, z, d, k } (shared object) or null. */
+  _nearestRoad(x, z, R) {
+    let best = null;
+    let bd = R * R;
+    const out = this._roadHit || (this._roadHit = { x: 0, z: 0, d: 0, k: null });
+    this._each(x - R, z - R, x + R, z + R, false, (cell) => {
+      const roads = cell.roads;
+      for (let i = 0; i < roads.length; i++) {
+        const s = roads[i];
+        const dx = s.bx - s.ax;
+        const dz = s.bz - s.az;
+        const l2 = dx * dx + dz * dz;
+        let t = l2 > 0 ? ((x - s.ax) * dx + (z - s.az) * dz) / l2 : 0;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const px = s.ax + dx * t;
+        const pz = s.az + dz * t;
+        const d2 = (px - x) * (px - x) + (pz - z) * (pz - z);
+        if (d2 < bd) {
+          bd = d2;
+          out.x = px;
+          out.z = pz;
+          out.k = s.k;
+          best = out;
+        }
+      }
+    });
+    if (best) best.d = Math.sqrt(bd);
+    return best;
+  }
+
+  /** Another building's footprint contains (x, z)? */
+  _otherBuildingAt(c, x, z) {
+    const cell = this.cellAt(x, z);
+    if (!cell) return false;
+    const polys = cell.polys;
+    for (let i = 0; i < polys.length; i++) {
+      const o = polys[i];
+      if (o === c || x < o.minX || x > o.maxX || z < o.minZ || z > o.maxZ) continue;
+      if (pointInPoly(o.p, o.n, x, z)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Plan the hollow shell of building collider c, or null to keep it a solid prism.
+   *
+   * shell = {
+   *   t           wall thickness (m)
+   *   floor       absolute floor height (= c.y0, the building base)
+   *   ceil        absolute interior ceiling (roof slab underside, or the ground-storey
+   *               ceiling of a tall building whose upper floors stay solid)
+   *   ceilRel     ceil - floor
+   *   doorH       door height above the floor; doorTop = floor + doorH
+   *   doors       [{ e, u0, u1, f0, f1, x, z, nx, nz }]  edge index e (vertex e -> e+1),
+   *               opening [u0, u1] metres from vertex e (fractions f0, f1), centre (x, z)
+   *               on the outer face, outward normal (nx, nz)
+   *   doorF       Float32Array [e, f0, f1, ...] (raycast door test)
+   *   segs        Float32Array [ax, az, bx, bz, ...] solid wall centre lines (capsules of radius t/2)
+   *   lintels     Float32Array, same layout: the wall above each door (blocks only above doorTop)
+   *   inner       Float32Array [x, z, ...] interior face polygon (footprint offset inward by t)
+   *   area        footprint area (m^2)
+   * }
+   */
+  _planShell(c) {
+    const p = c.p;
+    const n = c.n;
+    const bd = c.ref || {};
+    if (n < 3 || n > HOLLOW_MAX_VERTS) return null;
+    let A2 = 0;
+    let P = 0;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      A2 += p[j * 2] * p[i * 2 + 1] - p[i * 2] * p[j * 2 + 1];
+      P += Math.hypot(p[i * 2] - p[j * 2], p[i * 2 + 1] - p[j * 2 + 1]);
+    }
+    const area = Math.abs(A2) / 2;
+    if (area < HOLLOW_MIN_AREA || area / P < HOLLOW_MIN_A_OVER_P) return null;
+    const hgt = c.hgt;
+    const lv = Math.max(1, bd.lv || Math.round(hgt / 3.5) || 1);
+    const ceilRel = hgt <= SINGLE_SPACE_MAX ? hgt - ROOF_T : Math.max(STOREY_MIN, Math.min(STOREY_MAX, hgt / lv));
+    if (ceilRel < 2.6) return null;
+    const doorH = Math.min(DOOR_H, ceilRel - 0.15);
+    const t = SHELL_T;
+    const sgn = A2 > 0 ? 1 : -1; // interior lies left of each edge for a CCW (A2 > 0) ring
+
+    // per-edge unit direction / inward normal / length (edge i: vertex i -> i + 1)
+    const ex = new Float32Array(n);
+    const ez = new Float32Array(n);
+    const L = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const k = (i + 1) % n;
+      const dx = p[k * 2] - p[i * 2];
+      const dz = p[k * 2 + 1] - p[i * 2 + 1];
+      const l = Math.hypot(dx, dz);
+      L[i] = l;
+      ex[i] = l > 1e-6 ? dx / l : 1;
+      ez[i] = l > 1e-6 ? dz / l : 0;
+    }
+    // inward normal of edge i: sgn * (-ez, ex)
+    const inner = new Float32Array(n * 2);
+    const mid = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) {
+      const j = (i + n - 1) % n;
+      const n1x = -ez[j] * sgn;
+      const n1z = ex[j] * sgn;
+      const n2x = -ez[i] * sgn;
+      const n2z = ex[i] * sgn;
+      let mx = n1x + n2x;
+      let mz = n1z + n2z;
+      const ml = Math.hypot(mx, mz);
+      if (ml < 1e-6) {
+        mx = n2x;
+        mz = n2z;
+      } else {
+        mx /= ml;
+        mz /= ml;
+      }
+      const k = 1 / Math.max(0.35, mx * n2x + mz * n2z); // miter, clamped at sharp corners
+      inner[i * 2] = p[i * 2] + mx * t * k;
+      inner[i * 2 + 1] = p[i * 2 + 1] + mz * t * k;
+      mid[i * 2] = p[i * 2] + mx * t * 0.5 * k;
+      mid[i * 2 + 1] = p[i * 2 + 1] + mz * t * 0.5 * k;
+    }
+
+    // ---- door candidates
+    const minLen = DOOR_W + 2 * DOOR_MARGIN;
+    const cands = [];
+    for (let i = 0; i < n; i++) {
+      const l = L[i];
+      if (l < minLen) continue;
+      const ax = p[i * 2];
+      const az = p[i * 2 + 1];
+      const ox = ez[i] * sgn; // outward normal
+      const oz = -ex[i] * sgn;
+      const lo = DOOR_MARGIN + DOOR_W / 2;
+      const hi = l - lo;
+      const us = [l / 2];
+      const mxp = ax + ex[i] * (l / 2) + ox * 2;
+      const mzp = az + ez[i] * (l / 2) + oz * 2;
+      const road = this._nearestRoad(mxp, mzp, 60);
+      let roadFacing = false;
+      if (road && (road.x - mxp) * ox + (road.z - mzp) * oz > 0.3 * road.d) {
+        roadFacing = true;
+        const ur = (road.x - ax) * ex[i] + (road.z - az) * ez[i];
+        us.push(ur < lo ? lo : ur > hi ? hi : ur);
+      }
+      for (let u = lo; l > 30 && u <= hi; u += 20) us.push(u);
+      for (const u of us) {
+        const x = ax + ex[i] * u;
+        const z = az + ez[i] * u;
+        // the step outside must be open ground, the step inside must be roomy interior
+        let ok = true;
+        for (const s of [-0.7, 0, 0.7]) {
+          if (this._otherBuildingAt(c, x + ox * 1.1 + ex[i] * s, z + oz * 1.1 + ez[i] * s)) ok = false;
+        }
+        const ix = x - ox * (t + 0.7);
+        const iz = z - oz * (t + 0.7);
+        if (!ok || !pointInPoly(p, n, ix, iz) || this._polyDist2(c, ix, iz) < (t + 0.4) * (t + 0.4)) continue;
+        let score = 80;
+        if (roadFacing) {
+          const r2 = this._nearestRoad(x + ox, z + oz, 60);
+          score = r2 ? r2.d : 60;
+        }
+        cands.push({ e: i, u, x, z, ox, oz, score });
+      }
+    }
+    if (!cands.length) return null;
+    const want = area < 200 ? 1 : area < 900 ? 2 : area < 4000 ? 3 : Math.min(6, 3 + Math.floor(area / 8000));
+    cands.sort((a, b) => a.score - b.score);
+    const chosen = [cands[0]];
+    while (chosen.length < want) {
+      let best = null;
+      let bestV = -Infinity;
+      for (const cd of cands) {
+        let md = Infinity;
+        for (const ch of chosen) md = Math.min(md, Math.hypot(cd.x - ch.x, cd.z - ch.z));
+        if (md < 8) continue;
+        const v = md - cd.score * 0.25;
+        if (v > bestV) {
+          bestV = v;
+          best = cd;
+        }
+      }
+      if (!best) break;
+      chosen.push(best);
+    }
+
+    const doors = chosen.map((d) => {
+      const l = L[d.e];
+      const u0 = d.u - DOOR_W / 2;
+      const u1 = d.u + DOOR_W / 2;
+      return { e: d.e, u0, u1, f0: u0 / l, f1: u1 / l, x: d.x, z: d.z, nx: d.ox, nz: d.oz };
+    });
+    doors.sort((a, b) => a.e - b.e || a.f0 - b.f0);
+    const doorF = new Float32Array(doors.length * 3);
+    doors.forEach((d, k) => {
+      doorF[k * 3] = d.e;
+      doorF[k * 3 + 1] = d.f0;
+      doorF[k * 3 + 2] = d.f1;
+    });
+
+    // ---- collision centre lines (the wall band's middle), split at the doors
+    const segs = [];
+    const lintels = [];
+    const R = t / 2;
+    for (let i = 0; i < n; i++) {
+      const k = (i + 1) % n;
+      const ax = mid[i * 2];
+      const az = mid[i * 2 + 1];
+      const bx = mid[k * 2];
+      const bz = mid[k * 2 + 1];
+      const lm = Math.hypot(bx - ax, bz - az);
+      if (lm < 1e-4) continue;
+      const cap = R / lm; // capsule end caps reach R past a segment end: stop short of the opening
+      let f = 0;
+      const at = (q) => [ax + (bx - ax) * q, az + (bz - az) * q];
+      for (const d of doors) {
+        if (d.e !== i) continue;
+        const f0 = d.f0 - cap;
+        if (f0 > f) segs.push(...at(f), ...at(f0));
+        lintels.push(...at(d.f0), ...at(d.f1));
+        f = d.f1 + cap;
+      }
+      if (f < 1) segs.push(...at(f), ...at(1));
+    }
+
+    return {
+      t,
+      floor: c.y0,
+      ceil: c.y0 + ceilRel,
+      ceilRel,
+      doorH,
+      doorTop: c.y0 + doorH,
+      doors,
+      doorF,
+      segs: new Float32Array(segs),
+      lintels: new Float32Array(lintels),
+      inner,
+      area,
+    };
+  }
+
+  /** Is fraction u of edge e inside one of the shell's door openings? */
+  _inDoor(s, e, u) {
+    const F = s.doorF;
+    for (let k = 0; k < F.length; k += 3) if (F[k] === e && u >= F[k + 1] && u <= F[k + 2]) return true;
+    return false;
+  }
+
+  /** Squared distance from (x, z) to the nearest capsule centre line in A (stride 4). */
+  _segsDist2(A, x, z) {
+    let best = Infinity;
+    for (let k = 0; k < A.length; k += 4) {
+      const ax = A[k];
+      const az = A[k + 1];
+      const ex = A[k + 2] - ax;
+      const ez = A[k + 3] - az;
+      const l2 = ex * ex + ez * ez;
+      let t = l2 > 0 ? ((x - ax) * ex + (z - az) * ez) / l2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const dx = x - (ax + ex * t);
+      const dz = z - (az + ez * t);
+      const d2 = dx * dx + dz * dz;
+      if (d2 < best) best = d2;
+    }
+    return best;
+  }
+
+  /** Push a circle out of shell walls (and lintels when the head is above the door top). */
+  _shellPush(c, pos, r, head) {
+    const s = c.shell;
+    const lim = r + s.t * 0.5;
+    const lim2 = lim * lim;
+    let moved = false;
+    for (let pass = 0; pass < 2; pass++) {
+      if (pass === 1 && head <= s.doorTop + 0.02) break;
+      const A = pass === 0 ? s.segs : s.lintels;
+      for (let k = 0; k < A.length; k += 4) {
+        const ax = A[k];
+        const az = A[k + 1];
+        const ex = A[k + 2] - ax;
+        const ez = A[k + 3] - az;
+        const l2 = ex * ex + ez * ez;
+        let t = l2 > 0 ? ((pos.x - ax) * ex + (pos.z - az) * ez) / l2 : 0;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const dx = pos.x - (ax + ex * t);
+        const dz = pos.z - (az + ez * t);
+        const d2 = dx * dx + dz * dz;
+        if (d2 >= lim2) continue;
+        const d = Math.sqrt(d2);
+        let nx;
+        let nz;
+        if (d > 1e-5) {
+          nx = dx / d;
+          nz = dz / d;
+        } else {
+          const l = Math.sqrt(l2) || 1;
+          nx = ez / l;
+          nz = -ex / l;
+        }
+        pos.x += nx * (lim - d);
+        pos.z += nz * (lim - d);
+        this.pushX += nx;
+        this.pushZ += nz;
+        moved = true;
+      }
+    }
+    return moved;
+  }
+
+  /**
+   * The hollow building whose interior contains (x, z) (inside the footprint and
+   * clear of the wall band), or null. The collider's .shell has floor / ceil / doors.
+   */
+  interiorAt(x, z) {
+    const cell = this.cellAt(x, z);
+    if (!cell) return null;
+    const polys = cell.polys;
+    for (let i = 0; i < polys.length; i++) {
+      const c = polys[i];
+      if (!c.shell || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
+      if (this._onInteriorFloor(c, x, z, 0)) return c;
+    }
+    return null;
+  }
+
+  /**
+   * Is a circle (x, z, r) on shell c's interior floor: centre inside the footprint and
+   * clear of the wall capsules (and of the lintel capsules across the door openings, so a
+   * doorway is not "inside")? Uses the same capsules (radius t/2) as blockedAt(..., true)
+   * and the player's wall collision, so interiorAt(x, z) === c implies
+   * !blockedAt(x, z, 0, true) as far as c's walls go, and the loot / spawn checks agree.
+   */
+  _onInteriorFloor(c, x, z, r) {
+    const s = c.shell;
+    if (!pointInPoly(c.p, c.n, x, z)) return false;
+    const lim = r + s.t * 0.5;
+    const lim2 = lim * lim;
+    return this._segsDist2(s.segs, x, z) >= lim2 && (!s.lintels.length || this._segsDist2(s.lintels, x, z) >= lim2);
+  }
+
+  /**
+   * Every enterable building (cached; built by finishBuildings()):
+   *   [{ id, name, collider, x, z, area, floorY, ceilY, topY,
+   *      doors: [{ x, z, nx, nz, width, height }] }]
+   * (x, z) is the footprint's vertex average; floorY is the walkable interior floor,
+   * ceilY the interior ceiling, topY the (standable) roof; doors sit on the outer
+   * wall face with an outward normal.
+   */
+  buildingInteriors() {
+    if (this._interiors) return this._interiors;
+    const list = [];
+    for (const c of this._shells || []) {
+      const s = c.shell;
+      let x = 0;
+      let z = 0;
+      for (let i = 0; i < c.n; i++) {
+        x += c.p[i * 2];
+        z += c.p[i * 2 + 1];
+      }
+      list.push({
+        id: c.ref && c.ref.id,
+        name: (c.ref && c.ref.n) || null,
+        collider: c,
+        x: x / c.n,
+        z: z / c.n,
+        area: s.area,
+        floorY: s.floor,
+        ceilY: s.ceil,
+        topY: c.h,
+        doors: s.doors.map((d) => ({ x: d.x, z: d.z, nx: d.nx, nz: d.nz, width: DOOR_W, height: s.doorH })),
+      });
+    }
+    this._interiors = list;
+    return list;
+  }
+
+  /**
+   * A random standable point on the ground floor of an enterable building.
+   *   opts: { x, z, radius }   only buildings whose centre is within radius of (x, z)
+   *         clearance (0.5)    min distance (m) from the inner wall face
+   *         minArea (0)        skip smaller footprints
+   *         weight ('sqrt')    'sqrt' (sqrt of area), 'area' or 'uniform' building choice
+   * Returns out = { x, y, z, building } (building = a buildingInteriors() entry) or null.
+   */
+  randomInteriorPoint(rng, opts = {}, out = { x: 0, y: 0, z: 0, building: null }) {
+    const clr = opts.clearance != null ? opts.clearance : 0.5;
+    const minArea = opts.minArea || 0;
+    const r2 = opts.radius != null ? opts.radius * opts.radius : Infinity;
+    const wmode = opts.weight || 'sqrt';
+    const all = this.buildingInteriors();
+    const pool = [];
+    const cum = [];
+    let tot = 0;
+    for (const b of all) {
+      if (b.area < minArea) continue;
+      if (r2 !== Infinity && (b.x - opts.x) * (b.x - opts.x) + (b.z - opts.z) * (b.z - opts.z) > r2) continue;
+      tot += wmode === 'uniform' ? 1 : wmode === 'area' ? b.area : Math.sqrt(b.area);
+      pool.push(b);
+      cum.push(tot);
+    }
+    if (!pool.length) return null;
+    for (let tryB = 0; tryB < 12; tryB++) {
+      const pick = rng() * tot;
+      let lo = 0;
+      let hi = cum.length - 1;
+      while (lo < hi) {
+        const m = (lo + hi) >> 1;
+        if (cum[m] < pick) lo = m + 1;
+        else hi = m;
+      }
+      const b = pool[lo];
+      const c = b.collider;
+      for (let k = 0; k < 24; k++) {
+        const x = c.minX + rng() * (c.maxX - c.minX);
+        const z = c.minZ + rng() * (c.maxZ - c.minZ);
+        if (!this._onInteriorFloor(c, x, z, clr)) continue;
+        if (this._circleAt(x, z, clr)) continue;
+        out.x = x;
+        out.y = Math.max(c.shell.floor, this.terrainHeight(x, z));
+        out.z = z;
+        out.building = b;
+        return out;
+      }
+    }
+    return null;
+  }
+
+  /** Any solid cylinder overlapping a circle at (x, z)? */
+  _circleAt(x, z, r) {
+    const cell = this.cellAt(x, z);
+    if (!cell) return false;
+    const circles = cell.circles;
+    for (let i = 0; i < circles.length; i++) {
+      const c = circles[i];
+      const lim = r + c.r;
+      if ((x - c.x) * (x - c.x) + (z - c.z) * (z - c.z) < lim * lim) return true;
+    }
+    return false;
+  }
+
   /** h: height above the terrain at (x, z). The collider stores y0 (base) and h (absolute top). */
   addCircle(x, z, r, h, kind, mat, hp, ref) {
     const y0 = this.terrainHeight(x, z);
@@ -526,8 +1031,13 @@ export class World {
     return best;
   }
 
-  /** True when a circle of radius r at ground level would overlap something solid. */
-  blockedAt(x, z, r) {
+  /**
+   * True when a circle of radius r at ground level would overlap something solid.
+   * By default an enterable building blocks its whole footprint (spawn / scatter
+   * code keeps out of buildings). With interiors = true only its walls block, so
+   * points inside (and in the door openings) count as open.
+   */
+  blockedAt(x, z, r, interiors = false) {
     let hit = false;
     const band = this.terrainHeight(x, z) + PIECE_GROUND_BAND;
     this._each(x - r, z - r, x + r, z + r, false, (cell) => {
@@ -536,6 +1046,11 @@ export class World {
       for (let i = 0; i < polys.length && !hit; i++) {
         const c = polys[i];
         if (x < c.minX - r || x > c.maxX + r || z < c.minZ - r || z > c.maxZ + r) continue;
+        if (interiors && c.shell) {
+          const lim = r + c.shell.t * 0.5;
+          if (this._segsDist2(c.shell.segs, x, z) < lim * lim) hit = true;
+          continue;
+        }
         if (pointInPoly(c.p, c.n, x, z) || this._polyDist2(c, x, z) < r * r) hit = true;
       }
       const circles = cell.circles;
@@ -601,7 +1116,8 @@ export class World {
 
   /**
    * Highest walkable surface at (x, z) that is no higher than feetY + step.
-   * Sets this.surface to 'ground' | 'roof' | 'vehicle' | 'build'.
+   * Sets this.surface to 'ground' | 'roof' | 'vehicle' | 'build' | 'floor'
+   * ('floor' = the ground floor inside an enterable building, when it is above the terrain).
    */
   groundHeight(x, z, feetY, step = STEP) {
     let y = this.terrainHeight(x, z);
@@ -612,13 +1128,18 @@ export class World {
     const polys = cell.polys;
     for (let i = 0; i < polys.length; i++) {
       const c = polys[i];
-      if (c.h <= y || (!c.planes && c.h > lim)) continue;
+      if (c.h <= y || (!c.planes && !c.shell && c.h > lim)) continue;
       if (x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
       if (pointInPoly(c.p, c.n, x, z)) {
         const top = c.planes ? c.eave + roofRise(c.planes, x, z) : c.h;
-        if (top <= y || top > lim) continue;
-        y = top;
-        this.surface = c.kind === 'vehicle' ? 'vehicle' : 'roof';
+        if (top > y && top <= lim) {
+          y = top;
+          this.surface = c.kind === 'vehicle' ? 'vehicle' : 'roof';
+        } else if (c.shell && top > lim && c.shell.floor > y && c.shell.floor <= lim) {
+          // below the roof of an enterable building: its ground floor
+          y = c.shell.floor;
+          this.surface = 'floor';
+        }
       }
     }
     const decks = cell.decks;
@@ -642,13 +1163,29 @@ export class World {
     return y;
   }
 
-  /** Lowest built surface above the feet (for head bumps and "something cuts through my body"). */
+  /**
+   * Lowest built surface above the feet (for head bumps and "something cuts through my body"):
+   * built pieces, the interior ceiling of an enterable building, and a door's lintel.
+   */
   ceilingAbove(x, z, feetY, step = STEP) {
     let y = Infinity;
     const cell = this.cellAt(x, z);
     if (!cell) return y;
-    const dyn = cell.dyn;
     const lim = feetY + step;
+    const polys = cell.polys;
+    for (let i = 0; i < polys.length; i++) {
+      const c = polys[i];
+      const s = c.shell;
+      if (!s || feetY >= s.ceil || x < c.minX - 1 || x > c.maxX + 1 || z < c.minZ - 1 || z > c.maxZ + 1) continue;
+      let cy = Infinity;
+      if (pointInPoly(c.p, c.n, x, z)) cy = s.ceil;
+      if (feetY < s.doorTop && s.lintels.length) {
+        const ll = s.t * 0.5 + 0.3;
+        if (this._segsDist2(s.lintels, x, z) < ll * ll) cy = Math.min(cy, s.doorTop);
+      }
+      if (cy > lim && cy < y) y = cy;
+    }
+    const dyn = cell.dyn;
     for (let i = 0; i < dyn.length; i++) {
       const d = dyn[i];
       if (!d.surf || x < d.minX || x > d.maxX || z < d.minZ || z > d.maxZ) continue;
@@ -686,10 +1223,25 @@ export class World {
             const c = polys[i];
             if (c.stamp === stamp) continue;
             c.stamp = stamp;
-            if (feet >= (c.planes ? c.eave + roofRise(c.planes, pos.x, pos.z) : c.h) - step) continue; // on top of it / can step onto it
             const x = pos.x;
             const z = pos.z;
+            if (feet >= (c.planes ? c.eave + roofRise(c.planes, x, z) : c.h) - step) {
+              // on top of it / can step onto it, unless the feet are inside an enterable
+              // building's interior (just under a thin roof): its walls still hold there
+              if (!c.shell || feet >= c.shell.ceil || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ || !pointInPoly(c.p, c.n, x, z))
+                continue;
+            }
             if (x < c.minX - r || x > c.maxX + r || z < c.minZ - r || z > c.maxZ + r) continue;
+            if (c.shell && feet < c.shell.ceil) {
+              // enterable building, feet below its interior ceiling: only the walls (and
+              // the lintels above the doors) are solid. The walls trace the whole outline,
+              // so this blocks from outside exactly like the solid prism, and a body inside
+              // (mid-jump, or standing on a built floor / ramp) is never pushed out through
+              // a wall. The solid prism only applies above the ceiling: a tall building's
+              // solid upper floors, and the roof (stepped onto via the check above).
+              if (head > c.y0 && this._shellPush(c, pos, r, head)) moved = touched = true;
+              continue;
+            }
             const d2 = this._polyDist2(c, x, z);
             const inside = pointInPoly(c.p, c.n, x, z);
             if (!inside && d2 >= r * r) continue;
@@ -965,6 +1517,7 @@ export class World {
             if (u < 0 || u > 1) continue;
             const y = oy + dy * t;
             if (y < c.y0 || y > (planes ? c.eave + roofRise(planes, ox + dx * t, oz + dz * t) : c.h)) continue;
+            if (c.shell && y < c.shell.doorTop && this._inDoor(c.shell, b, u)) continue; // through a door
             best = t;
             found = true;
             const l = Math.hypot(ex, ez) || 1;
@@ -1005,7 +1558,11 @@ export class World {
               out.kind = c.kind;
             }
           } else if (dy !== 0) {
-            const t = (c.h - oy) / dy;
+            // enterable building: from below its interior ceiling a ray can only meet the
+            // ceiling (going up) or the floor (going down; the ground handles that)
+            const inside = c.shell && oy < c.shell.ceil + 1e-3;
+            if (inside && dy < 0) continue;
+            const t = ((inside ? c.shell.ceil : c.h) - oy) / dy;
             if (t > 1e-4 && t < best) {
               const x = ox + dx * t;
               const z = oz + dz * t;

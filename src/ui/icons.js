@@ -223,6 +223,79 @@ const WIDE = {
       `<path d="M52 13h16" stroke="${GUN_DARK}" stroke-width="2.500" stroke-linecap="round" fill="none"/>` +
       `<path d="M31.500 28l9 1M30.500 33.500l9 1" stroke="${GUN}" stroke-width="1.500" stroke-linecap="round" fill="none" opacity=".7"/>`
   ),
+  // ---- variants (share a world mesh with the base gun, distinct HUD art) ----
+  burst_rifle: sil(
+    `<rect x="62" y="17.500" width="29" height="4" rx="1"/>` +
+      `<rect x="40" y="13" width="26" height="10.500" rx="2"/>` +
+      `<rect x="16" y="13" width="28" height="13" rx="3"/>` +
+      `<rect x="20" y="6.500" width="34" height="5" rx="2"/>` +
+      `<rect x="24" y="10" width="4" height="4"/><rect x="47" y="10" width="4" height="4"/>` +
+      `<polygon points="17,14 5,16 4,31 11,31 14,26 17,26"/>` +
+      `<polygon points="24,26 33,26 32,41 23,40"/>` +
+      `<polygon points="46,23.500 55,23.500 51,35 43,34"/>`,
+    GUN,
+    `<rect x="16" y="13" width="28" height="13" rx="3" fill="${GUN_DARK}"/>` +
+      `<polygon points="24,26 33,26 32,41 23,40" fill="${GOLD}"/>` +
+      `<polygon points="46,23.500 55,23.500 51,35 43,34" fill="${GUN_DARK}"/>` +
+      `<circle cx="52" cy="18" r="1.800" fill="#ff7a45"/><circle cx="57" cy="18" r="1.800" fill="#ff7a45"/><circle cx="62" cy="18" r="1.800" fill="#ff7a45"/>`
+  ),
+  tac_shotgun: sil(
+    `<rect x="34" y="14" width="52" height="6" rx="2"/>` +
+      `<rect x="44" y="20.500" width="34" height="5" rx="2"/>` +
+      `<rect x="20" y="13" width="28" height="13" rx="2"/>` +
+      `<rect x="26" y="9" width="14" height="5" rx="1.500"/>` +
+      `<polygon points="21,15 6,17 5,30 11,30 14,25 21,25"/>` +
+      `<polygon points="26,26 34,26 31,39 23,38"/>` +
+      `<rect x="38" y="25" width="8" height="12" rx="1.500"/>`,
+    GUN,
+    `<rect x="44" y="20.500" width="34" height="5" rx="2" fill="${GUN_DARK}"/>` +
+      `<polygon points="21,15 6,17 5,30 11,30 14,25 21,25" fill="${GUN_DARK}"/>` +
+      `<polygon points="26,26 34,26 31,39 23,38" fill="${GUN_DARK}"/>` +
+      `<rect x="38" y="25" width="8" height="12" rx="1.500" fill="#ff5d4a"/>` +
+      `<path d="M52 17h22" stroke="${GUN_DARK}" stroke-width="1.500" fill="none"/>`
+  ),
+  heavy_shotgun: sil(
+    `<rect x="28" y="12.500" width="62" height="8.500" rx="3"/>` +
+      `<rect x="84" y="10.500" width="8" height="12.500" rx="2"/>` +
+      `<rect x="44" y="21" width="30" height="8" rx="3"/>` +
+      `<rect x="20" y="12" width="26" height="14" rx="2"/>` +
+      `<polygon points="22,13.500 5,18 4,34 11.500,35 16,27 23,26"/>` +
+      `<polygon points="26,26 34,26 30,36 22,35"/>`,
+    GUN,
+    `<rect x="44" y="21" width="30" height="8" rx="3" fill="${GUN_DARK}"/>` +
+      `<path d="M50 23v4M56 23v4M62 23v4M68 23v4" stroke="${GUN}" stroke-width="1.500" fill="none"/>` +
+      `<polygon points="22,13.500 5,18 4,34 11.500,35 16,27 23,26" fill="${GUN_DARK}"/>` +
+      `<polygon points="26,26 34,26 30,36 22,35" fill="${GOLD}"/>` +
+      `<rect x="84" y="10.500" width="8" height="12.500" rx="2" fill="${GUN_DARK}"/>`
+  ),
+  suppressed_smg: sil(
+    `<rect x="18" y="14" width="36" height="12.500" rx="3"/>` +
+      `<rect x="52" y="14.500" width="40" height="10" rx="5"/>` +
+      `<rect x="25" y="9.500" width="18" height="5" rx="1.500"/>` +
+      `<polygon points="36,26 45,26 44,44 35,44"/>` +
+      `<polygon points="21,26 29,26 26.500,38.500 18.500,37.500"/>` +
+      `<path d="M19 15H5V31h5V20h9Z"/>`,
+    GUN,
+    `<rect x="52" y="14.500" width="40" height="10" rx="5" fill="${GUN_DARK}"/>` +
+      `<path d="M60 16.500v6M68 16.500v6M76 16.500v6M84 16.500v6" stroke="${INK}" stroke-width="1.500" fill="none" opacity=".6"/>` +
+      `<polygon points="36,26 45,26 44,44 35,44" fill="${GUN_DARK}"/>` +
+      `<polygon points="21,26 29,26 26.500,38.500 18.500,37.500" fill="${GUN_DARK}"/>` +
+      `<path d="M19 15H5V31h5V20h9Z" fill="${GUN_DARK}"/>`
+  ),
+  hunting_rifle: sil(
+    `<rect x="46" y="18" width="46" height="4" rx="1"/>` +
+      `<rect x="22" y="16" width="30" height="9" rx="2"/>` +
+      `<polygon points="24,17 4,19.500 3,33 10,33 15,26 26,25"/>` +
+      `<polygon points="40,25 78,22 78,26 42,28"/>` +
+      `<rect x="30" y="11" width="10" height="5" rx="1"/>` +
+      `<polygon points="26,25 33,25 30.500,35.500 23.500,34.500"/>` +
+      `<rect x="88" y="14.500" width="3" height="4"/>`,
+    GUN,
+    `<polygon points="24,17 4,19.500 3,33 10,33 15,26 26,25" fill="${WOOD}"/>` +
+      `<polygon points="40,25 78,22 78,26 42,28" fill="${WOOD}"/>` +
+      `<polygon points="26,25 33,25 30.500,35.500 23.500,34.500" fill="${WOOD}"/>` +
+      `<rect x="30" y="11" width="10" height="5" rx="1" fill="${GOLD}"/>`
+  ),
 };
 
 /**

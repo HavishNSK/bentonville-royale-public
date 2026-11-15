@@ -1,9 +1,9 @@
 // BENTONVILLE ROYALE — multiplayer wire format.
 //
-// Two PeerJS DataConnections per client:
-//   'r' reliable + ordered, JSON   — lobby, match start, actions, events, inventory
-//   'u' unordered, raw ArrayBuffer — host snapshots (H->C, ~20 Hz) and client
-//                                    movement state (C->H, ~30 Hz), binary
+// One WebSocket per player to the PartyKit relay (party/server.js), carrying:
+//   text frames   JSON  — lobby, match start, actions, events, inventory
+//   binary frames ArrayBuffer — host snapshots (H->C, ~20 Hz) and client
+//                               movement state (C->H, ~30 Hz)
 //
 // Binary layouts (little endian):
 //
@@ -22,8 +22,8 @@
 //     u8  equip, u8 health, u8 shield, u8 kills
 //
 // Reliable messages are JSON objects { t: <type>, ... }. Anything longer than
-// CHUNK chars is split into { t: '_c', id, i, n, s } parts and reassembled
-// (PeerJS refuses JSON messages over ~16 KB).
+// the sender's chunk size is split into { t: '_c', id, i, n, s } parts and
+// reassembled by makeReassembler().
 
 import { WEAPONS, TAU } from '../core/config.js';
 
@@ -32,7 +32,6 @@ export const MAX_HUMANS = 16;
 export const SNAP_HZ = 20;
 export const STATE_HZ = 30;
 export const INTERP_DELAY = 0.1; // s of buffering for remote actors on clients
-export const PEER_PREFIX = 'bentonville-royale-v1-';
 export const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I / O
 export const CODE_LEN = 4;
 
@@ -193,25 +192,7 @@ export function seqNewer(a, b) {
   return ((a - b) & 0xffff) !== 0 && ((a - b) & 0xffff) < 0x8000;
 }
 
-// ------------------------------------------------------------------ reliable JSON with chunking
-
-const CHUNK = 6000; // chars; worst case 3 bytes per char stays under PeerJS's 16300-byte JSON cap
-
-let _chunkId = 1;
-
-/** Sends `msg` over a JSON DataConnection, splitting large payloads. Returns bytes (approx). */
-export function sendJSON(conn, msg) {
-  if (!conn || !conn.open) return 0;
-  const s = JSON.stringify(msg);
-  if (s.length <= CHUNK) {
-    conn.send(msg);
-    return s.length;
-  }
-  const id = _chunkId++;
-  const n = Math.ceil(s.length / CHUNK);
-  for (let i = 0; i < n; i++) conn.send({ t: '_c', id, i, n, s: s.slice(i * CHUNK, (i + 1) * CHUNK) });
-  return s.length + n * 30;
-}
+// ------------------------------------------------------------------ chunk reassembly (sender: Net.js)
 
 /** Returns a function(msg) -> full message | null that reassembles chunked messages. */
 export function makeReassembler() {

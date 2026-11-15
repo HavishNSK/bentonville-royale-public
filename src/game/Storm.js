@@ -18,6 +18,11 @@
 //   storm.dps                      // damage per second to anyone outside (current phase)
 //   storm.isOutside(x, z), storm.distanceOutside(x, z), storm.intensityAt(x, z)
 //   storm.hudState(x, z)           // -> { phase, secondsLeft, state, outside } for hud.setStorm()
+//   storm.dormant                  // true during phase 1's wait when STORM.openStart is on: the
+//                                  //   live circle (r) covers the map (up to STORM.openMaxRadius) and dps is 0. nextR still
+//                                  //   holds phase 1's real target (bots path toward it); views should
+//                                  //   hide the next ring while dormant (see Game._updateHud). Derived
+//                                  //   from phase + mode, so it holds on clients fed by host snapshots.
 //
 // Extras
 //   storm.shrinking                // true while the circle is moving (also in the final phase)
@@ -68,6 +73,11 @@ export class Storm {
     this._hud = { phase: 1, secondsLeft: 0, state: 'waiting', outside: false };
   }
 
+  /** Opening state: the storm has not formed yet (phase 1, still waiting). */
+  get dormant() {
+    return !!STORM.openStart && this.phase === 1 && this.mode === 'waiting';
+  }
+
   reset(rng, center) {
     this._rng = typeof rng === 'function' ? rng : Math.random;
     const b = this._bounds();
@@ -100,7 +110,10 @@ export class Storm {
     this._stageT = 0;
     this.shrinking = false;
     this.mode = 'waiting';
-    this._pickNext(true);
+    this._pickNext(true); // phase 1's target is picked inside the STORM.startRadius circle
+    // Dormant opening: the live circle covers the whole map until phase 1's shrink, which then
+    // closes from here straight to the target picked above (the target lies inside it).
+    if (STORM.openStart) this.r = this._coverRadius(this.cx, this.cz, b);
     this._syncFrom();
     this._refresh();
     return this;
@@ -255,6 +268,17 @@ export class Storm {
     return true;
   }
 
+  /** Radius (from cx, cz) that reaches past every map corner, plus STORM.openMargin. */
+  _coverRadius(cx, cz, b) {
+    const margin = STORM.openMargin || 0;
+    if (!b) return STORM.startRadius * 6 + margin;
+    let m = 0;
+    for (const x of [b.minX, b.maxX]) for (const z of [b.minZ, b.maxZ]) m = Math.max(m, Math.hypot(x - cx, z - cz));
+    // Capped (STORM.openMaxRadius): on a large map the far corners could be many km away and
+    // phase 1's shrink would race inward. Corners past the cap start outside the (dps 0) circle.
+    return Math.min(m + margin, STORM.openMaxRadius ?? Infinity);
+  }
+
   _bounds() {
     const b = this.world && this.world.bounds;
     if (b && Number.isFinite(b.minX)) return b;
@@ -276,6 +300,7 @@ export class Storm {
       return;
     }
     this.mode = last ? 'final' : this.shrinking ? 'shrinking' : 'waiting';
+    if (this.dormant) this.dps = 0; // the opening storm never hurts
     const len = this.shrinking ? p.shrink : p.wait;
     this.secondsLeft = Math.max(0, len - this._stageT);
   }

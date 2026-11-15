@@ -16,9 +16,9 @@
 // from the host (src/net/ClientSession.js). Solo and host play are unchanged.
 
 import * as THREE from 'three';
-import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, clamp, damp, TAU } from '../core/config.js';
+import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, clamp, damp, TAU, weaponStats } from '../core/config.js';
 
-const PIECE_KEYS = { KeyQ: 'wall', KeyC: 'floor', KeyV: 'ramp', KeyX: 'cone' };
+const PIECE_ACTIONS = { buildWall: 'wall', buildFloor: 'floor', buildRamp: 'ramp', buildCone: 'cone' };
 const FREEFALL_SPEED = 38;
 const DEPLOY_HEIGHT = 55;
 
@@ -149,7 +149,7 @@ export class Player {
     }
 
     // ---- look
-    const sens = (g.settings.sensitivity || 1) * 0.0022 * (this.ads ? 0.6 : 1);
+    const sens = (g.settings.sensitivity || 1) * 0.0022 * (this.ads ? (g.settings.adsSensitivity ?? 0.6) : 1);
     this.heading = (this.heading + input.dx * sens) % TAU;
     if (this.heading < 0) this.heading += TAU;
     this.pitch = clamp(this.pitch - input.dy * sens * (g.settings.invertY ? -1 : 1), CAMERA.minPitch, CAMERA.maxPitch);
@@ -161,10 +161,10 @@ export class Player {
     // ---- movement wish
     let mf = 0;
     let ms = 0;
-    if (input.down('KeyW')) mf += 1;
-    if (input.down('KeyS')) mf -= 1;
-    if (input.down('KeyD')) ms += 1;
-    if (input.down('KeyA')) ms -= 1;
+    if (input.action('moveForward')) mf += 1;
+    if (input.action('moveBack')) mf -= 1;
+    if (input.action('moveRight')) ms += 1;
+    if (input.action('moveLeft')) ms -= 1;
     const len = Math.hypot(mf, ms);
     if (len > 1) {
       mf /= len;
@@ -175,9 +175,9 @@ export class Player {
     const wx = sh * mf + ch * ms;
     const wz = -ch * mf + sh * ms;
 
-    this.crouching = this.mode === 'ground' && (input.down('ControlLeft') || input.down('KeyZ'));
-    this.sprinting = this.mode === 'ground' && input.down('ShiftLeft') && mf > 0 && !this.ads && !this.crouching && this.useT <= 0;
-    this.ads = this.mode === 'ground' && input.buttons[2] && !this.buildPiece && !!this._gun();
+    this.crouching = this.mode === 'ground' && (input.action('crouch') || input.action('crouchAlt'));
+    this.sprinting = this.mode === 'ground' && input.action('sprint') && mf > 0 && !this.ads && !this.crouching && this.useT <= 0;
+    this.ads = this.mode === 'ground' && input.action('aim') && !this.buildPiece && !!this._gun();
 
     let speed = PLAYER.runSpeed;
     if (this.sprinting) speed = PLAYER.sprintSpeed;
@@ -189,7 +189,7 @@ export class Player {
     const groundY = world.groundHeight(p.x, p.z, p.y);
     if (this.mode === 'freefall' || this.mode === 'glide') {
       const above = p.y - groundY;
-      if (this.mode === 'freefall' && (above < DEPLOY_HEIGHT || input.hit('Space'))) {
+      if (this.mode === 'freefall' && (above < DEPLOY_HEIGHT || input.actionHit('jump'))) {
         this.mode = 'glide';
         g.sfx.play('jump', { volume: 0.6 });
       }
@@ -213,7 +213,7 @@ export class Player {
         v.x += (dx / dl) * step;
         v.z += (dz / dl) * step;
       }
-      if (this.grounded && input.hit('Space') && !this.crouching) {
+      if (this.grounded && input.actionHit('jump') && !this.crouching) {
         v.y = PLAYER.jumpSpeed;
         this.grounded = false;
         g.sfx.play('jump', { volume: 0.5 });
@@ -260,12 +260,13 @@ export class Player {
     const hspeed = Math.hypot(v.x, v.z);
     if (this.character) {
       const c = this.character;
-      if (this.emoting && (hspeed > 0.5 || input.buttons[0])) {
+      if (this.emoting && (hspeed > 0.5 || input.action('fire'))) {
         this.emoting = false;
         c.emote(false);
       }
       c.root.position.copy(p);
-      c.root.visible = !(this.ads && this._gun() && this._gun().id === 'sniper');
+      const sg = this.ads && this._gun() && WEAPONS[this._gun().id];
+      c.root.visible = !(sg && sg.kind === 'sniper' && sg.zoom <= 0.35);
       c.update(dt, {
         fwd: hspeed > 0.1 ? (v.x * sh - v.z * ch) / hspeed : 0,
         side: hspeed > 0.1 ? (v.x * ch + v.z * sh) / hspeed : 0,
@@ -282,7 +283,15 @@ export class Player {
       this.stepT -= dt * (hspeed / PLAYER.runSpeed);
       if (this.stepT <= 0) {
         this.stepT = 0.36;
-        const s = this.surface === 'build' ? 'wood' : world.roadAt(p.x, p.z) ? 'road' : 'grass';
+        // indoor floors (raised 'floor', or a shell interior at terrain level) sound like
+        // boards; roofs and roads are hard
+        const sf = this.surface;
+        const s =
+          sf === 'build' || sf === 'floor' || (sf === 'ground' && world.interiorAt(p.x, p.z))
+            ? 'wood'
+            : sf === 'roof' || world.roadAt(p.x, p.z)
+              ? 'road'
+              : 'grass';
         g.sfx.play('footstep', { surface: s, volume: 0.45 });
       }
     }
@@ -315,7 +324,7 @@ export class Player {
   _handleLoadoutKeys(input, g) {
     const inv = this.inventory;
     for (let i = 0; i < 5; i++) {
-      if (input.hit('Digit' + (i + 1))) {
+      if (input.actionHit('slot' + (i + 1))) {
         this.buildPiece = null;
         inv.select(i);
       }
@@ -324,15 +333,15 @@ export class Player {
       this.buildPiece = null;
       inv.next(input.wheel > 0 ? 1 : -1);
     }
-    if (input.hit('KeyF')) {
+    if (input.actionHit('pickaxe')) {
       this.buildPiece = null;
       inv.select(-1);
     }
-    for (const code in PIECE_KEYS) {
-      if (input.hit(code)) this.setBuildPiece(PIECE_KEYS[code]);
+    for (const a in PIECE_ACTIONS) {
+      if (input.actionHit(a)) this.setBuildPiece(PIECE_ACTIONS[a]);
     }
-    if (input.hit('KeyG')) this.cycleMaterial();
-    if (input.hit('KeyB') && this.character && this.grounded) {
+    if (input.actionHit('cycleMaterial')) this.cycleMaterial();
+    if (input.actionHit('emote') && this.character && this.grounded) {
       this.emoting = !this.emoting;
       this.character.emote(this.emoting);
     }
@@ -382,15 +391,15 @@ export class Player {
     // bloom decay
     this.bloom = Math.max(0, this.bloom - dt * 0.12);
 
-    const lmb = input.buttons[0];
-    const lmbClick = input.clicked[0];
+    const lmb = input.action('fire');
+    const lmbClick = input.actionHit('fire');
 
     // ---- reload
     if (this.reloadT > 0) {
       this.reloadT -= dt;
       if (this.reloadT <= 0) this._finishReload();
     }
-    if (input.hit('KeyR') && !this.buildPiece) this.startReload(g);
+    if (input.actionHit('reload') && !this.buildPiece) this.startReload(g);
 
     // ---- consumable channel
     if (this.useT > 0) {
@@ -399,7 +408,7 @@ export class Player {
     }
 
     // ---- interact
-    this._interact(input, g);
+    this._interact(input, g, dt);
 
     if (this.buildPiece) {
       this._buildMode(dt, lmb, lmbClick, g);
@@ -419,15 +428,44 @@ export class Player {
     this.triggerHeld = lmb;
   }
 
-  _interact(input, g) {
+  /**
+   * Walk-over ammo: floor ammo and ammo boxes are collected without E (a few times a
+   * second). A multiplayer client sends the same 'int' request E does; the host
+   * validates and applies it, so requests are throttled per record until it answers.
+   */
+  _autoPickup(dt, g) {
+    if (g.settings && g.settings.autoPickupAmmo === false) return; // settings toggle (default on)
     const loot = g.loot;
+    if (!loot || !loot.autoPickups || this.airborneDrop) return;
+    this._autoT = (this._autoT || 0) - dt;
+    if (this._autoT > 0) return;
+    this._autoT = 0.1;
+    const net = clientNet(g);
+    const now = g.time || 0;
+    const sent = this._autoSent || (this._autoSent = new Map());
+    const recs = loot.autoPickups(this.pos, undefined, this._autoBuf || (this._autoBuf = []));
+    for (const rec of recs) {
+      if (rec.kind === 'item' && !this.inventory.canTake(rec.item)) continue;
+      if (net) {
+        const last = sent.get(rec.id);
+        if (last != null && now - last < 1) continue;
+        sent.set(rec.id, now);
+      }
+      this.interactWith(rec, g);
+    }
+    if (sent.size > 64) for (const [id, t] of sent) if (now - t > 2) sent.delete(id);
+  }
+
+  _interact(input, g, dt = 0) {
+    const loot = g.loot;
+    this._autoPickup(dt, g);
     let rec = null;
     if (loot && loot.nearest) rec = loot.nearest(this.pos);
     if (rec) {
       const swap = rec.kind === 'item' && rec.item && this.inventory.wouldSwap && this.inventory.wouldSwap(rec.item);
       const verb = rec.kind === 'item' ? (swap ? 'Swap for' : 'Pick up') : 'Open';
-      g.hud.prompt('[E] ' + verb + ' ' + (rec.label || ''));
-      if (input.hit('KeyE')) this.interactWith(rec, g);
+      g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] ' + verb + ' ' + (rec.label || ''));
+      if (input.actionHit('interact')) this.interactWith(rec, g);
     } else g.hud.prompt(null);
   }
 
@@ -473,9 +511,10 @@ export class Player {
     }
     this.reloadItem = it;
     this._g = g;
-    this.reloadT = this.reloadTotal = w.reload;
-    if (this.character) this.character.reload(w.reload);
-    g.sfx.play('reload', { volume: 0.7, weapon: it.id });
+    const reload = weaponStats(it.id, it.rarity).reload;
+    this.reloadT = this.reloadTotal = reload;
+    if (this.character) this.character.reload(reload);
+    g.sfx.play('reload', { volume: 0.7, weapon: w.kind === 'shotgun' ? 'shotgun' : it.id });
     return true;
   }
 
@@ -527,7 +566,7 @@ export class Player {
     const net = clientNet(g);
     if (net) net.sendFire(this, it, this.aimOrigin, g.combat.lastDirs, res);
     // recoil
-    this.pitch = clamp(this.pitch + (w.id === 'sniper' ? 0.05 : w.id === 'shotgun' ? 0.04 : 0.008), CAMERA.minPitch, CAMERA.maxPitch);
+    this.pitch = clamp(this.pitch + (w.kind === 'sniper' ? 0.05 : w.kind === 'shotgun' ? 0.04 : 0.008), CAMERA.minPitch, CAMERA.maxPitch);
     if (it.mag <= 0) this.startReload(g);
     return res;
   }

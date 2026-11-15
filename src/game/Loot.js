@@ -23,21 +23,19 @@
 import * as THREE from 'three';
 import { flattenModel } from '../core/assets.js';
 import { toToon } from '../render/Toon.js';
-import { pointInPoly } from '../world/World.js';
 import {
-  WEAPONS, CONSUMABLES, AMMO, MATERIALS, MATERIAL_COLOR, RARITIES, MATCH, DROP_ZONES, QUALITY, TAU,
+  WEAPONS, WEAPON_IDS, weaponStats, clampWeaponRarity, CONSUMABLES, AMMO, MATERIALS, MATERIAL_COLOR, RARITIES, MATCH,
+  DROP_ZONES, STORM, QUALITY, TAU,
 } from '../core/config.js';
 
 // ---------------------------------------------------------------- tunables
 export const LOOT = {
   floorRarity: [40, 30, 18, 9, 3], // weights for common..legendary
   chestRarity: [10, 32, 33, 18, 7],
-  weaponWeights: { rifle: 26, smg: 22, shotgun: 24, pistol: 18, sniper: 10 },
-  minRarity: { sniper: 'rare' },
+  weaponWeights: Object.fromEntries(WEAPON_IDS.map((id) => [id, WEAPONS[id].lootWeight ?? 10])),
   floorMix: { weapon: 0.45, consumable: 0.25, ammo: 0.2, material: 0.1 },
   matPickup: 30,
   chestMats: 30,
-  zoneBias: { chest: 0.55, ammoBox: 0.35, floor: 0.4 },
   spacing: { chest: 9, ammoBox: 7, item: 3 },
   cullDist: 260,
   beamDist: 70,
@@ -46,14 +44,35 @@ export const LOOT = {
   maxBeams: 110,
   maxGlows: 56,
   pickupRange: 2.4,
+  autoRange: 2.4, // floor ammo / ammo boxes are collected automatically inside this
   verticalReach: 2.2,
   scale: { chest: 2.0, ammo: 1.0, w: 1.3, medkit: 1.7, potion: 1.3, crateAmmo: 0.7, crateMat: 0.9 },
   ammoTint: { light: 0xbfe6ff, medium: 0x9ee08a, shells: 0xffa477, heavy: 0xa9b2ff },
 };
 
+// placement (spawnMatch): see the comment above Loot._interiorGrid
+const PLACE = {
+  indoor: { chest: 0.6, ammoBox: 0.35, item: 0.4 }, // share placed inside enterable buildings
+  candidates: { chest: 14, ammoBox: 12, item: 8 }, // best-of-K (indoor passes try 2K)
+  poiMin: { chest: 4, ammoBox: 2, item: 6 }, // every drop zone gets at least this many spots
+  reachMargin: 450, // playable area fades out over this beyond the storm circle / drop-zone disks
+  settledR: 120, // an enterable building within this = settled; else filler
+  fillerDensity: 0.2, // relative loot density in woods / meadow filler
+  poiMinR: 120,
+  poiMaxR: 350,
+  poiPad: 40,
+  dropBias: 0.65, // POI factor 1 - bias at a drop zone's heart (density there ~ 1/(1-bias)^2)
+  landmarkBias: 0.35,
+  indoorSearch: 70, // buildings within this of a candidate point
+  minInteriorArea: 30,
+  interiorCell: 100,
+  kindCell: 80,
+  scoreCap: 400,
+};
+
 const WEAPON_KEYS = Object.keys(WEAPONS);
 const AMMO_KINDS = Object.keys(AMMO);
-const CAP = { chest: MATCH.chests + 16, ammo: MATCH.ammoBoxes + 16, weapon: 220, consumable: 220, crate: 420 };
+const CAP = { chest: MATCH.chests + 16, ammo: MATCH.ammoBoxes + 16, weapon: 120 + MATCH.floorLoot, consumable: 120 + MATCH.floorLoot, crate: 200 + MATCH.floorLoot * 2 };
 
 const _m = new THREE.Matrix4();
 const _l = new THREE.Matrix4();
@@ -118,10 +137,9 @@ export function itemLabel(item) {
 /** Random loot rolls (exported for bots/tests). */
 export function rollWeapon(rng, rarityTable = LOOT.floorRarity) {
   const id = pickWeighted(rng, LOOT.weaponWeights);
-  let rarity = rollRarity(rng, rarityTable);
-  const min = LOOT.minRarity[id];
-  if (min && RARITIES.indexOf(rarity) < RARITIES.indexOf(min)) rarity = min;
-  return { type: 'weapon', id, rarity, mag: WEAPONS[id].mag };
+  const rarity = clampWeaponRarity(id, rollRarity(rng, rarityTable));
+  const st = weaponStats(id, rarity);
+  return { type: 'weapon', id, rarity, mag: (st && st.mag) || WEAPONS[id].mag };
 }
 export function ammoFor(weaponId) {
   const kind = WEAPONS[weaponId].ammo;
@@ -248,7 +266,8 @@ export class Loot {
     this._glows = 0;
     this._blips = [];
     this._blipsDirty = true;
-    this._buildings = null;
+    this._iGrid = null;
+    this.lastSpawn = null;
 
     const m = models || {};
     const chest = prepLidded(m.chest, 0xc58a3a, [0.5, 0.45, 0.5]);
@@ -265,7 +284,7 @@ export class Loot {
       crate: new Batch(g, prepFlat(m.crate, () => boxFlat(0.5, 0.5, 0.5, 0xffffff)), CAP.crate, { colored: true, name: 'crate' }),
     };
     for (const id of WEAPON_KEYS) {
-      this.batches['w_' + id] = new Batch(g, prepFlat(m[id], () => boxFlat(0.12, 0.2, 0.7, 0x55606a)), CAP.weapon, { name: id });
+      this.batches['w_' + id] = new Batch(g, prepFlat(m[WEAPONS[id].model] || m[id], () => boxFlat(0.12, 0.2, 0.7, 0x55606a)), CAP.weapon, { name: id });
     }
   }
 
@@ -353,53 +372,342 @@ export class Loot {
   }
 
   // -------------------------------------------------------------- placement
+  //
+  // Playable area (all derived at runtime from world.bounds, DROP_ZONE landmarks,
+  // the storm circle and world.buildingInteriors(); no hard-coded extents):
+  //   reach(p)  = 1 inside the storm's opening circle (opts.area; every later circle
+  //               lies inside it) or a DROP_ZONE disk, fading to 0 over
+  //               PLACE.reachMargin beyond them, clipped to the map bounds. On the
+  //               compact map that is the whole map; on a huge map it keeps loot off
+  //               empty fields km from the fight.
+  //   settled(p)= 1 with an enterable building within PLACE.settledR, else
+  //               PLACE.fillerDensity (woods / meadow filler gets sparse loot).
+  // Each DROP_ZONE first gets PLACE.poiMin spots of every kind inside its disk; the
+  // rest are spread by Mitchell's best-candidate sampling: each spot is the best of K
+  // uniform candidates, scored nearest-same-kind distance x sqrt(reach x settled) /
+  // poiFactor (poiFactor < 1 near landmarks, so they end up denser). Even blue-noise
+  // spread, exact counts, bounded work. A share of each kind goes inside enterable
+  // buildings at the building's floorY, capped per building (_cap).
 
-  _index() {
-    if (this._buildings) return this._buildings;
-    const list = [];
-    const bs = (this.world.data && this.world.data.buildings) || [];
-    for (const b of bs) {
-      const p = b.p;
-      if (!p || p.length < 3) continue;
-      const flat = new Float64Array(p.length * 2);
-      let cx = 0, cz = 0, per = 0;
-      for (let i = 0; i < p.length; i++) {
-        flat[i * 2] = p[i][0];
-        flat[i * 2 + 1] = p[i][1];
-        cx += p[i][0];
-        cz += p[i][1];
-        const q = p[(i + 1) % p.length];
-        per += Math.hypot(q[0] - p[i][0], q[1] - p[i][1]);
-      }
-      if (per < 12) continue; // sheds and slivers
-      list.push({ p, flat, n: p.length, cx: cx / p.length, cz: cz / p.length, per });
+  /** Enterable buildings bucketed on a coarse grid (cached per world). */
+  _interiorGrid() {
+    const w = this.world;
+    const list = typeof w.buildingInteriors === 'function' ? w.buildingInteriors() : [];
+    if (this._iGrid && this._iGrid.list === list) return this._iGrid;
+    const C = PLACE.interiorCell;
+    const cells = new Map();
+    for (const b of list) {
+      if (!(b.area >= PLACE.minInteriorArea)) continue;
+      const k = Math.floor(b.x / C) * 73856093 ^ Math.floor(b.z / C) * 19349663;
+      let cell = cells.get(k);
+      if (!cell) cells.set(k, (cell = []));
+      cell.push(b);
     }
-    this._buildings = list;
-    return list;
+    this._iGrid = { list, cells, C };
+    return this._iGrid;
   }
 
-  _zones(area) {
-    const lms = this.world.landmarks || {};
-    const out = [];
-    const all = this._index();
-    for (const z of DROP_ZONES) {
-      const lm = lms[z.key];
-      if (!lm || !Number.isFinite(lm.x)) continue;
-      const r = Math.min(lm.r || 80, 160) + 40;
-      if (area && Math.hypot(lm.x - area.x, lm.z - area.z) > area.r + r) continue;
-      const bl = all.filter((b) => (b.cx - lm.x) ** 2 + (b.cz - lm.z) ** 2 < r * r);
-      out.push({ x: lm.x, z: lm.z, r, buildings: bl });
+  /** Interior buildings whose centre is within r of (x, z), pushed into out. */
+  _interiorsNear(x, z, r, out) {
+    const g = this._interiorGrid();
+    out.length = 0;
+    const C = g.C;
+    const x0 = Math.floor((x - r) / C), x1 = Math.floor((x + r) / C);
+    const z0 = Math.floor((z - r) / C), z1 = Math.floor((z + r) / C);
+    for (let ix = x0; ix <= x1; ix++) {
+      for (let iz = z0; iz <= z1; iz++) {
+        const cell = g.cells.get(ix * 73856093 ^ iz * 19349663);
+        if (!cell) continue;
+        for (const b of cell) if ((b.x - x) ** 2 + (b.z - z) ** 2 < r * r) out.push(b);
+      }
     }
     return out;
   }
 
-  _okSpot(x, z, clearance, area) {
+  /** Playable-area description for this match (see the block comment). */
+  _playable(area) {
+    const w = this.world;
+    const lms = w.landmarks || {};
+    const main = area || { x: 0, z: 0, r: STORM.startRadius * 1.15 };
+    const disks = [{ key: 'circle', x: main.x, z: main.z, r: main.r }];
+    for (const zd of DROP_ZONES) {
+      const lm = lms[zd.key];
+      if (!lm || !Number.isFinite(lm.x)) continue;
+      const r = Math.max(PLACE.poiMinR, Math.min(lm.r || 100, PLACE.poiMaxR)) + PLACE.poiPad;
+      disks.push({ key: zd.key, x: lm.x, z: lm.z, r, poi: true });
+    }
+    const M = PLACE.reachMargin;
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    for (const d of disks) {
+      minX = Math.min(minX, d.x - d.r - M);
+      maxX = Math.max(maxX, d.x + d.r + M);
+      minZ = Math.min(minZ, d.z - d.r - M);
+      maxZ = Math.max(maxZ, d.z + d.r + M);
+    }
+    const b = w.bounds;
+    const inset = 20;
+    return {
+      disks,
+      minX: Math.max(minX, b.minX + inset),
+      maxX: Math.min(maxX, b.maxX - inset),
+      minZ: Math.max(minZ, b.minZ + inset),
+      maxZ: Math.min(maxZ, b.maxZ - inset),
+    };
+  }
+
+  /** reach(p) x settled(p) in [0, 1]; 0 = outside the playable area. */
+  _weight(x, z) {
+    const M = PLACE.reachMargin;
+    let reach = 0;
+    for (const d of this._play.disks) {
+      const e = Math.sqrt((x - d.x) ** 2 + (z - d.z) ** 2) - d.r;
+      const v = e <= 0 ? 1 : 1 - e / M;
+      if (v > reach) reach = v;
+      if (reach >= 1) break;
+    }
+    if (reach <= 0) return 0;
+    if (!this._inComposed(x, z)) return 0;
+    return reach * this._settled(x, z);
+  }
+
+  /**
+   * Compact composed maps (meta.composition from scripts/compose-map.mjs): loot only on the
+   * downtown core, the moved islands (padded a little) and along the connector roads between
+   * them, never in the countryside filler that pads the bounds rectangle. Maps without a
+   * composition allow everything.
+   */
+  _inComposed(x, z) {
+    let c = this._comp;
+    if (c === undefined) {
+      const meta = this.world.data && this.world.data.meta;
+      const comp = meta && meta.composition;
+      c = null;
+      if (comp && comp.core && Array.isArray(comp.core.rect)) {
+        const pad = 60;
+        const rects = [comp.core.rect, ...(comp.islands || []).map((i) => i.rect)]
+          .filter((r) => Array.isArray(r) && r.length === 4)
+          .map(([x0, z0, x1, z1]) => [Math.min(x0, x1) - pad, Math.min(z0, z1) - pad, Math.max(x0, x1) + pad, Math.max(z0, z1) + pad]);
+        const roads = (comp.connectors || []).filter((s) => Array.isArray(s.from) && Array.isArray(s.to));
+        c = { rects, roads, roadR: 70 };
+      }
+      this._comp = c;
+    }
+    if (!c) return true;
+    for (const r of c.rects) if (x >= r[0] && x <= r[2] && z >= r[1] && z <= r[3]) return true;
+    for (const s of c.roads) {
+      const ax = s.from[0], az = s.from[1], bx = s.to[0], bz = s.to[1];
+      const dx = bx - ax, dz = bz - az;
+      const L2 = dx * dx + dz * dz || 1;
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L2));
+      if (Math.hypot(x - (ax + dx * t), z - (az + dz * t)) <= c.roadR) return true;
+    }
+    return false;
+  }
+
+  /** 1 with an enterable building near (x, z), else PLACE.fillerDensity (cached per 40 m cell). */
+  _settled(x, z) {
+    const S = 40;
+    const cx = Math.floor(x / S), cz = Math.floor(z / S);
+    const key = cx * 73856093 ^ cz * 19349663;
+    let v = this._settledCache.get(key);
+    if (v !== undefined) return v;
+    v = PLACE.fillerDensity;
+    const g = this._interiorGrid();
+    const C = g.C, r = PLACE.settledR, px = (cx + 0.5) * S, pz = (cz + 0.5) * S;
+    outer: for (let ix = Math.floor((px - r) / C); ix <= Math.floor((px + r) / C); ix++) {
+      for (let iz = Math.floor((pz - r) / C); iz <= Math.floor((pz + r) / C); iz++) {
+        const cell = g.cells.get(ix * 73856093 ^ iz * 19349663);
+        if (!cell) continue;
+        for (const b of cell) {
+          if ((b.x - px) ** 2 + (b.z - pz) ** 2 < r * r) {
+            v = 1;
+            break outer;
+          }
+        }
+      }
+    }
+    this._settledCache.set(key, v);
+    return v;
+  }
+
+  /** Landmark richness: 1 away from POIs, down to 1 - bias at a POI's heart. */
+  _poiFactor(x, z) {
+    let f = 1;
+    for (const p of this._pois) {
+      const d2 = (x - p.x) ** 2 + (z - p.z) ** 2;
+      if (d2 >= p.r * p.r * 1.69) continue;
+      const d = Math.sqrt(d2);
+      const t = d <= p.r * 0.6 ? 1 : 1 - (d - p.r * 0.6) / (p.r * 0.7);
+      const v = 1 - p.bias * t * t * (3 - 2 * t);
+      if (v < f) f = v;
+    }
+    return f;
+  }
+
+  _collectPois() {
+    const lms = this.world.landmarks || {};
+    const drop = new Set(DROP_ZONES.map((z) => z.key));
+    const out = [];
+    for (const k in lms) {
+      const lm = lms[k];
+      if (!lm || !Number.isFinite(lm.x)) continue;
+      const isDrop = drop.has(k);
+      if (!isDrop && (lm.r || 0) > PLACE.poiMaxR) continue; // trails / greenway: too big to be a "place"
+      out.push({ x: lm.x, z: lm.z, r: Math.max(PLACE.poiMinR * (isDrop ? 1 : 0.5), Math.min(lm.r || 60, PLACE.poiMaxR)), bias: isDrop ? PLACE.dropBias : PLACE.landmarkBias });
+    }
+    return out;
+  }
+
+  /** Nearest same-kind spot distance (capped at PLACE.scoreCap); grid rings, nearest first. */
+  _nearestSame(kind, x, z) {
+    const g = this._kindGrid[kind];
+    const C = PLACE.kindCell;
+    const R = Math.ceil(PLACE.scoreCap / C);
+    const gx = Math.floor(x / C), gz = Math.floor(z / C);
+    let best = PLACE.scoreCap * PLACE.scoreCap;
+    for (let ring = 0; ring <= R; ring++) {
+      // every point in ring k is at least (k - 1) * C away
+      if (ring > 1 && ((ring - 1) * C) ** 2 >= best) break;
+      for (let ix = gx - ring; ix <= gx + ring; ix++) {
+        const edge = ix === gx - ring || ix === gx + ring;
+        for (let iz = gz - ring; iz <= gz + ring; iz += edge ? 1 : 2 * ring) {
+          const cell = g.get(ix * 73856093 ^ iz * 19349663);
+          if (!cell) continue;
+          for (let i = 0; i < cell.length; i += 2) {
+            const d = (cell[i] - x) ** 2 + (cell[i + 1] - z) ** 2;
+            if (d < best) best = d;
+          }
+        }
+      }
+    }
+    return Math.sqrt(best);
+  }
+
+  _markKind(kind, x, z) {
+    const C = PLACE.kindCell;
+    const g = this._kindGrid[kind];
+    const k = Math.floor(x / C) * 73856093 ^ Math.floor(z / C) * 19349663;
+    let cell = g.get(k);
+    if (!cell) g.set(k, (cell = []));
+    cell.push(x, z);
+  }
+
+  /** Uniform point inside `disk` (or the playable rectangle) with weight > 0; null if unlucky. */
+  _samplePoint(rng, disk) {
+    const P = this._play;
+    for (let i = 0; i < 30; i++) {
+      let x, z;
+      if (disk) {
+        const a = rng() * TAU, d = Math.sqrt(rng()) * disk.r;
+        x = disk.x + Math.cos(a) * d;
+        z = disk.z + Math.sin(a) * d;
+      } else {
+        x = P.minX + rng() * (P.maxX - P.minX);
+        z = P.minZ + rng() * (P.maxZ - P.minZ);
+      }
+      if (!this.world.inBounds(x, z, 20)) continue;
+      const wt = this._weight(x, z);
+      if (wt > 0) return { x, z, wt };
+    }
+    return null;
+  }
+
+  _okSpot(x, z, clearance) {
     const w = this.world;
     if (!w.inBounds(x, z, 20)) return false;
-    if (area && (x - area.x) ** 2 + (z - area.z) ** 2 > area.r * area.r) return false;
     if (w.blockedAt(x, z, clearance)) return false;
     if (w.areaAt && w.areaAt(x, z) === 'water') return false;
     return true;
+  }
+
+  /** An open ground candidate near p, or null. */
+  _outdoorCandidate(rng, p, clearance) {
+    const w = this.world;
+    for (let t = 0; t < 3; t++) {
+      const x = t ? p.x + (rng() - 0.5) * 16 : p.x;
+      const z = t ? p.z + (rng() - 0.5) * 16 : p.z;
+      if (this._okSpot(x, z, clearance)) return { x, z, y: w.groundHeight(x, z, 0.3), yaw: rng() * TAU, b: null };
+    }
+    return null;
+  }
+
+  /** A floor point inside an enterable building near p (not in a wall), or null. */
+  _indoorCandidate(rng, p, kind, clearance) {
+    const w = this.world;
+    const near = this._interiorsNear(p.x, p.z, PLACE.indoorSearch, this._nearBuf);
+    if (!near.length) return null;
+    const used = this._used[kind];
+    let tot = 0;
+    const wts = this._wBuf;
+    wts.length = 0;
+    for (const b of near) {
+      const v = (used.get(b) || 0) >= this._cap(kind, b) ? 0 : Math.sqrt(b.area);
+      wts.push(v);
+      tot += v;
+    }
+    if (tot <= 0) return null;
+    let pick = rng() * tot, b = near[near.length - 1];
+    for (let i = 0; i < near.length; i++) {
+      pick -= wts[i];
+      if (pick < 0) {
+        b = near[i];
+        break;
+      }
+    }
+    const c = b.collider;
+    for (let k = 0; k < 10; k++) {
+      const x = c.minX + rng() * (c.maxX - c.minX);
+      const z = c.minZ + rng() * (c.maxZ - c.minZ);
+      if (w.interiorAt(x, z) !== c) continue;
+      if (w.blockedAt(x, z, clearance, true)) continue;
+      return { x, z, y: Math.max(b.floorY, w.terrainHeight(x, z)), yaw: rng() * TAU, b };
+    }
+    return null;
+  }
+
+  /** Most spots of `kind` one building may hold. */
+  _cap(kind, b) {
+    const a = b.area;
+    if (kind === 'chest') return a < 1500 ? 1 : a < 6000 ? 2 : a < 20000 ? 3 : 4;
+    if (kind === 'ammoBox') return a < 3000 ? 1 : 2;
+    return a < 400 ? 1 : a < 2500 ? 2 : 3 + Math.min(3, Math.floor(a / 6000));
+  }
+
+  /** Best-of-K spot for `kind` (inside `disk` when given); indoor tries interiors first. */
+  _bestSpot(rng, kind, disk, indoor) {
+    const baseSpacing = LOOT.spacing[kind];
+    const clr = kind === 'item' ? 0.5 : 0.9;
+    const K = PLACE.candidates[kind];
+    // pass 0: indoor (if wanted); pass 1: outdoor; pass 2: last resort with more candidates and
+    // half spacing, so exact counts survive on a compact map where land is scarcer
+    for (let pass = 0; pass < 3; pass++) {
+      const wantIn = indoor && pass === 0;
+      const spacing = pass === 2 ? baseSpacing * 0.5 : baseSpacing;
+      const tries = pass === 2 ? K * 4 : K * (wantIn ? 2 : 1);
+      let best = null, bestScore = -1;
+      for (let k = 0; k < tries; k++) {
+        const p = this._samplePoint(rng, disk);
+        if (!p) continue;
+        const s = wantIn ? this._indoorCandidate(rng, p, kind, clr) : this._outdoorCandidate(rng, p, clr);
+        if (!s) continue;
+        if (disk && (s.x - disk.x) ** 2 + (s.z - disk.z) ** 2 > disk.r * disk.r) continue;
+        if (!this._spaced(s.x, s.z, spacing)) continue;
+        const wt = s.b ? this._weight(s.x, s.z) : p.wt;
+        if (wt <= 0) continue;
+        const score = (this._nearestSame(kind, s.x, s.z) * Math.sqrt(wt)) / this._poiFactor(s.x, s.z);
+        if (score > bestScore) {
+          bestScore = score;
+          best = s;
+        }
+      }
+      if (best) {
+        this._mark(best.x, best.z, spacing);
+        this._markKind(kind, best.x, best.z);
+        if (best.b) this._used[kind].set(best.b, (this._used[kind].get(best.b) || 0) + 1);
+        return best;
+      }
+    }
+    return null;
   }
 
   _spaced(x, z, d) {
@@ -425,114 +733,94 @@ export class Loot {
     cell.push({ x, z, d });
   }
 
-  /** A point just outside a building wall, facing away from it. */
-  _beside(rng, b, offMin, offMax, clearance, area) {
-    for (let tries = 0; tries < 6; tries++) {
-      let r = rng() * b.per;
-      let i = 0;
-      const p = b.p;
-      let ax, az, bx, bz, len;
-      for (; i < p.length; i++) {
-        const q = p[(i + 1) % p.length];
-        ax = p[i][0]; az = p[i][1]; bx = q[0]; bz = q[1];
-        len = Math.hypot(bx - ax, bz - az);
-        if (r < len) break;
-        r -= len;
-      }
-      if (!(len > 2)) continue;
-      const t = 0.15 + rng() * 0.7;
-      const mx = ax + (bx - ax) * t, mz = az + (bz - az) * t;
-      let nx = (bz - az) / len, nz = -(bx - ax) / len;
-      if (pointInPoly(b.flat, b.n, mx + nx * 0.3, mz + nz * 0.3)) {
-        nx = -nx;
-        nz = -nz;
-      }
-      const off = offMin + rng() * (offMax - offMin);
-      const x = mx + nx * off, z = mz + nz * off;
-      if (this._okSpot(x, z, clearance, area)) return { x, z, yaw: Math.atan2(nx, nz) };
-    }
-    return null;
-  }
-
-  _spot(rng, kind, ctx) {
-    const { zones, cands, area } = ctx;
-    const bias = LOOT.zoneBias[kind === 'item' ? 'floor' : kind];
-    const spacing = LOOT.spacing[kind];
-    const container = kind !== 'item';
-    for (let attempt = 0; attempt < 30; attempt++) {
-      const useZone = zones.length && rng() < bias;
-      const zone = useZone ? zones[Math.floor(rng() * zones.length)] : null;
-      const list = zone ? zone.buildings : cands;
-      let s = null;
-      if (list.length && (container || rng() < 0.6)) {
-        const b = list[Math.floor(rng() * list.length)];
-        s = container ? this._beside(rng, b, 0.9, 1.4, 0.75, area) : this._beside(rng, b, 1.2, 3.5, 0.5, area);
-      } else {
-        const b = !zone && list.length ? list[Math.floor(rng() * list.length)] : null;
-        const cx = zone ? zone.x : b ? b.cx : area ? area.x : 0;
-        const cz = zone ? zone.z : b ? b.cz : area ? area.z : 0;
-        const o = this.world.randomOpenPoint(rng, cx, cz, zone ? zone.r : b ? 30 : area ? area.r : 300, 0.6);
-        if (this._okSpot(o.x, o.z, 0.5, area)) s = { x: o.x, z: o.z, yaw: rng() * TAU };
-      }
-      if (!s || !this._spaced(s.x, s.z, spacing)) continue;
-      this._mark(s.x, s.z, spacing);
-      return s;
-    }
-    return null;
-  }
-
   /**
    * Places MATCH.chests chests, MATCH.ammoBoxes ammo boxes and MATCH.floorLoot
-   * floor spots (a weapon spot also gets its ammo beside it). Optional
-   * opts.area = { x, z, r } keeps everything inside that circle.
+   * floor spots (a weapon spot also gets its ammo beside it) over the playable
+   * area: opts.area = { x, z, r } (the storm's opening circle) plus every
+   * DROP_ZONE landmark. Deterministic for a given rng sequence.
+   * Returns { chests, ammoBoxes, items, indoorChests, ms }.
    */
   spawnMatch(rng = Math.random, opts = {}) {
+    const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
     this.clear();
     this._rng = rng;
     this._grid = new Map();
+    this._kindGrid = { chest: new Map(), ammoBox: new Map(), item: new Map() };
+    this._used = { chest: new Map(), ammoBox: new Map(), item: new Map() };
+    this._nearBuf = [];
+    this._wBuf = [];
+    this._pois = this._collectPois();
+    this._settledCache = new Map();
     const area = opts.area && opts.area.r > 0 ? opts.area : null;
-    const all = this._index();
-    const cands = area ? all.filter((b) => (b.cx - area.x) ** 2 + (b.cz - area.z) ** 2 < area.r * area.r) : all;
-    const ctx = { zones: this._zones(area), cands, area };
+    const play = (this._play = this._playable(area));
     const w = this.world;
-    const gy = (x, z) => w.groundHeight(x, z, 0.3);
 
-    const nChests = opts.chests ?? MATCH.chests;
-    const nBoxes = opts.ammoBoxes ?? MATCH.ammoBoxes;
-    const nFloor = opts.floorLoot ?? MATCH.floorLoot;
-    for (let i = 0; i < nChests; i++) {
-      const s = this._spot(rng, 'chest', ctx);
-      if (s) this._add('chest', s.x, gy(s.x, s.z), s.z, s.yaw, null);
-    }
-    for (let i = 0; i < nBoxes; i++) {
-      const s = this._spot(rng, 'ammoBox', ctx);
-      if (s) this._add('ammoBox', s.x, gy(s.x, s.z), s.z, s.yaw, null);
-    }
-    for (let i = 0; i < nFloor; i++) {
-      const s = this._spot(rng, 'item', ctx);
-      if (!s) continue;
-      const kind = pickWeighted(rng, LOOT.floorMix);
-      let item;
-      if (kind === 'weapon') item = rollWeapon(rng, LOOT.floorRarity);
-      else if (kind === 'consumable') item = rollConsumable(rng);
-      else if (kind === 'ammo') item = rollAmmo(rng);
-      else item = { type: 'material', mat: MATERIALS[Math.floor(rng() * MATERIALS.length)], count: LOOT.matPickup };
-      this._add('item', s.x, gy(s.x, s.z), s.z, s.yaw, item);
-      if (item.type === 'weapon' && rng() < 0.7) {
-        const ax = s.x + Math.cos(s.yaw) * 0.9, az = s.z - Math.sin(s.yaw) * 0.9;
-        const ok = !w.blockedAt(ax, az, 0.3);
-        this._add('item', ok ? ax : s.x, gy(ok ? ax : s.x, ok ? az : s.z), ok ? az : s.z, s.yaw, ammoFor(item.id));
+    const counts = {
+      chest: opts.chests ?? MATCH.chests,
+      ammoBox: opts.ammoBoxes ?? MATCH.ammoBoxes,
+      item: opts.floorLoot ?? MATCH.floorLoot,
+    };
+    let indoorChests = 0;
+    const pois = play.disks.filter((d) => d.poi);
+    for (const kind of ['chest', 'ammoBox', 'item']) {
+      const pIn = PLACE.indoor[kind];
+      const total = counts[kind];
+      // drop-zone minimum first (inside each POI's own footprint), then the whole area
+      const plan = [];
+      const per = Math.min(PLACE.poiMin[kind], Math.floor(total / Math.max(1, pois.length) / 2));
+      for (const d of pois) for (let i = 0; i < per; i++) plan.push({ x: d.x, z: d.z, r: d.r - PLACE.poiPad });
+      while (plan.length < total) plan.push(null);
+      for (let i = 0; i < plan.length; i++) {
+        // exact indoor share: spot i goes indoors when floor((i+1)p) steps up
+        const indoor = Math.floor((i + 1) * pIn) > Math.floor(i * pIn);
+        const s = this._bestSpot(rng, kind, plan[i], indoor);
+        if (!s) continue;
+        if (kind !== 'item') {
+          this._add(kind, s.x, s.y, s.z, s.yaw, null);
+          if (kind === 'chest' && s.b) indoorChests++;
+          continue;
+        }
+        const mix = pickWeighted(rng, LOOT.floorMix);
+        let item;
+        if (mix === 'weapon') item = rollWeapon(rng, LOOT.floorRarity);
+        else if (mix === 'consumable') item = rollConsumable(rng);
+        else if (mix === 'ammo') item = rollAmmo(rng);
+        else item = { type: 'material', mat: MATERIALS[Math.floor(rng() * MATERIALS.length)], count: LOOT.matPickup };
+        this._add('item', s.x, s.y, s.z, s.yaw, item);
+        if (item.type === 'weapon' && rng() < 0.7) {
+          const ax = s.x + Math.cos(s.yaw) * 0.9, az = s.z - Math.sin(s.yaw) * 0.9;
+          const ok = s.b
+            ? w.interiorAt(ax, az) === s.b.collider && !w.blockedAt(ax, az, 0.3, true)
+            : !w.blockedAt(ax, az, 0.3);
+          const px = ok ? ax : s.x, pz = ok ? az : s.z;
+          const py = s.b ? Math.max(s.b.floorY, w.terrainHeight(px, pz)) : w.groundHeight(px, pz, 0.3);
+          this._add('item', px, py, pz, s.yaw, ammoFor(item.id));
+        }
       }
     }
-    this._grid = null;
-    return { chests: this.records.filter((r) => r.kind === 'chest').length, ammoBoxes: this.records.filter((r) => r.kind === 'ammoBox').length, items: this.records.filter((r) => r.kind === 'item').length };
+    this._grid = this._kindGrid = this._used = null;
+    let chests = 0, ammoBoxes = 0, items = 0;
+    for (const r of this.records) {
+      if (r.kind === 'chest') chests++;
+      else if (r.kind === 'ammoBox') ammoBoxes++;
+      else items++;
+    }
+    const ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+    this._play = this._settledCache = null;
+    this.lastSpawn = { chests, ammoBoxes, items, indoorChests, ms };
+    return { chests, ammoBoxes, items, indoorChests, ms };
   }
 
   // -------------------------------------------------------------- interaction
 
   _spawnItem(item, fromX, fromY, fromZ, toX, toZ, hintY) {
     const w = this.world;
-    if (w.blockedAt(toX, toZ, 0.25)) {
+    // inside an enterable building only its walls block (the footprint itself would)
+    const inside = w.interiorAt ? w.interiorAt(fromX, fromZ) : null;
+    const blocked = inside
+      ? w.interiorAt(toX, toZ) !== inside || w.blockedAt(toX, toZ, 0.25, true)
+      : w.blockedAt(toX, toZ, 0.25);
+    if (blocked) {
       toX = fromX;
       toZ = fromZ;
     }
@@ -655,6 +943,23 @@ export class Loot {
     }
     out.sort((a, b) => a.d - b.d);
     return out.map((o) => o.info);
+  }
+
+  /**
+   * Auto-pickup candidates within `radius` of `pos` (horizontal, within verticalReach):
+   * settled floor ammo items and unopened ammo boxes. Fills and returns `out`.
+   */
+  autoPickups(pos, radius = LOOT.autoRange, out = []) {
+    out.length = 0;
+    const r2 = radius * radius;
+    for (const r of this.records) {
+      if (r.kind === 'item') {
+        if (r.spill || !r.item || r.item.type !== 'ammo') continue;
+      } else if (r.kind !== 'ammoBox' || r.opened) continue;
+      if (Math.abs(r.y - pos.y) > LOOT.verticalReach) continue;
+      if ((r.x - pos.x) ** 2 + (r.z - pos.z) ** 2 <= r2) out.push(r.info);
+    }
+    return out;
   }
 
   /** Minimap blips. The array is rebuilt only when loot changes. */

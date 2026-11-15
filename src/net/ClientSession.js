@@ -13,7 +13,7 @@
 // play effects; the pellets and what they appeared to hit are sent to the host.
 
 import * as THREE from 'three';
-import { WEAPONS, PLAYER, QUALITY, TAU } from '../core/config.js';
+import { WEAPONS, PLAYER, QUALITY, TAU, weaponStats } from '../core/config.js';
 import { Character } from '../game/Character.js';
 import { itemLabel } from '../game/Player.js';
 import { impactSound } from '../game/Combat.js';
@@ -82,7 +82,7 @@ export class Puppet {
     const c = this.character;
     if (c && this.alive) {
       if (eq !== this.equip) c.setEquipped(eq, WEAPONS[eq] ? WEAPONS[eq].twoHanded !== false : true);
-      if (r.flags & FLAG.reloading && !(was & FLAG.reloading) && WEAPONS[eq]) c.reload(WEAPONS[eq].reload);
+      if (r.flags & FLAG.reloading && !(was & FLAG.reloading) && WEAPONS[eq]) c.reload(weaponStats(eq).reload); // rarity is not replicated; lowest-rarity time
       const em = !!(r.flags & FLAG.emote);
       if (em !== !!(was & FLAG.emote)) c.emote(em);
     }
@@ -180,6 +180,10 @@ export class ClientSession {
       game.combat.register(pup);
     }
     this.aliveCount = start.roster.length;
+    // Follow-up rounds of a burst gun are scheduled by Combat; forward each one like a trigger pull.
+    game.combat.onBurstShot = (s, it, o, dirs, res) => {
+      if (s === game.player) this.sendFire(s, it, o, dirs, res);
+    };
     this.started = true;
     this.stats.t0 = performance.now();
     this.conn.bytesIn = 0;
@@ -413,14 +417,14 @@ export class ClientSession {
     if (!n) return;
     _v2.set(e.p[0], e.p[1], e.p[2]);
     _n.copy(_v2).sub(from).normalize();
-    if (g.fx) g.fx.muzzleFlash(from, _n, { scale: w.id === 'shotgun' ? 1.4 : 1 });
-    g.sfx.play(w.sound, { x: from.x, y: from.y, z: from.z });
+    if (g.fx) g.fx.muzzleFlash(from, _n, { scale: w.kind === 'shotgun' ? 1.4 : 1 });
+    g.sfx.play(w.sound, { x: from.x, y: from.y, z: from.z, volume: w.soundVolume });
     let impact = null;
     for (let i = 0; i < n; i++) {
       _v2.set(e.p[i * 3], e.p[i * 3 + 1], e.p[i * 3 + 2]);
       const surf = SURF[e.k[i]] || 'none';
       if (g.fx) {
-        if (i === 0 || n <= 3 || i % 3 === 0) g.fx.tracer(from, _v2, { color: w.tracer, width: w.id === 'sniper' ? 0.08 : 0.05 });
+        if (i === 0 || n <= 3 || i % 3 === 0) g.fx.tracer(from, _v2, { color: w.tracer, width: w.kind === 'sniper' ? 0.08 : 0.05 });
         if (surf !== 'none') {
           _n.copy(from).sub(_v2).normalize();
           g.fx.impact(_v2, _n, surf);
@@ -429,7 +433,7 @@ export class ClientSession {
       if (surf !== 'none' && !impact) impact = { x: _v2.x, y: _v2.y, z: _v2.z, surf };
     }
     if (impact) g.sfx.play('bullet_impact', { x: impact.x, y: impact.y, z: impact.z, volume: 0.6, surface: impactSound(impact.surf) });
-    if (w.id === 'shotgun') setTimeout(() => g.sfx.play('shotgun_pump', { x: from.x, y: from.y, z: from.z, volume: 0.7 }), 350);
+    if (w.pump) setTimeout(() => g.sfx.play('shotgun_pump', { x: from.x, y: from.y, z: from.z, volume: 0.7 }), 350);
   }
 
   _hit(e) {
@@ -590,6 +594,7 @@ export class ClientSession {
 
   dispose(game) {
     this.started = false;
+    if (game.combat.onBurstShot) game.combat.onBurstShot = null;
     for (const pup of this.puppets.values()) {
       game.combat.unregister(pup);
       pup.dispose();

@@ -4,6 +4,7 @@
 //   const menus = createMenus(root, {
 //     settings,                       // current settings object (src/ui/settings.js shape)
 //     onPlay(), onSettings(settings), onResume(), onLeave(), onPlayAgain(),
+//     onFreeBuild(name),                           // solo sandbox: no bots, no storm, full mats
 //     onHost(name), onJoin(code, name),           // multiplayer (main.js lazy-loads src/net)
 //     onLobbyStart(), onLobbyLeave(), onLobbyFill(on),
 //     googleTilesAvailable,          // false -> "Real-world 3D view" toggle shown disabled with a hint
@@ -21,15 +22,18 @@
 import './hud.css';
 import './menus.css';
 import { icon } from './icons.js';
-import { QUALITY_OPTIONS, DIFFICULTY_OPTIONS, sanitizeSettings } from './settings.js';
+import { QUALITY_OPTIONS, DIFFICULTY_OPTIONS, sanitizeSettings, ACTIONS, DEFAULT_BINDINGS, RESERVED_CODES, keyLabel, rebind } from './settings.js';
+import { createFpsMeter } from './fpsMeter.js';
+import { MATCH } from '../core/config.js';
 
+// Functions get the current key bindings (tips follow rebinds).
 const TIPS = [
   'Swing your pickaxe at trees, rocks and parked cars to gather building materials.',
-  'Q wall, C floor, V ramp, X cone. G switches between wood, brick and metal.',
+  (k) => `${k('buildWall')} wall, ${k('buildFloor')} floor, ${k('buildRamp')} ramp, ${k('buildCone')} cone. ${k('cycleMaterial')} switches between wood, brick and metal.`,
   'Shield Tonics stack on top of your health. Drink them before a fight.',
   'The storm hurts more every phase. Watch the timer in the top left.',
   'Chests glow and hum. Listen for them inside buildings.',
-  'Hold right mouse to aim down sights for tighter shots.',
+  (k) => `Hold ${k('aim')} to aim down sights for tighter shots.`,
   'Headshots deal bonus damage with every weapon.',
 ];
 
@@ -63,10 +67,11 @@ export function createMenus(root, opts = {}) {
     `<div class="mn-logo">
        <div class="mn-logo-top br-ol">BENTONVILLE</div>
        <div class="mn-logo-main br-ol-xl">ROYALE</div>
-       <div class="mn-logo-tag">32 players &middot; one town square &middot; build to survive</div>
+       <div class="mn-logo-tag">100 players &middot; one town square &middot; build to survive</div>
      </div>
      <div class="mn-stack">
        <button class="mn-btn mn-btn-hero" data-act="play">${icon('play')}<span>PLAY VS BOTS</span></button>
+       <button class="mn-btn" data-act="freebuild">${icon('wall')}<span>FREE BUILD</span></button>
        <button class="mn-btn" data-act="host">${icon('people')}<span>HOST MULTIPLAYER</span></button>
        <div class="mn-join">
          <input class="mn-field mn-code" data-ref="code" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Room code">
@@ -77,10 +82,10 @@ export function createMenus(root, opts = {}) {
        <button class="mn-btn mn-btn-small" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
      </div>
      <div class="mn-controls">
-       <span><kbd class="br-key">WASD</kbd>move</span><span><kbd class="br-key">SPACE</kbd>jump</span>
-       <span><kbd class="br-key">LMB</kbd>fire</span><span><kbd class="br-key">RMB</kbd>aim</span>
-       <span><kbd class="br-key">E</kbd>loot</span><span><kbd class="br-key">Q C V X</kbd>build</span>
-       <span><kbd class="br-key">F</kbd>pickaxe</span><span><kbd class="br-key">M</kbd>map</span>
+       <span><kbd class="br-key" data-bind="moveForward moveLeft moveBack moveRight">WASD</kbd>move</span><span><kbd class="br-key" data-bind="jump">SPACE</kbd>jump</span>
+       <span><kbd class="br-key" data-bind="fire">LMB</kbd>fire</span><span><kbd class="br-key" data-bind="aim">RMB</kbd>aim</span>
+       <span><kbd class="br-key" data-bind="interact">E</kbd>loot</span><span><kbd class="br-key" data-bind="buildWall buildFloor buildRamp buildCone">Q C V X</kbd>build</span>
+       <span><kbd class="br-key" data-bind="pickaxe">F</kbd>pickaxe</span><span><kbd class="br-key" data-bind="map">M</kbd>map</span>
      </div>
      <div class="mn-foot">Map data &copy; OpenStreetMap contributors &middot; An original fan-made game, not affiliated with any other battle royale</div>`
   );
@@ -136,17 +141,51 @@ export function createMenus(root, opts = {}) {
   // ---------------------------------------------------------------- settings
   const seg = (name, options) =>
     `<div class="mn-seg" data-name="${name}">${options.map((o) => `<button data-val="${o}">${o.toUpperCase()}</button>`).join('')}</div>`;
+  const range = (name, label, min, max, step) =>
+    `<label class="mn-row"><span>${label}</span><input type="range" min="${min}" max="${max}" step="${step}" data-name="${name}"><output data-out="${name}"></output></label>`;
+  const toggle = (name, label, hint = '') =>
+    `<label class="mn-row"><span>${label}${hint ? `<small class="mn-hint">${hint}</small>` : ''}</span><input type="checkbox" class="mn-toggle" data-name="${name}"></label>`;
+  let bindRows = '';
+  let lastGroup = '';
+  for (const a of ACTIONS) {
+    if (a.group !== lastGroup) {
+      bindRows += `<div class="mn-bind-group">${a.group}</div>`;
+      lastGroup = a.group;
+    }
+    bindRows += `<div class="mn-row mn-bind-row"><span>${a.label}</span><button type="button" class="mn-bind" data-bind-action="${a.id}"></button></div>`;
+  }
   const settingsEl = el(
     'section',
     'mn-screen mn-settings',
-    `<div class="mn-card">
+    `<div class="mn-card mn-card-settings">
        <h2 class="mn-h br-ol">SETTINGS</h2>
-       <label class="mn-row"><span>Mouse sensitivity</span><input type="range" min="0.2" max="3" step="0.05" data-name="sensitivity"><output data-out="sensitivity"></output></label>
-       <label class="mn-row"><span>Volume</span><input type="range" min="0" max="1" step="0.05" data-name="volume"><output data-out="volume"></output></label>
-       <div class="mn-row"><span>Graphics quality</span>${seg('quality', QUALITY_OPTIONS)}</div>
-       <div class="mn-row"><span>Bot difficulty</span>${seg('difficulty', DIFFICULTY_OPTIONS)}</div>
-       <label class="mn-row"><span>Invert mouse Y</span><input type="checkbox" class="mn-toggle" data-name="invertY"></label>
-       <label class="mn-row mn-row-gtiles"><span>Real-world 3D view (Google)<small class="mn-hint" data-ref="gtilesHint"></small></span><input type="checkbox" class="mn-toggle" data-name="googleTiles"></label>
+       <div class="mn-tabs" role="tablist">
+         <button type="button" role="tab" data-tab="game" class="is-on">GAME</button>
+         <button type="button" role="tab" data-tab="audio">AUDIO</button>
+         <button type="button" role="tab" data-tab="controls">CONTROLS</button>
+       </div>
+       <div class="mn-pane is-on" data-pane="game">
+         ${range('sensitivity', 'Mouse sensitivity', 0.2, 3, 0.05)}
+         ${range('adsSensitivity', 'Aim (ADS) sensitivity', 0.1, 2, 0.05)}
+         ${toggle('invertY', 'Invert mouse Y')}
+         ${range('fov', 'Field of view', 55, 100, 1)}
+         <div class="mn-row"><span>Graphics quality</span>${seg('quality', QUALITY_OPTIONS)}</div>
+         <div class="mn-row"><span>Bot difficulty</span>${seg('difficulty', DIFFICULTY_OPTIONS)}</div>
+         ${toggle('autoPickupAmmo', 'Auto-pickup ammo', 'Walk over ammo to take it without pressing interact.')}
+         ${toggle('showFps', 'Show FPS')}
+         <label class="mn-row mn-row-gtiles"><span>Real-world 3D view (Google)<small class="mn-hint" data-ref="gtilesHint"></small></span><input type="checkbox" class="mn-toggle" data-name="googleTiles"></label>
+       </div>
+       <div class="mn-pane" data-pane="audio">
+         ${range('volume', 'Master volume', 0, 1, 0.05)}
+         ${range('sfxVolume', 'Effects', 0, 1, 0.05)}
+         ${range('musicVolume', 'Music', 0, 1, 0.05)}
+         ${range('uiVolume', 'Menu sounds', 0, 1, 0.05)}
+       </div>
+       <div class="mn-pane" data-pane="controls">
+         <p class="mn-bind-status" data-ref="bindStatus" role="status">Click a key to change it. Esc cancels.</p>
+         <div class="mn-binds">${bindRows}</div>
+         <button type="button" class="mn-btn mn-btn-small" data-ref="bindReset"><span>RESET TO DEFAULTS</span></button>
+       </div>
        <button class="mn-btn mn-btn-small" data-act="back">${icon('back')}<span>BACK</span></button>
      </div>`
   );
@@ -221,6 +260,7 @@ export function createMenus(root, opts = {}) {
   let current = null;
 
   function show(screen, withBg) {
+    if (screen !== settingsEl) cancelCapture();
     for (const s of screens) s.classList.toggle('is-on', s === screen);
     bg.classList.toggle('is-on', !!withBg);
     wrap.classList.toggle('is-active', !!screen);
@@ -233,19 +273,52 @@ export function createMenus(root, opts = {}) {
   settingsEl.querySelector('[data-ref=gtilesHint]').textContent = gtilesAvailable
     ? 'Visual only. Streams photorealistic tiles from Google; collision is unchanged.'
     : 'Needs VITE_GOOGLE_MAPS_API_KEY in .env.local (see .env.example).';
+  const fpsMeter = createFpsMeter(document.body);
+  const pct = (v) => Math.round(v * 100) + '%';
+  const FORMAT = {
+    sensitivity: (v) => v.toFixed(2) + 'x',
+    adsSensitivity: (v) => v.toFixed(2) + 'x',
+    fov: (v) => Math.round(v) + '°',
+    volume: pct,
+    sfxVolume: pct,
+    musicVolume: pct,
+    uiVolume: pct,
+  };
+  const SR = {};
+  settingsEl.querySelectorAll('[data-ref]').forEach((e) => (SR[e.dataset.ref] = e));
+  const actionLabel = (id) => (ACTIONS.find((a) => a.id === id) || { label: id }).label;
+
+  function renderBindings() {
+    settingsEl.querySelectorAll('[data-bind-action]').forEach((b) => {
+      const id = b.dataset.bindAction;
+      const isCap = capturing && capturing.action === id;
+      b.textContent = isCap ? 'PRESS A KEY…' : keyLabel(settings.bindings[id]);
+      b.classList.toggle('is-capturing', isCap);
+      b.classList.toggle('is-custom', settings.bindings[id] !== DEFAULT_BINDINGS[id]);
+    });
+    // title-screen controls strip follows the bindings
+    title.querySelectorAll('[data-bind]').forEach((k) => {
+      k.textContent = k.dataset.bind.split(' ').map((a) => keyLabel(settings.bindings[a])).join(' ');
+    });
+  }
   function renderSettings() {
     settingsEl.querySelectorAll('input[type=range]').forEach((inp) => {
-      inp.value = settings[inp.dataset.name];
-      const out = settingsEl.querySelector(`[data-out="${inp.dataset.name}"]`);
-      out.textContent = inp.dataset.name === 'volume' ? Math.round(settings.volume * 100) + '%' : settings.sensitivity.toFixed(2) + 'x';
+      const name = inp.dataset.name;
+      inp.value = settings[name];
+      const out = settingsEl.querySelector(`[data-out="${name}"]`);
+      if (out) out.textContent = (FORMAT[name] || String)(settings[name]);
     });
     settingsEl.querySelectorAll('.mn-seg').forEach((s) => {
       s.querySelectorAll('button').forEach((b) => b.classList.toggle('is-on', b.dataset.val === settings[s.dataset.name]));
     });
-    settingsEl.querySelector('[data-name=invertY]').checked = settings.invertY;
+    settingsEl.querySelectorAll('input.mn-toggle[data-name]').forEach((inp) => {
+      if (inp.dataset.name !== 'googleTiles') inp.checked = !!settings[inp.dataset.name];
+    });
     const gt = settingsEl.querySelector('[data-name=googleTiles]');
     gt.disabled = !gtilesAvailable;
     gt.checked = gtilesAvailable && settings.googleTiles;
+    renderBindings();
+    fpsMeter.setVisible(settings.showFps);
   }
   function commit(patch) {
     settings = sanitizeSettings({ ...settings, ...patch });
@@ -258,8 +331,106 @@ export function createMenus(root, opts = {}) {
   settingsEl.querySelectorAll('.mn-seg button').forEach((b) => {
     b.addEventListener('click', () => commit({ [b.parentElement.dataset.name]: b.dataset.val }));
   });
-  settingsEl.querySelector('[data-name=invertY]').addEventListener('change', (e) => commit({ invertY: e.target.checked }));
-  settingsEl.querySelector('[data-name=googleTiles]').addEventListener('change', (e) => commit({ googleTiles: e.target.checked }));
+  settingsEl.querySelectorAll('input.mn-toggle[data-name]').forEach((inp) => {
+    inp.addEventListener('change', (e) => commit({ [inp.dataset.name]: e.target.checked }));
+  });
+
+  // tabs
+  settingsEl.querySelectorAll('[data-tab]').forEach((t) => {
+    t.addEventListener('click', () => {
+      if (opts.onClick) opts.onClick();
+      cancelCapture();
+      settingsEl.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('is-on', x === t));
+      settingsEl.querySelectorAll('[data-pane]').forEach((p) => p.classList.toggle('is-on', p.dataset.pane === t.dataset.tab));
+    });
+  });
+
+  // ---- key rebinding: capture the next key / mouse button (Esc cancels).
+  // Listeners sit on window in the capture phase and stop the event, so the
+  // game's Input never sees the key (no Esc -> unpause, no stray actions).
+  let capturing = null;
+  const setBindStatus = (text, warn) => {
+    SR.bindStatus.textContent = text;
+    SR.bindStatus.classList.toggle('is-warn', !!warn);
+  };
+  function applyBinding(code) {
+    const action = capturing.action;
+    stopCapture();
+    if (RESERVED_CODES.includes(code)) {
+      setBindStatus(`${keyLabel(code)} is reserved. Pick another key.`, true);
+      renderBindings();
+      return;
+    }
+    const prev = settings.bindings[action];
+    const { bindings, swapped } = rebind(settings.bindings, action, code);
+    commit({ bindings });
+    if (swapped) setBindStatus(`${keyLabel(code)} was used by ${actionLabel(swapped)}. Swapped: ${actionLabel(swapped)} is now ${keyLabel(prev)}.`, true);
+    else setBindStatus(`${actionLabel(action)}: ${keyLabel(code)}`);
+  }
+  const onCapKey = (e) => {
+    if (!capturing) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.repeat) return;
+    if (e.code === 'Escape') {
+      cancelCapture();
+      setBindStatus('Cancelled.');
+      return;
+    }
+    if (e.code) applyBinding(e.code);
+  };
+  const swallowClick = (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+  const onCapMouse = (e) => {
+    if (!capturing) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    // the click / auxclick / context menu that follows this mousedown must not
+    // press whatever is under the cursor
+    const follow = e.button === 0 ? ['click'] : ['auxclick', 'contextmenu'];
+    for (const type of follow) {
+      window.addEventListener(type, swallowClick, { capture: true, once: true });
+      setTimeout(() => window.removeEventListener(type, swallowClick, true), 400);
+    }
+    applyBinding('Mouse' + e.button);
+  };
+  function stopCapture() {
+    capturing = null;
+    window.removeEventListener('keydown', onCapKey, true);
+    window.removeEventListener('keyup', swallowClick, true);
+    window.removeEventListener('mousedown', onCapMouse, true);
+    window.removeEventListener('contextmenu', swallowClick, true);
+    window.removeEventListener('auxclick', swallowClick, true);
+  }
+  function cancelCapture() {
+    if (!capturing) return;
+    stopCapture();
+    renderBindings();
+  }
+  settingsEl.querySelectorAll('[data-bind-action]').forEach((b) => {
+    b.addEventListener('click', (e) => {
+      if (capturing) return; // handled by onCapMouse
+      e.preventDefault();
+      if (opts.onClick) opts.onClick();
+      capturing = { action: b.dataset.bindAction };
+      setBindStatus(`Press a key or mouse button for ${actionLabel(capturing.action)}. Esc cancels.`);
+      window.addEventListener('keydown', onCapKey, true);
+      window.addEventListener('keyup', swallowClick, true);
+      window.addEventListener('mousedown', onCapMouse, true);
+      window.addEventListener('contextmenu', swallowClick, true);
+      window.addEventListener('auxclick', swallowClick, true);
+      renderBindings();
+    });
+  });
+  SR.bindReset.addEventListener('click', () => {
+    if (opts.onClick) opts.onClick();
+    cancelCapture();
+    commit({ bindings: { ...DEFAULT_BINDINGS } });
+    setBindStatus('All keys reset to defaults.');
+  });
+  renderSettings();
 
   // ---------------------------------------------------------------- buttons
   const click = (fn) => () => {
@@ -282,6 +453,7 @@ export function createMenus(root, opts = {}) {
           return n;
         };
         if (act === 'play') opts.onPlay && opts.onPlay();
+        else if (act === 'freebuild') opts.onFreeBuild && opts.onFreeBuild(name());
         else if (act === 'host') opts.onHost && opts.onHost(name());
         else if (act === 'join') {
           if (T.code.value.length !== 4) {
@@ -356,7 +528,8 @@ export function createMenus(root, opts = {}) {
       LB.fill.checked = !!info.fill;
       LB.fill.disabled = !info.isHost;
       const humans = (info.players || []).length;
-      LB.fillHint.textContent = info.fill ? `${Math.max(0, 32 - humans)} bots join ${humans} player${humans === 1 ? '' : 's'}` : 'Humans only';
+      // HostSession.prepareMatch: MATCH.bots + 1 slots, every human (host included) takes one
+      LB.fillHint.textContent = info.fill ? `${Math.max(0, MATCH.bots + 1 - humans)} bots join ${humans} player${humans === 1 ? '' : 's'}` : 'Humans only';
       LB.status.textContent = info.status || '';
       LB.error.textContent = info.error || '';
       const start = lobby.querySelector('[data-act=lobby-start]');
@@ -372,7 +545,8 @@ export function createMenus(root, opts = {}) {
     },
     showLoading(pct = 0, label) {
       if (current !== loading) {
-        L.tip.textContent = TIPS[Math.floor(Math.random() * TIPS.length)];
+        const tip = TIPS[Math.floor(Math.random() * TIPS.length)];
+        L.tip.textContent = typeof tip === 'function' ? tip((a) => keyLabel((settings.bindings || DEFAULT_BINDINGS)[a] || DEFAULT_BINDINGS[a])) : tip;
         show(loading, true);
       }
       api.setLoading(pct, label);

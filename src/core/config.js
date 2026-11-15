@@ -46,6 +46,7 @@ export const RARITY_COLOR = {
   epic: 0xb05cff,
   legendary: 0xffb52e,
 };
+// Legacy flat multiplier, used only for a weapon that has no `rarities` table.
 export const RARITY_DAMAGE = { common: 1, uncommon: 1.05, rare: 1.1, epic: 1.16, legendary: 1.22 };
 
 // Ammo pools. Every gun draws from exactly one.
@@ -56,41 +57,188 @@ export const AMMO = {
   heavy: { name: 'Heavy Rounds', pickup: 6 },
 };
 
+// Classic battle-royale roster (generic names). Fields:
+//   kind      family for shared behaviour: 'ar' | 'smg' | 'shotgun' | 'sniper' | 'pistol'
+//   model     mesh in /assets/weapons (several guns share one); icon = HUD silhouette
+//   damage    per pellet / per bullet; shotguns split their damage over `pellets`
+//   rate      trigger pulls per second (for burst guns: bursts per second)
+//   burst     rounds per trigger pull (default 1); `burstDelay` seconds between them
+//   rarities  { rarity: { damage, reload, ...overrides } } — the keys are also the
+//             only rarities the gun can drop at. Read stats with weaponStats(id, rarity);
+//             the flat top-level damage/reload equal the lowest rarity's (legacy readers).
+//   lootWeight relative chance among weapon drops.
 // spread values are half-angles in radians. `bloom` is added per shot and
-// decays; moving/jumping multiplies the total.
+// decays; moving/jumping multiplies the total. `mag` is the same at every rarity.
 export const WEAPONS = {
   rifle: {
-    id: 'rifle', name: 'Ranger Rifle', icon: 'rifle', model: 'rifle', sound: 'shot_rifle', ammo: 'medium',
-    damage: 30, headMult: 1.6, rate: 5.6, auto: true, mag: 30, reload: 2.2,
+    id: 'rifle', name: 'Assault Rifle', kind: 'ar', icon: 'rifle', model: 'rifle', sound: 'shot_rifle', ammo: 'medium',
+    headMult: 1.5, rate: 5.5, auto: true, mag: 30,
     spread: 0.006, bloom: 0.0045, maxBloom: 0.03, pellets: 1, range: 280, falloffStart: 60, falloffEnd: 160, minFalloff: 0.65,
-    zoom: 0.72, twoHanded: true, botRange: 75, tracer: 0xfff0b0,
+    zoom: 0.72, twoHanded: true, botRange: 75, tracer: 0xfff0b0, lootWeight: 22,
+    rarities: {
+      common: { damage: 30, reload: 2.7 },
+      uncommon: { damage: 31, reload: 2.6 },
+      rare: { damage: 33, reload: 2.5 },
+      epic: { damage: 35, reload: 2.4 },
+      legendary: { damage: 36, reload: 2.3 },
+    },
   },
   smg: {
-    id: 'smg', name: 'Hornet SMG', icon: 'smg', model: 'smg', sound: 'shot_smg', ammo: 'light',
-    damage: 17, headMult: 1.5, rate: 11.5, auto: true, mag: 30, reload: 2.0,
-    spread: 0.012, bloom: 0.004, maxBloom: 0.04, pellets: 1, range: 180, falloffStart: 25, falloffEnd: 70, minFalloff: 0.5,
-    zoom: 0.8, twoHanded: true, botRange: 35, tracer: 0xffe9a0,
+    id: 'smg', name: 'SMG', kind: 'smg', icon: 'smg', model: 'smg', sound: 'shot_smg', ammo: 'light',
+    headMult: 1.75, rate: 12, auto: true, mag: 30,
+    spread: 0.013, bloom: 0.004, maxBloom: 0.042, pellets: 1, range: 180, falloffStart: 22, falloffEnd: 65, minFalloff: 0.5,
+    zoom: 0.8, twoHanded: true, botRange: 32, tracer: 0xffe9a0, lootWeight: 13,
+    rarities: {
+      common: { damage: 16, reload: 2.2 },
+      uncommon: { damage: 17, reload: 2.1 },
+      rare: { damage: 18, reload: 2.0 },
+    },
   },
   shotgun: {
-    id: 'shotgun', name: 'Thumper Shotgun', icon: 'shotgun', model: 'shotgun', sound: 'shot_shotgun', ammo: 'shells',
-    damage: 10, headMult: 1.4, rate: 1.05, auto: false, mag: 5, reload: 3.4,
-    spread: 0.05, bloom: 0, maxBloom: 0, pellets: 9, range: 70, falloffStart: 8, falloffEnd: 30, minFalloff: 0.25,
-    zoom: 0.86, twoHanded: true, botRange: 14, tracer: 0xffd890,
+    id: 'shotgun', name: 'Pump Shotgun', kind: 'shotgun', pump: true, icon: 'shotgun', model: 'shotgun', sound: 'shot_shotgun', ammo: 'shells',
+    headMult: 2, rate: 0.7, auto: false, mag: 5,
+    spread: 0.045, bloom: 0, maxBloom: 0, pellets: 10, range: 60, falloffStart: 7, falloffEnd: 28, minFalloff: 0.2,
+    zoom: 0.86, twoHanded: true, botRange: 12, tracer: 0xffd890, lootWeight: 13,
+    // 10 pellets: 90 / 95 / 100 / 105 for a full body hit
+    rarities: {
+      uncommon: { damage: 9, reload: 4.8 },
+      rare: { damage: 9.5, reload: 4.6 },
+      epic: { damage: 10, reload: 4.4 },
+      legendary: { damage: 10.5, reload: 4.2 },
+    },
   },
   sniper: {
-    id: 'sniper', name: 'Longshot Sniper', icon: 'sniper', model: 'sniper', sound: 'shot_sniper', ammo: 'heavy',
-    damage: 105, headMult: 2.2, rate: 0.75, auto: false, mag: 3, reload: 2.9,
+    id: 'sniper', name: 'Bolt-Action Sniper Rifle', kind: 'sniper', icon: 'sniper', model: 'sniper', sound: 'shot_sniper', ammo: 'heavy',
+    headMult: 2.5, rate: 0.33, auto: false, mag: 1,
     spread: 0.0008, bloom: 0, maxBloom: 0, pellets: 1, range: 600, falloffStart: 600, falloffEnd: 600, minFalloff: 1,
-    hipSpread: 0.03, zoom: 0.3, twoHanded: true, botRange: 130, tracer: 0xd8f4ff,
+    hipSpread: 0.03, zoom: 0.3, twoHanded: true, botRange: 130, tracer: 0xd8f4ff, lootWeight: 5,
+    rarities: {
+      rare: { damage: 105, reload: 3.0 },
+      epic: { damage: 110, reload: 2.85 },
+      legendary: { damage: 116, reload: 2.7 },
+    },
   },
   pistol: {
-    id: 'pistol', name: 'Sidekick Pistol', icon: 'pistol', model: 'pistol', sound: 'shot_pistol', ammo: 'light',
-    damage: 24, headMult: 1.6, rate: 5.2, auto: false, mag: 14, reload: 1.4,
+    id: 'pistol', name: 'Pistol', kind: 'pistol', icon: 'pistol', model: 'pistol', sound: 'shot_pistol', ammo: 'light',
+    headMult: 2, rate: 6.75, auto: false, mag: 16,
     spread: 0.008, bloom: 0.006, maxBloom: 0.035, pellets: 1, range: 200, falloffStart: 30, falloffEnd: 90, minFalloff: 0.55,
-    zoom: 0.8, twoHanded: false, botRange: 40, tracer: 0xfff0b0,
+    zoom: 0.8, twoHanded: false, botRange: 40, tracer: 0xfff0b0, lootWeight: 14,
+    rarities: {
+      common: { damage: 23, reload: 1.5 },
+      uncommon: { damage: 24, reload: 1.47 },
+      rare: { damage: 25, reload: 1.4 },
+    },
+  },
+  burst_rifle: {
+    id: 'burst_rifle', name: 'Burst Assault Rifle', kind: 'ar', icon: 'burst_rifle', model: 'rifle', sound: 'shot_rifle', ammo: 'medium',
+    headMult: 1.5, rate: 1.6, auto: false, burst: 3, burstDelay: 0.075, mag: 30,
+    spread: 0.0045, bloom: 0.0035, maxBloom: 0.025, pellets: 1, range: 280, falloffStart: 60, falloffEnd: 160, minFalloff: 0.65,
+    zoom: 0.72, twoHanded: true, botRange: 70, tracer: 0xfff0b0, lootWeight: 12,
+    rarities: {
+      common: { damage: 27, reload: 2.9 },
+      uncommon: { damage: 29, reload: 2.7 },
+      rare: { damage: 30, reload: 2.6 },
+      epic: { damage: 32, reload: 2.5 },
+      legendary: { damage: 33, reload: 2.4 },
+    },
+  },
+  tac_shotgun: {
+    id: 'tac_shotgun', name: 'Tactical Shotgun', kind: 'shotgun', icon: 'tac_shotgun', model: 'shotgun', sound: 'shot_shotgun', ammo: 'shells',
+    headMult: 2, rate: 1.5, auto: false, mag: 8,
+    spread: 0.06, bloom: 0, maxBloom: 0, pellets: 10, range: 55, falloffStart: 6, falloffEnd: 24, minFalloff: 0.2,
+    zoom: 0.86, twoHanded: true, botRange: 11, tracer: 0xffd890, lootWeight: 13,
+    // 10 pellets: 67 / 71 / 74 / 77 / 81 for a full body hit
+    rarities: {
+      common: { damage: 6.7, reload: 5.6 },
+      uncommon: { damage: 7.1, reload: 5.4 },
+      rare: { damage: 7.4, reload: 5.2 },
+      epic: { damage: 7.7, reload: 5.0 },
+      legendary: { damage: 8.1, reload: 4.8 },
+    },
+  },
+  heavy_shotgun: {
+    id: 'heavy_shotgun', name: 'Heavy Shotgun', kind: 'shotgun', pump: true, icon: 'heavy_shotgun', model: 'shotgun', sound: 'shot_shotgun', ammo: 'shells',
+    headMult: 2.25, rate: 1.0, auto: false, mag: 7,
+    spread: 0.035, bloom: 0, maxBloom: 0, pellets: 10, range: 65, falloffStart: 9, falloffEnd: 32, minFalloff: 0.25,
+    zoom: 0.86, twoHanded: true, botRange: 13, tracer: 0xffd890, lootWeight: 3,
+    // 10 pellets: 73 / 77 for a full body hit
+    rarities: {
+      epic: { damage: 7.3, reload: 5.6 },
+      legendary: { damage: 7.7, reload: 5.3 },
+    },
+  },
+  suppressed_smg: {
+    id: 'suppressed_smg', name: 'Suppressed SMG', kind: 'smg', icon: 'suppressed_smg', model: 'smg', sound: 'shot_smg', soundVolume: 0.45, ammo: 'light',
+    headMult: 1.75, rate: 10, auto: true, mag: 30,
+    spread: 0.01, bloom: 0.0035, maxBloom: 0.035, pellets: 1, range: 180, falloffStart: 25, falloffEnd: 70, minFalloff: 0.5,
+    zoom: 0.8, twoHanded: true, botRange: 34, tracer: 0xe8f0ff, lootWeight: 6,
+    rarities: {
+      epic: { damage: 20, reload: 2.1 },
+      legendary: { damage: 21, reload: 2.0 },
+    },
+  },
+  hunting_rifle: {
+    id: 'hunting_rifle', name: 'Hunting Rifle', kind: 'sniper', icon: 'hunting_rifle', model: 'sniper', sound: 'shot_sniper', ammo: 'heavy',
+    headMult: 2.5, rate: 0.8, auto: false, mag: 1,
+    spread: 0.0015, bloom: 0, maxBloom: 0, pellets: 1, range: 450, falloffStart: 450, falloffEnd: 450, minFalloff: 1,
+    hipSpread: 0.02, zoom: 0.55, twoHanded: true, botRange: 110, tracer: 0xd8f4ff, lootWeight: 5,
+    rarities: {
+      uncommon: { damage: 86, reload: 1.9 },
+      rare: { damage: 90, reload: 1.8 },
+    },
   },
 };
+// Top-level damage/reload mirror the lowest rarity so code that reads WEAPONS[id]
+// directly still gets sane numbers.
+for (const id in WEAPONS) {
+  const w = WEAPONS[id];
+  const low = RARITIES.find((r) => w.rarities && w.rarities[r]);
+  if (low) Object.assign(w, { damage: w.rarities[low].damage, reload: w.rarities[low].reload });
+}
 export const WEAPON_IDS = Object.keys(WEAPONS);
+
+/** Rarities `id` can drop at, lowest first (all five for a gun without a table). */
+export function weaponRarities(id) {
+  const w = WEAPONS[id];
+  if (!w) return [];
+  return w.rarities ? RARITIES.filter((r) => w.rarities[r]) : RARITIES.slice();
+}
+
+/** Nearest rarity `id` actually comes in (ties round down). */
+export function clampWeaponRarity(id, rarity) {
+  const allowed = weaponRarities(id);
+  if (!allowed.length || allowed.includes(rarity)) return allowed.length ? rarity : 'common';
+  const want = Math.max(0, RARITIES.indexOf(rarity));
+  let best = allowed[0];
+  for (const r of allowed) if (Math.abs(RARITIES.indexOf(r) - want) < Math.abs(RARITIES.indexOf(best) - want)) best = r;
+  return best;
+}
+
+const _statCache = new Map();
+/**
+ * Effective stats for a gun at a rarity: the base def with that rarity's overrides
+ * (damage, reload, ...) applied. Unknown rarities snap to the nearest available one.
+ * Returns a cached, shared object — do not mutate it. Unknown id -> null.
+ */
+export function weaponStats(id, rarity) {
+  const w = WEAPONS[id];
+  if (!w) return null;
+  const key = id + '|' + rarity;
+  let s = _statCache.get(key);
+  if (!s) {
+    const r = clampWeaponRarity(id, rarity);
+    s = w.rarities ? { ...w, ...w.rarities[r], rarity: r } : { ...w, damage: w.damage * (RARITY_DAMAGE[r] || 1), rarity: r };
+    _statCache.set(key, s);
+  }
+  return s;
+}
+
+/** Shortest legal gap between two shots (burst guns: between rounds of a burst). */
+export function weaponShotInterval(id) {
+  const w = WEAPONS[id];
+  if (!w) return 0;
+  return w.burst > 1 ? Math.min(w.burstDelay || 0.08, 1 / w.rate) : 1 / w.rate;
+}
 
 export const CONSUMABLES = {
   medkit: { id: 'medkit', name: 'Med Kit', icon: 'medkit', model: 'medkit', rarity: 'uncommon', useTime: 3.2, heal: 60, shield: 0, stack: 3, sound: 'heal' },
@@ -102,6 +250,7 @@ export const PICKAXE = {
   rate: 1.9, // swings per second
   range: 3.1,
   harvest: 50, // damage to harvestables per swing
+  yield: { wood: 50, brick: 40, metal: 35 }, // mats granted per harvesting swing
 };
 
 export const MATERIALS = ['wood', 'brick', 'metal'];
@@ -118,10 +267,17 @@ export const BUILD = {
 };
 
 // The storm: `wait` seconds holding, then `shrink` seconds closing to `radius`.
+// openStart: the match opens with a dormant storm covering the map (capped at openMaxRadius; no damage,
+// no circle drawn) for phase 1's `wait`; phase 1's shrink then closes in from there.
 export const STORM = {
   startRadius: 620,
+  openStart: true,
+  openMargin: 80, // metres beyond the farthest map corner for the dormant circle
+  openMaxRadius: 6000, // ...but never larger than this (safety cap; the compact map needs ~4.5 km from an edge POI)
   phases: [
-    { wait: 55, shrink: 55, radius: 340, dps: 1 },
+    // phase 1 closes the dormant circle (map-cover radius: ~2.7-4.6 km on the compact map, depending
+    // on which POI the storm forms at) to 340 m: over 150 s the edge averages ~16-28 m/s
+    { wait: 55, shrink: 150, radius: 340, dps: 1 },
     { wait: 40, shrink: 45, radius: 180, dps: 2 },
     { wait: 35, shrink: 35, radius: 90, dps: 3 },
     { wait: 25, shrink: 30, radius: 40, dps: 5 },
@@ -131,16 +287,19 @@ export const STORM = {
 };
 
 export const MATCH = {
-  bots: 31,
-  chests: 70,
-  floorLoot: 110,
-  ammoBoxes: 45,
+  bots: 99, // solo = 100 players; in multiplayer remote humans take slots first
+  chests: 140,
+  floorLoot: 220,
+  ammoBoxes: 90,
 };
 
+// Bot building: buildChance = odds a build roll in a fight succeeds; buildPieces = most
+// pieces in one response (1 wall / 2 wall+ramp / 3+ ramp rush / 5 box: 4 walls + cone);
+// buildCooldown = seconds between responses; buildRate = seconds between pieces in one.
 export const DIFFICULTY = {
-  easy: { aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.15, sight: 80, damageScale: 0.6 },
-  normal: { aimError: 0.05, reaction: 0.55, burst: 0.7, buildChance: 0.4, sight: 100, damageScale: 0.8 },
-  hard: { aimError: 0.028, reaction: 0.3, burst: 0.85, buildChance: 0.7, sight: 125, damageScale: 1 },
+  easy: { aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.15, buildPieces: 1, buildCooldown: 10, buildRate: 0.6, sight: 80, damageScale: 0.6 },
+  normal: { aimError: 0.05, reaction: 0.55, burst: 0.7, buildChance: 0.4, buildPieces: 2, buildCooldown: 6, buildRate: 0.35, sight: 100, damageScale: 0.8 },
+  hard: { aimError: 0.028, reaction: 0.3, burst: 0.85, buildChance: 0.75, buildPieces: 5, buildCooldown: 2.5, buildRate: 0.15, sight: 125, damageScale: 1 },
 };
 
 // outline / bloom: post passes (render/Post.js); both off = plain render (cheapest).
@@ -152,15 +311,16 @@ export const QUALITY = {
 };
 
 // Drop zones: each match the first circle is centred near one of these.
-// Keys match `landmarks` in the map data.
+// Keys match `landmarks` in the map data. The six named POIs (Phase 2); the other
+// map landmarks (momentary, market_8th, compton_gardens, courthouse, ...) stay in
+// the data for HUD location names and minimap labels but are no longer drop zones.
 export const DROP_ZONES = [
+  { key: 'bentonville_west', label: 'Bentonville West' },
+  { key: 'bentonville_high', label: 'Bentonville High' },
   { key: 'square', label: 'Downtown Square' },
+  { key: 'home_office', label: 'Walmart Home Office' },
   { key: 'crystal_bridges', label: 'Crystal Bridges' },
-  { key: 'momentary', label: 'The Momentary' },
-  { key: 'market_8th', label: '8th Street Market' },
-  { key: 'compton_gardens', label: 'Compton Gardens' },
   { key: 'memorial_park', label: 'Memorial Park' },
-  { key: 'home_office', label: 'Home Office' },
 ];
 
 export const BOT_NAMES = [

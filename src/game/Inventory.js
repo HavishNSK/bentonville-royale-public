@@ -280,7 +280,7 @@ export class Inventory {
     const s = this.current();
     if (!s || s.type !== 'weapon') return null;
     const w = WEAPONS[s.id];
-    return { name: w.name, mag: s.mag, reserve: this.ammo[w.ammo], magSize: w.mag, reloading01: reloading01 == null ? 0 : reloading01 };
+    return { name: w.name, rarity: rarityOf(s.rarity), mag: s.mag, reserve: this.ammo[w.ammo], magSize: w.mag, reloading01: reloading01 == null ? 0 : reloading01 };
   }
 }
 

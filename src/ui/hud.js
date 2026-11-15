@@ -377,7 +377,7 @@ export function buildHud(root) {
   }
 
   // ---- weapon / ammo -----------------------------------------------------------
-  const w = { shown: null, name: null, mag: null, res: null, low: null, reloading: null, pct: -1 };
+  const w = { shown: null, name: null, rarity: undefined, mag: null, res: null, low: null, reloading: null, pct: -1 };
   function setWeapon(weapon) {
     const shown = !!weapon;
     if (shown !== w.shown) {
@@ -393,6 +393,12 @@ export function buildHud(root) {
     if (weapon.name !== w.name) {
       r.weaponName.textContent = weapon.name || '';
       w.name = weapon.name;
+    }
+    const rar = RARITIES.includes(weapon.rarity) ? weapon.rarity : null;
+    if (rar !== w.rarity) {
+      if (rar) r.weapon.dataset.rarity = rar;
+      else r.weapon.removeAttribute('data-rarity');
+      w.rarity = rar;
     }
     const mag = int(weapon.mag);
     if (mag !== w.mag) {
@@ -468,6 +474,11 @@ export function buildHud(root) {
       hud.classList.toggle('is-outside', outside);
       st.outside = outside;
     }
+  }
+
+  /** Hide the storm panel entirely (free build has no storm). */
+  function setStormVisible(on) {
+    r.storm.style.display = on ? '' : 'none';
   }
 
   // ---- counts ----------------------------------------------------------------------
@@ -708,6 +719,19 @@ export function buildHud(root) {
     r.fullmap.classList.toggle('is-on', v);
     hud.classList.toggle('has-fullmap', v);
   }
+  /**
+   * Sizes the full-map canvas to the map's width/height ratio (meta.bounds). The short side
+   * stays 1024 px so Minimap's 1024-based label/icon scale is unchanged.
+   */
+  function setFullMapAspect(aspect) {
+    const a = Number.isFinite(aspect) && aspect > 0 ? Math.min(4, Math.max(0.25, aspect)) : 1;
+    const c = r.fullmapCanvas;
+    const w = a >= 1 ? Math.round(1024 * a) : 1024;
+    const h = a >= 1 ? 1024 : Math.round(1024 / a);
+    if (c.width !== w) c.width = w;
+    if (c.height !== h) c.height = h;
+    c.style.setProperty('--br-map-aspect', String(w / h));
+  }
   let emoteOn = false;
   function setEmoteHint(on) {
     const v = !!on;
@@ -744,8 +768,20 @@ export function buildHud(root) {
   setCompass(0);
   setCrosshair({ spread01: 0, hit: false, kind: 'gun' });
 
+  /** Refreshes the static keycaps from the player's bindings. labelOf(actionId) -> 'Q'. */
+  function setKeyLabels(labelOf) {
+    const set = (sel, action) => hud.querySelectorAll(sel).forEach((k) => (k.textContent = labelOf(action)));
+    for (const [piece, action] of [['wall', 'buildWall'], ['floor', 'buildFloor'], ['ramp', 'buildRamp'], ['cone', 'buildCone']]) set(`.br-piece[data-piece="${piece}"] .br-key`, action);
+    for (let i = 0; i < 5; i++) set(`.br-slot[data-slot="${i}"] .br-slot-key`, 'slot' + (i + 1));
+    set('.br-slot-pick .br-slot-key', 'pickaxe');
+    set('.br-minimap-key .br-key, .br-fullmap-hint .br-key', 'map');
+    set('.br-emote .br-key', 'emote');
+    set('.br-mats-key .br-key', 'cycleMaterial');
+  }
+
   return {
     el: hud,
+    setKeyLabels,
     setHealth,
     setShield,
     setMaterials,
@@ -753,6 +789,7 @@ export function buildHud(root) {
     setWeapon,
     setBuildMode,
     setStorm,
+    setStormVisible,
     setCounts,
     setCompass,
     setCrosshair,
@@ -766,6 +803,7 @@ export function buildHud(root) {
     setObjectBar,
     getMinimapCanvas: () => r.minimap,
     getFullMapCanvas: () => r.fullmapCanvas,
+    setFullMapAspect,
     showFullMap,
     setEmoteHint,
     setLocation,

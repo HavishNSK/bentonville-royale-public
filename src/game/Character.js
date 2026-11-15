@@ -6,7 +6,7 @@
 
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { damp, clamp } from '../core/config.js';
+import { damp, clamp, WEAPONS } from '../core/config.js';
 import { toToon } from '../render/Toon.js';
 
 // Characters and their weapons are cel-shaded; colours get a small saturation lift.
@@ -138,6 +138,7 @@ export class Character {
       }
     }
     this.equipped = 'pickaxe';
+    this.gunKey = 'pickaxe';
     this.twoHanded = true;
 
     // a simple canopy shown while gliding in
@@ -165,7 +166,9 @@ export class Character {
     if (id === this.equipped) return;
     this.equipped = id;
     this.twoHanded = twoHanded;
-    for (const k in this.guns) this.guns[k].visible = k === id;
+    // several guns share one mesh (WEAPONS[id].model), e.g. burst rifle -> rifle
+    this.gunKey = WEAPONS[id] && this.guns[WEAPONS[id].model] ? WEAPONS[id].model : id;
+    for (const k in this.guns) this.guns[k].visible = k === this.gunKey;
     if (this.pickaxe) this.pickaxe.visible = id === 'pickaxe';
   }
 
@@ -340,7 +343,7 @@ export class Character {
 
     // keep the gun in the right hand, pointing exactly where the character aims
     const hand = this.bones.handslotr || this.bones.handr;
-    const gun = this.guns[this.equipped];
+    const gun = this.guns[this.gunKey];
     if (gun && hand && !dead) {
       this.model.updateWorldMatrix(true, false);
       hand.updateWorldMatrix(true, false);
@@ -353,7 +356,7 @@ export class Character {
 
   /** World position of the equipped gun's muzzle (or the chest when unarmed). */
   muzzle(out = this._muzzle) {
-    const gun = this.guns[this.equipped];
+    const gun = this.guns[this.gunKey];
     if (gun) {
       this.root.updateWorldMatrix(true, true);
       out.set(0, 0.06, 0.85).applyMatrix4(gun.matrixWorld);

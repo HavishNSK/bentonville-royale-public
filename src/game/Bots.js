@@ -22,24 +22,35 @@
 // Behaviour: glide in -> loot (Loot.near/open/take) -> wander / rotate toward the next
 // storm circle (hurry when outside) -> engage targets seen via world.clearLine within
 // DIFFICULTY.sight (reaction delay, per-burst aim drift, bursts, strafing, weapon by
-// distance vs botRange, reloads, occasional wall / ramp) -> retreat and heal when hurt.
+// distance vs botRange, reloads, build responses) -> retreat and heal when hurt.
+// Building scales with DIFFICULTY.buildPieces / buildCooldown / buildRate: a single wall
+// (easy), wall + ramp (normal), up to ramp rushes toward high ground and 1x1 boxes (hard),
+// queued and placed one piece at a time through structures.plan/place with real mats.
 // Bots fight each other and the player alike. Unarmed bots only brawl at arm's length.
 // Stuck bots jump, flip their wall-following side, then get an A* detour from a shared,
 // time-sliced grid planner (PLAN_BUDGET expansions per frame).
+// Enterable buildings: a goal on the other side of a building wall (loot / cover / a wander
+// spot inside, or the way out) gets door waypoints (_doorRoute, every LOD tier); the A*
+// grid treats interiors as open, only the thin walls block, and door cells are forced open.
+// Bots only open / take loot on the same side of a wall; hurt bots heal / retreat indoors.
 // Every collaborator except `world` may be null; the matching behaviour is skipped.
 // With an empty `kits` array bots have no Character (headless, used by tests).
 //
 // Each bot thinks (perception, state choice, steering) at ~4-8 Hz on a staggered
 // timer; movement, aiming, firing cadence, reloads and heals run every frame
-// without allocating. Characters beyond QUALITY[q].charDist are hidden and not
-// animated; past half that distance they animate at half rate.
+// without allocating. Sim budget for big lobbies (see _lod): bots far from every human
+// (and the camera) think 1.6-3x less often, run physics every 2nd / 4th frame in
+// bounded sub-steps, cast fewer steering rays and skip A* detours; a bot fighting a
+// human is always full rate. Characters beyond QUALITY[q].charDist are hidden and not
+// animated; the skeleton updates every frame within 35 m, every 2nd frame to half the
+// draw distance, every 3rd beyond; settled death poses are frozen.
 
 import * as THREE from 'three';
 import { Character } from './Character.js';
 import { Inventory } from './Inventory.js';
 import {
   PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, RARITIES, DIFFICULTY, QUALITY,
-  BOT_NAMES, DROP_ZONES, angleDelta, clamp,
+  BOT_NAMES, DROP_ZONES, STORM, angleDelta, clamp, weaponStats,
 } from '../core/config.js';
 
 const EYE = PLAYER.eyeHeight;
@@ -54,6 +65,24 @@ const PLAN_BUDGET = 350; // A* expansions per frame (~0.3-0.6 ms)
 const CANOPY_COLORS = [0x4fc3f7, 0xff7a45, 0x9ccc65, 0xba68c8, 0xffd54f, 0xf06292, 0x4db6ac, 0xa1887f];
 const AVOID = [0, 0.55, -0.55, 1.1, -1.1, 1.65, -1.65, 2.3, -2.3, 3.0];
 const RARITY_RANK = Object.fromEntries(RARITIES.map((r, i) => [r, i]));
+// sim budget (LOD by distance to the nearest human / the camera), see update()
+const LOD_NEAR = 110; // metres: full think rate inside this
+const LOD_FAR = 420; // metres: beyond this, physics every 4th frame instead of every 2nd
+const LOD_RECHECK = 0.5; // seconds between a bot's LOD re-evaluations
+const SIM_STEP_MAX = 0.05; // longest physics sub-step for time-sliced bots (no tunnelling)
+const ANIM_FULL = 35; // metres: animate every frame inside this
+const DEAD_ANIM = 3; // seconds a death animation plays before the pose is frozen
+// building
+const BUILD_Q = 6; // most queued pieces in one build response
+const BUILD_ROOM = 0.85; // bots stop starting builds past this share of BUILD.maxPieces
+// enterable buildings (World collider.shell): door waypoints, see _doorRoute
+const DOOR_OUT = 1.6; // metres in front of a door's outer face: the approach point
+const DOOR_IN = 1.3; // metres behind the outer face: the step inside (wall is 0.4 m)
+const DOOR_REACH = 0.8; // waypoint radius for door waypoints (others use WP_REACH)
+const WP_REACH = 1.8;
+const COVER_RANGE = 30; // metres: buildings this close are used for cover / healing
+const INDOOR_WANDER = 0.3; // share of new wander goals placed inside a nearby building
+const SHELL_CELL = 64; // metres: spatial hash cell for enterable buildings (Bots._shellGrid)
 
 const _v = new THREE.Vector3();
 const _origin = new THREE.Vector3();
@@ -63,6 +92,8 @@ const _anim = { fwd: 0, side: 0, speed: 0, grounded: true, gliding: false, headi
 const _cand = [null, null, null, null];
 const _candD = [0, 0, 0, 0];
 const _matItem = { type: 'material', mat: 'wood', count: 0 };
+const _bpos = { x: 0, y: 0, z: 0 }; // synthetic "stand here" point passed to structures.plan
+const _pl = {}; // reused placement
 
 export class Bots {
   constructor({ scene, world, kits, weaponModels, loot, structures, combat, fx, sfx } = {}) {
@@ -87,7 +118,13 @@ export class Bots {
     this.rng = Math.random;
     this.diff = DIFFICULTY.normal;
     this._all = [];
+    this._eyes = []; // flat x,z of every live human (+ the camera): the sim budget centres
+    this._frame = 0;
+    this.lodStats = [0, 0, 0]; // bots per LOD tier at the last update (debug / QA)
     this.planner = new Planner(world);
+    this.navStats = { doorRoutes: 0, indoorLoot: 0, plans: 0, cover: 0, lootLos: 0 };
+    this._shellGrid = null; // Map: SHELL_CELL hash -> enterable building colliders (lazy)
+    this._shellSrc = null; // the world.buildingInteriors() list _shellGrid was built from
   }
 
   get list() {
@@ -120,7 +157,9 @@ export class Bots {
     this.diff = DIFFICULTY[this.diffName];
     if (opts.quality) this.setQuality(opts.quality);
     const names = shuffled(opts.names || BOT_NAMES, rng);
-    const points = this._dropTargets(count, rng, opts.dropPoints);
+    // fallback drop area centre: opts.center {x,z} or opts.storm (its first circle), else the origin
+    const sc = opts.center || opts.storm || ctxStorm(this._storm);
+    const points = this._dropTargets(count, rng, opts.dropPoints, sc);
     const idBase = opts.idBase ?? 1;
     this.time = 0;
     // opts.launchWindow (s): bots wait in the "bus" and jump one by one, staggered
@@ -177,7 +216,10 @@ export class Bots {
     return this.actors;
   }
 
-  _dropTargets(count, rng, dropPoints) {
+  _dropTargets(count, rng, dropPoints, centre) {
+    const ccx = centre && Number.isFinite(centre.cx ?? centre.x) ? (centre.cx ?? centre.x) : 0;
+    const ccz = centre && Number.isFinite(centre.cz ?? centre.z) ? (centre.cz ?? centre.z) : 0;
+    const cr = STORM.startRadius;
     const world = this.world;
     const lm = world.landmarks || {};
     const anchors = [];
@@ -191,9 +233,9 @@ export class Bots {
     if (!anchors.length) {
       for (const z of DROP_ZONES) {
         const l = lm[z.key];
-        if (l && Math.hypot(l.x, l.z) < 520) anchors.push({ x: l.x, z: l.z, r: Math.min(l.r || 40, 120) + 50 });
+        if (l && Math.hypot(l.x - ccx, l.z - ccz) < cr * 0.85) anchors.push({ x: l.x, z: l.z, r: Math.min(l.r || 40, 120) + 50 });
       }
-      if (!anchors.length) anchors.push({ x: 0, z: 0, r: 300 });
+      if (!anchors.length) anchors.push({ x: ccx, z: ccz, r: cr * 0.5 });
     }
     const out = [];
     const given = anchors.length && dropPoints && dropPoints.length;
@@ -208,10 +250,10 @@ export class Bots {
         cz = a.z;
         r = a.r;
       } else {
-        // anywhere within ~550 m of downtown (the storm's first circle is around there)
-        cx = 0;
-        cz = 0;
-        r = 550;
+        // anywhere inside the storm's first circle
+        cx = ccx;
+        cz = ccz;
+        r = cr * 0.9;
       }
       out.push(world.randomOpenPoint(rng, cx, cz, r, 1.2, { x: 0, z: 0 }));
     }
@@ -240,6 +282,7 @@ export class Bots {
     if (src && src !== victim && src.alive && src.pos) {
       b.threat = src;
       b.thinkIn = Math.min(b.thinkIn, 0.05);
+      if (!src.isBot) b.lodAt = 0; // a human is on it: back to full rate next frame
     }
   }
 
@@ -268,6 +311,8 @@ export class Bots {
     // time-sliced path planning for stuck bots
     const done = this.planner.step(PLAN_BUDGET);
     if (done && done.actor.alive && done.planN > 0) {
+      this.navStats.plans++;
+      this._planDoorTail(done);
       done.pathN = done.planN;
       done.pathI = 0;
       done.pathGoalX = done.planGX;
@@ -276,6 +321,20 @@ export class Bots {
       done.stuck = 0;
       done.paths++;
     }
+
+    // sim budget centres: every live human (local player, remote humans on a host) plus
+    // the camera / viewer. ctx.humans may add more ({pos} objects).
+    const eyes = this._eyes;
+    eyes.length = 0;
+    for (let i = 0; i < all.length; i++) {
+      const o = all[i];
+      if (!o.isBot && o.alive && o.pos) eyes.push(o.pos.x, o.pos.z);
+    }
+    if (viewer) eyes.push(viewer.x, viewer.z);
+    if (ctx.humans) for (const h of ctx.humans) if (h && h.pos) eyes.push(h.pos.x, h.pos.z);
+    const frame = ++this._frame;
+    const lodStats = this.lodStats;
+    lodStats[0] = lodStats[1] = lodStats[2] = 0;
 
     const cd2 = this.charDist * this.charDist;
     for (let i = 0; i < this.brains.length; i++) {
@@ -302,18 +361,78 @@ export class Bots {
         b.hurtAt = this.time;
       }
       b.lastHp = hp;
+      if (this.time >= b.lodAt) this._lod(b);
+      lodStats[b.lod]++;
 
       b.thinkIn -= dt;
       if (b.thinkIn <= 0) {
         this._think(b, all);
         const busy = b.state === 'engage' || b.state === 'drop';
-        b.thinkIn += (busy ? 0.125 : 0.2) + this.rng() * 0.06;
+        // far bots think less often, but a fight (few at a time) keeps most of its rate
+        const mul = b.state === 'engage' && b.thinkMul > 1.3 ? 1.3 : b.thinkMul;
+        b.thinkIn += ((busy ? 0.125 : 0.2) + this.rng() * 0.06) * mul;
+        if (b.doorNear && b.thinkIn > 0.12) b.thinkIn = 0.12; // threading a door: steer often
         if (b.thinkIn < 0) b.thinkIn = 0.05;
       }
-      this._act(b, dt);
-      this._move(b, dt);
+      // physics + per-frame actions: every frame for near bots; far bots are time-sliced
+      // (staggered by index) and catch up with the accumulated time in bounded sub-steps
+      b.simAcc += dt;
+      if (b.slice > 1 && (frame + i) % b.slice !== 0) {
+        this._present(b, dt, viewer, cd2);
+        continue;
+      }
+      const sdt = b.simAcc;
+      b.simAcc = 0;
+      this._act(b, sdt);
+      if (sdt <= SIM_STEP_MAX) this._move(b, sdt);
+      else {
+        let left = sdt;
+        while (left > 1e-4) {
+          const s = left < SIM_STEP_MAX ? left : SIM_STEP_MAX;
+          this._move(b, s);
+          left -= s;
+        }
+      }
       this._present(b, dt, viewer, cd2);
     }
+  }
+
+  /**
+   * Sim budget tier from the distance to the nearest human / the camera:
+   *   0 (< LOD_NEAR)            full rate
+   *   1 (< draw distance)       thinks ~1.6x less often, physics every frame (it may be on screen)
+   *   2 (beyond)                thinks 2-3x less often, physics every 2nd / 4th frame,
+   *                             fewer steering rays, no A* detours
+   * A bot fighting (or hunted by) a human is always tier 0. Without any reference point
+   * (headless tests) everyone runs at full rate.
+   */
+  _lod(b) {
+    const a = b.actor;
+    const eyes = this._eyes;
+    let best = Infinity;
+    for (let k = 0; k < eyes.length; k += 2) {
+      const dx = eyes[k] - a.pos.x;
+      const dz = eyes[k + 1] - a.pos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < best) best = d2;
+    }
+    if (!eyes.length || (b.target && !b.target.isBot) || (b.threat && !b.threat.isBot)) best = 0;
+    const d = Math.sqrt(best);
+    b.lodDist = d;
+    if (d < LOD_NEAR) {
+      b.lod = 0;
+      b.slice = 1;
+      b.thinkMul = 1;
+    } else if (d < Math.max(this.charDist, LOD_NEAR + 40)) {
+      b.lod = 1;
+      b.slice = 1;
+      b.thinkMul = 1.6;
+    } else {
+      b.lod = 2;
+      b.slice = d < LOD_FAR ? 2 : 4;
+      b.thinkMul = d < LOD_FAR ? 2.2 : 3;
+    }
+    b.lodAt = this.time + LOD_RECHECK + this.rng() * 0.2;
   }
 
   // -------------------------------------------------------------- thinking
@@ -340,6 +459,8 @@ export class Bots {
     const inv = a.inventory;
 
     this._perceive(b, all);
+    b.inB = this._shellAt(a.pos.x, a.pos.z, a.pos.y);
+    if (b.inB) b.wasInside = true;
 
     const outside = storm ? storm.isOutside(a.pos.x, a.pos.z) : false;
     const target = b.target;
@@ -424,6 +545,16 @@ export class Bots {
         speed = b.targetVisible ? PLAYER.runSpeed : PLAYER.sprintSpeed;
         if (!b.targetVisible && d < 1.5) b.target = null; // reached last seen spot
         this._maybeBuild(b, fx, fz, d);
+        if (t < b.rushUntil) {
+          // ramp rush: run straight up the ramps being built toward the target
+          gx = a.pos.x + b.bqDirX * 6;
+          gz = a.pos.z + b.bqDirZ * 6;
+          speed = PLAYER.runSpeed;
+          stop = 0;
+        } else if (b.bqMode === 'box' && t < b.holdUntil) {
+          // boxed up: stay inside while it goes up (and heal / reload behind it)
+          speed = 0;
+        }
         break;
       }
       case 'retreat': {
@@ -432,6 +563,18 @@ export class Bots {
         const d = Math.hypot(dx, dz) || 1;
         gx = a.pos.x + (dx / d) * 10;
         gz = a.pos.z + (dz / d) * 10;
+        // break line of sight inside a nearby building when there is one
+        if (b.stateTime === 0) {
+          if (b.inB && this._interiorPoint(b.inB, _pt)) {
+            b.coverC = b.inB; // already indoors: stay in, move to another spot
+            b.coverX = _pt.x;
+            b.coverZ = _pt.z;
+          } else this._pickCover(b, b.lastSeenX, b.lastSeenZ);
+        }
+        if (b.coverC) {
+          gx = b.coverX;
+          gz = b.coverZ;
+        }
         speed = PLAYER.sprintSpeed;
         b.target = null;
         b.targetVisible = false;
@@ -452,6 +595,14 @@ export class Bots {
         break;
       }
       case 'heal': {
+        // patch up indoors when a building is close (give up after a few seconds)
+        if (b.healing <= 0 && b.stateTime === 0 && !b.inB) this._pickCover(b, NaN, NaN);
+        if (b.healing <= 0 && b.coverC && !b.inB && b.stateTime < 9 && !b.target) {
+          gx = b.coverX;
+          gz = b.coverZ;
+          stop = 0.6;
+          break;
+        }
         if (b.healing <= 0) this._startHeal(b);
         speed = 0;
         break;
@@ -461,7 +612,16 @@ export class Bots {
         gz = b.lootZ;
         stop = 0.3;
         const d = Math.hypot(gx - a.pos.x, gz - a.pos.z);
-        if (d < INTERACT) this._interact(b);
+        // not through a building wall: the loot and the bot must be on the same side of it
+        // (walkable interior of the same building, or both outside) with a clear line to it
+        if (d < INTERACT && b.lootIn === b.inB) {
+          if (this.world.clearLine(a.pos.x, a.pos.y + CHEST, a.pos.z, gx, b.lootY + 0.4, gz)) this._interact(b);
+          else {
+            this.navStats.lootLos++;
+            if (b.lootId != null) b.ignore.set(b.lootId, t + 20);
+            b.lootId = null;
+          }
+        }
         break;
       }
       case 'harvest': {
@@ -494,6 +654,16 @@ export class Bots {
             b.goalX = _pt.x;
             b.goalZ = _pt.z;
           }
+          // now and then explore a building on the way instead
+          if (this.rng() < INDOOR_WANDER) {
+            const cx = (b.goalX + a.pos.x) / 2;
+            const cz = (b.goalZ + a.pos.z) / 2;
+            const c = this._nearShell(cx, cz, 70, b.inB);
+            if (c && this._interiorPoint(c, _pt)) {
+              b.goalX = _pt.x;
+              b.goalZ = _pt.z;
+            }
+          }
           b.wanderGoal = true;
           b.wanderUntil = t + 25;
         }
@@ -507,20 +677,65 @@ export class Bots {
       }
     }
     if (state !== 'wander') b.wanderGoal = false;
+    if (state !== 'retreat' && state !== 'heal') b.coverC = null;
     b.navX = gx;
     b.navZ = gz;
-    // follow a planned detour (set up when the bot got stuck) while it still leads to this goal
-    if (b.pathN > 0 && state !== 'engage' && state !== 'heal') {
-      if (t > b.pathUntil || Math.hypot(gx - b.pathGoalX, gz - b.pathGoalZ) > 12) b.pathN = 0;
+    // route goal: where the bot is really heading (a fight with the target out of sight
+    // chases its last seen spot, which may be inside a building)
+    let rgx = gx;
+    let rgz = gz;
+    let routed = speed > 0; // (healing stands still; walking into cover first is routed)
+    if (state === 'engage') {
+      if (b.targetVisible || t < b.rushUntil) routed = false;
       else {
-        while (b.pathI < b.pathN - 1 && Math.hypot(b.path[b.pathI * 2] - a.pos.x, b.path[b.pathI * 2 + 1] - a.pos.z) < 1.8) b.pathI++;
-        const wx = b.path[b.pathI * 2];
-        const wz = b.path[b.pathI * 2 + 1];
-        if (b.pathI >= b.pathN - 1 && Math.hypot(wx - a.pos.x, wz - a.pos.z) < 1.8) b.pathN = 0;
-        else {
-          gx = wx;
-          gz = wz;
+        rgx = b.lastSeenX;
+        rgz = b.lastSeenZ;
+      }
+    }
+    // a goal on the other side of a building wall: go through a door (cheap, every LOD tier)
+    if (routed && b.pathN === 0) this._doorRoute(b, rgx, rgz, state === 'loot' ? b.lootIn : undefined);
+    // follow the door route / planned detour while it still leads to this goal
+    b.doorNear = false;
+    if (b.pathN > 0 && routed) {
+      if (t > b.pathUntil || Math.hypot(rgx - b.pathGoalX, rgz - b.pathGoalZ) > 12) {
+        if (t > b.pathUntil && b.pathK[b.pathI]) b.routeFails++;
+        b.pathN = 0;
+      } else {
+        const P = b.path;
+        const K = b.pathK;
+        // advance past reached waypoints (or ones already passed on the way to the next)
+        for (;;) {
+          const i = b.pathI;
+          const dx = a.pos.x - P[i * 2];
+          const dz = a.pos.z - P[i * 2 + 1];
+          const r = K[i] ? DOOR_REACH : WP_REACH;
+          const d2 = dx * dx + dz * dz;
+          let next = d2 < r * r;
+          if (!next && i < b.pathN - 1 && d2 < 6.25) {
+            const sx = P[i * 2 + 2] - P[i * 2];
+            const sz = P[i * 2 + 3] - P[i * 2 + 1];
+            next = dx * sx + dz * sz > 0; // past the waypoint along the next leg
+          }
+          if (!next) break;
+          if (i >= b.pathN - 1) {
+            b.pathN = 0;
+            b.routeFails = 0;
+            break;
+          }
+          b.pathI++;
+        }
+        if (b.pathN > 0) {
+          const i = b.pathI;
+          gx = P[i * 2];
+          gz = P[i * 2 + 1];
           stop = 0;
+          if (K[i] || (i > 0 && K[i - 1])) {
+            const d = Math.hypot(gx - a.pos.x, gz - a.pos.z);
+            if (d < 5) {
+              b.doorNear = true; // think faster and slow down through the door
+              if (d < 3) speed = Math.min(speed, PLAYER.runSpeed);
+            }
+          }
         }
       }
     }
@@ -629,7 +844,8 @@ export class Bots {
   }
 
   _startEngage(b) {
-    b.buildRolled = false;
+    // a fresh fight may open with a build quickly, but not on a cooldown-reset spam
+    b.buildCooldown = Math.max(b.buildCooldown, this.time + 0.3 + this.rng() * 0.5);
   }
 
   _hasGun(inv) {
@@ -668,6 +884,7 @@ export class Bots {
     if (inv.selected === slot) return;
     inv.select(slot);
     b.reloading = 0;
+    if (this.combat && this.combat.cancelBurst) this.combat.cancelBurst(a);
     b.switchAt = this.time + 0.6;
     b.fireCd = Math.max(b.fireCd, 0.3);
     b.burstLeft = 0;
@@ -699,6 +916,7 @@ export class Bots {
     const c = CONSUMABLES[inv.slots[slot].id];
     b.healing = c.useTime;
     b.reloading = 0;
+    if (this.combat && this.combat.cancelBurst) this.combat.cancelBurst(a);
     if (a.character) {
       a.character.setEquipped('pickaxe', true);
       a.character.useItem(c.useTime);
@@ -767,8 +985,11 @@ export class Bots {
       b.lootId = r.id;
       b.lootKind = r.kind;
       b.lootX = p.x;
+      b.lootY = p.y;
       b.lootZ = p.z;
-      b.lootUntil = t + 4 + Math.hypot(p.x - a.pos.x, p.z - a.pos.z) / 3;
+      b.lootIn = this._shellAt(p.x, p.z, p.y);
+      // the way in (or out) through a door takes longer than the straight line
+      b.lootUntil = t + 4 + Math.hypot(p.x - a.pos.x, p.z - a.pos.z) / 3 + (b.lootIn !== b.inB ? 10 : 0);
       return true;
     }
     return false;
@@ -809,6 +1030,10 @@ export class Bots {
     b.lootId = null;
     if (id == null) return;
     b.ignore.set(id, this.time + 60);
+    if (b.lootIn) {
+      b.indoorLoot++;
+      this.navStats.indoorLoot++;
+    }
     if (b.lootKind === 'chest' || b.lootKind === 'ammoBox') {
       loot.open(id);
       b.thinkIn = 0.15;
@@ -868,35 +1093,120 @@ export class Bots {
     return true;
   }
 
+  /**
+   * Rolls for a build response in a fight and queues it; _buildStep places the pieces one
+   * per DIFFICULTY.buildRate seconds through the same plan / spendMats / place path players
+   * use (so mats, slot rules and BUILD.maxPieces all apply). DIFFICULTY.buildPieces caps
+   * the response:
+   *   1   a wall toward the target
+   *   2   wall + ramp (the wall covers the ramp's high end), or a lone wall
+   *   3+  ramp rush toward a target on higher ground (or a far one now and then)
+   *   5   1x1 box (4 walls + cone roof) when hurt in a close fight
+   */
   _maybeBuild(b, fx, fz, d) {
     const st = this.structures;
-    if (!st || b.buildRolled || !b.targetVisible) return;
-    if (this.time < b.buildCooldown) return;
-    b.buildRolled = true;
-    if (this.rng() > this.diff.buildChance) return;
-    const inv = b.actor.inventory;
-    let mat = null;
-    let most = BUILD.cost - 1;
-    for (const m of MATERIALS) {
-      if (inv.mats[m] > most) {
-        most = inv.mats[m];
-        mat = m;
-      }
+    const tgt = b.target;
+    if (!st || !tgt || !b.targetVisible || b.bqI < b.bqN) return;
+    const t = this.time;
+    if (t < b.buildCooldown) return;
+    const diff = this.diff;
+    if (st.count >= BUILD.maxPieces * BUILD_ROOM) return;
+    if (this.rng() > diff.buildChance) {
+      b.buildCooldown = t + diff.buildCooldown * (0.3 + this.rng() * 0.4);
+      return;
     }
-    if (!mat) return;
     const a = b.actor;
+    if (!a.grounded) return;
+    const mat = bestMat(a.inventory);
+    if (!mat) return;
+    let afford = 0;
+    for (const m of MATERIALS) afford += Math.floor(a.inventory.mats[m] / BUILD.cost);
+    const maxN = Math.min(diff.buildPieces || 1, afford, BUILD_Q);
     const heading = Math.atan2(fx, -fz);
-    const kind = d > 25 && this.rng() < 0.5 ? 'ramp' : 'wall';
-    const placement = st.plan(kind, a.pos, heading, 0);
-    if (!placement || !placement.valid) return;
-    if (!inv.spendMats(mat, BUILD.cost)) return;
-    const piece = st.place(placement, mat, a);
-    if (!piece) inv.mats[mat] += BUILD.cost;
-    else {
-      b.buildCooldown = this.time + 5 + this.rng() * 6;
-      b.builds++;
-      // run up a ramp toward the target for a moment
-      if (kind === 'ramp') b.wantJump = false;
+    // axis-snapped heading toward the target (ramps and box sides sit on the grid)
+    const hs = (Math.round(heading / (Math.PI / 2)) * Math.PI) / 2;
+    const dx = Math.sin(hs);
+    const dz = -Math.cos(hs);
+    const px = a.pos.x;
+    const py = a.pos.y;
+    const pz = a.pos.z;
+    const hurt = a.health + a.shield < 70 || t - b.hurtAt < 1.2;
+    const high = tgt.pos.y - py > 1.5;
+    let n = 0;
+    let mode;
+    if (maxN >= 5 && hurt && d < 40) {
+      // 1x1 box around the bot's own cell: front wall first, then sides, back, roof
+      mode = 'box';
+      const cx = (Math.floor(px / BUILD.cell) + 0.5) * BUILD.cell;
+      const cz = (Math.floor(pz / BUILD.cell) + 0.5) * BUILD.cell;
+      n = queueStep(b, n, 'wall', cx, py, cz, hs, 0);
+      n = queueStep(b, n, 'wall', cx, py, cz, hs + Math.PI / 2, 0);
+      n = queueStep(b, n, 'wall', cx, py, cz, hs - Math.PI / 2, 0);
+      n = queueStep(b, n, 'wall', cx, py, cz, hs + Math.PI, 0);
+      n = queueStep(b, n, 'cone', cx, py, cz, hs, 1);
+    } else if (maxN >= 3 && (high || (d > 18 && this.rng() < 0.45))) {
+      // ramp rush: a chain of rising ramps toward the target, run up while it is built
+      mode = 'rush';
+      const ramps = Math.min(maxN, high ? 2 + Math.ceil((tgt.pos.y - py) / BUILD.level) : 3);
+      for (let i = 0; i < ramps && n < maxN; i++) {
+        n = queueStep(b, n, 'ramp', px + dx * BUILD.cell * i, py + BUILD.level * i, pz + dz * BUILD.cell * i, hs, 0);
+      }
+    } else if (maxN >= 2 && (d > 25 || this.rng() < (maxN >= 3 ? 0.75 : 0.4))) {
+      // wall + ramp: the wall goes on the far edge of the ramp's cell, so it covers the climb
+      mode = 'wallramp';
+      _bpos.x = px;
+      _bpos.y = py;
+      _bpos.z = pz;
+      const pl = st.plan('ramp', _bpos, hs, 0, _pl);
+      n = queueStep(b, n, 'wall', pl.x, pl.y, pl.z, hs, 0);
+      n = queueStep(b, n, 'ramp', px, py, pz, hs, 0);
+    } else {
+      mode = 'wall';
+      n = queueStep(b, n, 'wall', px, py, pz, heading, 0);
+    }
+    b.bqN = n;
+    b.bqI = 0;
+    b.bqNext = t;
+    b.bqMat = mat;
+    b.bqMode = mode;
+    b.bqDirX = dx;
+    b.bqDirZ = dz;
+    b.buildCooldown = Infinity; // set for real when the queue finishes
+    if (mode === 'rush') b.rushUntil = t + 0.6 + n * Math.max(0.5, diff.buildRate * 2.5);
+    else if (mode === 'box') b.holdUntil = t + n * diff.buildRate + 2.5;
+    this._buildStep(b);
+  }
+
+  /** Places the next queued piece when its time has come (called every sim frame). */
+  _buildStep(b) {
+    const t = this.time;
+    if (t < b.bqNext) return;
+    const st = this.structures;
+    const a = b.actor;
+    const diff = this.diff;
+    // a rush toward a target that is gone (or a dead builder) stops; walls and boxes finish
+    const stop = !st || !a.alive || (b.bqMode === 'rush' && (!b.target || !b.target.alive));
+    if (!stop) {
+      const q = b.bq[b.bqI];
+      _bpos.x = q.x;
+      _bpos.y = q.y;
+      _bpos.z = q.z;
+      const pl = st.plan(q.kind, _bpos, q.h, q.p, _pl);
+      const inv = a.inventory;
+      let mat = b.bqMat;
+      if ((inv.mats[mat] || 0) < BUILD.cost) mat = b.bqMat = bestMat(inv);
+      if (pl && pl.valid && mat && inv.spendMats(mat, BUILD.cost)) {
+        if (st.place(pl, mat, a)) b.builds++;
+        else inv.mats[mat] += BUILD.cost;
+      }
+      b.bqI++;
+      b.bqNext = t + diff.buildRate * (0.8 + this.rng() * 0.4);
+    } else b.bqI = b.bqN;
+    if (b.bqI >= b.bqN) {
+      b.bqN = 0;
+      b.bqI = 0;
+      if (stop) b.rushUntil = 0;
+      b.buildCooldown = t + diff.buildCooldown * (0.7 + this.rng() * 0.6);
     }
   }
 
@@ -917,13 +1227,22 @@ export class Bots {
     const ux = dx / d;
     const uz = dz / d;
     const base = Math.atan2(ux, -uz);
+    if (this.time < b.rushUntil) {
+      // running up own ramps: the avoidance rays would see the ramp as a wall
+      b.mx = ux;
+      b.mz = uz;
+      b.speed = speed;
+      return;
+    }
     const world = this.world;
     const oy = a.pos.y + 0.95;
     const range = Math.min(d, 3.2);
     const side = b.avoidSide;
     let chosen = base;
     let ok = false;
-    for (let i = 0; i < AVOID.length; i++) {
+    // far bots (sim budget tier 2) probe only the first few directions
+    const probes = b.lod === 2 ? 5 : AVOID.length;
+    for (let i = 0; i < probes; i++) {
       const h = base + AVOID[i] * side;
       const hx = Math.sin(h);
       const hz = -Math.cos(h);
@@ -940,6 +1259,220 @@ export class Bots {
     b.speed = speed;
   }
 
+  // ---------------------------------------------------- enterable buildings
+
+  /**
+   * The hollow building whose walkable interior (inside the footprint, clear of the wall band
+   * and door openings) holds (x, z) below its interior ceiling, or null. Used for both the bot
+   * (b.inB) and its loot (b.lootIn), so 'same building' means the same side of the walls.
+   */
+  _shellAt(x, z, y) {
+    const c = this.world.interiorAt ? this.world.interiorAt(x, z) : null;
+    if (!c || !c.shell) return null;
+    return y == null || y < c.shell.ceil - 0.3 ? c : null;
+  }
+
+  /**
+   * Goal on the other side of a building wall (bot inside and goal elsewhere, or goal inside
+   * a building the bot is not in): writes door waypoints into b.path (approach point outside
+   * the door, then the step inside; reversed to get out). No-op when nothing needs a door.
+   */
+  _doorRoute(b, gx, gz, ig = undefined) {
+    const a = b.actor;
+    const ib = b.inB;
+    if (ig === undefined) ig = this._shellAt(gx, gz, null);
+    if (ib === ig) return false;
+    const P = b.path;
+    const K = b.pathK;
+    let n = 0;
+    let fx = a.pos.x;
+    let fz = a.pos.z;
+    if (ib) {
+      const d = this._pickDoor(b, ib, fx, fz, gx, gz);
+      if (!d) return false;
+      // already in the doorway: skip the inside step
+      if (Math.hypot(d.x - fx, d.z - fz) > 1.1) {
+        P[0] = d.x - d.nx * DOOR_IN;
+        P[1] = d.z - d.nz * DOOR_IN;
+        K[0] = 1;
+        n = 1;
+      }
+      P[n * 2] = d.x + d.nx * DOOR_OUT;
+      P[n * 2 + 1] = d.z + d.nz * DOOR_OUT;
+      K[n] = 1;
+      n++;
+      fx = P[n * 2 - 2];
+      fz = P[n * 2 - 1];
+    }
+    if (ig) {
+      const d = this._pickDoor(b, ig, fx, fz, gx, gz);
+      if (d) {
+        if (Math.hypot(d.x - fx, d.z - fz) > 1.1) {
+          P[n * 2] = d.x + d.nx * DOOR_OUT;
+          P[n * 2 + 1] = d.z + d.nz * DOOR_OUT;
+          K[n] = 1;
+          n++;
+        }
+        P[n * 2] = d.x - d.nx * DOOR_IN;
+        P[n * 2 + 1] = d.z - d.nz * DOOR_IN;
+        K[n] = 1;
+        n++;
+      }
+    }
+    if (!n) return false;
+    b.pathN = n;
+    b.pathI = 0;
+    b.pathGoalX = gx;
+    b.pathGoalZ = gz;
+    b.pathUntil = this.time + 10 + Math.hypot(gx - a.pos.x, gz - a.pos.z) / 3;
+    b.doorRoutes++;
+    this.navStats.doorRoutes++;
+    return true;
+  }
+
+  /** Door of building c with the shortest from -> door -> goal walk (randomised after failed tries). */
+  _pickDoor(b, c, fx, fz, gx, gz) {
+    const doors = c.shell.doors;
+    let best = null;
+    let bestV = Infinity;
+    const noise = b.routeFails > 0 ? 25 * Math.min(b.routeFails, 4) : 0;
+    for (let i = 0; i < doors.length; i++) {
+      const d = doors[i];
+      const ox = d.x + d.nx * DOOR_OUT;
+      const oz = d.z + d.nz * DOOR_OUT;
+      let v = Math.hypot(ox - fx, oz - fz) + Math.hypot(gx - d.x, gz - d.z);
+      if (noise) v += this.rng() * noise;
+      if (v < bestV) {
+        bestV = v;
+        best = d;
+      }
+    }
+    return best;
+  }
+
+  /** Enterable buildings binned by SHELL_CELL (built on first use). */
+  _shells() {
+    const list = this.world.buildingInteriors ? this.world.buildingInteriors() : null;
+    if (this._shellGrid && list === this._shellSrc) return this._shellGrid; // rebuilt when the world's list changes
+    this._shellSrc = list;
+    const grid = new Map();
+    if (!list) {
+      this._shellGrid = grid;
+      return grid;
+    }
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
+      const k = shellKey(Math.floor(e.x / SHELL_CELL), Math.floor(e.z / SHELL_CELL));
+      let arr = grid.get(k);
+      if (!arr) grid.set(k, (arr = []));
+      arr.push(e.collider);
+    }
+    this._shellGrid = grid;
+    return grid;
+  }
+
+  /** A random enterable building whose door is within r of (x, z) (not `skip`), or null. */
+  _nearShell(x, z, r, skip = null) {
+    const grid = this._shells();
+    if (!grid.size) return null;
+    const i0 = Math.floor((x - r) / SHELL_CELL);
+    const i1 = Math.floor((x + r) / SHELL_CELL);
+    const j0 = Math.floor((z - r) / SHELL_CELL);
+    const j1 = Math.floor((z + r) / SHELL_CELL);
+    let pick = null;
+    let seen = 0;
+    for (let i = i0; i <= i1; i++) {
+      for (let j = j0; j <= j1; j++) {
+        const arr = grid.get(shellKey(i, j));
+        if (!arr) continue;
+        for (let k = 0; k < arr.length; k++) {
+          const c = arr[k];
+          if (c === skip || !c.alive) continue;
+          const d0 = this._nearDoor(c, x, z);
+          if (!d0 || Math.hypot(d0.x - x, d0.z - z) > r) continue;
+          if (this.rng() * ++seen < 1) pick = c; // reservoir sample
+        }
+      }
+    }
+    return pick;
+  }
+
+  /** Door of building c nearest to (x, z), or null. */
+  _nearDoor(c, x, z) {
+    const doors = c.shell.doors;
+    let best = null;
+    let bestD = Infinity;
+    for (let i = 0; i < doors.length; i++) {
+      const d = doors[i];
+      const v = (d.x - x) * (d.x - x) + (d.z - z) * (d.z - z);
+      if (v < bestD) {
+        bestD = v;
+        best = d;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * A* plan (b.path / b.planN) toward a goal inside a building it does not enter (a partial
+   * plan, or one that ends at the wall): append the door approach + step inside, so the bot
+   * does not follow it to the wall and stall with door routing held off by pathN > 0.
+   */
+  _planDoorTail(b) {
+    const ig = this._shellAt(b.planGX, b.planGZ, null);
+    if (!ig || !ig.shell.doors.length) return;
+    let n = b.planN;
+    const P = b.path;
+    const K = b.pathK;
+    const lx = P[n * 2 - 2];
+    const lz = P[n * 2 - 1];
+    if (this._shellAt(lx, lz, null) === ig) return; // already gets inside
+    const d = this._pickDoor(b, ig, lx, lz, b.planGX, b.planGZ);
+    if (!d) return;
+    n = Math.min(n, PATH_MAX - 2);
+    P[n * 2] = d.x + d.nx * DOOR_OUT;
+    P[n * 2 + 1] = d.z + d.nz * DOOR_OUT;
+    K[n] = 1;
+    n++;
+    P[n * 2] = d.x - d.nx * DOOR_IN;
+    P[n * 2 + 1] = d.z - d.nz * DOOR_IN;
+    K[n] = 1;
+    n++;
+    b.planN = n;
+  }
+
+  /** Random open floor point inside building c (clear of its walls), or false. */
+  _interiorPoint(c, out) {
+    const w = this.world;
+    for (let k = 0; k < 14; k++) {
+      const x = c.minX + this.rng() * (c.maxX - c.minX);
+      const z = c.minZ + this.rng() * (c.maxZ - c.minZ);
+      if (w.interiorAt(x, z) !== c || w.blockedAt(x, z, 0.7, true)) continue;
+      out.x = x;
+      out.z = z;
+      return true;
+    }
+    return false;
+  }
+
+  /** Cover inside a nearby building (away from the threat at fromX/fromZ when given). */
+  _pickCover(b, fromX, fromZ) {
+    const a = b.actor;
+    b.coverC = null;
+    if (b.inB) return false;
+    const c = this._nearShell(a.pos.x, a.pos.z, COVER_RANGE);
+    if (!c) return false;
+    // do not run toward the shooter (through the door the bot would use)
+    const d0 = this._nearDoor(c, a.pos.x, a.pos.z);
+    if (Number.isFinite(fromX) && Math.hypot(d0.x - fromX, d0.z - fromZ) < Math.hypot(a.pos.x - fromX, a.pos.z - fromZ) - 4) return false;
+    if (!this._interiorPoint(c, _pt)) return false;
+    b.coverC = c;
+    b.coverX = _pt.x;
+    b.coverZ = _pt.z;
+    this.navStats.cover++;
+    return true;
+  }
+
   _stuckCheck(b) {
     const a = b.actor;
     const t = this.time;
@@ -951,25 +1484,12 @@ export class Bots {
       b.stuckTotal++;
       b.wantJump = true;
       b.avoidSide = -b.avoidSide;
-      if (b.stuck >= 2 && b.state !== 'engage' && b.pathN === 0) {
-        // plan a way around on a coarse grid toward the current goal (delivered in a later frame)
-        this.planner.request(b, a.pos.x, a.pos.z, b.navX, b.navZ);
+      if (b.stuck >= 2 && b.state !== 'engage' && b.pathN === 0 && b.lod < 2) {
+        // plan a way around on a coarse grid toward the current goal (delivered in a later
+        // frame; bots near a human jump the queue). Far bots skip A* and just re-goal below.
+        this.planner.request(b, a.pos.x, a.pos.z, b.navX, b.navZ, b.lod === 0);
       }
-      if (b.stuck >= 5) {
-        // re-path: drop this goal and go somewhere else nearby
-        b.stuck = 0;
-        if (b.lootId != null) {
-          b.ignore.set(b.lootId, t + 30);
-          b.lootId = null;
-        }
-        b.harvest = null;
-        world_pointIn(this.world, this.rng, a.pos.x, a.pos.z, 40, _pt);
-        b.goalX = _pt.x;
-        b.goalZ = _pt.z;
-        b.wanderGoal = true;
-        b.wanderUntil = t + 8;
-        b.rotGoal = b.state === 'rotate' ? false : b.rotGoal;
-      }
+      if (b.stuck >= 5) this._regoal(b);
     } else if (moved > 1.5) b.stuck = 0;
     // long-horizon progress: moving but oscillating in place also counts as stuck
     if (t > b.progAt) {
@@ -977,7 +1497,8 @@ export class Bots {
       const travelling = b.speed > 0 && b.state !== 'engage' && b.state !== 'harvest' && d > 4;
       if (travelling && b.progD - d < 3 && b.pathN === 0) {
         b.stuck = Math.max(b.stuck, 2);
-        this.planner.request(b, a.pos.x, a.pos.z, b.navX, b.navZ);
+        if (b.lod < 2) this.planner.request(b, a.pos.x, a.pos.z, b.navX, b.navZ, b.lod === 0);
+        else this._regoal(b); // far from every human: no A*, just pick another goal
       }
       b.progD = d;
       b.progAt = t + 6;
@@ -985,6 +1506,27 @@ export class Bots {
     b.stuckX = a.pos.x;
     b.stuckZ = a.pos.z;
     b.stuckAt = t + STUCK_WINDOW;
+  }
+
+  /** Re-path: drop the current goal and go somewhere else nearby. */
+  _regoal(b) {
+    const a = b.actor;
+    const t = this.time;
+    b.stuck = 0;
+    if (b.pathN > 0 && b.pathK[b.pathI]) b.routeFails++; // the door route did not work: try another door
+    b.pathN = 0;
+    b.coverC = null;
+    if (b.lootId != null) {
+      b.ignore.set(b.lootId, t + 30);
+      b.lootId = null;
+    }
+    b.harvest = null;
+    world_pointIn(this.world, this.rng, a.pos.x, a.pos.z, 40, _pt);
+    b.goalX = _pt.x;
+    b.goalZ = _pt.z;
+    b.wanderGoal = true;
+    b.wanderUntil = t + 8;
+    b.rotGoal = b.state === 'rotate' ? false : b.rotGoal;
   }
 
   // ---------------------------------------------------------- per-frame act
@@ -998,6 +1540,7 @@ export class Bots {
     b.bloom = Math.max(0, b.bloom - dt * 0.08);
     const inv = a.inventory;
 
+    if (b.bqI < b.bqN) this._buildStep(b);
     if (b.healing > 0) {
       b.healing -= dt;
       if (b.healing <= 0) this._finishHeal(b);
@@ -1042,6 +1585,17 @@ export class Bots {
       }
       if (Math.abs(angleDelta(a.heading, want)) > 0.3) return;
       this._fireControl(b, tgt);
+      // time-sliced (far) bots: catch up on the shots that fell inside the skipped frames
+      let rem = dt;
+      for (let k = 1; k < b.slice; k++) {
+        const c = b.fireCd;
+        if (!(c > 0) || c >= rem) break;
+        rem -= c;
+        b.fireCd = 0;
+        const shots = b.shots;
+        this._fireControl(b, tgt);
+        if (b.shots === shots) break;
+      }
     } else if (b.state === 'harvest' && b.harvestReach && b.fireCd <= 0 && b.harvest) {
       this._swingAt(b, b.harvest.x, a.pos.y + 1.0, b.harvest.z, null);
     }
@@ -1137,10 +1691,13 @@ export class Bots {
     const a = b.actor;
     const w = WEAPONS[it.id];
     if (b.reloading > 0 || it.mag >= w.mag || a.inventory.ammo[w.ammo] <= 0) return;
-    b.reloading = w.reload;
+    const st = weaponStats(it.id, it.rarity) || w;
+    b.reloading = st.reload;
     b.burstLeft = 0;
-    if (a.character) a.character.reload(w.reload);
-    if (this.sfx) this.sfx.play('reload', { x: a.pos.x, y: a.pos.y, z: a.pos.z, weapon: it.id });
+    if (this.combat && this.combat.cancelBurst) this.combat.cancelBurst(a); // no burst rounds 2-3 during the reload
+    if (a.character) a.character.reload(st.reload);
+    // Sfx plays the shell-by-shell loading only for 'shotgun'
+    if (this.sfx) this.sfx.play('reload', { x: a.pos.x, y: a.pos.y, z: a.pos.z, weapon: w.kind === 'shotgun' ? 'shotgun' : it.id });
     if (this.onReload) this.onReload(a, it.id); // multiplayer: host replicates the sound
   }
 
@@ -1243,15 +1800,18 @@ export class Bots {
       b.animAcc = 0;
       return;
     }
-    // half-rate animation in the outer half of the draw distance
+    // position / facing every frame (cheap); the skeleton (mixer) at a distance-scaled rate:
+    // every frame inside ANIM_FULL, every 2nd frame to half the draw distance, every 3rd beyond
+    ch.root.position.copy(a.pos);
+    ch.root.rotation.y = Math.PI - a.heading;
+    if (b.state === 'dead' && b.deadAnimated > DEAD_ANIM) return; // death pose settled: frozen
     b.animAcc += dt;
-    if (d2 > cd2 * 0.25) {
-      b.animFlip = !b.animFlip;
-      if (b.animFlip) return;
-    }
+    const every = d2 > cd2 * 0.25 ? 3 : d2 > ANIM_FULL * ANIM_FULL ? 2 : 1;
+    if (++b.animTick < every) return;
+    b.animTick = 0;
     const step = b.animAcc;
     b.animAcc = 0;
-    ch.root.position.copy(a.pos);
+    if (b.state === 'dead') b.deadAnimated += step;
     const h = a.heading;
     const fx = Math.sin(h);
     const fz = -Math.cos(h);
@@ -1349,16 +1909,38 @@ function newBrain(actor, target, rng) {
     switchAt: 0,
     strafe: 1,
     strafeUntil: 0,
-    buildRolled: false,
     buildCooldown: 0,
+    // queued build response, placed one piece per buildRate seconds (see _maybeBuild)
+    bq: Array.from({ length: BUILD_Q }, () => ({ kind: 'wall', x: 0, y: 0, z: 0, h: 0, p: 0 })),
+    bqN: 0,
+    bqI: 0,
+    bqNext: 0,
+    bqMat: 'wood',
+    bqMode: '',
+    bqDirX: 0,
+    bqDirZ: 0,
+    rushUntil: 0,
+    holdUntil: 0,
     // items
     healing: 0,
     lootId: null,
     lootKind: null,
     lootX: 0,
+    lootY: 0,
     lootZ: 0,
     lootUntil: 0,
+    lootIn: null, // enterable building (World collider) holding the loot target, or null
     ignore: new Map(),
+    // enterable buildings
+    inB: null, // building the bot is inside (updated every think), or null
+    wasInside: false,
+    doorNear: false,
+    doorRoutes: 0,
+    routeFails: 0,
+    indoorLoot: 0,
+    coverC: null,
+    coverX: 0,
+    coverZ: 0,
     harvest: null,
     harvestUntil: 0,
     harvestCooldown: 0,
@@ -1368,7 +1950,15 @@ function newBrain(actor, target, rng) {
     // presentation
     deadTime: 0,
     animAcc: 0,
-    animFlip: false,
+    animTick: 0,
+    deadAnimated: 0,
+    // sim budget (see Bots._lod)
+    lod: 0,
+    slice: 1,
+    thinkMul: 1,
+    lodAt: 0,
+    lodDist: 0,
+    simAcc: 0,
     // counters (debug / QA)
     shots: 0,
     swings: 0,
@@ -1380,6 +1970,7 @@ function newBrain(actor, target, rng) {
     navX: 0,
     navZ: 0,
     path: new Float32Array(PATH_MAX * 2),
+    pathK: new Uint8Array(PATH_MAX), // 1 = door waypoint (tight reach radius)
     pathN: 0,
     pathI: 0,
     pathGoalX: 0,
@@ -1397,6 +1988,32 @@ function newBrain(actor, target, rng) {
 /** Still in the drop (bus / freefall / glide): not a target yet. */
 function inAir(o) {
   return !!(o.gliding || o.airborneDrop || o.mode === 'bus' || o.mode === 'freefall' || o.mode === 'glide');
+}
+
+/** Material with the most stock that still pays for a piece, or null. */
+function bestMat(inv) {
+  let mat = null;
+  let most = BUILD.cost - 1;
+  for (const m of MATERIALS) {
+    if (inv.mats[m] > most) {
+      most = inv.mats[m];
+      mat = m;
+    }
+  }
+  return mat;
+}
+
+/** Writes build step n of b's queue; returns n + 1 (or n when the queue is full). */
+function queueStep(b, n, kind, x, y, z, h, p) {
+  if (n >= BUILD_Q) return n;
+  const q = b.bq[n];
+  q.kind = kind;
+  q.x = x;
+  q.y = y;
+  q.z = z;
+  q.h = h;
+  q.p = p;
+  return n + 1;
 }
 
 function findConsumable(inv, id) {
@@ -1465,9 +2082,21 @@ const PLAN_MAX_EXPANSIONS = 6000;
 // neighbour offsets as (dx, dz, cost) triples
 const NB = [1, 0, 1, -1, 0, 1, 0, 1, 1, 0, -1, 1, 1, 1, 1.4142, 1, -1, 1.4142, -1, 1, 1.4142, -1, -1, 1.4142];
 
+// Enterable buildings: cells are sampled with blockedAt(..., true) (only the thin outer
+// walls block, interiors are open) and cells straddling a door opening are forced open
+// (a 2 m cell lattice rarely has a centre inside a 1.8 m door); _emit turns a run of
+// door cells into two door-aligned waypoints (outside -> inside, or back).
+const DOOR_HASH = 16; // metres per door hash cell
+const DOOR_ALONG = 1.45; // |offset along the wall| (m) of a cell centre counted as in the door
+const DOOR_ACROSS = 1.5; // |offset across the wall| (m)
+
 class Planner {
-  constructor(world) {
+  constructor(world, legacy = false) {
     this.world = world;
+    this.legacy = legacy; // true: whole footprints block (the old behaviour; benchmarks)
+    this.doorOf = new Int32Array(PG * PG); // door index of a forced-open cell, else -1 (valid when seen[i] == stamp)
+    this.doors = null; // flat door list [{ x, z, nx, nz }] (lazy, see _doorIndex)
+    this.doorHash = null; // Map: DOOR_HASH cell -> door indices
     this.occ = new Uint8Array(PG * PG); // 1 free, 2 blocked (valid when seen[i] == stamp)
     this.seen = new Uint32Array(PG * PG);
     this.g = new Float32Array(PG * PG);
@@ -1482,14 +2111,15 @@ class Planner {
     this.queue = [];
   }
 
-  request(b, sx, sz, gx, gz) {
+  request(b, sx, sz, gx, gz, urgent = false) {
     if (b.planQueued) return;
     b.planQueued = true;
     b.planSX = sx;
     b.planSZ = sz;
     b.planGX = gx;
     b.planGZ = gz;
-    this.queue.push(b);
+    if (urgent) this.queue.unshift(b);
+    else this.queue.push(b);
   }
 
   cancelAll() {
@@ -1513,7 +2143,7 @@ class Planner {
     this.owner = null;
     this.busy = false;
     b.planQueued = false;
-    b.planN = this._emit(b.path);
+    b.planN = this._emit(b.path, b.pathK);
     return b;
   }
 
@@ -1533,6 +2163,7 @@ class Planner {
     this.start = start;
     this.seen[start] = this.stamp;
     this.occ[start] = 1;
+    this.doorOf[start] = -1;
     this.g[start] = 0;
     this.parent[start] = -1;
     this.state[start] = this.stamp + 1e9;
@@ -1553,9 +2184,64 @@ class Planner {
       const x = this.ox + ((i % PG) + 0.5) * PC;
       const z = this.oz + (Math.floor(i / PG) + 0.5) * PC;
       const w = this.world;
-      this.occ[i] = w.inBounds(x, z, 3) && !w.blockedAt(x, z, 0.75) ? 1 : 2;
+      this.doorOf[i] = -1;
+      if (!w.inBounds(x, z, 3)) this.occ[i] = 2;
+      else if (this.legacy) this.occ[i] = w.blockedAt(x, z, 0.75) ? 2 : 1;
+      else {
+        // door cells are open (and tagged, so _emit lines the path up with the opening)
+        const d = this._doorCell(x, z);
+        this.doorOf[i] = d;
+        this.occ[i] = d >= 0 || !w.blockedAt(x, z, 0.75, true) ? 1 : 2;
+      }
     }
     return this.occ[i] === 1;
+  }
+
+  /** Door (index into this.doors) whose opening the cell centre (x, z) straddles, or -1. */
+  _doorCell(x, z) {
+    if (!this.doorHash) this._doorIndex();
+    const arr = this.doorHash.get(shellKey(Math.floor(x / DOOR_HASH), Math.floor(z / DOOR_HASH)));
+    if (!arr) return -1;
+    const D = this.doors;
+    for (let k = 0; k < arr.length; k++) {
+      const d = D[arr[k]];
+      const rx = x - d.x;
+      const rz = z - d.z;
+      const across = rx * d.nx + rz * d.nz;
+      const along = rz * d.nx - rx * d.nz;
+      if (across > -DOOR_ACROSS && across < DOOR_ACROSS && along > -DOOR_ALONG && along < DOOR_ALONG) return arr[k];
+    }
+    return -1;
+  }
+
+  /** Hash every door of every enterable building into each DOOR_HASH cell its catch box touches. */
+  _doorIndex() {
+    const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
+    const D = (this.doors = []);
+    const H = (this.doorHash = new Map());
+    const list = this.world.buildingInteriors ? this.world.buildingInteriors() : [];
+    const m = Math.hypot(DOOR_ALONG, DOOR_ACROSS);
+    for (let i = 0; i < list.length; i++) {
+      const sh = list[i].collider.shell;
+      if (!sh) continue;
+      for (const d of sh.doors) {
+        const id = D.length;
+        D.push({ x: d.x, z: d.z, nx: d.nx, nz: d.nz });
+        const i0 = Math.floor((d.x - m) / DOOR_HASH);
+        const i1 = Math.floor((d.x + m) / DOOR_HASH);
+        const j0 = Math.floor((d.z - m) / DOOR_HASH);
+        const j1 = Math.floor((d.z + m) / DOOR_HASH);
+        for (let a = i0; a <= i1; a++) {
+          for (let b = j0; b <= j1; b++) {
+            const k = shellKey(a, b);
+            let arr = H.get(k);
+            if (!arr) H.set(k, (arr = []));
+            arr.push(id);
+          }
+        }
+      }
+    }
+    this.indexMs = typeof performance !== 'undefined' ? performance.now() - t0 : 0;
   }
 
   _push(i, f) {
@@ -1636,18 +2322,52 @@ class Planner {
     return false;
   }
 
-  /** Writes waypoints (every 3rd cell from start toward the best cell) into out; returns the count. */
-  _emit(out) {
+  /**
+   * Writes waypoints (every 3rd cell from start toward the best cell) into out, kinds into
+   * kout (1 = door waypoint); returns the count. A run of door cells becomes the door's
+   * approach point and its step through (DOOR_OUT / DOOR_IN), in walking order.
+   */
+  _emit(out, kout) {
     if (this.best === this.start) return 0;
     const cells = this.cells;
     let n = 0;
     for (let i = this.best; i !== -1 && n < cells.length; i = this.parent[i]) cells[n++] = i;
     let w = 0;
+    let since = 0;
+    let lastDoor = -1;
+    let px = this.ox + ((this.start % PG) + 0.5) * PC;
+    let pz = this.oz + (Math.floor(this.start / PG) + 0.5) * PC;
     for (let k = n - 2; k >= 0 && w < PATH_MAX; k--) {
-      if (k !== 0 && (n - 2 - k) % 3 !== 2) continue;
       const i = cells[k];
-      out[w * 2] = this.ox + ((i % PG) + 0.5) * PC;
-      out[w * 2 + 1] = this.oz + (Math.floor(i / PG) + 0.5) * PC;
+      const cx = this.ox + ((i % PG) + 0.5) * PC;
+      const cz = this.oz + (Math.floor(i / PG) + 0.5) * PC;
+      const di = this.legacy || this.seen[i] !== this.stamp ? -1 : this.doorOf[i];
+      if (di >= 0) {
+        if (di !== lastDoor && w < PATH_MAX - 1) {
+          const d = this.doors[di];
+          const side = (px - d.x) * d.nx + (pz - d.z) * d.nz >= 0 ? 1 : -1; // +1: coming from outside
+          const a = side > 0 ? DOOR_OUT : -DOOR_IN;
+          const c = side > 0 ? -DOOR_IN : DOOR_OUT;
+          out[w * 2] = d.x + d.nx * a;
+          out[w * 2 + 1] = d.z + d.nz * a;
+          if (kout) kout[w] = 1;
+          w++;
+          out[w * 2] = d.x + d.nx * c;
+          out[w * 2 + 1] = d.z + d.nz * c;
+          if (kout) kout[w] = 1;
+          w++;
+          since = 0;
+        }
+        lastDoor = di;
+        continue;
+      }
+      px = cx;
+      pz = cz;
+      since++;
+      if (k !== 0 && since % 3 !== 0) continue;
+      out[w * 2] = cx;
+      out[w * 2 + 1] = cz;
+      if (kout) kout[w] = 0;
       w++;
     }
     return w;
@@ -1655,13 +2375,22 @@ class Planner {
 }
 
 /** Blocking one-shot plan (tests / debugging). */
-function planPath(world, sx, sz, gx, gz, out) {
-  const p = new Planner(world);
-  const b = { path: out, planQueued: false, planN: 0 };
+function planPath(world, sx, sz, gx, gz, out, opts = {}) {
+  const p = opts.planner || new Planner(world, !!opts.legacy);
+  const b = { path: out, pathK: opts.kinds || null, planQueued: false, planN: 0 };
   p.request(b, sx, sz, gx, gz);
   let r = null;
   while (!r) r = p.step(1e9);
   return b.planN;
+}
+
+function shellKey(i, j) {
+  return (i + 32768) * 65536 + (j + 32768);
+}
+
+/** The storm as a drop centre ({cx, cz}) when it has one, else null. */
+function ctxStorm(storm) {
+  return storm && Number.isFinite(storm.cx) && Number.isFinite(storm.cz) ? storm : null;
 }
 
 function world_pointIn(world, rng, cx, cz, r, out) {

@@ -27,10 +27,15 @@
 //   client that fired) and opts.claims (actor the client saw each pellet hit,
 //   accepted when the host ray passes within CLAIM_TOL of that actor).
 //   `combat.lastDirs` holds the pellet directions of the last call.
-// - Hooks: onFire(shooter, weapon, origin, records), onColliderDestroyed(c, point).
+// - Hooks: onFire(shooter, weapon, origin, records), onColliderDestroyed(c, point),
+//   onBurstShot(shooter, item, origin, dirs, records) after each follow-up round of a
+//   burst gun (a multiplayer client forwards it to the host like a trigger pull).
+// - Burst guns (WEAPONS[id].burst > 1): a locally-originated trigger pull (no opts.dirs)
+//   fires the first round and schedules the rest `burstDelay` apart; each follow-up
+//   takes one round from item.mag and stops if the shooter dies, reloads or swaps.
 
 import * as THREE from 'three';
-import { WEAPONS, PICKAXE, RARITY_DAMAGE, PLAYER, lerp } from '../core/config.js';
+import { WEAPONS, PICKAXE, PLAYER, lerp, weaponStats } from '../core/config.js';
 
 const _dir = new THREE.Vector3();
 const _pt = new THREE.Vector3();
@@ -96,7 +101,9 @@ export class Combat {
     this.onEliminate = null;
     this.onHarvest = null;
     this.onFire = null;
+    this.onBurstShot = null;
     this.onColliderDestroyed = null;
+    this._burstEpoch = 0;
     this.authoritative = true;
     this.lastDirs = [];
     this._hits = [];
@@ -113,6 +120,7 @@ export class Combat {
 
   clear() {
     this.actors.length = 0;
+    this._burstEpoch++; // cancels pending burst rounds
   }
 
   /** Puts every destroyed tree / rock / prop / vehicle back (match restart). */
@@ -173,8 +181,7 @@ export class Combat {
     const auth = this.authoritative;
     const dirs = opts && opts.dirs;
     const claims = opts && opts.claims;
-    const w = WEAPONS[weaponItem && weaponItem.id] || WEAPONS.pistol;
-    const rarityMul = RARITY_DAMAGE[weaponItem && weaponItem.rarity] || 1;
+    const w = weaponStats(weaponItem && WEAPONS[weaponItem.id] ? weaponItem.id : 'pistol', weaponItem && weaponItem.rarity);
     const scale = shooter && shooter.damageScale != null ? shooter.damageScale : 1;
     const results = this._hits;
     results.length = 0;
@@ -183,8 +190,8 @@ export class Combat {
     // muzzle for tracers / flash
     if (shooter && shooter.character && shooter.character.muzzle) shooter.character.muzzle(_from);
     else _from.copy(origin);
-    if (this.fx) this.fx.muzzleFlash(_from, dir, { scale: w.id === 'shotgun' ? 1.4 : 1 });
-    if (this.sfx) this.sfx.play(w.sound, { x: _from.x, y: _from.y, z: _from.z });
+    if (this.fx) this.fx.muzzleFlash(_from, dir, { scale: w.kind === 'shotgun' ? 1.4 : 1 });
+    if (this.sfx) this.sfx.play(w.sound, { x: _from.x, y: _from.y, z: _from.z, volume: w.soundVolume });
 
     const actorDamage = new Map();
     const pellets = dirs ? dirs.length : w.pellets || 1;
@@ -212,7 +219,7 @@ export class Combat {
 
       let fall = 1;
       if (dist > w.falloffStart) fall = dist >= w.falloffEnd ? w.minFalloff : lerp(1, w.minFalloff, (dist - w.falloffStart) / Math.max(1, w.falloffEnd - w.falloffStart));
-      let dmg = w.damage * rarityMul * fall * scale;
+      let dmg = w.damage * fall * scale;
 
       const record = { hitActor: null, point: _pt.clone(), headshot: false, surface: 'none' };
       if (res.actor) {
@@ -245,7 +252,7 @@ export class Combat {
         }
         if (this.sfx && p === 0) this.sfx.play('bullet_impact', { x: _pt.x, y: _pt.y, z: _pt.z, volume: 0.6, surface: impactSound(res.surface) });
       }
-      if (this.fx && (p === 0 || pellets <= 3 || p % 3 === 0)) this.fx.tracer(_from, _pt, { color: w.tracer, width: w.id === 'sniper' ? 0.08 : 0.05 });
+      if (this.fx && (p === 0 || pellets <= 3 || p % 3 === 0)) this.fx.tracer(_from, _pt, { color: w.tracer, width: w.kind === 'sniper' ? 0.08 : 0.05 });
       out.push(record);
     }
 
@@ -253,7 +260,7 @@ export class Combat {
       const first = actorDamage.values().next().value;
       this.sfx.play('bullet_impact', { x: first.point.x, y: first.point.y, z: first.point.z, volume: 0.6, surface: 'body' });
     }
-    if (w.id === 'shotgun' && this.sfx) {
+    if (w.pump && this.sfx) {
       const sfx = this.sfx;
       const x = _from.x, y = _from.y, z = _from.z;
       setTimeout(() => sfx.play('shotgun_pump', { x, y, z, volume: 0.7 }), 350);
@@ -264,7 +271,44 @@ export class Combat {
       }
     }
     if (this.onFire) this.onFire(shooter, w.id, origin, out);
+    if (w.burst > 1 && !dirs && !(opts && opts.burstRound)) this._scheduleBurst(shooter, weaponItem, origin, dir, spread, w);
     return out;
+  }
+
+  /**
+   * Drops the pending rounds of `shooter`'s burst (reload start, weapon swap, heal). Players
+   * are also covered by the reloadT / current-item checks in _scheduleBurst; bots keep their
+   * reload timer on the brain, so Bots calls this.
+   */
+  cancelBurst(shooter) {
+    if (shooter) shooter._burstGen = (shooter._burstGen || 0) + 1;
+  }
+
+  /** Queues the remaining rounds of a burst gun's trigger pull. */
+  _scheduleBurst(shooter, item, origin, dir, spread, w) {
+    const epoch = this._burstEpoch;
+    const gen = shooter ? shooter._burstGen || 0 : 0;
+    const o0 = origin.clone();
+    const d0 = dir.clone();
+    const delay = Math.max(0.02, w.burstDelay || 0.08) * 1000;
+    let left = w.burst - 1;
+    const next = () => {
+      if (epoch !== this._burstEpoch || !shooter || shooter.alive === false || !(item.mag > 0)) return;
+      if ((shooter._burstGen || 0) !== gen) return; // cancelBurst(): reload / swap / heal since the trigger pull
+      if (shooter.reloadT > 0 || shooter.reloading > 0 || shooter.buildPiece) return;
+      const inv = shooter.inventory;
+      if (inv && inv.current && inv.current() !== item) return;
+      item.mag--;
+      left--;
+      const o = shooter.aimOrigin || o0;
+      const d = shooter.aimDir || d0;
+      const s = shooter.computeSpread ? shooter.computeSpread() : spread;
+      if (shooter.character && shooter.character.fire) shooter.character.fire();
+      const res = this.fireWeapon(shooter, item, o, d, s, { burstRound: true });
+      if (this.onBurstShot) this.onBurstShot(shooter, item, o, this.lastDirs, res);
+      if (left > 0) setTimeout(next, delay);
+    };
+    setTimeout(next, delay);
   }
 
   /** Distance along the ray at which it passes within CLAIM_TOL of `a`'s body axis (before `maxT`), or null. */
@@ -341,7 +385,7 @@ export class Combat {
     const mat = c.mat === 'brick' || c.mat === 'metal' ? c.mat : 'wood';
     if (!this.authoritative) {
       // client: predicted harvest for feedback only; the host owns hp and mats
-      out.harvested = { mat, count: mat === 'wood' ? 10 : mat === 'brick' ? 8 : 7 };
+      out.harvested = { mat, count: PICKAXE.yield[mat] };
       out.collider = c;
       out.point = point.clone();
       out.predicted = true;
@@ -350,7 +394,7 @@ export class Combat {
       return out;
     }
     c.hp -= PICKAXE.harvest;
-    const count = mat === 'wood' ? 10 : mat === 'brick' ? 8 : 7;
+    const count = PICKAXE.yield[mat];
     out.harvested = { mat, count };
     out.collider = c;
     out.point = point.clone();

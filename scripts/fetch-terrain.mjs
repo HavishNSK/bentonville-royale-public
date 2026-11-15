@@ -30,11 +30,11 @@ import { fromArrayBuffer } from 'geotiff';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RAW_DIR = path.join(ROOT, 'data-raw', 'terrain');
 const RAW_META = path.join(RAW_DIR, 'fetch-meta.json');
-const MAP_JSON = path.join(ROOT, 'public', 'data', 'bentonville-osm.json');
+const MAP_JSON = path.join(ROOT, 'data-raw', 'bentonville-osm-full.json'); // real geography (pre-compose)
 const OUT_BIN = path.join(ROOT, 'public', 'data', 'bentonville-terrain.bin');
 const OUT_JSON = path.join(ROOT, 'public', 'data', 'bentonville-terrain.json');
 
-const BBOX = [36.355, -94.23, 36.4, -94.19]; // south, west, north, east
+const BBOX = [36.346, -94.31, 36.4, -94.19]; // south, west, north, east (keep in sync with fetch-map-data.mjs)
 const ORIGIN = { lat: 36.3729, lon: -94.2088 };
 const COS0 = Math.cos((ORIGIN.lat * Math.PI) / 180);
 const MX = 111320 * COS0;

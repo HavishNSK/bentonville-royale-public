@@ -47,6 +47,8 @@
  *   so neither startup nor walking into a new tile blocks a frame.
  */
 
+import { DROP_ZONES } from '../core/config.js';
+
 const TAU = Math.PI * 2;
 const TILE_PX = 512;
 const TILE_GUTTER = 1; // tiles overlap by this many px so rotated blits show no seams
@@ -694,9 +696,15 @@ export class Minimap {
     const c = this._full;
     if (!c || !c.getBoundingClientRect) return this.fullCanvasToWorld(clientX, clientY);
     const r = c.getBoundingClientRect();
-    const w = r.width || 1;
-    const h = r.height || 1;
-    return this.fullCanvasToWorld(((clientX - r.left) / w) * c.width, ((clientY - r.top) / h) * c.height);
+    // content box only (the canvas has a CSS border); clientLeft/Top = border widths in
+    // layout px, scaled by any CSS transform on the frame (rect / offset size)
+    const sx = c.offsetWidth ? r.width / c.offsetWidth : 1;
+    const sy = c.offsetHeight ? r.height / c.offsetHeight : 1;
+    const bl = (c.clientLeft || 0) * sx;
+    const bt = (c.clientTop || 0) * sy;
+    const w = (c.clientWidth ? c.clientWidth * sx : r.width) || 1;
+    const h = (c.clientHeight ? c.clientHeight * sy : r.height) || 1;
+    return this.fullCanvasToWorld(((clientX - r.left - bl) / w) * c.width, ((clientY - r.top - bt) / h) * c.height);
   }
 
   invalidate() {
@@ -757,6 +765,14 @@ export class Minimap {
         out.push({ key, n: String(l.n), x: l.x, z: l.z, r: l.r || 0, ids: Array.isArray(l.ids) ? l.ids : [], sprite: null });
       }
     }
+    // Drop zones first: full-map labels are placed greedily in this order, and on the
+    // expanded map the downtown landmarks sit a few pixels apart, so the named POIs
+    // must claim their label space before the minor landmarks around them.
+    const rank = (k) => {
+      const i = DROP_ZONES.findIndex((z) => z.key === k);
+      return i < 0 ? DROP_ZONES.length : i;
+    };
+    out.sort((a, b) => rank(a.key) - rank(b.key));
     return out;
   }
 

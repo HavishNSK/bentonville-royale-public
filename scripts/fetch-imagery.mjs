@@ -40,7 +40,7 @@ import sharp from 'sharp';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RAW_DIR = path.join(ROOT, 'data-raw', 'naip');
 const RAW_META = path.join(RAW_DIR, 'fetch-meta.json');
-const MAP_JSON = path.join(ROOT, 'public', 'data', 'bentonville-osm.json');
+const MAP_JSON = path.join(ROOT, 'data-raw', 'bentonville-osm-full.json'); // real geography (pre-compose)
 const TERRAIN_JSON = path.join(ROOT, 'public', 'data', 'bentonville-terrain.json');
 const OUT_TREES = path.join(ROOT, 'public', 'data', 'bentonville-trees.json');
 const OUT_GROUND = path.join(ROOT, 'public', 'data', 'bentonville-ground.webp');
