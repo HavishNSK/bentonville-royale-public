@@ -1,0 +1,14 @@
+{
+  // Multiplayer relay: PartyServer on Cloudflare Workers (free plan: SQLite-backed Durable Objects).
+  // Deploy: npm run party:deploy   Local: npm run party:dev (port 1999)
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bentonville-royale",
+  "main": "party/server.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [{ "name": "Main", "class_name": "Main" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Main"] }],
+  "dev": { "port": 1999 }
+}
