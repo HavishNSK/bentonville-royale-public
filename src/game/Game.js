@@ -863,9 +863,15 @@ export class Game {
     hud.setBuildMode(p.buildPiece);
     const rl = p.reloadT > 0 ? 1 - p.reloadT / p.reloadTotal : 0;
     hud.setWeapon(p.buildPiece ? null : inv.weaponHud ? inv.weaponHud(rl) : null);
-    const kind = p.buildPiece ? 'build' : inv.current() && inv.current().type === 'weapon' ? 'gun' : 'pickaxe';
-    hud.setCrosshair({ spread01: clamp(p.computeSpread() / 0.06, 0, 1), hit: false, kind });
+    const cur = inv.current();
+    const curW = cur && cur.type === 'weapon' ? WEAPONS[cur.id] : null;
+    const kind = p.buildPiece ? 'build' : curW ? (curW.kind === 'shotgun' ? 'shotgun' : 'gun') : 'pickaxe';
+    const spreadNow = p.computeSpread();
+    // true on-screen pellet cone: its radius as a fraction of half the viewport height at the current fov
+    const spreadFrac = Math.tan(spreadNow) / Math.tan((this.camera.fov * Math.PI) / 360);
+    hud.setCrosshair({ spread01: clamp(spreadNow / 0.06, 0, 1), spreadFrac, hit: false, kind });
     hud.el.classList.toggle('is-onbus', this.state === 'drop'); // no aiming UI while riding the Drop Bus
+    hud.el.classList.toggle('is-scoped', this.state === 'play' && p.alive && p.scopeView); // sniper scope overlay
     const netAlive = this.net && this.net.aliveCount;
     hud.setCounts({ alive: netAlive != null ? netAlive : this.combat.aliveCount, eliminations: p.kills });
     hud.setCompass(((p.heading * 180) / Math.PI + 360) % 360);

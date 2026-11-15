@@ -67,6 +67,8 @@ export const AMMO = {
 //             only rarities the gun can drop at. Read stats with weaponStats(id, rarity);
 //             the flat top-level damage/reload equal the lowest rarity's (legacy readers).
 //   lootWeight relative chance among weapon drops.
+//   scope     true = aiming goes first-person through a scope overlay (scoped snipers);
+//             without it aiming is the usual over-the-shoulder zoom (e.g. Hunting Rifle).
 // spread values are half-angles in radians. `bloom` is added per shot and
 // decays; moving/jumping multiplies the total. `mag` is the same at every rarity.
 export const WEAPONS = {
@@ -111,7 +113,7 @@ export const WEAPONS = {
     id: 'sniper', name: 'Bolt-Action Sniper Rifle', kind: 'sniper', icon: 'sniper', model: 'sniper', sound: 'shot_sniper', ammo: 'heavy',
     headMult: 2.5, rate: 0.33, auto: false, mag: 1,
     spread: 0.0008, bloom: 0, maxBloom: 0, pellets: 1, range: 600, falloffStart: 600, falloffEnd: 600, minFalloff: 1,
-    hipSpread: 0.03, zoom: 0.3, twoHanded: true, botRange: 130, tracer: 0xd8f4ff, lootWeight: 5,
+    hipSpread: 0.03, zoom: 0.3, scope: true, twoHanded: true, botRange: 130, tracer: 0xd8f4ff, lootWeight: 5,
     rarities: {
       rare: { damage: 105, reload: 3.0 },
       epic: { damage: 110, reload: 2.85 },
