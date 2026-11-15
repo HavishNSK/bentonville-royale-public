@@ -32,6 +32,7 @@ export const ACTIONS = Object.freeze([
   { id: 'buildRamp', label: 'Build ramp', group: 'Building', def: 'KeyV' },
   { id: 'buildCone', label: 'Build cone', group: 'Building', def: 'KeyX' },
   { id: 'cycleMaterial', label: 'Switch material', group: 'Building', def: 'KeyG' },
+  { id: 'edit', label: 'Edit piece', group: 'Building', def: 'KeyT' },
   { id: 'map', label: 'Full map', group: 'Other', def: 'KeyM' },
   { id: 'emote', label: 'Emote', group: 'Other', def: 'KeyB' },
 ]);
@@ -53,6 +54,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   invertY: false,
   showFps: false,
   autoPickupAmmo: true,
+  editOnRelease: false, // releasing the mouse after selecting edit tiles confirms the edit
+  editWheelReset: false, // the mouse wheel resets the piece being edited
   difficulty: 'normal', // 'easy' | 'normal' | 'hard'
   googleTiles: false, // optional Google Photorealistic 3D Tiles view (needs VITE_GOOGLE_MAPS_API_KEY)
   bindings: DEFAULT_BINDINGS,
@@ -96,6 +99,8 @@ export function sanitizeSettings(raw) {
     invertY: bool(s.invertY, d.invertY),
     showFps: bool(s.showFps, d.showFps),
     autoPickupAmmo: bool(s.autoPickupAmmo, d.autoPickupAmmo),
+    editOnRelease: bool(s.editOnRelease, d.editOnRelease),
+    editWheelReset: bool(s.editWheelReset, d.editWheelReset),
     difficulty: DIFFICULTY_OPTIONS.includes(s.difficulty) ? s.difficulty : d.difficulty,
     googleTiles: s.googleTiles === true,
     bindings: sanitizeBindings(s.bindings),

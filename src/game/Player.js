@@ -16,10 +16,12 @@
 // from the host (src/net/ClientSession.js). Solo and host play are unchanged.
 
 import * as THREE from 'three';
+import { rampDragQuarter, validEdit } from './Structures.js';
 import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, clamp, damp, TAU, weaponStats } from '../core/config.js';
 
 const PIECE_ACTIONS = { buildWall: 'wall', buildFloor: 'floor', buildRamp: 'ramp', buildCone: 'cone' };
 export const FREEFALL_SPEED = 38;
+const EDIT_REACH = 7; // m from the aim origin to a piece you can start editing
 export const DEPLOY_HEIGHT = 55;
 export const FREEFALL_ACROSS = 22; // m/s sideways while skydiving
 
@@ -81,6 +83,7 @@ export class Player {
     this.ads = false;
     this.buildPiece = null;
     this.buildMat = 'wood';
+    this.editing = null; // { piece, mask, hover, drag } while editing a built piece
     this.cooldown = 0;
     this.reloadT = 0;
     this.reloadTotal = 0;
@@ -118,6 +121,7 @@ export class Player {
     this.cooldown = this.reloadT = this.useT = this.bloom = 0;
     this.reloadItem = this.useItem = null;
     this.placement = null;
+    this.editing = null;
     this.emoting = false;
     this.lastEquipped = null;
     if (this.inventory) this.inventory.reset();
@@ -178,7 +182,7 @@ export class Player {
 
     this.crouching = this.mode === 'ground' && (input.action('crouch') || input.action('crouchAlt'));
     this.sprinting = this.mode === 'ground' && input.action('sprint') && mf > 0 && !this.ads && !this.crouching && this.useT <= 0;
-    this.ads = this.mode === 'ground' && input.action('aim') && !this.buildPiece && !!this._gun();
+    this.ads = this.mode === 'ground' && input.action('aim') && !this.buildPiece && !this.editing && !!this._gun();
 
     let speed = PLAYER.runSpeed;
     if (this.sprinting) speed = PLAYER.sprintSpeed;
@@ -326,20 +330,28 @@ export class Player {
     const inv = this.inventory;
     for (let i = 0; i < 5; i++) {
       if (input.actionHit('slot' + (i + 1))) {
+        this._endEdit(g);
         this.buildPiece = null;
         inv.select(i);
       }
     }
-    if (input.wheel) {
+    if (input.wheel && this.editing && g.settings && g.settings.editWheelReset) {
+      this._resetEdit(g); // setting: the mouse wheel resets the piece being edited
+    } else if (input.wheel) {
+      this._endEdit(g);
       this.buildPiece = null;
       inv.next(input.wheel > 0 ? 1 : -1);
     }
     if (input.actionHit('pickaxe')) {
+      this._endEdit(g);
       this.buildPiece = null;
       inv.select(-1);
     }
     for (const a in PIECE_ACTIONS) {
-      if (input.actionHit(a)) this.setBuildPiece(PIECE_ACTIONS[a]);
+      if (input.actionHit(a)) {
+        this._endEdit(g);
+        this.setBuildPiece(PIECE_ACTIONS[a]);
+      }
     }
     if (input.actionHit('cycleMaterial')) this.cycleMaterial();
     if (input.actionHit('emote') && this.character && this.grounded) {
@@ -400,7 +412,7 @@ export class Player {
       this.reloadT -= dt;
       if (this.reloadT <= 0) this._finishReload();
     }
-    if (input.actionHit('reload') && !this.buildPiece) this.startReload(g);
+    if (input.actionHit('reload') && !this.buildPiece && !this.editing) this.startReload(g);
 
     // ---- consumable channel
     if (this.useT > 0) {
@@ -411,7 +423,18 @@ export class Player {
     // ---- interact
     this._interact(input, g, dt);
 
-    if (this.buildPiece) {
+    // ---- edit (T): opens edit mode on your own piece and it stays open; T again confirms.
+    // With "Confirm edit on release" on, letting go of the mouse after selecting confirms too.
+    if (input.actionHit('edit')) {
+      if (this.editing) this._confirmEdit(g);
+      else this._startEdit(g);
+    }
+
+    if (this.editing) {
+      if (g.structures) g.structures.setGhost(null);
+      this.placement = null;
+      this._editMode(input, lmb, lmbClick, g);
+    } else if (this.buildPiece) {
       this._buildMode(dt, lmb, lmbClick, g);
     } else {
       if (g.structures) g.structures.setGhost(null);
@@ -467,6 +490,18 @@ export class Player {
       const verb = rec.kind === 'item' ? (swap ? 'Swap for' : 'Pick up') : 'Open';
       g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] ' + verb + ' ' + (rec.label || ''));
       if (input.actionHit('interact')) this.interactWith(rec, g);
+      return;
+    }
+    // doors cut into built walls: anyone can open / close them, swinging away from them
+    const st = g.structures;
+    const door = st && st.doorNear && !this.airborneDrop ? st.doorNear(this.pos) : null;
+    if (door) {
+      g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] ' + (door.open ? 'Close' : 'Open') + ' door');
+      if (input.actionHit('interact')) {
+        const net = clientNet(g);
+        if (net) net.action({ k: 'dr', key: door.piece.key, c: door.c, s: door.sign });
+        else st.toggleDoor(door.piece, door.c, door.sign);
+      }
     } else g.hud.prompt(null);
   }
 
@@ -687,6 +722,105 @@ export class Player {
     const piece = st.place(pl, this.buildMat, this);
     if (piece) this.inventory.spendMats(this.buildMat, BUILD.cost);
     return piece;
+  }
+
+  // --- editing
+
+  /** Start editing the piece under the crosshair, if it is yours and in reach. */
+  _startEdit(g) {
+    const st = g.structures;
+    if (!st || !st.pickPiece || this.airborneDrop || this.mode !== 'ground') return false;
+    const hit = st.pickPiece(this.aimOrigin, this.aimDir, EDIT_REACH);
+    if (!hit || hit.piece.owner !== this) {
+      g.sfx.play('build_denied', { volume: 0.5 });
+      return false;
+    }
+    const piece = hit.piece;
+    this.editing = { piece, mask: st.editValue(piece), hover: -1, drag: null, from: -1 };
+    this._cancelUse();
+    this._cancelReload();
+    return true;
+  }
+
+  /**
+   * Per frame while editing (Fortnite rules): the first tile clicked decides whether a drag
+   * selects or deselects, and every tile the crosshair crosses while the button is held gets
+   * the same. Selected tiles are cut on confirm. Ramps: drag from one tile to its neighbour
+   * and the ramp rises that way. Reset (right mouse, or the wheel when that setting is on)
+   * restores the piece at once and leaves edit mode.
+   */
+  _editMode(input, lmb, lmbClick, g) {
+    const e = this.editing;
+    const st = g.structures;
+    const p = e.piece;
+    if (!st || !p.alive || Math.hypot(p.x - this.pos.x, p.z - this.pos.z) > EDIT_REACH + 4 || Math.abs(p.y - this.pos.y) > 8) {
+      this._endEdit(g);
+      return;
+    }
+    if (input.actionHit('aim')) {
+      this._resetEdit(g);
+      return;
+    }
+    e.hover = st.aimTile(p, this.aimOrigin, this.aimDir);
+    if (lmbClick && e.hover >= 0) e.selecting = true;
+    if (p.kind === 'ramp') {
+      if (lmbClick && e.hover >= 0) e.from = e.hover;
+      if (lmb && e.from >= 0 && e.hover >= 0 && e.hover !== e.from) {
+        const q = rampDragQuarter(p.rot, e.from, e.hover);
+        if (q >= 0) e.mask = q;
+      }
+      if (!lmb) e.from = -1;
+    } else {
+      const all = (1 << st.tileCount(p.kind)) - 1;
+      if (lmbClick && e.hover >= 0) e.drag = e.mask & (1 << e.hover) ? 'deselect' : 'select';
+      if (lmb && e.drag && e.hover >= 0) {
+        const bit = 1 << e.hover;
+        const next = e.drag === 'select' ? e.mask | bit : e.mask & ~bit;
+        if (next !== all) e.mask = next; // a piece keeps at least one tile
+      }
+      if (!lmb) e.drag = null;
+    }
+    // confirm edit on release (setting): the mouse came up after selecting
+    if (!lmb && e.selecting) {
+      e.selecting = false;
+      if (g.settings && g.settings.editOnRelease && e.mask !== st.editValue(p)) {
+        if (validEdit(p.kind, e.mask)) {
+          this._confirmEdit(g);
+          return;
+        }
+        g.sfx.play('build_denied', { volume: 0.5 }); // not a shape: keep editing
+      }
+    }
+    st.setEditGhost(p, e.mask, e.hover);
+  }
+
+  /** Apply the pending edit (the host does it for a multiplayer client) and leave edit mode. */
+  _confirmEdit(g, mask) {
+    const e = this.editing;
+    const st = g.structures;
+    // applied exactly as selected; a selection that is not a valid shape does nothing
+    const m = mask != null ? mask : e && e.mask;
+    if (e && st && e.piece.alive && m !== st.editValue(e.piece) && !validEdit(e.piece.kind, m)) {
+      g.sfx.play('build_denied', { volume: 0.5 });
+    } else if (e && st && e.piece.alive && m !== st.editValue(e.piece)) {
+      const net = clientNet(g);
+      if (net) net.action({ k: 'e', key: e.piece.key, ed: m });
+      else st.edit(e.piece, m);
+    }
+    this._endEdit(g);
+  }
+
+  /** Reset: the piece goes back to how it was placed, right away, and edit mode ends. */
+  _resetEdit(g) {
+    const e = this.editing;
+    if (!e || !g.structures) return;
+    this._confirmEdit(g, g.structures.resetValue(e.piece));
+  }
+
+  _endEdit(g) {
+    if (!this.editing) return;
+    this.editing = null;
+    if (g && g.structures) g.structures.setEditGhost(null);
   }
 
   // ------------------------------------------------------------- camera

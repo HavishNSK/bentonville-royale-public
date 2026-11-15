@@ -1190,6 +1190,33 @@ export class Game {
         const piece = p.tryPlace(game);
         return { placed: !!piece, valid: !!(p.placement && p.placement.valid), count: game.structures ? game.structures.count : 0 };
       },
+      /** Why a piece would / would not place right now (QA): the plan plus each rule. */
+      plan(kind = 'wall') {
+        const p = game.player;
+        const st = game.structures;
+        const w = game.world;
+        if (!st) return null;
+        const pl = st.plan(kind, p.pos, p.heading, p.pitch);
+        return {
+          pl: { ...pl },
+          slotTaken: !!st.at(pl),
+          fits: st.fits(pl),
+          supported: st.supported(pl),
+          feet: +p.pos.y.toFixed(2),
+          terrainFeet: +w.terrainHeight(p.pos.x, p.pos.z).toFixed(2),
+          terrainTarget: +w.terrainHeight(pl.x, pl.z).toFixed(2),
+          surface: p.surface,
+        };
+      },
+      /** Edit the last piece the player placed (tile mask, or a ramp's quarter turn). */
+      edit(mask = 0) {
+        const st = game.structures;
+        const mine = st ? st.pieces.filter((q) => q.owner === game.player) : [];
+        const piece = mine[mine.length - 1];
+        if (!piece) return null;
+        const changed = st.edit(piece, mask);
+        return { changed, key: piece.kind + ':' + piece.key, edit: st.editValue(piece), tris: piece.tris.length / 9, segs: piece.segs ? piece.segs.length : 0, doors: piece.doors ? piece.doors.slice() : null };
+      },
       interact() {
         const rec = game.loot && game.loot.nearest(game.player.pos);
         if (!rec) return null;
@@ -1292,7 +1319,7 @@ export class Game {
           return a ? game.combat.applyDamage(a, n, { source: null }) : null;
         },
         structures() {
-          return game.structures ? game.structures.pieces.map((p) => ({ key: p.key, kind: p.kind, mat: p.mat, hp: Math.round(p.hp) })) : [];
+          return game.structures ? game.structures.pieces.map((p) => ({ key: p.key, kind: p.kind, mat: p.mat, hp: Math.round(p.hp), edit: p.edit | 0, doors: p.doors ? p.doors.join(',') : '' })) : [];
         },
         lootCount() {
           return game.loot ? { records: game.loot.records.length, opened: game.loot.records.filter((r) => r.opened).length } : null;
@@ -1325,6 +1352,7 @@ export class Game {
           ammo: { ...p.inventory.ammo },
           mats: { ...p.inventory.mats },
           buildPiece: p.buildPiece,
+          editing: p.editing ? p.editing.piece.kind : null,
         };
       },
       get bots() {

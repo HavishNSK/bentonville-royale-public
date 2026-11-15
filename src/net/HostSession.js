@@ -236,7 +236,7 @@ export class HostSession {
     keep(game.combat, 'onColliderDestroyed');
     keep(game.combat, 'swingPickaxe');
     for (const k of ['_add', 'take', 'open']) keep(game.loot, k);
-    for (const k of ['place', 'damage', '_destroy']) keep(game.structures, k);
+    for (const k of ['place', 'damage', '_destroy', 'edit', 'setDoor']) keep(game.structures, k);
     const ev = (e) => this.started && !this._spawning && this.events.push(e);
     const combat = game.combat;
     combat.onFire = (shooter, wid, origin, records) => {
@@ -295,6 +295,22 @@ export class HostSession {
         if (!gone && piece && piece.alive) ev({ e: 'sd', key: piece.key, hp: Math.round(piece.hp) });
         return gone;
       };
+      if (st.edit) {
+        const edit = st.edit.bind(st);
+        st.edit = (piece, mask) => {
+          const ok = edit(piece, mask);
+          if (ok) ev({ e: 'se', key: piece.key, ed: st.editValue(piece) });
+          return ok;
+        };
+      }
+      if (st.setDoor) {
+        const setDoor = st.setDoor.bind(st);
+        st.setDoor = (piece, c, v) => {
+          const ok = setDoor(piece, c, v);
+          if (ok) ev({ e: 'sdr', key: piece.key, c, v: piece.doors[c] });
+          return ok;
+        };
+      }
       if (st._destroy) {
         const destroy = st._destroy.bind(st);
         st._destroy = (piece, ...rest) => {
@@ -626,8 +642,29 @@ export class HostSession {
         if (!st || st.at({ ...p })) return;
         const pl = { kind: p.kind, x: +p.x, y: +p.y, z: +p.z, rot: +p.rot, key: p.key, level: p.level, valid: true };
         if (st.fits && !st.fits(pl)) return; // same world rule as the client's ghost (refunded by the inventory sync)
+        if (st.supported && !st.supported(pl)) return; // nothing holding it up: refused (and refunded) like the ghost says
         const piece = st.place(pl, mat, a);
         if (piece) inv.spendMats(mat, BUILD.cost);
+        return;
+      }
+      case 'e': {
+        // edit one of your own pieces (tile mask, or a ramp's quarter turn); no mats involved
+        const st = g.structures;
+        const piece = st && st.edit && st.slots.get(m.key);
+        if (!piece || piece.owner !== a || a.inBus || a.airborneDrop) return;
+        if (!(Math.hypot(piece.x - a.pos.x, piece.z - a.pos.z) < 14 && Math.abs(piece.y - a.pos.y) < 10)) return;
+        st.edit(piece, m.ed | 0);
+        return;
+      }
+      case 'dr': {
+        // open / close a door cut into a built wall (anyone may)
+        const st = g.structures;
+        const piece = st && st.toggleDoor && st.slots.get(m.key);
+        const c = m.c | 0;
+        if (!piece || a.inBus || a.airborneDrop || !(st.doorColumns(piece) & (1 << c))) return;
+        const at = st.doorPoint(piece, c, _o);
+        if (!(Math.hypot(at.x - a.pos.x, at.z - a.pos.z) < 4 && Math.abs(piece.y - a.pos.y) < 3)) return;
+        st.toggleDoor(piece, c, m.s >= 0 ? 1 : -1);
         return;
       }
       case 'int': {

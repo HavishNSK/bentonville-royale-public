@@ -28,10 +28,12 @@
 
 const CELL = 32;
 const STEP = 0.62;
+// A wedge piece (ramp / cone) appearing around an actor lifts it at most this far.
+const WEDGE_LIFT = 3.2;
 const WALL_HALF = 0.14;
 // Pieces whose base is below this count as 'at ground level' for blockedAt / randomOpenPoint.
 const PIECE_GROUND_BAND = 2.5;
-// A built surface within this distance of the ground hit wins the ray (level-0 floors sit at y = 0).
+// A built surface within this distance of the ground hit wins the ray (a floor on the ground level can sit flush with the terrain).
 const PIECE_TIE = 0.02;
 // Ray-vs-terrain march step (m). The DEM is a 4 m grid, so 2 m catches every ridge that matters.
 const GROUND_STEP = 2;
@@ -1074,16 +1076,22 @@ export class World {
   _pieceOverlaps(c, x, z, r, belowY) {
     if (!c.alive || c.y0 >= belowY) return false;
     if (c.seg) {
-      const s = c.seg;
-      const ex = s[2] - s[0];
-      const ez = s[3] - s[1];
-      const l2 = ex * ex + ez * ez;
-      let t = l2 > 0 ? ((x - s[0]) * ex + (z - s[1]) * ez) / l2 : 0;
-      t = t < 0 ? 0 : t > 1 ? 1 : t;
-      const qx = x - (s[0] + ex * t);
-      const qz = z - (s[1] + ez * t);
-      const lim = r + WALL_HALF;
-      return qx * qx + qz * qz < lim * lim;
+      const segs = c.segs; // edited wall: only its solid runs count
+      const ns = segs ? segs.length : 1;
+      for (let si = 0; si < ns; si++) {
+        const s = segs ? segs[si] : c.seg;
+        if (segs && s[4] >= belowY) continue;
+        const ex = s[2] - s[0];
+        const ez = s[3] - s[1];
+        const l2 = ex * ex + ez * ez;
+        let t = l2 > 0 ? ((x - s[0]) * ex + (z - s[1]) * ez) / l2 : 0;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const qx = x - (s[0] + ex * t);
+        const qz = z - (s[1] + ez * t);
+        const lim = r + WALL_HALF;
+        if (qx * qx + qz * qz < lim * lim) return true;
+      }
+      return false;
     }
     return x > c.minX - r && x < c.maxX + r && z > c.minZ - r && z < c.maxZ + r;
   }
@@ -1155,7 +1163,12 @@ export class World {
       const d = dyn[i];
       if (!d.surf || x < d.minX || x > d.maxX || z < d.minZ || z > d.maxZ) continue;
       const sy = d.surf(x, z);
-      if (sy > y && sy <= lim) {
+      // a ramp / cone built around the feet (centre strictly inside it, feet within its
+      // height) lifts them onto its surface even past the step height
+      const around =
+        d.wedge && feetY >= d.y0 - 0.3 && sy - feetY <= WEDGE_LIFT &&
+        x > d.minX + 0.01 && x < d.maxX - 0.01 && z > d.minZ + 0.01 && z < d.maxZ - 0.01;
+      if (sy > y && (sy <= lim || around)) {
         y = sy;
         this.surface = 'build';
       }
@@ -1189,7 +1202,9 @@ export class World {
     for (let i = 0; i < dyn.length; i++) {
       const d = dyn[i];
       if (!d.surf || x < d.minX || x > d.maxX || z < d.minZ || z > d.maxZ) continue;
-      const sy = d.surf(x, z);
+      // under a ramp / cone (feet below its base): it is solid from its base up, so the base
+      // is the ceiling — jumping up into one bonks instead of phasing in and popping on top
+      const sy = d.wedge && feetY < d.y0 - 0.3 ? d.y0 : d.surf(x, z);
       if (sy > lim && sy < y) y = sy;
     }
     return y;
@@ -1320,15 +1335,10 @@ export class World {
                 nz = ddz / d;
                 push = r - d;
               } else {
-                // centre is inside the footprint below the surface: leave by the nearest side
-                const l = x - c.minX;
-                const rr = c.maxX - x;
-                const t = z - c.minZ;
-                const b = c.maxZ - z;
-                const m = Math.min(l, rr, t, b);
-                nx = m === l ? -1 : m === rr ? 1 : 0;
-                nz = nx !== 0 ? 0 : m === t ? -1 : 1;
-                push = m + r;
+                // centre is inside the footprint below the surface: the wedge was built around
+                // this actor. No sideways shove (that went through an adjacent wall);
+                // groundHeight() lifts the actor onto the surface instead, like Fortnite.
+                continue;
               }
               pos.x += nx * push;
               pos.z += nz * push;
@@ -1338,34 +1348,43 @@ export class World {
               continue;
             }
             c.stamp = stamp;
-            if (feet >= c.y1 - 0.05 || head <= c.y0 + 0.05) continue;
-            const s = c.seg;
-            const ex = s[2] - s[0];
-            const ez = s[3] - s[1];
-            const l2 = ex * ex + ez * ez;
-            let t = l2 > 0 ? ((pos.x - s[0]) * ex + (pos.z - s[1]) * ez) / l2 : 0;
-            t = t < 0 ? 0 : t > 1 ? 1 : t;
-            const dx = pos.x - (s[0] + ex * t);
-            const dz = pos.z - (s[1] + ez * t);
-            const lim = r + WALL_HALF;
-            const d2 = dx * dx + dz * dz;
-            if (d2 >= lim * lim) continue;
-            const d = Math.sqrt(d2);
-            let nx;
-            let nz;
-            if (d > 1e-5) {
-              nx = dx / d;
-              nz = dz / d;
-            } else {
-              const l = Math.sqrt(l2) || 1;
-              nx = ez / l;
-              nz = -ex / l;
+            // a wall whose top is within step height of the feet is stepped over (the top of a
+            // ramp meeting a wall on its high edge, which used to leave a lip you had to jump)
+            if (feet >= c.y1 - step || head <= c.y0 + 0.05) continue;
+            // an edited wall (door / window) blocks with one segment per solid run of tiles,
+            // each with its own [y0, y1]: s = [ax, az, bx, bz, y0, y1]
+            const segs = c.segs;
+            const ns = segs ? segs.length : 1;
+            for (let si = 0; si < ns; si++) {
+              const s = segs ? segs[si] : c.seg;
+              if (segs && (feet >= s[5] - step || head <= s[4] + 0.05)) continue;
+              const ex = s[2] - s[0];
+              const ez = s[3] - s[1];
+              const l2 = ex * ex + ez * ez;
+              let t = l2 > 0 ? ((pos.x - s[0]) * ex + (pos.z - s[1]) * ez) / l2 : 0;
+              t = t < 0 ? 0 : t > 1 ? 1 : t;
+              const dx = pos.x - (s[0] + ex * t);
+              const dz = pos.z - (s[1] + ez * t);
+              const lim = r + WALL_HALF;
+              const d2 = dx * dx + dz * dz;
+              if (d2 >= lim * lim) continue;
+              const d = Math.sqrt(d2);
+              let nx;
+              let nz;
+              if (d > 1e-5) {
+                nx = dx / d;
+                nz = dz / d;
+              } else {
+                const l = Math.sqrt(l2) || 1;
+                nx = ez / l;
+                nz = -ex / l;
+              }
+              pos.x += nx * (lim - d);
+              pos.z += nz * (lim - d);
+              this.pushX += nx;
+              this.pushZ += nz;
+              moved = touched = true;
             }
-            pos.x += nx * (lim - d);
-            pos.z += nz * (lim - d);
-            this.pushX += nx;
-            this.pushZ += nz;
-            moved = touched = true;
           }
         }
       }
