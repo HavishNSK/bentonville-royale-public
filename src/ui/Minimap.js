@@ -81,8 +81,8 @@ const C = {
   routeDark: 'rgba(29, 42, 54, 0.8)',
 };
 // areas, drawn in this order (water last so ponds inside parks/woods stay visible)
-const AREA_KINDS = ['grass', 'park', 'garden', 'wood', 'pitch', 'parking', 'water'];
-const AREA_FILL = ['#cde4ae', '#bfdd9e', '#b6dcaa', '#9fcb8e', '#a9d9b6', '#e4e2d4', C.water];
+const AREA_KINDS = ['grass', 'park', 'garden', 'wood', 'pitch', 'parking', 'water', 'busloop'];
+const AREA_FILL = ['#cde4ae', '#bfdd9e', '#b6dcaa', '#9fcb8e', '#a9d9b6', '#e4e2d4', C.water, '#e4e2d4'];
 const AREA_EDGE = [null, null, null, null, '#7dbd90', '#c9c6b4', C.waterEdge];
 // buildings: wood, brick, metal, then the same three for landmark buildings
 const MATS = { wood: 0, brick: 1, metal: 2 };

@@ -23,6 +23,7 @@ import * as THREE from 'three';
 import { PLAYER, TAU, makeRng, clamp } from '../core/config.js';
 import { FREEFALL_SPEED, DEPLOY_HEIGHT, FREEFALL_ACROSS } from './Player.js';
 import { toToon } from '../render/Toon.js';
+import { schoolBusParts, schoolBusMaterials, SCHOOL_BUS } from '../render/SchoolBus.js';
 
 const ROUTE_MARGIN = 100; // m outside the map at both ends
 const OPEN_INSET = 10; // m inside the map edge before anyone may jump
@@ -208,11 +209,10 @@ export class DropBusMesh {
     const root = (this.root = new THREE.Group());
     root.name = 'drop-bus';
     root.visible = false;
-    const yellow = mat(0xffc21f);
-    const ink = mat(0x1d2a36);
-    const glass = mat(0x8fd3ff, { emissive: 0x1a3a55, emissiveIntensity: 0.4 });
+    const bm = schoolBusMaterials();
+    const ink = bm.ink;
     const white = mat(0xfff6e0);
-    const red = mat(0xd8452f);
+    const red = bm.red;
     const teal = mat(0x2fb3a6);
     const rope = mat(0x6b4a2b);
     const box = (w, h, d, m, x, y, z) => {
@@ -222,34 +222,12 @@ export class DropBusMesh {
       return mesh;
     };
 
-    // ---- the school bus (length along -z = forward)
-    const L = 12;
-    box(3, 2.6, L, yellow, 0, BUS_Y, 0);
-    box(2.9, 0.4, L - 0.6, yellow, 0, BUS_Y + 1.5, 0); // roof crown
-    box(3.04, 0.22, L + 0.04, ink, 0, BUS_Y - 0.35, 0); // black rub rail
-    box(3.04, 0.22, L + 0.04, ink, 0, BUS_Y + 0.15, 0);
-    box(3, 1.8, 2.2, yellow, 0, BUS_Y - 0.4, -L / 2 - 1.1); // hood
-    box(3.06, 0.3, 0.3, ink, 0, BUS_Y - 1.2, -L / 2 - 2.2); // bumper
-    box(2.6, 1, 0.08, glass, 0, BUS_Y + 0.75, -L / 2 - 0.02); // windshield
-    for (let i = 0; i < 6; i++) {
-      const z = -L / 2 + 1.4 + i * 1.75;
-      box(0.06, 0.85, 1.3, glass, 1.52, BUS_Y + 0.75, z);
-      box(0.06, 0.85, 1.3, glass, -1.52, BUS_Y + 0.75, z);
-    }
-    box(2.4, 0.8, 0.06, glass, 0, BUS_Y + 0.75, L / 2 + 0.02); // rear window
-    // a stop arm on the driver's side, folded out (it is a school bus after all)
-    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.06, 8), red);
-    arm.rotation.z = Math.PI / 2;
-    arm.position.set(-1.9, BUS_Y + 0.4, -L / 2 + 1.2);
-    root.add(arm);
-    // wheels
-    const wheelG = new THREE.CylinderGeometry(0.7, 0.7, 0.5, 14);
-    for (const [x, z] of [[1.4, -L / 2 + 1.6], [-1.4, -L / 2 + 1.6], [1.4, L / 2 - 2], [-1.4, L / 2 - 2]]) {
-      const w = new THREE.Mesh(wheelG, ink);
-      w.rotation.z = Math.PI / 2;
-      w.position.set(x, BUS_Y - 1.35, z);
-      root.add(w);
-    }
+    // ---- the school bus (shared body, src/render/SchoolBus.js; length along -z = forward)
+    const L = SCHOOL_BUS.length;
+    const body = new THREE.Group();
+    body.position.y = BUS_Y;
+    for (const part of schoolBusParts()) body.add(new THREE.Mesh(part.geometry, bm[part.mat]));
+    root.add(body);
 
     // ---- the balloon: vertical gores in cream / tomato / teal, a basket-ring and burner
     const envelope = new THREE.Group();

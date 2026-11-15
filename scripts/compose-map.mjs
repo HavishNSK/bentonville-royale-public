@@ -62,7 +62,9 @@ const TILES = [
   { key: 'market_8th', col: 0, row: 1, src: [860, 845] },
   { key: 'square', col: 1, row: 1, src: [50, 10] },
   { key: 'momentary', col: 2, row: 1, src: [570, 690] },
-  { key: 'bentonville_west', col: 0, row: 2, src: [-7979, -509.5] },
+  // busloop: real-map points inside parking polygons that are really the school's bus loop
+  // (re-tagged `busloop`: asphalt with parked school buses instead of cars)
+  { key: 'bentonville_west', col: 0, row: 2, src: [-7979, -509.5], busloop: [[-7938, -404]] },
   { key: 'bentonville_high', col: 1, row: 2, src: [1223, 2398] },
   { key: 'home_office', col: 2, row: 2, src: [1466, 1070] },
 ];
@@ -81,6 +83,16 @@ function shoelace(p) {
     s += a[0] * b[1] - b[0] * a[1];
   }
   return s / 2;
+}
+
+function inPoly(q, p) {
+  let c = false;
+  for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
+    const a = p[i];
+    const b = p[j];
+    if (a[1] > q[1] !== b[1] > q[1] && q[0] < ((b[0] - a[0]) * (q[1] - a[1])) / (b[1] - a[1]) + a[0]) c = !c;
+  }
+  return c;
 }
 
 const inRect = (q, R) => q[0] >= R[0] - EPS && q[0] <= R[2] + EPS && q[1] >= R[1] - EPS && q[1] <= R[3] + EPS;
@@ -231,9 +243,13 @@ function compose(full) {
         out.roads.push({ ...r, p });
       }
     for (const w of full.waterways || []) for (const l of clipLine(w.p, R)) out.waterways.push({ ...w, p: l.map((q) => mv(q, P)) });
+    const loops = (TILES.find((t) => t.key === P.key) || {}).busloop || [];
     for (const a of full.areas) {
       const ring = clipRing(a.p, R);
-      if (ring.length >= 3 && Math.abs(shoelace(ring)) >= 1) out.areas.push({ ...a, p: ring.map((q) => mv(q, P)) });
+      if (!(ring.length >= 3 && Math.abs(shoelace(ring)) >= 1)) continue;
+      const k = a.k === 'parking' && loops.some((q) => inPoly(q, a.p)) ? 'busloop' : a.k;
+      if (k === 'busloop') stats.busloops = (stats.busloops || 0) + 1;
+      out.areas.push({ ...a, k, p: ring.map((q) => mv(q, P)) });
     }
     for (const t of full.trees) if (inRect(t, R)) out.trees.push(mv(t, P));
     for (const poi of full.pois) if (inRect([poi.x, poi.z], R)) out.pois.push({ ...poi, x: r1(poi.x + P.dx), z: r1(poi.z + P.dz) });
@@ -345,7 +361,7 @@ async function main() {
   console.log(`  buildings ${n.buildings}, roads ${n.roads}, areas ${n.areas}, waterways ${n.waterways}, trees ${n.trees}, pois ${n.pois}`);
   console.log(`  buildings kept per tile ${JSON.stringify(stats.kept)}`);
   console.log(`  dropped on tile edges ${JSON.stringify(stats.droppedEdgeBuildings)}`);
-  console.log(`  road ends extended onto the gap streets: ${stats.extended}`);
+  console.log(`  road ends extended onto the gap streets: ${stats.extended}; bus loops re-tagged: ${stats.busloops || 0}`);
   console.log(`  landmarks dropped (outside every tile): ${stats.droppedLandmarks.join(', ') || 'none'}`);
   for (const T of c.tiles) console.log(`  tile ${T.key.padEnd(16)} game ${JSON.stringify(T.rect)} moved (${T.dx}, ${T.dz})`);
   for (const [k, l] of Object.entries(data.landmarks)) console.log(`  landmark ${k.padEnd(16)} x=${l.x} z=${l.z} r=${l.r} ids=${l.ids.length}`);

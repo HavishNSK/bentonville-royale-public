@@ -9,6 +9,8 @@ import * as THREE from 'three';
 import { makeRng } from '../core/config.js';
 import { flattenModel } from '../core/assets.js';
 import { pointInPoly } from './World.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { schoolBusParts, schoolBusMaterials, SCHOOL_BUS } from '../render/SchoolBus.js';
 
 const CHUNK = 256;
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -21,6 +23,7 @@ const AREA_COLOR = {
   pitch: 0x6cb257,
   garden: 0x76b65c,
   parking: 0x8a8e93,
+  busloop: 0x83878c, // a school's bus loop: asphalt with parked school buses (parkSchoolBuses)
 };
 const MOTOR = new Set(['motorway', 'motorway_link', 'trunk', 'trunk_link', 'primary', 'primary_link', 'secondary', 'secondary_link', 'tertiary', 'tertiary_link', 'unclassified', 'residential', 'living_street']);
 const MAJOR = new Set(['primary', 'secondary', 'tertiary', 'trunk']);
@@ -555,6 +558,133 @@ class Scatter {
   }
 }
 
+
+// ----------------------------------------------------------------------- bus loops
+
+const BUS_HALF_LEN = (SCHOOL_BUS.rear - SCHOOL_BUS.front) / 2; // footprint, bumper to rear
+const BUS_MID = (SCHOOL_BUS.front + SCHOOL_BUS.rear) / 2; // footprint centre in bus-local z
+const BUS_HALF_W = SCHOOL_BUS.halfWidth + 0.05;
+const BUS_LANE = 6; // m between lane centres (3 m between parked buses side by side)
+const BUS_GAP = 2.5; // m between a bus's rear and the next one's front bumper
+const BUS_MAX = 10; // per bus loop
+
+/**
+ * Parks rows of school buses on every `busloop` area (scripts/compose-map.mjs re-tags a
+ * school's bus loop), aligned with the area's long axis and all facing the same way. The
+ * bodies are merged per material (4 draw calls in total). Each bus gets an indestructible
+ * box collider (kind 'vehicle': stand on its roof, take cover behind it; blockedAt sees it,
+ * so bots path around it and loot never lands in it). Returns the number of buses parked.
+ */
+function parkSchoolBuses(world, data, root) {
+  const loops = data.areas.filter((a) => a.k === 'busloop');
+  if (!loops.length) return 0;
+  const byMat = {};
+  const parts = schoolBusParts();
+  const m = new THREE.Matrix4();
+  let n = 0;
+  for (const a of loops) {
+    const p = a.p;
+    const flat = new Float32Array(p.length * 2);
+    p.forEach((q, i) => {
+      flat[i * 2] = q[0];
+      flat[i * 2 + 1] = q[1];
+    });
+    // long axis = direction of the longest edge; extents of the polygon along / across it
+    let best = 0;
+    let ang = 0;
+    for (let i = 0; i < p.length; i++) {
+      const q = p[(i + 1) % p.length];
+      const l = Math.hypot(q[0] - p[i][0], q[1] - p[i][1]);
+      if (l > best) {
+        best = l;
+        ang = Math.atan2(q[1] - p[i][1], q[0] - p[i][0]);
+      }
+    }
+    const fx = Math.cos(ang);
+    const fz = Math.sin(ang);
+    const vx = -fz;
+    const vz = fx;
+    let u0 = Infinity;
+    let u1 = -Infinity;
+    let v0 = Infinity;
+    let v1 = -Infinity;
+    for (const q of p) {
+      const u = q[0] * fx + q[1] * fz;
+      const v = q[0] * vx + q[1] * vz;
+      u0 = Math.min(u0, u);
+      u1 = Math.max(u1, u);
+      v0 = Math.min(v0, v);
+      v1 = Math.max(v1, v);
+    }
+    const inside = (x, z) => pointInPoly(flat, p.length, x, z);
+    const fits = (cx, cz) => {
+      for (const su of [-1, -0.5, 0, 0.5, 1])
+        for (const sv of [-1, 1]) {
+          const x = cx + fx * su * (BUS_HALF_LEN + 0.6) + vx * sv * (BUS_HALF_W + 0.6);
+          const z = cz + fz * su * (BUS_HALF_LEN + 0.6) + vz * sv * (BUS_HALF_W + 0.6);
+          if (!inside(x, z)) return false;
+        }
+      for (const su of [-0.8, -0.4, 0, 0.4, 0.8]) if (world.blockedAt(cx + fx * su * BUS_HALF_LEN, cz + fz * su * BUS_HALF_LEN, BUS_HALF_W + 0.8)) return false;
+      return true;
+    };
+    // lanes across the lot (centred), buses end to end along each lane
+    const lanes = Math.max(1, Math.floor((v1 - v0 - 4) / BUS_LANE));
+    const pitch = BUS_HALF_LEN * 2 + BUS_GAP;
+    const byLane = [];
+    for (let l = 0; l < lanes; l++) {
+      const spots = [];
+      byLane.push(spots);
+      const v = (v0 + v1) / 2 + (l - (lanes - 1) / 2) * BUS_LANE;
+      const count = Math.floor((u1 - u0 - 2) / pitch);
+      for (let k = 0; k < count; k++) {
+        const u = (u0 + u1) / 2 + (k - (count - 1) / 2) * pitch;
+        const cx = fx * u + vx * v;
+        const cz = fz * u + vz * v;
+        if (fits(cx, cz)) spots.push([cx, cz]);
+      }
+    }
+    // neat rows: whole lanes only (no lone bus at the end), as many as BUS_MAX allows,
+    // taken from the middle of the lot outward
+    const most = Math.max(0, ...byLane.map((l) => l.length));
+    const full = byLane.filter((l) => l.length && l.length >= most - 1);
+    const take = Math.max(1, Math.floor(BUS_MAX / Math.max(1, most)));
+    const first = Math.max(0, Math.floor((full.length - take) / 2));
+    const spots = full.slice(first, first + take).flat().slice(0, BUS_MAX);
+    for (const [cx, cz] of spots) {
+      // bus-local -z (the front) points along +f; origin sits BUS_MID behind the footprint centre
+      const ox = cx - fx * -BUS_MID;
+      const oz = cz - fz * -BUS_MID;
+      const gy = world.terrainHeight(cx, cz);
+      m.makeRotationY(Math.atan2(-fx, -fz)).setPosition(ox, gy + SCHOOL_BUS.groundY, oz);
+      for (const part of parts) (byMat[part.mat] ||= []).push(part.geometry.clone().applyMatrix4(m));
+      const corners = [
+        [cx + fx * BUS_HALF_LEN + vx * BUS_HALF_W, cz + fz * BUS_HALF_LEN + vz * BUS_HALF_W],
+        [cx + fx * BUS_HALF_LEN - vx * BUS_HALF_W, cz + fz * BUS_HALF_LEN - vz * BUS_HALF_W],
+        [cx - fx * BUS_HALF_LEN - vx * BUS_HALF_W, cz - fz * BUS_HALF_LEN - vz * BUS_HALF_W],
+        [cx - fx * BUS_HALF_LEN + vx * BUS_HALF_W, cz - fz * BUS_HALF_LEN + vz * BUS_HALF_W],
+      ];
+      const col = world.addPoly(corners, SCHOOL_BUS.groundY + SCHOOL_BUS.top, 'vehicle', 'metal', []);
+      col.x = cx;
+      col.z = cz;
+      n++;
+    }
+  }
+  if (!n) return 0;
+  const mats = schoolBusMaterials();
+  const group = new THREE.Group();
+  group.name = 'school-buses';
+  for (const k in byMat) {
+    const mesh = new THREE.Mesh(mergeGeometries(byMat[k], false), mats[k]);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    for (const g of byMat[k]) g.dispose();
+  }
+  for (const part of parts) part.geometry.dispose();
+  root.add(group);
+  return n;
+}
+
 // ----------------------------------------------------------------------- main
 
 export async function buildWorldMeshes({ world, scene, models, manifests, onProgress }) {
@@ -763,6 +893,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
       }
     }
   }
+  const schoolBuses = parkSchoolBuses(world, data, root);
   progress(0.56, 'Planting trees');
   await tick();
 
@@ -906,7 +1037,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const addTree = (x, z, pine) => {
     if (!isOpen(x, z, 1.1)) return false;
     const k = world.areaAt(x, z);
-    if (k === 'water' || k === 'parking' || k === 'pitch') return false;
+    if (k === 'water' || k === 'parking' || k === 'busloop' || k === 'pitch') return false;
     const pool = pine ? 4 + Math.floor(rng() * 2) : Math.floor(rng() * 4);
     let name = TREE_NAMES[pool];
     if (!trees.has(name)) name = TREE_NAMES.find((t) => trees.has(t));
@@ -943,7 +1074,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     const x = b.minX + rng() * (b.maxX - b.minX);
     const z = b.minZ + rng() * (b.maxZ - b.minZ);
     const k = world.areaAt(x, z);
-    if (k === 'water' || k === 'parking' || k === 'pitch') continue;
+    if (k === 'water' || k === 'parking' || k === 'busloop' || k === 'pitch') continue;
     const wild = k === 'wood' || k === 'park';
     if (i % 3 === 0 && (wild || rng() < 0.35)) {
       const name = ['rock_a', 'rock_b', 'rock_b', 'rock_c'][Math.floor(rng() * 4)];
@@ -967,7 +1098,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
 
   const view = {
     root,
-    counts: { buildings: count, hollow: world.counts.hollow || 0, chunks: buildingMeshes.length, cars, lamps, ...harvestables, treesBy },
+    counts: { buildings: count, hollow: world.counts.hollow || 0, chunks: buildingMeshes.length, cars, schoolBuses, lamps, ...harvestables, treesBy },
     /** Distance-cull chunks. `q` is a QUALITY entry. */
     update(cam, q) {
       trees.cull(cam, q.treeDist);

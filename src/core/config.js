@@ -292,7 +292,7 @@ export const STORM = {
 // 320 / 180 / 450) because 100 players still need ~1 chest each.
 export const MATCH = {
   bots: 74, // solo = 75 players (a crowded ~0.9 km tile map); in multiplayer remote humans take slots first
-  chests: 250,
+  chests: 200,
   floorLoot: 630,
   ammoBoxes: 270,
 };
