@@ -5,6 +5,14 @@ import { createMenus } from './ui/menus.js';
 import { loadSettings, saveSettings } from './ui/settings.js';
 import { sfx } from './audio/Sfx.js';
 import { createGoogleTilesController, hasGoogleTilesKey } from './render/GoogleTiles.js';
+import { inject as injectAnalytics } from '@vercel/analytics';
+
+// Vercel Web Analytics: anonymous page views / visitors (no cookies). Only reports from the Vercel deployment.
+try {
+  injectAnalytics();
+} catch (err) {
+  /* analytics must never break the game */
+}
 
 const canvas = document.getElementById('game');
 const uiRoot = document.getElementById('ui-root');
