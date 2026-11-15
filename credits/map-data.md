@@ -42,4 +42,4 @@ Service Agency product served by USGS The National Map. Public domain.
 Imagery courtesy of USDA FSA and the U.S. Geological Survey.
 
 - Source: https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer (exportImage), via `scripts/fetch-imagery.mjs`
-- Fetched: not yet fetched
+- Fetched: 2026-11-14T21:24:08.738Z

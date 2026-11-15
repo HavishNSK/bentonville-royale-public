@@ -1140,7 +1140,8 @@ export class Bots {
     b.reloading = w.reload;
     b.burstLeft = 0;
     if (a.character) a.character.reload(w.reload);
-    if (this.sfx) this.sfx.play('reload', a.pos);
+    if (this.sfx) this.sfx.play('reload', { x: a.pos.x, y: a.pos.y, z: a.pos.z, weapon: it.id });
+    if (this.onReload) this.onReload(a, it.id); // multiplayer: host replicates the sound
   }
 
   // --------------------------------------------------------------- physics

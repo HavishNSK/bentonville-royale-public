@@ -19,6 +19,15 @@
 // - `info.storm` damage skips the shield.
 // - Every collider destroyed here is remembered; `restoreWorld()` puts them
 //   back for the next match.
+//
+// Multiplayer (src/net):
+// - `combat.authoritative = false` on a client: shots and swings only play
+//   effects and sounds; no damage, no structure / harvestable hp changes.
+// - fireWeapon(..., opts) takes opts.dirs (exact pellet directions, from the
+//   client that fired) and opts.claims (actor the client saw each pellet hit,
+//   accepted when the host ray passes within CLAIM_TOL of that actor).
+//   `combat.lastDirs` holds the pellet directions of the last call.
+// - Hooks: onFire(shooter, weapon, origin, records), onColliderDestroyed(c, point).
 
 import * as THREE from 'three';
 import { WEAPONS, PICKAXE, RARITY_DAMAGE, PLAYER, lerp } from '../core/config.js';
@@ -32,6 +41,7 @@ const _a = new THREE.Vector3();
 const _b = new THREE.Vector3();
 
 const HARVEST_SOUND = { wood: 'hit_wood', brick: 'hit_stone', metal: 'hit_metal' };
+const CLAIM_TOL = 1.6; // m: lag allowance for a client's claimed hit (favour the shooter, a little)
 const SURFACE = { wood: 'wood', brick: 'brick', metal: 'metal' };
 
 /** Ray (o + t d, |d| = 1) vs. an actor's vertical cylinder. Returns t or Infinity. */
@@ -85,6 +95,10 @@ export class Combat {
     this.onDamage = null;
     this.onEliminate = null;
     this.onHarvest = null;
+    this.onFire = null;
+    this.onColliderDestroyed = null;
+    this.authoritative = true;
+    this.lastDirs = [];
     this._hits = [];
   }
 
@@ -146,6 +160,7 @@ export class Combat {
     this.world.remove(c);
     if (this.view && this.view.hideCollider) this.view.hideCollider(c);
     this.destroyed.push(c);
+    if (this.onColliderDestroyed) this.onColliderDestroyed(c, point);
     if (this.fx && point) this.fx.debris(point, SURFACE[c.mat] || 'wood', { count: 18, size: 0.4, spread: 2.4 });
     if (this.sfx && point) this.sfx.play(c.kind === 'tree' ? 'tree_fall' : 'building_collapse', { x: point.x, y: point.y, z: point.z, volume: 0.7 });
   }
@@ -154,7 +169,10 @@ export class Combat {
    * One trigger pull. `origin` is the aim-ray start (camera-aligned for the
    * player, eye for bots); tracers start at the shooter's muzzle when known.
    */
-  fireWeapon(shooter, weaponItem, origin, dir, spread = 0) {
+  fireWeapon(shooter, weaponItem, origin, dir, spread = 0, opts = null) {
+    const auth = this.authoritative;
+    const dirs = opts && opts.dirs;
+    const claims = opts && opts.claims;
     const w = WEAPONS[weaponItem && weaponItem.id] || WEAPONS.pistol;
     const rarityMul = RARITY_DAMAGE[weaponItem && weaponItem.rarity] || 1;
     const scale = shooter && shooter.damageScale != null ? shooter.damageScale : 1;
@@ -169,10 +187,12 @@ export class Combat {
     if (this.sfx) this.sfx.play(w.sound, { x: _from.x, y: _from.y, z: _from.z });
 
     const actorDamage = new Map();
-    const pellets = w.pellets || 1;
+    const pellets = dirs ? dirs.length : w.pellets || 1;
+    const used = (this.lastDirs = []);
     for (let p = 0; p < pellets; p++) {
-      _dir.copy(dir).normalize();
-      const s = spread;
+      if (dirs) _dir.copy(dirs[p]).normalize();
+      else _dir.copy(dir).normalize();
+      const s = dirs ? 0 : spread;
       if (s > 0) {
         // uniform-ish cone around dir
         _tmp.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
@@ -180,7 +200,13 @@ export class Combat {
         const ang = Math.sqrt(Math.random()) * s;
         _dir.applyAxisAngle(_a, ang);
       }
-      const res = this._trace(shooter, origin, _dir, w.range);
+      used.push(_dir.clone());
+      let res = this._trace(shooter, origin, _dir, w.range);
+      const claim = claims && claims[p];
+      if (claim && !res.actor && claim !== shooter && claim.alive && !claim.inBus) {
+        const t = this._claimT(origin, _dir, claim, res.t);
+        if (t != null) res = { t, actor: claim, hit: null };
+      }
       const dist = res.t;
       _pt.set(origin.x + _dir.x * dist, origin.y + _dir.y * dist, origin.z + _dir.z * dist);
 
@@ -188,12 +214,13 @@ export class Combat {
       if (dist > w.falloffStart) fall = dist >= w.falloffEnd ? w.minFalloff : lerp(1, w.minFalloff, (dist - w.falloffStart) / Math.max(1, w.falloffEnd - w.falloffStart));
       let dmg = w.damage * rarityMul * fall * scale;
 
-      const record = { hitActor: null, point: _pt.clone(), headshot: false };
+      const record = { hitActor: null, point: _pt.clone(), headshot: false, surface: 'none' };
       if (res.actor) {
         const a = res.actor;
         const head = _pt.y > a.pos.y + (a.crouching ? a.height * 0.7 : a.height) * 0.8;
         record.hitActor = a;
         record.headshot = head;
+        record.surface = a.shield > 0 ? 'shield' : 'body';
         if (head) dmg *= w.headMult;
         const prev = actorDamage.get(a) || { dmg: 0, head: false, point: record.point };
         prev.dmg += dmg;
@@ -205,24 +232,54 @@ export class Combat {
         }
       } else if (res.hit) {
         _n.set(res.hit.nx, res.hit.ny, res.hit.nz);
+        record.surface = res.surface;
         if (this.fx) this.fx.impact(_pt, _n, res.surface);
         const c = res.hit.collider;
-        if (c && res.hit.kind === 'piece' && this.structures) {
+        if (!auth) {
+          // client: effects only, the host applies damage
+        } else if (c && res.hit.kind === 'piece' && this.structures) {
           this.structures.damage(c, dmg, _pt);
         } else if (this._isHarvestable(c)) {
           c.hp -= dmg;
           if (c.hp <= 0) this._destroyCollider(c, _pt);
         }
-        if (this.sfx && p === 0) this.sfx.play('bullet_impact', { x: _pt.x, y: _pt.y, z: _pt.z, volume: 0.6 });
+        if (this.sfx && p === 0) this.sfx.play('bullet_impact', { x: _pt.x, y: _pt.y, z: _pt.z, volume: 0.6, surface: impactSound(res.surface) });
       }
       if (this.fx && (p === 0 || pellets <= 3 || p % 3 === 0)) this.fx.tracer(_from, _pt, { color: w.tracer, width: w.id === 'sniper' ? 0.08 : 0.05 });
       out.push(record);
     }
 
-    for (const [a, d] of actorDamage) {
-      this.applyDamage(a, d.dmg, { source: shooter, headshot: d.head, weapon: w.id, point: d.point });
+    if (this.sfx && actorDamage.size) {
+      const first = actorDamage.values().next().value;
+      this.sfx.play('bullet_impact', { x: first.point.x, y: first.point.y, z: first.point.z, volume: 0.6, surface: 'body' });
     }
+    if (w.id === 'shotgun' && this.sfx) {
+      const sfx = this.sfx;
+      const x = _from.x, y = _from.y, z = _from.z;
+      setTimeout(() => sfx.play('shotgun_pump', { x, y, z, volume: 0.7 }), 350);
+    }
+    if (auth) {
+      for (const [a, d] of actorDamage) {
+        this.applyDamage(a, d.dmg, { source: shooter, headshot: d.head, weapon: w.id, point: d.point });
+      }
+    }
+    if (this.onFire) this.onFire(shooter, w.id, origin, out);
     return out;
+  }
+
+  /** Distance along the ray at which it passes within CLAIM_TOL of `a`'s body axis (before `maxT`), or null. */
+  _claimT(origin, dir, a, maxT) {
+    const cx = a.pos.x - origin.x;
+    const cy = a.pos.y + (a.height || PLAYER.height) * 0.5 - origin.y;
+    const cz = a.pos.z - origin.z;
+    const t = cx * dir.x + cy * dir.y + cz * dir.z;
+    if (!(t > 0) || t > maxT + 1) return null;
+    const px = origin.x + dir.x * t - a.pos.x;
+    const pz = origin.z + dir.z * t - a.pos.z;
+    const py = origin.y + dir.y * t;
+    if (Math.hypot(px, pz) > (a.radius || PLAYER.radius) + CLAIM_TOL) return null;
+    if (py < a.pos.y - 0.5 || py > a.pos.y + (a.height || PLAYER.height) + 0.6) return null;
+    return Math.min(t, maxT);
   }
 
   /** Nearest of world geometry vs actors along a ray. */
@@ -251,7 +308,7 @@ export class Combat {
     const ah = this.rayActors(origin.x, origin.y, origin.z, _dir.x, _dir.y, _dir.z, tWorld, shooter);
     if (ah) {
       _pt.copy(origin).addScaledVector(_dir, ah.t);
-      this.applyDamage(ah.actor, PICKAXE.damage * (shooter && shooter.damageScale != null ? shooter.damageScale : 1), { source: shooter, weapon: 'pickaxe', point: _pt.clone() });
+      if (this.authoritative) this.applyDamage(ah.actor, PICKAXE.damage * (shooter && shooter.damageScale != null ? shooter.damageScale : 1), { source: shooter, weapon: 'pickaxe', point: _pt.clone() });
       if (this.fx) this.fx.impact(_pt, _n.copy(_dir).negate(), 'body');
       out.hitActor = ah.actor;
       return out;
@@ -260,7 +317,7 @@ export class Combat {
     let c = hitCopy && hitCopy.collider;
     let point = hitCopy ? _pt.set(hitCopy.x, hitCopy.y, hitCopy.z) : null;
     if (c && hitCopy.kind === 'piece' && this.structures) {
-      this.structures.damage(c, PICKAXE.harvest, point);
+      if (this.authoritative) this.structures.damage(c, PICKAXE.harvest, point);
       if (this.fx) this.fx.harvestHit(point, c.mat || 'wood', false);
       if (this.sfx) this.sfx.play(HARVEST_SOUND[c.mat] || 'hit_wood', { x: point.x, y: point.y, z: point.z });
       out.piece = c;
@@ -282,6 +339,16 @@ export class Combat {
       return out;
     }
     const mat = c.mat === 'brick' || c.mat === 'metal' ? c.mat : 'wood';
+    if (!this.authoritative) {
+      // client: predicted harvest for feedback only; the host owns hp and mats
+      out.harvested = { mat, count: mat === 'wood' ? 10 : mat === 'brick' ? 8 : 7 };
+      out.collider = c;
+      out.point = point.clone();
+      out.predicted = true;
+      if (this.fx) this.fx.harvestHit(point, mat, false);
+      if (this.sfx) this.sfx.play(HARVEST_SOUND[mat], { x: point.x, y: point.y, z: point.z });
+      return out;
+    }
     c.hp -= PICKAXE.harvest;
     const count = mat === 'wood' ? 10 : mat === 'brick' ? 8 : 7;
     out.harvested = { mat, count };
@@ -335,4 +402,12 @@ export class Combat {
   }
 }
 
-export { rayActor };
+/** Effects surface name -> Sfx bullet_impact surface. */
+function impactSound(s) {
+  if (s === 'body' || s === 'shield') return 'body';
+  if (s === 'wood' || s === 'metal' || s === 'brick') return s;
+  if (s === 'dirt' || s === 'stone' || s === 'rock') return 'stone';
+  return 'stone';
+}
+
+export { rayActor, impactSound };

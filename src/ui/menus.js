@@ -4,8 +4,14 @@
 //   const menus = createMenus(root, {
 //     settings,                       // current settings object (src/ui/settings.js shape)
 //     onPlay(), onSettings(settings), onResume(), onLeave(), onPlayAgain(),
+//     onHost(name), onJoin(code, name),           // multiplayer (main.js lazy-loads src/net)
+//     onLobbyStart(), onLobbyLeave(), onLobbyFill(on),
 //     googleTilesAvailable,          // false -> "Real-world 3D view" toggle shown disabled with a hint
 //   });
+//   menus.showLobby(info)   info = { isHost, code, link, players:[{id,name,host}], max, fill,
+//                                   status, canStart, error }
+//   menus.showNotice(text)  title screen with a message (host left, room full, ...)
+//   menus.playerName()      saved name (localStorage)
 //   menus.setSettings(settings)       // update the shown settings without firing onSettings
 //   menus.showTitle() / showSettings(from) / showLoading(pct, label) / showPause()
 //   menus.showResult({ victory, placement, kills, total, time, killer })
@@ -60,9 +66,15 @@ export function createMenus(root, opts = {}) {
        <div class="mn-logo-tag">32 players &middot; one town square &middot; build to survive</div>
      </div>
      <div class="mn-stack">
-       <button class="mn-btn mn-btn-hero" data-act="play">${icon('play')}<span>PLAY</span></button>
-       <button class="mn-btn" data-act="friends">${icon('people')}<span>WITH FRIENDS</span></button>
-       <button class="mn-btn" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
+       <button class="mn-btn mn-btn-hero" data-act="play">${icon('play')}<span>PLAY VS BOTS</span></button>
+       <button class="mn-btn" data-act="host">${icon('people')}<span>HOST MULTIPLAYER</span></button>
+       <div class="mn-join">
+         <input class="mn-field mn-code" data-ref="code" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Room code">
+         <button class="mn-btn" data-act="join"><span>JOIN</span></button>
+       </div>
+       <label class="mn-name"><span>Name</span><input class="mn-field" data-ref="name" maxlength="16" autocomplete="nickname" spellcheck="false"></label>
+       <div class="mn-notice" data-ref="notice" role="status"></div>
+       <button class="mn-btn mn-btn-small" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
      </div>
      <div class="mn-controls">
        <span><kbd class="br-key">WASD</kbd>move</span><span><kbd class="br-key">SPACE</kbd>jump</span>
@@ -73,6 +85,53 @@ export function createMenus(root, opts = {}) {
      <div class="mn-foot">Map data &copy; OpenStreetMap contributors &middot; An original fan-made game, not affiliated with any other battle royale</div>`
   );
   wrap.appendChild(title);
+  const T = {};
+  title.querySelectorAll('[data-ref]').forEach((e) => (T[e.dataset.ref] = e));
+  const NAME_KEY = 'bentonville-royale.playerName';
+  const savedName = () => {
+    try {
+      return localStorage.getItem(NAME_KEY) || '';
+    } catch {
+      return '';
+    }
+  };
+  T.name.value = savedName() || 'Player' + Math.floor(100 + Math.random() * 900);
+  T.name.addEventListener('change', () => {
+    try {
+      localStorage.setItem(NAME_KEY, T.name.value.trim().slice(0, 16));
+    } catch {
+      /* private mode */
+    }
+  });
+  T.code.addEventListener('input', () => {
+    T.code.value = T.code.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
+  });
+  T.code.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') title.querySelector('[data-act=join]').click();
+  });
+
+  // ---------------------------------------------------------------- lobby
+  const lobby = el(
+    'section',
+    'mn-screen mn-lobby',
+    `<div class="mn-card">
+       <h2 class="mn-h br-ol">LOBBY</h2>
+       <div class="mn-room"><span>ROOM</span><b class="br-ol" data-ref="code">····</b></div>
+       <div class="mn-link"><input class="mn-field" data-ref="link" readonly aria-label="Share link"><button class="mn-btn mn-btn-small" data-act="copy"><span>COPY LINK</span></button></div>
+       <div class="mn-roster-head"><span>Players</span><b data-ref="count">0/16</b></div>
+       <ul class="mn-roster" data-ref="roster"></ul>
+       <label class="mn-row"><span>Fill empty spots with bots<small class="mn-hint" data-ref="fillHint"></small></span><input type="checkbox" class="mn-toggle" data-ref="fill"></label>
+       <p class="mn-status" data-ref="status" role="status"></p>
+       <p class="mn-status mn-error" data-ref="error" role="alert"></p>
+       <button class="mn-btn mn-btn-hero" data-act="lobby-start">${icon('play')}<span>START MATCH</span></button>
+       <button class="mn-btn mn-btn-small" data-act="lobby-leave">${icon('back')}<span>LEAVE</span></button>
+     </div>`
+  );
+  wrap.appendChild(lobby);
+  const LB = {};
+  lobby.querySelectorAll('[data-ref]').forEach((e) => (LB[e.dataset.ref] = e));
+  LB.fill.addEventListener('change', () => opts.onLobbyFill && opts.onLobbyFill(LB.fill.checked));
+  let lobbyInfo = null;
 
   // ---------------------------------------------------------------- settings
   const seg = (name, options) =>
@@ -92,42 +151,6 @@ export function createMenus(root, opts = {}) {
      </div>`
   );
   wrap.appendChild(settingsEl);
-
-  const NAME_KEY = 'bentonville-royale.playerName';
-  const friends = el(
-    'section',
-    'mn-screen mn-friends',
-    `<div class="mn-card">
-       <h2 class="mn-h br-ol">WITH FRIENDS</h2>
-       <label class="mn-row"><span>Your name</span><input class="mn-field" data-ref="name" maxlength="16" autocomplete="nickname"></label>
-       <button class="mn-btn mn-btn-hero" data-act="host">${icon('people')}<span>HOST A MATCH</span></button>
-       <label class="mn-row"><span>Room code</span><input class="mn-field mn-code-input" data-ref="code" maxlength="8" autocapitalize="characters" spellcheck="false" placeholder="BR4K2M"></label>
-       <button class="mn-btn" data-act="join"><span>JOIN</span></button>
-       <p class="mn-note" data-ref="note"></p>
-       <button class="mn-btn mn-btn-small" data-act="back">${icon('back')}<span>BACK</span></button>
-     </div>`
-  );
-  wrap.appendChild(friends);
-  const F = {};
-  friends.querySelectorAll('[data-ref]').forEach((e) => (F[e.dataset.ref] = e));
-
-  const lobby = el(
-    'section',
-    'mn-screen mn-lobby',
-    `<div class="mn-card">
-       <h2 class="mn-h br-ol">LOBBY</h2>
-       <div class="mn-room br-ol" data-ref="code">------</div>
-       <p class="mn-note" data-ref="status"></p>
-       <ul class="mn-roster" data-ref="roster"></ul>
-       <p class="mn-note mn-error" data-ref="error"></p>
-       <button class="mn-btn mn-btn-hero" data-act="lobby-start">${icon('play')}<span>START MATCH</span></button>
-       <button class="mn-btn mn-btn-small" data-act="copy"><span>COPY CODE</span></button>
-       <button class="mn-btn mn-btn-small" data-act="lobby-back">${icon('back')}<span>BACK</span></button>
-     </div>`
-  );
-  wrap.appendChild(lobby);
-  const B = {};
-  lobby.querySelectorAll('[data-ref]').forEach((e) => (B[e.dataset.ref] = e));
 
   // ---------------------------------------------------------------- loading
   const loading = el(
@@ -193,7 +216,7 @@ export function createMenus(root, opts = {}) {
   const D = {};
   banner.querySelectorAll('[data-ref]').forEach((e) => (D[e.dataset.ref] = e));
 
-  const screens = [title, settingsEl, friends, lobby, loading, pause, result];
+  const screens = [title, settingsEl, lobby, loading, pause, result];
   let settingsFrom = 'title';
   let current = null;
 
@@ -249,18 +272,32 @@ export function createMenus(root, opts = {}) {
     b.addEventListener(
       'click',
       click(() => {
+        const name = () => {
+          const n = T.name.value.trim().slice(0, 16) || 'Player';
+          try {
+            localStorage.setItem(NAME_KEY, n);
+          } catch {
+            /* private mode */
+          }
+          return n;
+        };
         if (act === 'play') opts.onPlay && opts.onPlay();
-        else if (act === 'friends') api.showFriends();
-        else if (act === 'host') opts.onHost && opts.onHost(F.name.value);
-        else if (act === 'join') opts.onJoin && opts.onJoin(F.code.value, F.name.value);
-        else if (act === 'lobby-start') opts.onLobbyStart && opts.onLobbyStart();
-        else if (act === 'copy') {
-          const code = B.code.textContent || '';
-          if (navigator.clipboard && code && code !== '------') navigator.clipboard.writeText(code).catch(() => {});
-        } else if (act === 'lobby-back') {
-          if (opts.onLobbyLeave) opts.onLobbyLeave();
-          api.showTitle();
-        } else if (act === 'settings') api.showSettings(current === pause ? 'pause' : current === friends || current === lobby ? 'title' : 'title');
+        else if (act === 'host') opts.onHost && opts.onHost(name());
+        else if (act === 'join') {
+          if (T.code.value.length !== 4) {
+            api.showNotice('Enter the 4-letter room code from your host.');
+            T.code.focus();
+          } else if (opts.onJoin) opts.onJoin(T.code.value, name());
+        } else if (act === 'copy') {
+          const link = LB.link.value;
+          LB.link.select();
+          if (navigator.clipboard && link) navigator.clipboard.writeText(link).catch(() => {});
+          b.querySelector('span').textContent = 'COPIED';
+          setTimeout(() => (b.querySelector('span').textContent = 'COPY LINK'), 1400);
+        } else if (act === 'lobby-start') {
+          if (lobbyInfo && lobbyInfo.canStart && opts.onLobbyStart) opts.onLobbyStart();
+        } else if (act === 'lobby-leave') opts.onLobbyLeave && opts.onLobbyLeave();
+        else if (act === 'settings') api.showSettings(current === pause ? 'pause' : 'title');
         else if (act === 'back') settingsFrom === 'pause' ? api.showPause() : api.showTitle();
         else if (act === 'resume') opts.onResume && opts.onResume();
         else if (act === 'leave') opts.onLeave && opts.onLeave();
@@ -278,35 +315,55 @@ export function createMenus(root, opts = {}) {
   const api = {
     el: wrap,
     get current() {
-      return current === title ? 'title' : current === settingsEl ? 'settings' : current === friends ? 'friends' : current === lobby ? 'lobby' : current === loading ? 'loading' : current === pause ? 'pause' : current === result ? 'result' : null;
+      return current === lobby ? 'lobby' : current === title ? 'title' : current === settingsEl ? 'settings' : current === loading ? 'loading' : current === pause ? 'pause' : current === result ? 'result' : null;
     },
     showTitle() {
       api.showDropBanner(false);
+      T.notice.textContent = '';
+      T.notice.classList.remove('is-on');
       show(title, true);
     },
-    showFriends() {
-      F.name.value = localStorage.getItem(NAME_KEY) || '';
-      F.note.textContent = 'The host runs the match. Everyone else follows.';
-      show(friends, true);
+    /** Title screen with a message (errors from joining, "Host left the match"). */
+    showNotice(text) {
+      api.showDropBanner(false);
+      T.notice.textContent = text || '';
+      T.notice.classList.toggle('is-on', !!text);
+      show(title, true);
     },
-    showLobby(info = {}) {
-      const code = info.code || '------';
-      B.code.textContent = code;
-      B.status.textContent = info.status || '';
-      B.error.textContent = info.error || '';
-      B.roster.replaceChildren();
+    playerName: () => T.name.value.trim().slice(0, 16) || 'Player',
+    setJoinCode(code) {
+      T.code.value = String(code || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
+    },
+    showLobby(info) {
+      lobbyInfo = info;
+      LB.code.textContent = info.code || '····';
+      LB.link.value = info.link || '';
+      lobby.querySelector('.mn-link').hidden = !info.link;
+      LB.count.textContent = `${(info.players || []).length}/${info.max || 16}`;
+      LB.roster.replaceChildren();
       for (const p of info.players || []) {
         const li = document.createElement('li');
-        li.textContent = p.host ? p.name + ' · host' : p.name;
-        B.roster.appendChild(li);
+        const nm = document.createElement('span');
+        nm.textContent = p.name;
+        li.appendChild(nm);
+        if (p.host || p.you) {
+          const tag = document.createElement('em');
+          tag.textContent = [p.host ? 'HOST' : '', p.you ? 'YOU' : ''].filter(Boolean).join(' · ');
+          li.appendChild(tag);
+        }
+        LB.roster.appendChild(li);
       }
-      lobby.querySelector('[data-act="lobby-start"]').hidden = info.role !== 'host';
-      lobby.querySelector('[data-act="copy"]').hidden = info.role !== 'host';
-      show(lobby, true);
-    },
-    lobbyError(text) {
-      B.error.textContent = text || '';
-      if (current !== lobby && current !== friends) show(friends, true);
+      LB.fill.checked = !!info.fill;
+      LB.fill.disabled = !info.isHost;
+      const humans = (info.players || []).length;
+      LB.fillHint.textContent = info.fill ? `${Math.max(0, 32 - humans)} bots join ${humans} player${humans === 1 ? '' : 's'}` : 'Humans only';
+      LB.status.textContent = info.status || '';
+      LB.error.textContent = info.error || '';
+      const start = lobby.querySelector('[data-act=lobby-start]');
+      start.hidden = !info.isHost;
+      start.disabled = !info.canStart;
+      start.classList.toggle('is-disabled', !info.canStart);
+      if (current !== lobby) show(lobby, true);
     },
     showSettings(from = 'title') {
       settingsFrom = from;
@@ -343,6 +400,9 @@ export function createMenus(root, opts = {}) {
       R.placement.textContent = `${r.placement}/${r.total}`;
       R.kills.textContent = String(r.kills);
       R.time.textContent = fmt(r.time);
+      // multiplayer: no instant rematch; the host makes a new room
+      result.querySelector('[data-act=again]').hidden = !!r.mp;
+      if (r.hostNote) R.sub.textContent += ' ' + r.hostNote;
       show(result, false);
     },
     showDropBanner(on, secondsLeft, zone) {

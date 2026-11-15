@@ -19,7 +19,7 @@
 // ---- bentonville-trees.json
 // { meta: { count, source, generated, method, format }, t: [x, z, r, x, z, r, ...] }
 //   x, z  game metres (x east, z south), 0.1 m
-//   r     crown radius hint in metres (2.5..9), 0.1 m
+//   r     crown radius hint in metres (3..9, from canopy fill of a 22 m cell), 0.1 m
 // The OSM `trees` array in bentonville-osm.json is unchanged (236 mapped trees);
 // these are additional canopy trees detected from imagery and already exclude
 // buildings, roads, water, parking and pitches.
@@ -58,7 +58,7 @@ const GROUND_LONG = 2048;
 // tree extraction parameters
 const NDVI_MIN = 0.12; // tuned on this imagery, see report
 const BRIGHT_MAX = 105; // trees are darker than lawns at the same NDVI
-const CELL_M = 13; // one tree per canopy cell at most
+const CELL_M = 22; // one tree per canopy cell at most (13 m gave ~36k trees: too many to instance)
 const FILL_MIN = 0.4; // fraction of a cell that must be canopy
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -329,7 +329,8 @@ async function main() {
       const x = T.minX + (bx + 0.5) / sx;
       const z = T.minZ + (by + 0.5) / sz;
       const fill = s / tot;
-      const r = Math.max(2.5, Math.min(9, Math.sqrt((fill * CELL_M * CELL_M) / Math.PI) * 1.05));
+      // crown radius hint 3..9 m, linear in how full the cell's canopy is
+      const r = 3 + (6 * (fill - FILL_MIN)) / (1 - FILL_MIN);
       trees.push([Math.round(x * 10) / 10, Math.round(z * 10) / 10, Math.round(r * 10) / 10]);
     }
   }

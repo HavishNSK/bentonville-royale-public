@@ -1,19 +1,36 @@
-# Wave 1 A: real-world map data
+# Wave 1 A: real-world map data (final)
 
-Status: **cut off at 3:23pm America/Chicago** (usage limit, resets 5:20pm). The imagery shell job finished at 3:24pm after the agent died. This report was not rewritten by that agent.
+All outputs are in `public/data/` (4.4 MB total). `node data-raw/verify.mjs public/data/bentonville-osm.json` passes every check.
 
-On disk: terrain (`public/data/bentonville-terrain.bin` + `.json`), Overture heights merged into the OSM JSON, `public/data/bentonville-trees.json` (36,226 canopy points, fetched 2026-11-14T21:24:08Z), and `public/data/bentonville-ground.webp` (1489×2048). The game does not load them. `src/game/Game.js` still loads only `bentonville-osm.json`.
+## Pipeline (run in this order; each is cache-first, `--refresh` refetches)
+1. `node scripts/fetch-map-data.mjs`: OSM to `bentonville-osm.json` (uses `data-raw/overture/buildings.json` if present)
+2. `python3 -I scripts/fetch-overture.py`: Overture buildings via pyarrow from public S3, then re-run step 1
+3. `node scripts/fetch-terrain.mjs`: USGS 3DEP DEM to terrain bin/json
+4. `node scripts/fetch-imagery.mjs`: USDA NAIP to trees + ground texture (needs steps 1 and 3)
 
-Done before the cutoff: terrain (3DEP), Overture heights merged, OSM tag extension. NAIP imagery landed after the agent was killed.
+Disk: the downloaded DEM/NAIP tiles were deleted after processing (only `fetch-meta.json` is kept), so re-running step 3 or 4 re-downloads (about 8 MB and 12 MB, in tiles). The USGS servers 502/504 often, and the scripts retry.
 
-## Terrain: public/data/bentonville-terrain.{bin,json}
-- Int16 LE, row-major, 910 cols x 1251 rows, cell 4 m, value = cm above baseElevation (388.3 m).
-- Sample (r, c) is the grid POINT x = minX + c*4, z = minZ + r*4 (minX -1912, minZ -3008).
-- Game height range -59.4..20.0 m (relief 79.4 m); square ~7 m, Crystal Bridges ~-30 m.
+## Terrain: bentonville-terrain.{bin,json} (2.28 MB)
+- Int16 little-endian, row-major, 910 cols x 1251 rows, cell 4 m. Value = cm above `baseElevation` (388.3 m NAVD88).
+- Sample (r, c) is the grid point x = minX + c*4, z = minZ + r*4 (minX -1912, minZ -3008; z is south).
+- Game height -59.4..20.0 m (relief 79 m). Square 7.1 m, Crystal Bridges -29.9 m (in its ravine), Home Office 14.0 m.
+- Source DEM is 1 m lidar (2015), fetched as square-degree-pixel tiles (ArcGIS stretches non-square requests; the first attempt was misaligned and fixed). Streams line up with the lowest terrain at zero offset, which confirms alignment.
 
-## OSM JSON additions (all additive)
-- buildings[]: `hs` ('osm'|'overture'|'part'|'est'), `roof` ('flat'|'gable'|'hip'|...), optional `minH`, `roofH`, `colour`, `roofColour` (#rrggbb).
-- 4034 of 4712 buildings now use Overture (Microsoft ML) heights; 18 OSM-tagged; 1 from parts.
-- roads[]: optional `bridge: 1`, `tunnel: 1|'building_passage'`, `layer: int`.
-- areas[].k adds residential, commercial, retail, industrial, farmland, meadow, scrub.
-- new top-level `buildingParts[]`.
+## OSM JSON additions (all additive; old fields unchanged)
+- buildings[]: `hs` ('osm' | 'overture' | 'part' | 'est'), `roof` ('flat' | 'gable' | 'hip' | 'pyramid' | 'skillion' | 'dome' | 'gambrel' | 'mansard' | 'round'), optional `minH`, `roofH`, `colour`, `roofColour` (#rrggbb).
+- Heights: 4034 Overture (Microsoft ML, values under 2 m ignored), 18 OSM-tagged, 1 from parts, 659 estimated, so 86% are real. Median 4.7 m, max 24.6 m. Untagged roofs are estimated (small houses get gable/hip).
+- roads[]: optional `bridge: 1` (83), `tunnel: 1 | 'building_passage'`, `layer: int`.
+- areas[].k adds residential, commercial, retail, industrial, farmland (broad zones, drawn first), meadow (natural grassland/heath), scrub. `landuse=meadow` is still 'grass'. The current `AREA_COLOR` in src/world/WorldMeshes.js skips the new kinds.
+- New top-level `buildingParts[]`: {id, h, minH?, lv?, roof, colour?, roofColour?, p} for 24 parts (3D sub-volumes; outlines are unchanged).
+- `meta.heights`: Overture release and match stats (4706 matched by OSM id, 6 unmatched).
+
+## Trees: bentonville-trees.json (226 KB)
+- `{ meta, t: [x, z, r, ...] }`: 12,577 canopy trees in game metres, r = crown radius hint 3..9 m (median 6.8).
+- From NAIP NDVI > 0.12 and brightness < 105, a 3x3 majority filter, and one tree per 22 m cell with at least 40% canopy. Buildings (plus 2 m), roads, water, parking and pitches are masked out, and no tree falls inside a building. Canopy covers 5.6 km², 31% of the map.
+- These are in addition to the 236 OSM `trees`. If the renderer uses these, it should probably drop the procedural park/wood fill in WorldMeshes.
+
+## Ground tint: bentonville-ground.webp (378 KB, 1489x2048)
+- A 10-colour posterized NAIP image covering exactly the terrain extent: u = (x - minX)/(maxX - minX), v = (z - minZ)/(maxZ - minZ), row 0 = north. With three.js flipY use (u, 1 - v).
+
+## Credits
+`credits/map-data.md` is regenerated by fetch-map-data.mjs and covers OSM (ODbL), Overture/Microsoft (ODbL), USGS 3DEP (public domain) and NAIP (public domain).

@@ -8,6 +8,14 @@
 //   dyn     player-built pieces (registered by Structures.js)
 //   roads   road centre-line segments (surface lookup only, never collide)
 //   areas   land-cover polygons (surface lookup only)
+//   decks   bridge decks (walkable surfaces above the terrain)
+//
+// The ground is a heightfield (USGS 3DEP, 4 m grid; see public/data/
+// bentonville-terrain.json). terrainHeight(x, z) samples it bilinearly. Prisms
+// and cylinders stand on it: every collider has a base y0 (the lowest terrain
+// under its footprint) and an ABSOLUTE top `h` (y0 + height). Pitched roofs
+// carry roof planes (see roofPlanes()) so their walkable / hittable top follows
+// the slope; `h` is then the ridge.
 
 const CELL = 32;
 const STEP = 0.62;
@@ -16,6 +24,8 @@ const WALL_HALF = 0.14;
 const PIECE_GROUND_BAND = 2.5;
 // A built surface within this distance of the ground hit wins the ray (level-0 floors sit at y = 0).
 const PIECE_TIE = 0.02;
+// Ray-vs-terrain march step (m). The DEM is a 4 m grid, so 2 m catches every ridge that matters.
+const GROUND_STEP = 2;
 
 function pointInPoly(p, n, x, z) {
   let inside = false;
@@ -29,8 +39,143 @@ function pointInPoly(p, n, x, z) {
   return inside;
 }
 
+/**
+ * Roof planes for a pitched roof over footprint `pts` ([[x, z], ...]): returns
+ * { planes: Float32Array [A, B, C, ...], rise } where the roof height above
+ * the eave at (x, z) is max(0, min_i(A_i x + B_i z + C_i)), or null when the
+ * shape stays flat. Ridge direction follows the footprint's minimum-area
+ * oriented bounding box. Shared by WorldMeshes (geometry) and World (collision).
+ */
+function roofPlanes(pts, shape, rise) {
+  const n = pts.length;
+  if (n < 3 || !(rise > 0.2)) return null;
+  // minimum-area OBB over the edge directions
+  let best = null;
+  for (let i = 0; i < n; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % n];
+    const ex = b[0] - a[0];
+    const ez = b[1] - a[1];
+    const l = Math.hypot(ex, ez);
+    if (l < 0.5) continue;
+    const ux = ex / l;
+    const uz = ez / l;
+    let u0 = Infinity;
+    let u1 = -Infinity;
+    let v0 = Infinity;
+    let v1 = -Infinity;
+    for (const p of pts) {
+      const u = p[0] * ux + p[1] * uz;
+      const v = -p[0] * uz + p[1] * ux;
+      if (u < u0) u0 = u;
+      if (u > u1) u1 = u;
+      if (v < v0) v0 = v;
+      if (v > v1) v1 = v;
+    }
+    const area = (u1 - u0) * (v1 - v0);
+    if (!best || area < best.area) best = { area, ux, uz, u0, u1, v0, v1 };
+  }
+  if (!best) return null;
+  let { ux, uz, u0, u1, v0, v1 } = best;
+  // u = the long axis (ridge direction)
+  if (v1 - v0 > u1 - u0) {
+    // new u axis = old v axis (-uz, ux); new v = -(old u)
+    const tx = ux;
+    ux = -uz;
+    uz = tx;
+    const a0 = u0;
+    const a1 = u1;
+    u0 = v0;
+    u1 = v1;
+    v0 = -a1;
+    v1 = -a0;
+  }
+  const hl = (u1 - u0) / 2;
+  const hw = (v1 - v0) / 2;
+  if (hw < 1) return null;
+  const uc = (u0 + u1) / 2;
+  const vc = (v0 + v1) / 2;
+  // u(x,z) = x*ux + z*uz - uc ; v(x,z) = -x*uz + z*ux - vc
+  const P = [];
+  const plane = (ku, kv, k0) => {
+    // height = ku*u + kv*v + k0
+    P.push(ku * ux - kv * uz, ku * uz + kv * ux, k0 - ku * uc - kv * vc);
+  };
+  const s = rise / hw;
+  if (shape === 'skillion') {
+    plane(0, -rise / (2 * hw), rise / 2);
+  } else if (shape === 'pyramid' || shape === 'dome' || shape === 'round') {
+    plane(0, -s, rise);
+    plane(0, s, rise);
+    plane(-rise / hl, 0, rise);
+    plane(rise / hl, 0, rise);
+  } else if (shape === 'hip' || shape === 'mansard' || shape === 'gambrel') {
+    plane(0, -s, rise);
+    plane(0, s, rise);
+    plane(-s, 0, s * hl);
+    plane(s, 0, s * hl);
+  } else {
+    // gable
+    plane(0, -s, rise);
+    plane(0, s, rise);
+  }
+  return { planes: new Float32Array(P), rise, hl, hw };
+}
+
+/** Roof height above the eave at (x, z) for a plane set from roofPlanes(). */
+function roofRise(planes, x, z) {
+  let m = Infinity;
+  for (let i = 0; i < planes.length; i += 3) {
+    const v = planes[i] * x + planes[i + 1] * z + planes[i + 2];
+    if (v < m) m = v;
+  }
+  return m > 0 ? m : 0;
+}
+
+/**
+ * Fetch the terrain heightfield and NAIP tree points (browser). Every part is
+ * optional: a missing file just leaves that part null (the world falls back to
+ * flat ground / procedural trees).
+ *   -> { terrain: { meta, heights: Float32Array } | null, trees: number[] | null, groundImage: HTMLImageElement | null }
+ */
+async function loadTerrainData(base = '/data/') {
+  const get = async (fn) => {
+    try {
+      return await fn();
+    } catch (err) {
+      console.warn('[world] optional map data missing:', err && err.message);
+      return null;
+    }
+  };
+  const ok = (r) => {
+    if (!r.ok) throw new Error(r.status + ' ' + r.url);
+    return r;
+  };
+  const [meta, bin, trees, groundImage] = await Promise.all([
+    get(async () => ok(await fetch(base + 'bentonville-terrain.json')).json()),
+    get(async () => ok(await fetch(base + 'bentonville-terrain.bin')).arrayBuffer()),
+    get(async () => (await ok(await fetch(base + 'bentonville-trees.json')).json()).t),
+    get(async () => {
+      const img = new Image();
+      img.src = base + 'bentonville-ground.webp';
+      await img.decode();
+      return img;
+    }),
+  ]);
+  return { terrain: meta && bin ? { meta, heights: decodeTerrain(meta, bin) } : null, trees, groundImage };
+}
+
+/** int16 little-endian centimetres -> Float32Array metres. */
+function decodeTerrain(meta, buf) {
+  const dv = new DataView(buf);
+  const n = meta.cols * meta.rows;
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = dv.getInt16(i * 2, true) / 100;
+  return out;
+}
+
 export class World {
-  constructor(mapData) {
+  constructor(mapData, extras = null) {
     this.data = mapData;
     const b = mapData.meta.bounds;
     this.bounds = { minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ };
@@ -46,6 +191,117 @@ export class World {
     this.pushZ = 0;
     this._hit = { t: 0, x: 0, y: 0, z: 0, nx: 0, ny: 1, nz: 0, collider: null, kind: 'none' };
     this.counts = { polys: 0, circles: 0 };
+    this.terrain = null;
+    this.terrainMin = 0;
+    this.terrainMax = 0;
+    this._tTop = null; // highest terrain per world cell (ray march early-out)
+    if (extras && extras.terrain) this.setTerrain(extras.terrain.meta, extras.terrain.heights);
+  }
+
+  // --------------------------------------------------------------- terrain
+
+  /** meta: bentonville-terrain.json; heights: Float32Array of metres (row-major, z rows). */
+  setTerrain(meta, heights) {
+    const T = {
+      minX: meta.minX,
+      minZ: meta.minZ,
+      cell: meta.cell,
+      cols: meta.cols,
+      rows: meta.rows,
+      maxX: meta.minX + (meta.cols - 1) * meta.cell,
+      maxZ: meta.minZ + (meta.rows - 1) * meta.cell,
+      h: heights,
+    };
+    this.terrain = T;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = 0; i < heights.length; i++) {
+      const v = heights[i];
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    this.terrainMin = lo;
+    this.terrainMax = hi;
+    // per world cell: max terrain over the samples that can influence it
+    const top = new Float32Array(this.cols * this.rows);
+    for (let cz = 0; cz < this.rows; cz++) {
+      for (let cx = 0; cx < this.cols; cx++) {
+        const x0 = this.minX + cx * CELL;
+        const z0 = this.minZ + cz * CELL;
+        const c0 = Math.max(0, Math.min(T.cols - 1, Math.floor((x0 - T.minX) / T.cell)));
+        const c1 = Math.max(0, Math.min(T.cols - 1, Math.ceil((x0 + CELL - T.minX) / T.cell)));
+        const r0 = Math.max(0, Math.min(T.rows - 1, Math.floor((z0 - T.minZ) / T.cell)));
+        const r1 = Math.max(0, Math.min(T.rows - 1, Math.ceil((z0 + CELL - T.minZ) / T.cell)));
+        let m = -Infinity;
+        for (let r = r0; r <= r1; r++) {
+          const row = r * T.cols;
+          for (let c = c0; c <= c1; c++) if (heights[row + c] > m) m = heights[row + c];
+        }
+        top[cz * this.cols + cx] = m;
+      }
+    }
+    this._tTop = top;
+  }
+
+  /** Bilinear terrain height (m) at (x, z); 0 without a heightfield. Clamped at the edges. */
+  terrainHeight(x, z) {
+    const T = this.terrain;
+    if (!T) return 0;
+    let fx = (x - T.minX) / T.cell;
+    let fz = (z - T.minZ) / T.cell;
+    const cm = T.cols - 1;
+    const rm = T.rows - 1;
+    if (fx < 0) fx = 0;
+    else if (fx > cm) fx = cm;
+    if (fz < 0) fz = 0;
+    else if (fz > rm) fz = rm;
+    let c = fx | 0;
+    let r = fz | 0;
+    if (c >= cm) c = cm - 1;
+    if (r >= rm) r = rm - 1;
+    const tx = fx - c;
+    const tz = fz - r;
+    const h = T.h;
+    const i = r * T.cols + c;
+    const a = h[i] + (h[i + 1] - h[i]) * tx;
+    const b = h[i + T.cols] + (h[i + T.cols + 1] - h[i + T.cols]) * tx;
+    return a + (b - a) * tz;
+  }
+
+  /** Unit terrain normal at (x, z) written to out ({x, y, z}); returns out. */
+  terrainNormal(x, z, out = { x: 0, y: 1, z: 0 }) {
+    const e = 1.5;
+    const gx = (this.terrainHeight(x + e, z) - this.terrainHeight(x - e, z)) / (2 * e);
+    const gz = (this.terrainHeight(x, z + e) - this.terrainHeight(x, z - e)) / (2 * e);
+    const l = Math.hypot(gx, 1, gz);
+    out.x = -gx / l;
+    out.y = 1 / l;
+    out.z = -gz / l;
+    return out;
+  }
+
+  /** Lowest terrain under a footprint (vertices plus interior samples on the DEM spacing). */
+  terrainMinUnder(p, n, minX, minZ, maxX, maxZ) {
+    if (!this.terrain) return 0;
+    let m = Infinity;
+    for (let i = 0; i < n; i++) {
+      const y = this.terrainHeight(p[i * 2], p[i * 2 + 1]);
+      if (y < m) m = y;
+    }
+    const s = this.terrain.cell;
+    for (let z = Math.ceil(minZ / s) * s; z < maxZ; z += s) {
+      for (let x = Math.ceil(minX / s) * s; x < maxX; x += s) {
+        if (!pointInPoly(p, n, x, z)) continue;
+        const y = this.terrainHeight(x, z);
+        if (y < m) m = y;
+      }
+    }
+    return m === Infinity ? this.terrainHeight((minX + maxX) / 2, (minZ + maxZ) / 2) : m;
+  }
+
+  /** Walkable / hittable top of prism c at (x, z) (pitched roofs follow their planes). */
+  topAt(c, x, z) {
+    return c.planes ? c.eave + roofRise(c.planes, x, z) : c.h;
   }
 
   // ------------------------------------------------------------------ grid
@@ -55,7 +311,7 @@ export class World {
     const i = cz * this.cols + cx;
     let c = this.cells[i];
     if (!c && create) {
-      c = { polys: [], circles: [], dyn: [], roads: [], areas: [] };
+      c = { polys: [], circles: [], dyn: [], roads: [], areas: [], decks: [] };
       this.cells[i] = c;
     }
     return c;
@@ -85,8 +341,12 @@ export class World {
 
   // ------------------------------------------------------------ registering
 
-  /** pts: [[x,z],...] or flat array. Returns the collider. */
-  addPoly(pts, h, kind, mat, ref) {
+  /**
+   * pts: [[x,z],...] or flat array; h: height above the base. Returns the collider
+   * (c.y0 = base, c.h = absolute top). opts: { y0, roof: roofPlanes() result,
+   * eaveH: wall height under a pitched roof }.
+   */
+  addPoly(pts, h, kind, mat, ref, opts = null) {
     const flat = typeof pts[0] === 'number';
     const n = flat ? pts.length / 2 : pts.length;
     const p = new Float32Array(n * 2);
@@ -104,14 +364,22 @@ export class World {
       if (z < minZ) minZ = z;
       if (z > maxZ) maxZ = z;
     }
-    const c = { type: 'poly', kind, p, n, h, minX, maxX, minZ, maxZ, mat, ref, stamp: 0, alive: true, hp: Infinity, maxHp: Infinity };
+    const y0 = opts && opts.y0 != null ? opts.y0 : this.terrainMinUnder(p, n, minX, minZ, maxX, maxZ);
+    const c = { type: 'poly', kind, p, n, h: y0 + h, y0, hgt: h, minX, maxX, minZ, maxZ, mat, ref, stamp: 0, alive: true, hp: Infinity, maxHp: Infinity };
+    if (opts && opts.roof) {
+      c.planes = opts.roof.planes;
+      c.eave = y0 + opts.eaveH;
+      c.h = c.eave + opts.roof.rise;
+    }
     this._each(minX, minZ, maxX, maxZ, true, (cell) => cell.polys.push(c));
     this.counts.polys++;
     return c;
   }
 
+  /** h: height above the terrain at (x, z). The collider stores y0 (base) and h (absolute top). */
   addCircle(x, z, r, h, kind, mat, hp, ref) {
-    const c = { type: 'circle', kind, x, z, r, h, mat, hp, maxHp: hp, ref, stamp: 0, alive: true };
+    const y0 = this.terrainHeight(x, z);
+    const c = { type: 'circle', kind, x, z, r, h: y0 + h, y0, hgt: h, mat, hp, maxHp: hp, ref, stamp: 0, alive: true };
     this._each(x - r, z - r, x + r, z + r, true, (cell) => cell.circles.push(c));
     this.counts.circles++;
     return c;
@@ -159,6 +427,28 @@ export class World {
     const s = { ax, az, bx, bz, hw: w / 2, k };
     const m = w / 2 + 1;
     this._each(Math.min(ax, bx) - m, Math.min(az, bz) - m, Math.max(ax, bx) + m, Math.max(az, bz) + m, true, (cell) => cell.roads.push(s));
+  }
+
+  /**
+   * Bridge deck segment: walkable surface from (ax, ay, az) to (bx, by, bz),
+   * half-width hw. groundHeight() stands on it; it does not block or stop rays.
+   */
+  addDeck(ax, ay, az, bx, by, bz, hw) {
+    const d = { ax, ay, az, bx, by, bz, hw };
+    this._each(Math.min(ax, bx) - hw, Math.min(az, bz) - hw, Math.max(ax, bx) + hw, Math.max(az, bz) + hw, true, (cell) => cell.decks.push(d));
+    return d;
+  }
+
+  _deckY(d, x, z) {
+    const ex = d.bx - d.ax;
+    const ez = d.bz - d.az;
+    const l2 = ex * ex + ez * ez;
+    let t = l2 > 0 ? ((x - d.ax) * ex + (z - d.az) * ez) / l2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const qx = d.ax + ex * t - x;
+    const qz = d.az + ez * t - z;
+    if (qx * qx + qz * qz > d.hw * d.hw) return -Infinity;
+    return d.ay + (d.by - d.ay) * t;
   }
 
   addArea(pts, k) {
@@ -239,6 +529,7 @@ export class World {
   /** True when a circle of radius r at ground level would overlap something solid. */
   blockedAt(x, z, r) {
     let hit = false;
+    const band = this.terrainHeight(x, z) + PIECE_GROUND_BAND;
     this._each(x - r, z - r, x + r, z + r, false, (cell) => {
       if (hit) return;
       const polys = cell.polys;
@@ -258,7 +549,7 @@ export class World {
       // player-built pieces that reach the ground band (spawning inside a build)
       const dyn = cell.dyn;
       for (let i = 0; i < dyn.length && !hit; i++) {
-        if (this._pieceOverlaps(dyn[i], x, z, r, PIECE_GROUND_BAND)) hit = true;
+        if (this._pieceOverlaps(dyn[i], x, z, r, band)) hit = true;
       }
     });
     return hit;
@@ -313,19 +604,29 @@ export class World {
    * Sets this.surface to 'ground' | 'roof' | 'vehicle' | 'build'.
    */
   groundHeight(x, z, feetY, step = STEP) {
-    let y = 0;
+    let y = this.terrainHeight(x, z);
     this.surface = 'ground';
     const cell = this.cellAt(x, z);
-    if (!cell) return 0;
+    if (!cell) return y;
     const lim = feetY + step;
     const polys = cell.polys;
     for (let i = 0; i < polys.length; i++) {
       const c = polys[i];
-      if (c.h <= y || c.h > lim) continue;
+      if (c.h <= y || (!c.planes && c.h > lim)) continue;
       if (x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
       if (pointInPoly(c.p, c.n, x, z)) {
-        y = c.h;
+        const top = c.planes ? c.eave + roofRise(c.planes, x, z) : c.h;
+        if (top <= y || top > lim) continue;
+        y = top;
         this.surface = c.kind === 'vehicle' ? 'vehicle' : 'roof';
+      }
+    }
+    const decks = cell.decks;
+    for (let i = 0; i < decks.length; i++) {
+      const sy = this._deckY(decks[i], x, z);
+      if (sy > y && sy <= lim) {
+        y = sy;
+        this.surface = 'ground';
       }
     }
     const dyn = cell.dyn;
@@ -385,7 +686,7 @@ export class World {
             const c = polys[i];
             if (c.stamp === stamp) continue;
             c.stamp = stamp;
-            if (feet >= c.h - step) continue; // on top of it / can step onto it
+            if (feet >= (c.planes ? c.eave + roofRise(c.planes, pos.x, pos.z) : c.h) - step) continue; // on top of it / can step onto it
             const x = pos.x;
             const z = pos.z;
             if (x < c.minX - r || x > c.maxX + r || z < c.minZ - r || z > c.maxZ + r) continue;
@@ -420,7 +721,7 @@ export class World {
             const c = circles[i];
             if (c.stamp === stamp) continue;
             c.stamp = stamp;
-            if (feet >= c.h - 0.05) continue;
+            if (feet >= c.h - 0.05 || head <= c.y0) continue;
             const dx = pos.x - c.x;
             const dz = pos.z - c.z;
             const lim = r + c.r;
@@ -534,8 +835,15 @@ export class World {
     let best = maxT;
     let found = false;
     out.collider = null;
-
-    if (dy < -1e-6) {
+    const T = this.terrain;
+    // Terrain: marched cell by cell below. Exactly level rays (dy === 0: bot steering
+    // feelers) skip it, because every slope is walkable. A ray that starts under the
+    // terrain only hits it after it has come back above (like the old y = 0 plane).
+    let groundT = -1;
+    let gT = -1; // last marched t
+    let gD = NaN; // ray height above the terrain at gT
+    const marchGround = T ? dy !== 0 : false;
+    if (!T && dy < -1e-6) {
       const t = -oy / dy;
       if (t > 0 && t < best) {
         best = t;
@@ -544,9 +852,9 @@ export class World {
         out.ny = 1;
         out.nz = 0;
         out.kind = 'ground';
+        groundT = best;
       }
     }
-    const groundT = found ? best : -1;
 
     const stamp = ++this.stamp;
     let cx = Math.floor((ox - this.minX) / CELL);
@@ -558,8 +866,79 @@ export class World {
     const tDeltaZ = Math.abs(dz) > 1e-9 ? CELL / Math.abs(dz) : Infinity;
     let tMaxX = Math.abs(dx) > 1e-9 ? ((cx + (dx > 0 ? 1 : 0)) * CELL + this.minX - ox) / dx : Infinity;
     let tMaxZ = Math.abs(dz) > 1e-9 ? ((cz + (dz > 0 ? 1 : 0)) * CELL + this.minZ - oz) / dz : Infinity;
+    let tEnter = 0;
 
     for (let guard = 0; guard < 512; guard++) {
+      // ---- terrain within this cell's stretch of the ray
+      if (marchGround && groundT < 0 && flat) {
+        const h = this.terrainHeight(ox, oz);
+        if (dy < 0 && oy > h) {
+          const th = (oy - h) / -dy;
+          if (th > 1e-4 && th < best) {
+            best = th;
+            found = true;
+            this.terrainNormal(ox, oz, out);
+            out.nx = out.x;
+            out.ny = out.y;
+            out.nz = out.z;
+            out.kind = 'ground';
+            groundT = best;
+          }
+        }
+      } else if (marchGround && groundT < 0) {
+        const tExit = Math.min(tMaxX, tMaxZ, best);
+        if (tExit > tEnter) {
+          const inGrid = cx >= 0 && cz >= 0 && cx < this.cols && cz < this.rows;
+          const top = inGrid ? this._tTop[cz * this.cols + cx] : this.terrainMax;
+          const yA = oy + dy * tEnter;
+          const yB = oy + dy * tExit;
+          if ((yA < yB ? yA : yB) > top + 0.01) {
+            gT = tExit;
+            gD = 1;
+          } else {
+            let t = tEnter;
+            for (;;) {
+              const d = oy + dy * t - this.terrainHeight(ox + dx * t, oz + dz * t);
+              if (gD > 0 && d <= 0) {
+                // crossed between gT (above) and t (below): bisect, then interpolate
+                let a = gT;
+                let da = gD;
+                let b = t;
+                let db = d;
+                for (let k = 0; k < 4; k++) {
+                  const m = (a + b) * 0.5;
+                  const dm = oy + dy * m - this.terrainHeight(ox + dx * m, oz + dz * m);
+                  if (dm > 0) {
+                    a = m;
+                    da = dm;
+                  } else {
+                    b = m;
+                    db = dm;
+                  }
+                }
+                const th = a + ((b - a) * da) / (da - db || 1e-9);
+                if (th > 1e-4 && th < best) {
+                  best = th;
+                  found = true;
+                  const nn = this.terrainNormal(ox + dx * th, oz + dz * th, out);
+                  out.nx = nn.x;
+                  out.ny = nn.y;
+                  out.nz = nn.z;
+                  out.collider = null;
+                  out.kind = 'ground';
+                  groundT = best;
+                }
+                break;
+              }
+              gT = t;
+              gD = d;
+              if (t >= tExit) break;
+              t = t + GROUND_STEP < tExit ? t + GROUND_STEP : tExit;
+            }
+          }
+        }
+      }
+
       const cell = this._cell(cx, cz, false);
       if (cell) {
         // ---- prisms
@@ -570,6 +949,7 @@ export class World {
           c.stamp = stamp;
           const p = c.p;
           const n = c.n;
+          const planes = c.planes;
           for (let a = 0, b = n - 1; a < n; b = a++) {
             const ax = p[b * 2];
             const az = p[b * 2 + 1];
@@ -584,7 +964,7 @@ export class World {
             const u = (wx * dz - wz * dx) / den;
             if (u < 0 || u > 1) continue;
             const y = oy + dy * t;
-            if (y < 0 || y > c.h) continue;
+            if (y < c.y0 || y > (planes ? c.eave + roofRise(planes, ox + dx * t, oz + dz * t) : c.h)) continue;
             best = t;
             found = true;
             const l = Math.hypot(ex, ez) || 1;
@@ -600,7 +980,31 @@ export class World {
             out.collider = c;
             out.kind = c.kind;
           }
-          if (dy !== 0) {
+          if (planes) {
+            // pitched roof: each plane where it is the lowest one (the visible roof face)
+            for (let k = 0; k < planes.length; k += 3) {
+              const A = planes[k];
+              const B = planes[k + 1];
+              const C = planes[k + 2];
+              const den = dy - A * dx - B * dz;
+              if (den > -1e-9 && den < 1e-9) continue;
+              const t = (c.eave + A * ox + B * oz + C - oy) / den;
+              if (t <= 1e-4 || t >= best) continue;
+              const x = ox + dx * t;
+              const z = oz + dz * t;
+              if (x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ || !pointInPoly(p, n, x, z)) continue;
+              if (roofRise(planes, x, z) < A * x + B * z + C - 1e-3) continue;
+              best = t;
+              found = true;
+              const l = Math.hypot(A, 1, B);
+              const s = den < 0 ? 1 : -1; // face the ray
+              out.nx = (-A / l) * s;
+              out.ny = (1 / l) * s;
+              out.nz = (-B / l) * s;
+              out.collider = c;
+              out.kind = c.kind;
+            }
+          } else if (dy !== 0) {
             const t = (c.h - oy) / dy;
             if (t > 1e-4 && t < best) {
               const x = ox + dx * t;
@@ -635,7 +1039,7 @@ export class World {
             const t = (-hb - Math.sqrt(disc)) / a2;
             if (t <= 1e-4 || t >= best) continue;
             const y = oy + dy * t;
-            if (y < 0 || y > c.h) continue;
+            if (y < c.y0 - 0.4 || y > c.h) continue;
             best = t;
             found = true;
             out.nx = (ox + dx * t - c.x) / c.r;
@@ -706,14 +1110,43 @@ export class World {
       // advance to the next cell unless the best hit is already closer than it
       if (tMaxX < tMaxZ) {
         if (tMaxX > best) break;
+        tEnter = tMaxX;
         cx += stepX;
         tMaxX += tDeltaX;
       } else {
         if (tMaxZ > best) break;
+        tEnter = tMaxZ;
         cz += stepZ;
         tMaxZ += tDeltaZ;
       }
-      if (cx < 0 || cz < 0 || cx >= this.cols || cz >= this.rows) break;
+      if (cx < 0 || cz < 0 || cx >= this.cols || cz >= this.rows) {
+        // outside the collision grid only the terrain remains
+        if (marchGround && groundT < 0 && best > tEnter) {
+          let t = tEnter;
+          for (let g = 0; g < 4000 && t < best; g++) {
+            const d = oy + dy * t - this.terrainHeight(ox + dx * t, oz + dz * t);
+            if (gD > 0 && d <= 0) {
+              const th = gT + ((t - gT) * gD) / (gD - d || 1e-9);
+              if (th > 1e-4 && th < best) {
+                best = th;
+                found = true;
+                this.terrainNormal(ox + dx * th, oz + dz * th, out);
+                out.nx = out.x;
+                out.ny = out.y;
+                out.nz = out.z;
+                out.collider = null;
+                out.kind = 'ground';
+              }
+              break;
+            }
+            gT = t;
+            gD = d;
+            if (oy + dy * t > this.terrainMax + 1 && dy >= 0) break;
+            t += GROUND_STEP * 4;
+          }
+        }
+        break;
+      }
     }
 
     if (!found) return null;
@@ -788,4 +1221,4 @@ export class World {
   }
 }
 
-export { pointInPoly, CELL as WORLD_CELL };
+export { pointInPoly, roofPlanes, roofRise, loadTerrainData, decodeTerrain, CELL as WORLD_CELL };
