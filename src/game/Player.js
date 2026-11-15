@@ -99,6 +99,8 @@ export class Player {
     this.fallSpeed = 0;
     this.camDist = CAMERA.distance;
     this.fovMul = 1;
+    this.scopeT = 0; // 0..1 raise-to-eye progress on a scoped gun
+    this.scopeView = false; // true while looking through the scope (first person + HUD overlay)
     this.objBar = null; // { collider, until, point }
     this.prompt = null;
     this.placement = null;
@@ -149,12 +151,15 @@ export class Player {
     const { world, hud } = g;
     if (!this.alive) {
       this.mode = 'dead';
+      this.ads = false;
+      this.scopeT = 0;
+      this.scopeView = false;
       if (this.character) this.character.update(dt, { fwd: 0, side: 0, speed: 0, grounded: true, gliding: false, heading: this.heading, pitch: 0 });
       return;
     }
 
     // ---- look
-    const sens = (g.settings.sensitivity || 1) * 0.0022 * (this.ads ? (g.settings.adsSensitivity ?? 0.6) : 1);
+    const sens = (g.settings.sensitivity || 1) * 0.0022 * (this.ads ? (g.settings.adsSensitivity ?? 0.6) : 1) * (this.scopeView ? 0.5 : 1);
     this.heading = (this.heading + input.dx * sens) % TAU;
     if (this.heading < 0) this.heading += TAU;
     this.pitch = clamp(this.pitch - input.dy * sens * (g.settings.invertY ? -1 : 1), CAMERA.minPitch, CAMERA.maxPitch);
@@ -183,6 +188,10 @@ export class Player {
     this.crouching = this.mode === 'ground' && (input.action('crouch') || input.action('crouchAlt'));
     this.sprinting = this.mode === 'ground' && input.action('sprint') && mf > 0 && !this.ads && !this.crouching && this.useT <= 0;
     this.ads = this.mode === 'ground' && input.action('aim') && !this.buildPiece && !this.editing && !!this._gun();
+    // scoped guns: a short raise-to-eye, then the view snaps into the scope; lowering is instant
+    const scoping = this.ads && !!WEAPONS[this._gun().id].scope;
+    this.scopeT = scoping ? Math.min(1, this.scopeT + dt / 0.16) : 0;
+    this.scopeView = scoping && this.scopeT >= 1;
 
     let speed = PLAYER.runSpeed;
     if (this.sprinting) speed = PLAYER.sprintSpeed;
@@ -270,8 +279,7 @@ export class Player {
         c.emote(false);
       }
       c.root.position.copy(p);
-      const sg = this.ads && this._gun() && WEAPONS[this._gun().id];
-      c.root.visible = !(sg && sg.kind === 'sniper' && sg.zoom <= 0.35);
+      c.root.visible = !this.scopeView; // first person through the scope: don't draw our own body
       c.update(dt, {
         fwd: hspeed > 0.1 ? (v.x * sh - v.z * ch) / hspeed : 0,
         side: hspeed > 0.1 ? (v.x * ch + v.z * sh) / hspeed : 0,
@@ -827,10 +835,13 @@ export class Player {
 
   updateCamera(camera, dt, world, baseFov = CAMERA.fov) {
     const it = this._gun();
-    const zoom = this.ads && it ? WEAPONS[it.id].zoom : 1;
+    const w = it ? WEAPONS[it.id] : null;
+    const scoped = this.scopeView && !!w;
+    // a scoped gun only eases part-way in over the shoulder, then snaps to full zoom in the scope
+    const zoom = !this.ads || !w ? 1 : w.scope && !scoped ? 0.8 : w.zoom;
     const want = this.airborneDrop ? 8.5 : this.ads ? CAMERA.distance * 0.55 : CAMERA.distance;
-    this.camDist = damp(this.camDist, want, 10, dt);
-    this.fovMul = damp(this.fovMul, zoom, 14, dt);
+    this.camDist = scoped ? 1.2 : damp(this.camDist, want, 10, dt);
+    this.fovMul = scoped ? zoom : damp(this.fovMul, zoom, 14, dt);
     const fov = baseFov * this.fovMul;
     if (Math.abs(camera.fov - fov) > 0.01) {
       camera.fov = fov;
@@ -838,7 +849,13 @@ export class Player {
     }
     const crouchDrop = this.crouching ? 0.45 : 0;
     _pivot.set(this.pos.x, this.pos.y + CAMERA.pivotHeight - crouchDrop, this.pos.z);
-    placeOrbitCamera(camera, world, _pivot, this.heading, this.pitch, this.camDist, this.airborneDrop ? 0 : CAMERA.shoulder);
+    if (scoped) {
+      // first person: the eye sits at the pivot and looks straight down the aim direction
+      const cp = Math.cos(this.pitch);
+      _fwd.set(Math.sin(this.heading) * cp, Math.sin(this.pitch), -Math.cos(this.heading) * cp);
+      camera.position.copy(_pivot);
+      camera.lookAt(_v.copy(_pivot).add(_fwd));
+    } else placeOrbitCamera(camera, world, _pivot, this.heading, this.pitch, this.camDist, this.airborneDrop ? 0 : CAMERA.shoulder);
 
     // aim ray: from the camera through the screen centre, starting level with the player
     camera.getWorldDirection(this.aimDir);

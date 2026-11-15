@@ -88,6 +88,18 @@ function hudHTML() {
   ).join('');
 
   return `
+<div class="br-scope" aria-hidden="true">
+  <svg class="br-scope-reticle" viewBox="-100 -100 200 200">
+    <g class="br-scope-fine">
+      <path d="M-100 0H-3M3 0H100M0 -100V-3M0 3V100"/>
+      <path d="M-4 12H4M-3 24H3M-2.5 36H2.5M-2 48H2"/>
+    </g>
+    <g class="br-scope-post">
+      <path d="M-100 0H-42M42 0H100M0 58V100"/>
+    </g>
+    <circle class="br-scope-dot" r="0.7"/>
+  </svg>
+</div>
 <div class="br-vig br-vig-storm"></div>
 <div class="br-vig br-vig-dmg"></div>
 
@@ -131,6 +143,7 @@ function hudHTML() {
   <div class="br-xhair" data-ref="xhair" data-kind="gun">
     <i class="br-xh-t"></i><i class="br-xh-r"></i><i class="br-xh-b"></i><i class="br-xh-l"></i>
     <i class="br-xh-dot"></i><i class="br-xh-ring"></i>
+    <svg class="br-xh-sg" viewBox="-60 -50 120 100" preserveAspectRatio="none"><path class="br-xh-sg-ink" d="M-43 -50H-52L-60 -41V-30M43 -50H52L60 -41V-30M43 50H52L60 41V30M-43 50H-52L-60 41V30"/><path class="br-xh-sg-line" d="M-43 -50H-52L-60 -41V-30M43 -50H52L60 -41V-30M43 50H52L60 41V30M-43 50H-52L-60 41V30"/></svg>
     <i class="br-xh-c br-xh-c1"></i><i class="br-xh-c br-xh-c2"></i><i class="br-xh-c br-xh-c3"></i><i class="br-xh-c br-xh-c4"></i>
   </div>
   <div class="br-hitmarker" data-ref="hitmarker"><i></i><i></i><i></i><i></i></div>
@@ -521,7 +534,7 @@ export function buildHud(root) {
   const xh = { spread: null, hit: null, kind: null };
   function setCrosshair(cross) {
     const c = cross || {};
-    const kind = c.kind === 'pickaxe' || c.kind === 'build' ? c.kind : 'gun';
+    const kind = c.kind === 'pickaxe' || c.kind === 'build' || c.kind === 'shotgun' ? c.kind : 'gun';
     if (kind !== xh.kind) {
       r.xhair.dataset.kind = kind;
       xh.kind = kind;
@@ -530,6 +543,11 @@ export function buildHud(root) {
     if (spread !== xh.spread) {
       r.xhair.style.setProperty('--spread', spread);
       xh.spread = spread;
+    }
+    const frac = Math.round(Math.min(1, Math.max(0, c.spreadFrac || 0)) * 1000) / 1000;
+    if (frac !== xh.frac) {
+      r.xhair.style.setProperty('--sgf', frac);
+      xh.frac = frac;
     }
     const hit = !!c.hit;
     if (hit !== xh.hit) {

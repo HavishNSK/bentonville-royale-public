@@ -727,6 +727,52 @@
   display: none;
   background: none;
 }
+/* shotgun: Thunder-style frame sized to the pellet spread */
+.br-xhair[data-kind='shotgun'] .br-xh-t,
+.br-xhair[data-kind='shotgun'] .br-xh-r,
+.br-xhair[data-kind='shotgun'] .br-xh-b,
+.br-xhair[data-kind='shotgun'] .br-xh-l {
+  display: none;
+}
+/* a wide frame of four chamfered corner brackets around a small square dot */
+.br-xh-sg {
+  /* frame height from the real pellet cone (--sgf = cone radius / half the viewport height):
+     0.72 puts the chamfered corners on the edge of the cone, so pellets land inside the frame */
+  --h: max(calc(var(--u) * 14), calc(100vh * 0.72 * var(--sgf, 0.05)));
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(var(--h) * 1.2);
+  height: var(--h);
+  overflow: visible;
+  fill: none;
+  stroke-linecap: butt;
+  stroke-linejoin: miter;
+  transform: translate(-50%, -50%);
+  transition:
+    width 0.07s linear,
+    height 0.07s linear;
+}
+.br-xh-sg path {
+  vector-effect: non-scaling-stroke;
+}
+.br-xh-sg-ink {
+  stroke: var(--br-ink);
+  stroke-width: calc(var(--u) * 5.6);
+}
+.br-xh-sg-line {
+  stroke: #fff;
+  stroke-width: calc(var(--u) * 2.8);
+}
+.br-xhair[data-kind='shotgun'] .br-xh-sg {
+  display: block;
+}
+.br-xhair[data-kind='shotgun'] .br-xh-dot {
+  width: calc(var(--u) * 3.5);
+  height: calc(var(--u) * 3.5);
+  border-radius: 0;
+}
 /* pickaxe: a ring around the dot */
 .br-xhair[data-kind='pickaxe'] .br-xh-t,
 .br-xhair[data-kind='pickaxe'] .br-xh-r,
@@ -1667,6 +1713,69 @@
   letter-spacing: 0;
   opacity: 0.8;
 }
+/* ---- sniper scope: black mask with a round lens, first-person view behind it ---------- */
+.br-scope {
+  --lens: 44vmin; /* lens radius */
+  position: absolute;
+  inset: 0;
+  display: none;
+  /* glass shading inside the lens, a soft dark rim, then solid black out to the screen edge */
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(120, 190, 255, 0.05) 0,
+    rgba(10, 20, 40, 0.06) calc(var(--lens) * 0.7),
+    rgba(0, 0, 0, 0.55) calc(var(--lens) * 0.95),
+    #000 calc(var(--lens) - 1px),
+    #000 100%
+  );
+}
+.br-hud.is-scoped .br-scope {
+  display: block;
+  animation: br-scope-in 0.09s ease-out;
+}
+@keyframes br-scope-in {
+  from {
+    opacity: 0;
+    transform: scale(1.25);
+  }
+}
+.br-scope-reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(var(--lens) * 2);
+  height: calc(var(--lens) * 2);
+  transform: translate(-50%, -50%);
+  overflow: hidden;
+  border-radius: 50%;
+  fill: none;
+  stroke: #05070a;
+  stroke-linecap: butt;
+}
+.br-scope-fine {
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+.br-scope-fine path,
+.br-scope-post path {
+  vector-effect: non-scaling-stroke;
+}
+.br-scope-post {
+  stroke-width: 5px;
+}
+.br-scope-dot {
+  fill: #e8242c;
+  stroke: none;
+}
+/* the scope replaces the normal crosshair; the hit marker and reload ring stay */
+.br-hud.is-scoped .br-xhair {
+  visibility: hidden;
+}
+.br-hud.has-fullmap .br-scope,
+.br-hud.has-inventory .br-scope {
+  display: none;
+}
+
 /* no crosshair while riding the Drop Bus */
 .br-hud.is-onbus .br-center {
   visibility: hidden;
