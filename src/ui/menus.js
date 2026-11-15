@@ -183,7 +183,9 @@ export function createMenus(root, opts = {}) {
          ${range('uiVolume', 'Menu sounds', 0, 1, 0.05)}
        </div>
        <div class="mn-pane" data-pane="controls">
-         <p class="mn-bind-status" data-ref="bindStatus" role="status">Click a key to change it. Esc cancels.</p>
+         ${toggle('editOnRelease', 'Confirm edit on release', 'Releasing the mouse after selecting tiles confirms the edit.')}
+         ${toggle('editWheelReset', 'Reset edit with mouse wheel', 'Scroll while editing to reset the piece (instead of switching slots).')}
+         <p class="mn-bind-status" data-ref="bindStatus" role="status">Click a key to change it. Esc cancels. Right mouse resets an edit.</p>
          <div class="mn-binds">${bindRows}</div>
          <button type="button" class="mn-btn mn-btn-small" data-ref="bindReset"><span>RESET TO DEFAULTS</span></button>
        </div>

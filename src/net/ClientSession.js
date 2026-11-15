@@ -392,6 +392,18 @@ export class ClientSession {
         if (st._paint) st._paint(piece);
         return;
       }
+      case 'se': {
+        const st = g.structures;
+        const piece = st && st.slots.get(e.key);
+        if (piece && st.edit) st.edit(piece, e.ed | 0);
+        return;
+      }
+      case 'sdr': {
+        const st = g.structures;
+        const piece = st && st.slots.get(e.key);
+        if (piece && st.setDoor) st.setDoor(piece, e.c | 0, e.v | 0);
+        return;
+      }
       case 'sx': {
         const st = g.structures;
         const piece = st && st.slots.get(e.key);
