@@ -22,7 +22,7 @@ export const PLAYER = {
   maxShield: 100,
   glideFallSpeed: 13,
   glideSpeed: 19,
-  dropHeight: 130,
+  dropHeight: 320, // Drop Bus altitude: open the glider early to reach ~500 m to either side of the route
   matCap: 999,
 };
 
@@ -270,27 +270,31 @@ export const BUILD = {
 // openStart: the match opens with a dormant storm covering the map (capped at openMaxRadius; no damage,
 // no circle drawn) for phase 1's `wait`; phase 1's shrink then closes in from there.
 export const STORM = {
-  startRadius: 620,
+  startRadius: 400, // phase 1's target circle is picked inside this (clamped to the map)
   openStart: true,
-  openMargin: 80, // metres beyond the farthest map corner for the dormant circle
-  openMaxRadius: 6000, // ...but never larger than this (safety cap; the compact map needs ~4.5 km from an edge POI)
+  openMargin: 60, // metres beyond the farthest map corner for the dormant circle
+  openMaxRadius: 2500, // ...but never larger than this (safety cap; the tile-pack map needs ~1.3 km)
   phases: [
-    // phase 1 closes the dormant circle (map-cover radius: ~2.7-4.6 km on the compact map, depending
-    // on which POI the storm forms at) to 340 m: over 150 s the edge averages ~16-28 m/s
-    { wait: 55, shrink: 150, radius: 340, dps: 1 },
-    { wait: 40, shrink: 45, radius: 180, dps: 2 },
-    { wait: 35, shrink: 35, radius: 90, dps: 3 },
-    { wait: 25, shrink: 30, radius: 40, dps: 5 },
-    { wait: 20, shrink: 25, radius: 14, dps: 8 },
-    { wait: 12, shrink: 25, radius: 0, dps: 10 },
+    // Paced for the ~0.9 x 0.95 km tile-pack map (neighbouring POIs ~30-45 s apart on foot):
+    // the storm clock starts when you leave the bus, so phase 1 gives ~2.5 min of looting
+    // before its circle (320 m) is set; a whole match is ~10 min of storm plus the ~25 s bus.
+    { wait: 85, shrink: 80, radius: 320, dps: 1 },
+    { wait: 55, shrink: 45, radius: 200, dps: 1 },
+    { wait: 45, shrink: 40, radius: 125, dps: 2 },
+    { wait: 40, shrink: 35, radius: 75, dps: 3 },
+    { wait: 30, shrink: 30, radius: 40, dps: 5 },
+    { wait: 25, shrink: 25, radius: 15, dps: 8 },
+    { wait: 15, shrink: 25, radius: 0, dps: 10 },
   ],
 };
 
+// Loot totals for the ~0.7 km2 of tiles: denser per m2 than the old 8 km2 map (which had
+// 320 / 180 / 450) because 100 players still need ~1 chest each.
 export const MATCH = {
-  bots: 99, // solo = 100 players; in multiplayer remote humans take slots first
-  chests: 140,
-  floorLoot: 220,
-  ammoBoxes: 90,
+  bots: 74, // solo = 75 players (a crowded ~0.9 km tile map); in multiplayer remote humans take slots first
+  chests: 250,
+  floorLoot: 630,
+  ammoBoxes: 270,
 };
 
 // Bot building: buildChance = odds a build roll in a fight succeeds; buildPieces = most

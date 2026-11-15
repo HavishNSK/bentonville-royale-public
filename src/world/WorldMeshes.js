@@ -37,6 +37,9 @@ const ROOF_COLORS = {
   metal: [0xd9dcdf, 0xbfc5ca, 0xa7adb3],
 };
 const STYLE = { wood: 0, brick: 1, metal: 2 };
+// Tree planting: multipliers on the per-area counts for wood / park / garden polygons, and
+// yard / street-tree tries per km2 of map (most tries land on a road or building and fail).
+const TREE_DENSITY = { wood: 0.8, park: 0.6, garden: 0.7, yard: 2250 };
 
 function hash01(n, salt) {
   let h = (Math.imul(n | 0, 0x9e3779b1) ^ Math.imul((salt | 0) + 1, 0x85ebca77)) >>> 0;
@@ -915,19 +918,25 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     harvestables.trees++;
     return true;
   };
-  for (const t of data.trees) addTree(t[0], t[1], false);
+  // Every tree is planted through addTree, so its collider always matches what is drawn.
+  const treesBy = { mapped: 0, wood: 0, park: 0, garden: 0, yard: 0 };
+  const plant = (src, x, z, pine) => addTree(x, z, pine) && treesBy[src]++;
+  for (const t of data.trees) plant('mapped', t[0], t[1], false);
   for (const info of areaInfo) {
     const k = info.a.k;
     if (k !== 'wood' && k !== 'park' && k !== 'garden') continue;
-    const n = k === 'wood' ? Math.min(1400, info.area / 75) : Math.min(2600, info.area / (k === 'garden' ? 220 : 420));
-    for (let i = 0; i < n; i++) if (sampleIn(info, pt)) addTree(pt.x, pt.z, rng() < (k === 'wood' ? 0.45 : 0.2));
+    const n = (k === 'wood' ? Math.min(1400, info.area / 75) : Math.min(2600, info.area / (k === 'garden' ? 220 : 420))) * TREE_DENSITY[k];
+    for (let i = 0; i < n; i++) if (sampleIn(info, pt)) plant(k, pt.x, pt.z, rng() < (k === 'wood' ? 0.45 : 0.2));
   }
   progress(0.7, 'Planting trees');
   await tick();
-  for (let i = 0, n = cap(7000); i < n; i++) {
+  // yard / street trees: TREE_DENSITY.yard tries per km2 of map (not cap(): on a small map
+  // that floor of 1 would pack the original map's 7000 tries into a fraction of the area)
+  const mapKm2 = ((b.maxX - b.minX) * (b.maxZ - b.minZ)) / 1e6;
+  for (let i = 0, n = Math.round(TREE_DENSITY.yard * mapKm2); i < n; i++) {
     const x = b.minX + rng() * (b.maxX - b.minX);
     const z = b.minZ + rng() * (b.maxZ - b.minZ);
-    addTree(x, z, rng() < 0.2);
+    plant('yard', x, z, rng() < 0.2);
   }
   // rocks and bushes
   for (let i = 0, n = cap(2600); i < n; i++) {
@@ -958,7 +967,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
 
   const view = {
     root,
-    counts: { buildings: count, hollow: world.counts.hollow || 0, chunks: buildingMeshes.length, cars, lamps, ...harvestables },
+    counts: { buildings: count, hollow: world.counts.hollow || 0, chunks: buildingMeshes.length, cars, lamps, ...harvestables, treesBy },
     /** Distance-cull chunks. `q` is a QUALITY entry. */
     update(cam, q) {
       trees.cull(cam, q.treeDist);

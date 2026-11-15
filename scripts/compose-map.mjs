@@ -7,24 +7,24 @@
 // Output: public/data/bentonville-osm.json      (what the game loads)
 //         credits/map-data.md                   (the "Map composition" section is replaced)
 //
-// The real map has ~8 km of suburbs between downtown and Bentonville West High, so the
-// game map is a designed layout instead of real distances:
-//   - CORE: downtown stays exactly where it is (origin = the Square, so Google 3D tiles and
-//     every downtown coordinate still line up with reality).
-//   - ISLANDS: a rectangle around each high school campus is cut out and translated next to
-//     the core, leaving GAP metres of designed countryside in between.
-//   - Everything outside the core and the islands is dropped.
-//   - Each gap gets a connector road (island road -> core road, both ending on the facing
-//     rectangle edges; class and width of the core road). Everything inside the bounds that
-//     is not a real-map piece becomes designed countryside (grass base + wood / park blobs,
-//     denser in the gaps) so nothing reads as a void.
-// Clipping: roads, paths, waterways and land-cover areas are clipped to their rectangle
-// (Liang-Barsky / Sutherland-Hodgman); buildings and building parts that cross a rectangle
-// edge are dropped rather than cut; trees, POIs and landmarks move with their rectangle.
-// Building heights (Overture) are already baked into each building, so they move too.
+// The real POIs are kilometres apart (Bentonville West High is ~8 km from the Square), so
+// the game map is a designed TILE PACK, not real distances:
+//   - TILES: a rectangle around each POI is cut out of the real map (sized to the POI's key
+//     buildings) and translated into a 3 x 3 grid. Real neighbours stay neighbours where
+//     possible (Crystal Bridges north, the Home Office south-east, ...), the Square is in
+//     the middle, and neighbouring tile centres are ~270-310 m apart (~30-45 s of running).
+//   - STREETS: every gap between tiles is exactly one street wide (GAP m). A synthetic road
+//     runs down every gap and around the outside, and the cut ends of real roads are
+//     extended onto it, so every tile is bordered by streets and the network is continuous.
+//   - Everything outside the tiles is dropped. No synthetic countryside.
+// Clipping: roads, paths, waterways and land-cover areas are clipped to their tile
+// (Liang-Barsky / Sutherland-Hodgman); buildings and building parts that cross a tile edge
+// are dropped rather than cut; trees, POIs and landmarks move with their tile. Building
+// heights (Overture) are baked into each building, so they move too. Nothing is rotated.
+// No position on this map matches the real world, so meta.composition has no `core` (the
+// optional Google 3D tiles view turns itself off for it).
 //
 // Deterministic: same input -> byte-identical output. Tweak the layout in the table below.
-// Rectangles are [minX, minZ, maxX, maxZ] in game metres (x east, z SOUTH) of the FULL map.
 
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -38,39 +38,34 @@ const CREDITS_FILE = path.join(ROOT, 'credits', 'map-data.md');
 
 // ------------------------------------------------------------------ layout (edit me)
 
-// Downtown core, kept in place. Covers the Square/Courthouse, Crystal Bridges, Memorial
-// Park, the Walmart Home Office, the Momentary, 8th Street Market and Compton Gardens with
-// ~150-250 m of margin (east edge = edge of the fetched data).
-const CORE = { key: 'downtown', rect: [-250, -1400, 1723, 1450] };
+const GAP = 20; // m between tiles = one street (its road ribbon + sidewalks fill it)
+const STREET = { k: 'tertiary', w: 9, n: '' }; // synthetic gap / ring street
+const BOUNDS_MARGIN = 14; // m of plain ground beyond the outer ring street's centre line
 
-// Islands: `rect` in full-map metres, moved by (dx, dz). `connect` names the island road and
-// the core road joined across the gap (OSM way ids; each must cross its facing edge).
-//   bentonville_west: campus + the street grid around it; its main east drive (way 651787759, z = -587)
-//     is lined up with West Central Avenue (z = 59), the road straight into the Square, and
-//     the island's east edge sits GAP m west of the core's west edge.
-//   bentonville_high: campus + stadium; SE J Street (x = 1049) lines up with downtown's SE J
-//     Street at the core's south edge (x = 1072), island north edge GAP m south of the core.
-const GAP = 400;
-const ISLANDS = [
-  {
-    key: 'bentonville_west',
-    side: 'west', // which side of the core the island sits on
-    rect: [-8410, -1080, -7700, -240], // campus, stadium + fields, and the Maple Street houses to the north
-    dx: -250 - GAP - -7700, // east edge -> core west edge - GAP
-    dz: 59 - -587, // campus drive -> West Central Avenue
-    connect: [{ island: 651787759, core: 779012351 }],
-  },
-  {
-    key: 'bentonville_high',
-    side: 'south',
-    rect: [880, 2060, 1560, 2730],
-    dx: 1072 - 1049, // SE J Street -> SE J Street
-    dz: 1450 + GAP - 2060, // north edge -> core south edge + GAP
-    connect: [{ island: 1421461553, core: 1421461530 }],
-  },
+// Grid: column widths (west -> east) and row heights (north -> south), in metres. Every
+// tile is exactly its cell, so the cell sizes come from the biggest thing each column / row
+// must hold: West High's main building (310 m) plus its iconic north parking lots (the tile
+// runs from the lots at z -662 to the school's south wall), the Crystal Bridges museum
+// (332 m long), Bentonville High's two buildings (228 x 265 m).
+const COLS = [330, 250, 250];
+const ROWS = [345, 230, 325];
+// Square tile centred on the game origin.
+const ORIGIN = { x: -(COLS[0] + GAP + COLS[1] / 2), z: -(ROWS[0] + GAP + ROWS[1] / 2) };
+
+// One tile per cell: `key` (a landmark / DROP_ZONES key), `col`, `row`, and `src` = the
+// real-map point (full-map metres, x east, z south) that lands on the cell centre.
+// West High and Bentonville High share the south row so only that row is tall.
+const TILES = [
+  { key: 'compton_gardens', col: 0, row: 0, src: [96, -376] },
+  { key: 'crystal_bridges', col: 1, row: 0, src: [469, -1073] },
+  { key: 'memorial_park', col: 2, row: 0, src: [1454, -385] },
+  { key: 'market_8th', col: 0, row: 1, src: [860, 845] },
+  { key: 'square', col: 1, row: 1, src: [50, 10] },
+  { key: 'momentary', col: 2, row: 1, src: [570, 690] },
+  { key: 'bentonville_west', col: 0, row: 2, src: [-7979, -509.5] },
+  { key: 'bentonville_high', col: 1, row: 2, src: [1223, 2398] },
+  { key: 'home_office', col: 2, row: 2, src: [1466, 1070] },
 ];
-const BOUNDS_MARGIN = 120; // metres of plain ground around the composed extent
-const PATCH = 100; // countryside grid cell (m): grass base + at most one wood/park blob per cell
 const PATH_KINDS = new Set(['footway', 'path', 'steps', 'cycleway', 'track', 'pedestrian']);
 
 // ------------------------------------------------------------------ geometry
@@ -165,35 +160,76 @@ function clipRing(ring, R) {
 }
 
 const mv = (q, P) => [r1(q[0] + P.dx), r1(q[1] + P.dz)];
-const rectMoved = (P) => [P.rect[0] + P.dx, P.rect[1] + P.dz, P.rect[2] + P.dx, P.rect[3] + P.dz];
-
-/** Small deterministic hash -> [0, 1). */
-function hash01(a, b) {
-  let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263)) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
 // ------------------------------------------------------------------ compose
 
+const cellX = (c) => ORIGIN.x + COLS.slice(0, c).reduce((s, w) => s + w + GAP, 0);
+const cellZ = (r) => ORIGIN.z + ROWS.slice(0, r).reduce((s, h) => s + h + GAP, 0);
+
+/** Tile -> { key, rect (source), dx, dz, game } with game = the cell in game metres. */
+function tilePieces() {
+  const pieces = TILES.map((t) => {
+    const w = COLS[t.col];
+    const h = ROWS[t.row];
+    const gx = cellX(t.col);
+    const gz = cellZ(t.row);
+    const sx = t.src[0] - w / 2;
+    const sz = t.src[1] - h / 2;
+    return { key: t.key, col: t.col, row: t.row, rect: [sx, sz, sx + w, sz + h], dx: r1(gx - sx), dz: r1(gz - sz), game: [gx, gz, gx + w, gz + h] };
+  });
+  // source rectangles must not overlap (a building would appear twice)
+  for (let i = 0; i < pieces.length; i++)
+    for (let j = i + 1; j < pieces.length; j++) {
+      const a = pieces[i].rect;
+      const b = pieces[j].rect;
+      if (a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]) throw new Error(`source tiles overlap: ${pieces[i].key} / ${pieces[j].key}`);
+    }
+  return pieces;
+}
+
 function compose(full) {
-  const pieces = [{ key: CORE.key, rect: CORE.rect, dx: 0, dz: 0 }, ...ISLANDS];
+  const pieces = tilePieces();
   const out = { buildings: [], roads: [], areas: [], waterways: [], trees: [], pois: [], buildingParts: [], landmarks: {} };
-  const stats = { droppedEdgeBuildings: {}, kept: {} };
+  const stats = { droppedEdgeBuildings: {}, kept: {}, extended: 0 };
+
+  const W = COLS.reduce((s, w) => s + w, 0) + GAP * (COLS.length - 1);
+  const H = ROWS.reduce((s, h) => s + h, 0) + GAP * (ROWS.length - 1);
+  const ext = [ORIGIN.x, ORIGIN.z, ORIGIN.x + W, ORIGIN.z + H]; // tiles' outer edge
+  const half = GAP / 2;
+  // street centre lines: between columns / rows and the outer ring
+  const xs = [ext[0] - half, ...COLS.slice(0, -1).map((_, c) => cellX(c) + COLS[c] + half), ext[2] + half];
+  const zs = [ext[1] - half, ...ROWS.slice(0, -1).map((_, r) => cellZ(r) + ROWS[r] + half), ext[3] + half];
 
   for (const P of pieces) {
     const R = P.rect;
+    const G = P.game;
     let nb = 0;
     let edge = 0;
     for (const b of full.buildings) {
-      const inAll = b.p.every((q) => inRect(q, R));
-      if (inAll) {
+      if (b.p.every((q) => inRect(q, R))) {
         out.buildings.push({ ...b, p: b.p.map((q) => mv(q, P)) });
         nb++;
       } else if (b.p.some((q) => inRect(q, R))) edge++;
     }
     for (const b of full.buildingParts || []) if (b.p.every((q) => inRect(q, R))) out.buildingParts.push({ ...b, p: b.p.map((q) => mv(q, P)) });
-    for (const r of full.roads) for (const l of clipLine(r.p, R)) out.roads.push({ ...r, p: l.map((q) => mv(q, P)) });
+    for (const r of full.roads)
+      for (const l of clipLine(r.p, R)) {
+        const p = l.map((q) => mv(q, P));
+        // a road cut by the tile edge runs on to the street in the gap
+        if (!PATH_KINDS.has(r.k)) {
+          const reach = (q) => {
+            if (Math.abs(q[0] - G[0]) < 0.6) return [r1(q[0] - half), q[1]];
+            if (Math.abs(q[0] - G[2]) < 0.6) return [r1(q[0] + half), q[1]];
+            if (Math.abs(q[1] - G[1]) < 0.6) return [q[0], r1(q[1] - half)];
+            if (Math.abs(q[1] - G[3]) < 0.6) return [q[0], r1(q[1] + half)];
+            return null;
+          };
+          const a = reach(p[0]);
+          const b = reach(p[p.length - 1]);
+          if (a) p.unshift(a), stats.extended++;
+          if (b) p.push(b), stats.extended++;
+        }
+        out.roads.push({ ...r, p });
+      }
     for (const w of full.waterways || []) for (const l of clipLine(w.p, R)) out.waterways.push({ ...w, p: l.map((q) => mv(q, P)) });
     for (const a of full.areas) {
       const ring = clipRing(a.p, R);
@@ -205,140 +241,40 @@ function compose(full) {
     stats.droppedEdgeBuildings[P.key] = edge;
   }
 
-  // landmarks: move with the rectangle that holds their point; drop the rest
+  // landmarks: move with the tile that holds their point (radius kept inside the tile)
   const kept = new Set(out.buildings.map((b) => b.id));
   for (const [k, l] of Object.entries(full.landmarks)) {
     const P = pieces.find((pc) => inRect([l.x, l.z], pc.rect));
     if (!P) continue;
-    const isl = P !== pieces[0];
-    const half = Math.min(P.rect[2] - P.rect[0], P.rect[3] - P.rect[1]) / 2;
-    let r = isl ? Math.min(l.r, Math.round(half)) : l.r;
-    if (!isl) {
-      // the HUD names the place you are in when within 1.2 r: keep big downtown landmarks
-      // (the Home Office campus, the greenway) from reaching past mid-gap into an island
-      const R = P.rect;
-      for (const I of ISLANDS) {
-        const d = I.side === 'west' ? l.x - R[0] : I.side === 'east' ? R[2] - l.x : I.side === 'south' ? R[3] - l.z : l.z - R[1];
-        r = Math.min(r, Math.floor((d + GAP / 2) / 1.2));
-      }
-    }
+    const r = Math.min(l.r, Math.round(Math.min(P.rect[2] - P.rect[0], P.rect[3] - P.rect[1]) / 2));
     out.landmarks[k] = { ...l, x: r1(l.x + P.dx), z: r1(l.z + P.dz), r, ids: l.ids.filter((id) => kept.has(id)) };
   }
   stats.droppedLandmarks = Object.keys(full.landmarks).filter((k) => !out.landmarks[k]);
+  for (const t of TILES) if (!out.landmarks[t.key]) throw new Error(`tile ${t.key}: its landmark is not inside the tile`);
 
-  // connectors + countryside in each gap
-  const core = CORE.rect;
+  // synthetic streets: one down every gap and around the outside (full length, so they cross)
   let synthId = -1;
-  const connectors = [];
-  const gaps = [];
-  for (const I of ISLANDS) {
-    const IR = rectMoved(I);
-    // gap rectangle: between the facing edges, across the overlap of the two spans
-    const G =
-      I.side === 'west' ? [IR[2], Math.max(IR[1], core[1]), core[0], Math.min(IR[3], core[3])]
-      : I.side === 'east' ? [core[2], Math.max(IR[1], core[1]), IR[0], Math.min(IR[3], core[3])]
-      : I.side === 'south' ? [Math.max(IR[0], core[0]), core[3], Math.min(IR[2], core[2]), IR[1]]
-      : [Math.max(IR[0], core[0]), IR[3], Math.min(IR[2], core[2]), core[1]];
-    if (!(G[2] - G[0] > 1 && G[3] - G[1] > 1)) throw new Error(`${I.key}: island does not face the core (gap ${G})`);
-    const horiz = I.side === 'west' || I.side === 'east'; // connector runs along x
-    // the island edge and the core edge the connector must touch
-    const iEdge = I.side === 'west' ? IR[2] : I.side === 'east' ? IR[0] : I.side === 'south' ? IR[1] : IR[3];
-    const cEdge = I.side === 'west' ? core[0] : I.side === 'east' ? core[2] : I.side === 'south' ? core[3] : core[1];
-    const A = horiz ? 0 : 1; // axis across the gap
-    const endOn = (roads, id, edge) => {
-      for (const r of roads) {
-        if (r.id !== id) continue;
-        for (const q of [r.p[0], r.p[r.p.length - 1]]) if (Math.abs(q[A] - edge) < 0.6) return { r, q };
-      }
-      return null;
-    };
-    for (const c of I.connect) {
-      const a = endOn(out.roads, c.island, iEdge);
-      const b = endOn(out.roads, c.core, cEdge);
-      if (!a || !b) throw new Error(`${I.key}: connector roads ${c.island} / ${c.core} do not end on the facing edges`);
-      const p0 = a.q;
-      const p3 = b.q;
-      const s = Math.sign(p3[A] - p0[A]);
-      const span = Math.abs(p3[A] - p0[A]);
-      const lead = (q, d) => (horiz ? [r1(q[0] + d), q[1]] : [q[0], r1(q[1] + d)]);
-      // straight when lined up, else a gentle S-bend over the middle half of the gap
-      const pts = Math.abs(p0[1 - A] - p3[1 - A]) < 0.5 ? [p0, p3] : [p0, lead(p0, s * span * 0.25), lead(p3, -s * span * 0.25), p3];
-      const road = { id: synthId--, k: b.r.k, n: b.r.n || a.r.n, w: Math.max(b.r.w, Math.min(a.r.w, b.r.w + 4)), p: pts };
-      out.roads.push(road);
-      connectors.push({ island: I.key, from: p0, to: p3, k: road.k, w: road.w });
-    }
-    gaps.push(G);
-  }
+  const streets = [];
+  for (const x of xs) streets.push([[r1(x), r1(zs[0])], [r1(x), r1(zs[zs.length - 1])]]);
+  for (const z of zs) streets.push([[r1(xs[0]), r1(z)], [r1(xs[xs.length - 1]), r1(z)]]);
+  for (const p of streets) out.roads.push({ id: synthId--, ...STREET, p });
 
-  // bounds = composed extent + margin
-  const all = [core, ...ISLANDS.map(rectMoved)];
-  const bounds = {
-    minX: r1(Math.min(...all.map((R) => R[0])) - BOUNDS_MARGIN),
-    minZ: r1(Math.min(...all.map((R) => R[1])) - BOUNDS_MARGIN),
-    maxX: r1(Math.max(...all.map((R) => R[2])) + BOUNDS_MARGIN),
-    maxZ: r1(Math.max(...all.map((R) => R[3])) + BOUNDS_MARGIN),
-  };
-
-  // countryside: everything inside the bounds that is not a real-map piece. A grass base
-  // (merged runs of free PATCH cells) with irregular wood blobs and a few park meadows on top;
-  // denser in the gaps between the islands and downtown so they read as woodland, lighter
-  // around the outside. Roads are drawn over areas and trees keep clear of roads.
-  const pad = 4;
-  const busy = (x0, z0, x1, z1) => all.some((R) => x0 < R[2] + pad && x1 > R[0] - pad && z0 < R[3] + pad && z1 > R[1] - pad);
-  const inGap = (x, z) => gaps.some((G) => x >= G[0] && x <= G[2] && z >= G[1] && z <= G[3]);
-  const nx = Math.ceil((bounds.maxX - bounds.minX) / PATCH);
-  const nz = Math.ceil((bounds.maxZ - bounds.minZ) / PATCH);
-  const ccw = (ring) => (shoelace(ring) > 0 ? ring.reverse() : ring); // data winding: shoelace < 0
-  let blobs = 0;
-  for (let j = 0; j < nz; j++) {
-    const z0 = bounds.minZ + j * PATCH;
-    const z1 = Math.min(bounds.maxZ, z0 + PATCH);
-    let run = -1;
-    for (let i = 0; i <= nx; i++) {
-      const x0 = bounds.minX + i * PATCH;
-      const x1 = Math.min(bounds.maxX, x0 + PATCH);
-      const free = i < nx && !busy(x0, z0, x1, z1);
-      if (free && run < 0) run = i;
-      if (!free && run >= 0) {
-        const rx0 = bounds.minX + run * PATCH;
-        out.areas.push({ k: 'grass', p: ccw([[r1(rx0), r1(z0)], [r1(x0), r1(z0)], [r1(x0), r1(z1)], [r1(rx0), r1(z1)]]) });
-        run = -1;
-      }
-      if (!free) continue;
-      const h = (n) => hash01(i * 7919 + j * 104729 + 17, n);
-      const cx = (x0 + x1) / 2;
-      const cz = (z0 + z1) / 2;
-      const gap = inGap(cx, cz);
-      if (h(1) > (gap ? 0.75 : 0.35)) continue;
-      const k = h(2) < (gap ? 0.1 : 0.2) ? 'park' : 'wood';
-      const rad = PATCH * (0.3 + h(3) * 0.17);
-      const room = PATCH / 2 - rad - 2;
-      const bx = cx + (h(4) - 0.5) * 2 * room;
-      const bz = cz + (h(5) - 0.5) * 2 * room;
-      const n = 9;
-      const ring = [];
-      for (let v = 0; v < n; v++) {
-        const a = (v / n) * Math.PI * 2;
-        const rr = rad * (0.78 + 0.22 * h(10 + v));
-        ring.push([r1(bx + Math.cos(a) * rr), r1(bz + Math.sin(a) * rr)]);
-      }
-      out.areas.push({ k, p: ccw(ring) });
-      blobs++;
-    }
-  }
-  stats.countryside = blobs;
+  const m = half + BOUNDS_MARGIN;
+  const bounds = { minX: r1(ext[0] - m), minZ: r1(ext[1] - m), maxX: r1(ext[2] + m), maxZ: r1(ext[3] + m) };
 
   const meta = {
     ...full.meta,
     bounds,
     composition: {
-      note: 'Compact designed layout: only the downtown core is at its real position; the islands are moved real-map cut-outs (scripts/compose-map.mjs).',
+      layout: 'tiles',
+      note: 'Designed tile pack: every POI is a real-map cut-out moved into a grid; no position matches the real world (scripts/compose-map.mjs).',
       source: 'data-raw/bentonville-osm-full.json',
       sourceBounds: full.meta.bounds,
-      core: { key: CORE.key, rect: CORE.rect },
-      islands: ISLANDS.map((I) => ({ key: I.key, srcRect: I.rect, dx: I.dx, dz: I.dz, rect: rectMoved(I) })),
+      core: null, // nothing is at its real position
+      tiles: pieces.map((P) => ({ key: P.key, col: P.col, row: P.row, srcRect: P.rect, dx: P.dx, dz: P.dz, rect: P.game })),
       gap: GAP,
-      connectors,
+      // the gap / ring streets, as segments (Loot treats them like the old island connectors)
+      connectors: streets.map((p) => ({ island: 'street', from: p[0], to: p[1], k: STREET.k, w: STREET.w })),
     },
   };
   meta.counts = {
@@ -386,16 +322,16 @@ async function main() {
   const b = data.meta.bounds;
   const section = [
     '<!-- compose-map:start (written by scripts/compose-map.mjs) -->',
-    '## Map composition (positions outside downtown are not geographic)',
+    '## Map composition (positions are not geographic)',
     '',
     '`public/data/bentonville-osm.json` is a compact, designed layout cut from the full',
     'OpenStreetMap extract (`data-raw/bentonville-osm-full.json`) by `scripts/compose-map.mjs`.',
-    `Only the downtown core (game metres x ${c.core.rect[0]}..${c.core.rect[2]}, z ${c.core.rect[1]}..${c.core.rect[3]}) is at its real position.`,
-    'The school campuses below are real-map cut-outs moved next to it; the countryside and',
-    'connector roads in the gaps between them are invented, and everything else is left out.',
+    'Each POI below is a real-map cut-out moved into a 3 x 3 grid of tiles; no position on the',
+    `game map matches the real world. The ${c.gap} m streets between the tiles and around the`,
+    'outside are invented, and everything else is left out.',
     '',
-    ...c.islands.map((I) => `- ${I.key}: source rectangle ${I.srcRect.join(', ')} moved by (${I.dx}, ${I.dz}) m`),
-    `- Gap between each island and downtown: ${c.gap} m; map bounds ${b.minX}..${b.maxX} x ${b.minZ}..${b.maxZ}`,
+    ...c.tiles.map((T) => `- ${T.key}: source rectangle ${T.srcRect.join(', ')} moved by (${T.dx}, ${T.dz}) m`),
+    `- Map bounds ${b.minX}..${b.maxX} x ${b.minZ}..${b.maxZ}`,
     '<!-- compose-map:end -->',
   ].join('\n');
   let credits = existsSync(CREDITS_FILE) ? await readFile(CREDITS_FILE, 'utf8') : '# Map data\n';
@@ -407,10 +343,11 @@ async function main() {
   console.log(`Wrote ${path.relative(ROOT, OUT_FILE)}: ${(Buffer.byteLength(json) / 1e6).toFixed(2)} MB`);
   console.log(`  bounds x ${b.minX}..${b.maxX} (${((b.maxX - b.minX) / 1000).toFixed(2)} km), z ${b.minZ}..${b.maxZ} (${((b.maxZ - b.minZ) / 1000).toFixed(2)} km)`);
   console.log(`  buildings ${n.buildings}, roads ${n.roads}, areas ${n.areas}, waterways ${n.waterways}, trees ${n.trees}, pois ${n.pois}`);
-  console.log(`  buildings kept per piece ${JSON.stringify(stats.kept)}, dropped on edges ${JSON.stringify(stats.droppedEdgeBuildings)}`);
-  console.log(`  countryside wood/park blobs: ${stats.countryside}`);
-  console.log(`  landmarks dropped (outside every piece): ${stats.droppedLandmarks.join(', ') || 'none'}`);
-  for (const k of c.connectors) console.log(`  connector ${k.island}: ${k.k} w${k.w} ${JSON.stringify(k.from)} -> ${JSON.stringify(k.to)}`);
+  console.log(`  buildings kept per tile ${JSON.stringify(stats.kept)}`);
+  console.log(`  dropped on tile edges ${JSON.stringify(stats.droppedEdgeBuildings)}`);
+  console.log(`  road ends extended onto the gap streets: ${stats.extended}`);
+  console.log(`  landmarks dropped (outside every tile): ${stats.droppedLandmarks.join(', ') || 'none'}`);
+  for (const T of c.tiles) console.log(`  tile ${T.key.padEnd(16)} game ${JSON.stringify(T.rect)} moved (${T.dx}, ${T.dz})`);
   for (const [k, l] of Object.entries(data.landmarks)) console.log(`  landmark ${k.padEnd(16)} x=${l.x} z=${l.z} r=${l.r} ids=${l.ids.length}`);
 }
 

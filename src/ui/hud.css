@@ -1611,6 +1611,8 @@
 .br-fullmap-frame {
   display: flex;
   flex-direction: column;
+  /* hug the map canvas: a tall map must not leave an empty strip beside it */
+  width: min-content;
   gap: calc(var(--u) * 8);
   padding: calc(var(--u) * 10) calc(var(--u) * 12);
   border: calc(var(--u) * 4) solid var(--br-ink);
@@ -1648,9 +1650,11 @@
 }
 .br-fullmap-hint {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: calc(var(--u) * 7);
-  height: calc(var(--u) * 26);
+  gap: calc(var(--u) * 4) calc(var(--u) * 7);
+  min-height: calc(var(--u) * 26);
+  white-space: nowrap;
   color: var(--br-ink);
   font-size: calc(var(--u) * 12);
   font-weight: 900;
@@ -1663,6 +1667,10 @@
   letter-spacing: 0;
   opacity: 0.8;
 }
+/* no crosshair while riding the Drop Bus */
+.br-hud.is-onbus .br-center {
+  visibility: hidden;
+}
 /* aiming UI and the small map step aside while the big map is open */
 .br-hud.has-fullmap .br-center,
 .br-hud.has-fullmap .br-objbar,
@@ -1670,6 +1678,7 @@
 .br-hud.has-fullmap .br-toasts,
 .br-hud.has-fullmap .br-announce,
 .br-hud.has-fullmap .br-stormwarn,
+.br-hud.has-fullmap .br-bc,
 .br-hud.has-fullmap .br-minimap {
   visibility: hidden;
 }

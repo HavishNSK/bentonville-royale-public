@@ -203,6 +203,22 @@ export class Inventory {
     return this.selected;
   }
 
+  /**
+   * Swaps slots a and b (0..4; either may be empty). The selection follows the held
+   * item: holding a -> now holding it in b, and vice versa. Returns true on a change.
+   */
+  swap(a, b) {
+    const ok = (i) => Number.isInteger(i) && i >= 0 && i < SLOT_COUNT;
+    if (!ok(a) || !ok(b) || a === b) return false;
+    const t = this.slots[a];
+    this.slots[a] = this.slots[b];
+    this.slots[b] = t;
+    if (this.selected === a) this.selected = b;
+    else if (this.selected === b) this.selected = a;
+    this.version++;
+    return true;
+  }
+
   /** Scroll-wheel cycling over pickaxe + filled slots. dir = +1 / -1. */
   next(dir = 1) {
     const order = [-1, 0, 1, 2, 3, 4];

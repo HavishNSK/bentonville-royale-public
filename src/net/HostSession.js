@@ -28,6 +28,7 @@ import { Character } from '../game/Character.js';
 import {
   SNAP_HZ, FLAG, EQUIP, SURF, encodeSnapshot, decodeState, seqNewer, rnd,
 } from './protocol.js';
+import { busPosAt, routeWire } from '../game/DropBus.js';
 
 // Bots.js colours its canopies with this palette by spawn index (kept in sync by hand).
 const BOT_CANOPY = [0x4fc3f7, 0xff7a45, 0x9ccc65, 0xba68c8, 0xffd54f, 0xf06292, 0x4db6ac, 0xa1887f];
@@ -169,7 +170,9 @@ export class HostSession {
         game.scene.add(ch.root);
       }
       const a = new RemoteActor(c.id, c.name, ch, new Inventory());
-      a.pos.set(lm.x, PLAYER.dropHeight, lm.z);
+      // aboard the Drop Bus (Game boards the route before this runs)
+      if (game.busRoute) busPosAt(game.busRoute, 0, a.pos);
+      else a.pos.set(lm.x, PLAYER.dropHeight, lm.z);
       a.drawPos.copy(a.pos);
       this.remotes.set(c.id, a);
       game.combat.register(a);
@@ -207,7 +210,8 @@ export class HostSession {
       roster,
       total: game.totalActors,
       zone: game.dropZone ? game.dropZone.key : null,
-      marker: game.dropMarker,
+      bus: game.busRoute ? routeWire(game.busRoute) : null, // clients fly the identical Drop Bus
+      map: game.mapId, // clients on a different map file refuse to play (stale cache / deploy)
       storm: { cx: s.cx, cz: s.cz, r: s.r, nextCx: s.nextCx, nextCz: s.nextCz, nextR: s.nextR, phase: s.phase, mode: s.mode, secondsLeft: s.secondsLeft, dps: s.dps },
       loot,
     };
@@ -307,6 +311,20 @@ export class HostSession {
     const g = this.game;
     if (!this.started) return;
     this.time += dt;
+    // a remote still aboard well after the Drop Bus left the map (stalled / backgrounded tab):
+    // eject it where the bus left, like the client itself would
+    const route = g.busRoute;
+    if (route && this.time > route.tClose + 3) {
+      for (const a of this.remotes.values()) {
+        if (!a.alive || !a.inBus) continue;
+        busPosAt(route, route.tClose, a.pos);
+        a.pos.y -= 1;
+        a.vel.set(0, 0, 0);
+        a.mode = 'freefall';
+        a.inBus = false;
+        this.room.sendTo(a.id, { t: 'cor', x: a.pos.x, y: a.pos.y, z: a.pos.z });
+      }
+    }
     for (const a of this.remotes.values()) this._present(a, dt);
 
     // match end: last one standing (the host's own victory/defeat screens are Game's)
@@ -451,6 +469,23 @@ export class HostSession {
     this.events.push({ e: 'el', v: victim.id, k: killer ? killer.id : -1, how, pl: placement, n: g.combat.aliveCount, kk: killer ? killer.kills : 0 });
   }
 
+  /**
+   * A remote's first state out of the bus: its position must be near where the Drop Bus is
+   * at our current time. The client flies the bus on our clock (snapshot offset), so it
+   * lags by about one-way latency: allow speed * 0.8 s + 25 m along the route (lag plus
+   * the jump's momentum and the state interval) and 40 m across it. Not before tOpen.
+   */
+  _busExitOk(s) {
+    const r = this.game.busRoute;
+    if (!r) return true;
+    const t = this.time;
+    if (t < r.tOpen - 0.5) return false;
+    const along = (s.x - r.ax) * r.dx + (s.z - r.az) * r.dz;
+    const across = Math.abs((s.x - r.ax) * r.dz - (s.z - r.az) * r.dx);
+    const now = r.speed * Math.min(t, r.tClose);
+    return across <= 40 && Math.abs(along - now) <= r.speed * 0.8 + 25 && s.y > r.y - 60;
+  }
+
   // ---------------------------------------------------------------- client input
 
   _onState(c, buf) {
@@ -470,9 +505,27 @@ export class HostSession {
     const dist = Math.hypot(s.x - a.pos.x, s.y - a.pos.y, s.z - a.pos.z);
     const cap = (MAX_SPEED[s.mode] || 20) * dt + 3;
     const fromBus = was === 'bus' && s.mode !== 'bus';
+    if (fromBus && !this._busExitOk(s)) {
+      // jumped from somewhere the bus never was (or is not now): leave from the bus instead,
+      // at the earliest legal exit point (an early jump would otherwise land them outside the
+      // map). Below they are accepted as jumped from here (mode freefall, no longer in the
+      // bus), and the client snaps to it via 'cor'.
+      const r = this.game.busRoute;
+      busPosAt(r, Math.max(r.tOpen, Math.min(this.time, r.tClose)), a.pos);
+      a.pos.y -= 1;
+      a.allowJump = false;
+      a.lastCorrect = this.time;
+      this.room.sendTo(a.id, { t: 'cor', x: a.pos.x, y: a.pos.y, z: a.pos.z });
+      s.x = a.pos.x;
+      s.y = a.pos.y;
+      s.z = a.pos.z;
+    }
     const b = this.game.world.bounds;
     const inBounds = s.x > b.minX - 5 && s.x < b.maxX + 5 && s.z > b.minZ - 5 && s.z < b.maxZ + 5;
-    if (inBounds && (fromBus || a.allowJump || dist <= cap || was === 'bus')) {
+    const route = this.game.busRoute;
+    if (s.mode === 'bus' && route) {
+      busPosAt(route, Math.min(this.time, route.tClose), a.pos); // riding: wherever the bus is
+    } else if (inBounds && (fromBus || a.allowJump || dist <= cap || was === 'bus')) {
       a.pos.set(s.x, s.y, s.z);
       a.allowJump = false;
     } else if (this.time - (a.lastCorrect || -9) > 0.5) {
@@ -614,6 +667,18 @@ export class HostSession {
         a.shield = Math.min(PLAYER.maxShield, a.shield + def.shield);
         if (g.fx) g.fx.aura(a.pos, def.shield > 0 ? 'shield' : 'heal', 1.2);
         this.events.push({ e: 'au', a: a.id, kind: def.shield > 0 ? 'shield' : 'heal' });
+        return;
+      }
+      case 'mv': {
+        // inventory screen: reorder two hotbar slots (the client already applied it locally)
+        const sa = m.a;
+        const sb = m.b;
+        if (!Number.isInteger(sa) || !Number.isInteger(sb) || sa < 0 || sb < 0 || sa > 4 || sb > 4) return;
+        // same rules as Game.swapSlots: not from the bus / mid-skydive, not while reloading
+        // (the client's last state packet says so). A refusal still bumps a.ack, so the next
+        // inventory sync puts the client's optimistic swap back.
+        if (a.inBus || a.airborneDrop || a.netReloading) return;
+        if (inv.swap(sa, sb) && g.combat && g.combat.cancelBurst) g.combat.cancelBurst(a);
         return;
       }
       case 'fall': {

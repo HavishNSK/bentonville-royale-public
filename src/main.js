@@ -230,6 +230,15 @@ async function joinMultiplayer(code, name) {
         session = new ClientSession(conn, game); // queues match messages until begin()
         await ensureLoaded();
         if (mp !== me) return session.dispose(game);
+        // the host plays a different map file (one of us has a stale build): don't play on it.
+        // Hosts from before this check send no map id: allow.
+        if (msg.map && game.mapId && msg.map !== game.mapId) {
+          session.dispose(game);
+          game.combat.authoritative = true;
+          closeMultiplayer();
+          menus.showNotice('Your game files are out of date \u2014 refresh the page.');
+          return;
+        }
         game.net = session;
         game.startClientMatch(msg);
       } catch (err) {

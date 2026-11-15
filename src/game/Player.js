@@ -19,8 +19,9 @@ import * as THREE from 'three';
 import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, clamp, damp, TAU, weaponStats } from '../core/config.js';
 
 const PIECE_ACTIONS = { buildWall: 'wall', buildFloor: 'floor', buildRamp: 'ramp', buildCone: 'cone' };
-const FREEFALL_SPEED = 38;
-const DEPLOY_HEIGHT = 55;
+export const FREEFALL_SPEED = 38;
+export const DEPLOY_HEIGHT = 55;
+export const FREEFALL_ACROSS = 22; // m/s sideways while skydiving
 
 const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
@@ -193,7 +194,7 @@ export class Player {
         this.mode = 'glide';
         g.sfx.play('jump', { volume: 0.6 });
       }
-      const hs = this.mode === 'glide' ? PLAYER.glideSpeed : 14;
+      const hs = this.mode === 'glide' ? PLAYER.glideSpeed : FREEFALL_ACROSS;
       const fall = this.mode === 'glide' ? PLAYER.glideFallSpeed : FREEFALL_SPEED;
       v.x = damp(v.x, wx * hs, 3, dt);
       v.z = damp(v.z, wz * hs, 3, dt);

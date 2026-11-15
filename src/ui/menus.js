@@ -16,7 +16,7 @@
 //   menus.setSettings(settings)       // update the shown settings without firing onSettings
 //   menus.showTitle() / showSettings(from) / showLoading(pct, label) / showPause()
 //   menus.showResult({ victory, placement, kills, total, time, killer })
-//   menus.showDropBanner(on, secondsLeft, zoneLabel)
+//   menus.showDropBanner(on, secondsLeft, zoneLabel, { title, sub }?)  // Drop Bus banner
 //   menus.hideAll()
 
 import './hud.css';
@@ -34,6 +34,7 @@ const TIPS = [
   'The storm hurts more every phase. Watch the timer in the top left.',
   'Chests glow and hum. Listen for them inside buildings.',
   (k) => `Hold ${k('aim')} to aim down sights for tighter shots.`,
+  (k) => `Press ${k('inventory')} to open your inventory, then drag guns and heals to reorder your hotbar.`,
   'Headshots deal bonus damage with every weapon.',
 ];
 
@@ -248,8 +249,8 @@ export function createMenus(root, opts = {}) {
     'div',
     'mn-drop',
     `<div class="mn-drop-time br-ol-xl" data-ref="t">15</div>
-     <div class="mn-drop-text"><b class="br-ol">CHOOSE YOUR DROP</b><span data-ref="zone"></span>
-     <span>Click the map to move your marker &middot; <kbd class="br-key">SPACE</kbd> to jump</span></div>`
+     <div class="mn-drop-text"><b class="br-ol" data-ref="title">[SPACE] Jump from the Drop Bus</b><span data-ref="zone"></span>
+     <span data-ref="sub">Seconds until the bus leaves the map</span></div>`
   );
   wrap.appendChild(banner);
   const D = {};
@@ -579,13 +580,20 @@ export function createMenus(root, opts = {}) {
       if (r.hostNote) R.sub.textContent += ' ' + r.hostNote;
       show(result, false);
     },
-    showDropBanner(on, secondsLeft, zone) {
+    showDropBanner(on, secondsLeft, zone, text) {
       banner.classList.toggle('is-on', !!on);
       // lets the full map and the hotbar make room for the banner (menus.css)
       document.documentElement.classList.toggle('br-dropping', !!on);
       if (on) {
-        D.t.textContent = String(Math.max(0, Math.ceil(secondsLeft)));
-        D.zone.textContent = zone ? `Storm forming near ${zone}` : '';
+        // called every frame during the drop: only touch the DOM when something changed
+        const set = (el, v) => {
+          if (el.textContent !== v) el.textContent = v;
+        };
+        set(D.t, String(Math.max(0, Math.ceil(secondsLeft))));
+        set(D.zone, zone ? `Storm forming near ${zone}` : '');
+        D.zone.hidden = !zone;
+        if (text && text.title) set(D.title, text.title);
+        if (text && text.sub) set(D.sub, text.sub);
       }
     },
     hideAll() {

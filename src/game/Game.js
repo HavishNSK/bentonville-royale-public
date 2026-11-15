@@ -1,5 +1,9 @@
 // BENTONVILLE ROYALE — the match: loading, drop phase, play, end, render loop.
 //
+// Drop phase: everyone rides the Drop Bus (src/game/DropBus.js) across the map on a
+// route derived from the match seed; the jump action leaves it at its current position,
+// and anyone still aboard when it reaches the far edge is ejected.
+//
 //   const game = new Game({ canvas, uiRoot, menus, settings });
 //   await game.load(onProgress)      // map, models, world meshes (once)
 //   game.startMatch()                // drop phase -> play -> over
@@ -26,6 +30,7 @@ import { Effects } from '../render/Effects.js';
 import { Post } from '../render/Post.js';
 import { sfx } from '../audio/Sfx.js';
 import { buildHud } from '../ui/hud.js';
+import { createInventoryPanel } from '../ui/inventoryPanel.js';
 import { Minimap } from '../ui/Minimap.js';
 import { CharacterKit, Character } from './Character.js';
 import { Combat } from './Combat.js';
@@ -36,8 +41,9 @@ import * as InvMod from './Inventory.js';
 import * as StructMod from './Structures.js';
 import * as BotsMod from './Bots.js';
 import { createFpsMeter } from '../ui/fpsMeter.js';
+import { planBusRoute, makeRoute, routeWire, busPosAt, planBotTargets, DropBusMesh } from './DropBus.js';
 
-const DROP_SECONDS = 15;
+const BUS_CAM_DIST = 34; // third-person distance behind the Drop Bus
 const DEATH_SCREEN_DELAY = 3.5;
 const WIN_SCREEN_DELAY = 3;
 
@@ -105,6 +111,7 @@ export class Game {
     this.sfx = sfx;
     this.errors = [];
     this.net = null; // HostSession | ClientSession while in a multiplayer match
+    this.inventoryOpen = false; // inventory screen (pointer unlocked, no pause)
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
@@ -122,7 +129,7 @@ export class Game {
     this.input.setBindings(this.settings.bindings); // remappable actions (src/ui/settings.js)
     this._wasLocked = false;
     canvas.addEventListener('click', () => {
-      if (this.state === 'play' && !this.paused) this.input.lock();
+      if ((this.state === 'play' || this.state === 'drop') && !this.paused) this.input.lock();
     });
 
     window.addEventListener('resize', () => this._resize());
@@ -178,7 +185,11 @@ export class Game {
     const mb = mapData && mapData.meta && mapData.meta.bounds;
     if (mb && this.hud.setFullMapAspect) this.hud.setFullMapAspect((mb.maxX - mb.minX) / (mb.maxZ - mb.minZ));
     this.minimap = new Minimap({ mapData, miniCanvas: this.hud.getMinimapCanvas(), fullCanvas: this.hud.getFullMapCanvas() });
-    this._wireFullMapClicks();
+    this.invPanel = createInventoryPanel(this.hud.el, {
+      onSwap: (a, b, expect) => this.swapSlots(a, b, expect),
+      onSelect: (i) => this._selectSlot(i),
+    });
+    this.invPanel.setKeyLabels((a) => this.input.label(a));
 
     const Structures = StructMod.Structures;
     this.structures = Structures ? new Structures({ scene: this.scene, world: this.world, fx: this.fx, sfx }) : null;
@@ -213,6 +224,10 @@ export class Game {
       ? new BotsCls({ scene: this.scene, world: this.world, kits: botKits, weaponModels: weaponScenes, loot: this.loot, structures: this.structures, combat: this.combat, fx: this.fx, sfx })
       : new NullBots();
     this.bots.dropLootOnDeath = false; // Game drops every actor's inventory in _onEliminate
+    this.dropBus = new DropBusMesh();
+    this.scene.add(this.dropBus.root);
+    this.busRoute = null;
+    this.busT = 0;
 
     this.applySettings(this.settings);
     P(1, 'Ready');
@@ -246,7 +261,8 @@ export class Game {
     this.fx.clear();
     this.hud.clearTransient();
 
-    // storm, centred toward a random drop zone
+    // storm, centred toward a random POI (the opening storm is dormant and covers the map;
+    // nobody picks a drop spot any more, the Drop Bus decides where people can land)
     const zone = DROP_ZONES[Math.floor(rng() * DROP_ZONES.length)];
     const lm = this.world.landmarks[zone.key] || { x: 0, z: 0 };
     this.storm.reset(rng, { x: lm.x, z: lm.z });
@@ -262,12 +278,9 @@ export class Game {
     p.god = p.invulnerable = freeBuild; // free build: nothing can end the session but Leave
     if (freeBuild) this._refillMats();
     this.combat.register(p);
-    this.dropMarker = { x: lm.x, z: lm.z };
-    p.pos.set(lm.x, PLAYER.dropHeight, lm.z);
-    p.heading = 0;
-    p.pitch = -0.6;
-    p.mode = 'bus';
-    if (p.character) p.character.root.visible = false;
+    // canonical route: exactly what a multiplayer host sends (routeWire rounds), so the host
+    // simulates and validates the same geometry / tOpen / tClose its clients rebuild
+    this._boardBus(makeRoute(routeWire(planBusRoute(seed, this.world.bounds))));
 
     // bots (multiplayer host: remote humans take slots first; see HostSession.prepareMatch)
     const net = this.net && this.net.isHost ? this.net : null;
@@ -280,18 +293,10 @@ export class Game {
     }
     this.bots.clear();
     const names = botNames(botCount, rng);
-    const dropPoints = [];
-    for (let i = 0; i < botCount; i++) {
-      const z = DROP_ZONES[Math.floor(rng() * DROP_ZONES.length)];
-      const l = this.world.landmarks[z.key] || lm;
-      // compact map: bots spread over every POI (the dormant opening storm covers the whole map)
-      const pt = l
-        ? this.world.randomOpenPoint(rng, l.x, l.z, clamp((l.r || 150) * 1.2, 120, 320))
-        : this.world.randomOpenPoint(rng, this.storm.cx, this.storm.cz, STORM.startRadius * 0.7);
-      dropPoints.push({ x: pt.x, z: pt.z });
-    }
+    // bots ride the bus too: landing spots spread over POIs and open ground, busier near the route
+    const dropPoints = planBotTargets(this.busRoute, this.world, rng, botCount);
     try {
-      this.bots.spawn(botCount, rng, { names, difficulty: this.settings.difficulty, dropPoints, launchWindow: DROP_SECONDS, ...spawnOpts });
+      this.bots.spawn(botCount, rng, { names, difficulty: this.settings.difficulty, dropPoints, bus: this.busRoute, ...spawnOpts });
     } catch (err) {
       this._error('bots.spawn', err);
     }
@@ -302,21 +307,78 @@ export class Game {
       return;
     }
 
-    this.state = 'drop';
-    this.dropLeft = DROP_SECONDS;
-    this.hud.setVisible(true);
-    this.hud.showFullMap(true);
-    this._setFullMapInteractive(true);
-    this.hud.announce('PICK YOUR DROP', 'Click the map, then press SPACE to jump', 4000);
-    this.menus.hideAll();
-    this.menus.showDropBanner(true, this.dropLeft, zone.label);
-    sfx.stopMusic();
+    this._enterBusPhase();
     if (net) net.matchStarted(this);
+  }
+
+  /**
+   * Identity of the loaded map file (multiplayer start check): meta.generated, else a short
+   * hash of meta.composition. null before the map loads or when it carries neither.
+   */
+  get mapId() {
+    const meta = this.mapData && this.mapData.meta;
+    if (!meta) return null;
+    if (meta.generated) return String(meta.generated);
+    if (!meta.composition) return null;
+    const str = JSON.stringify(meta.composition);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
+    return 'c' + (h >>> 0).toString(16);
+  }
+
+  /** Puts the local player aboard the Drop Bus flying `route`. */
+  _boardBus(route) {
+    const p = this.player;
+    this.busRoute = route;
+    this.busT = 0;
+    this.dropMarker = null;
+    busPosAt(route, 0, p.pos);
+    p.vel.set(0, 0, 0);
+    p.heading = route.heading;
+    p.pitch = -0.3;
+    p.mode = 'bus';
+    p.inBus = true;
+    if (p.character) p.character.root.visible = false;
+  }
+
+  /** Drop phase UI: third-person bus view, M shows the route, SPACE jumps. */
+  _enterBusPhase() {
+    this.state = 'drop';
+    this.fullMapOpen = false;
+    this.hud.setVisible(true);
+    this.hud.showFullMap(false);
+    this._setFullMapInteractive(false);
+    const jumpKey = this.input.label('jump') || 'SPACE';
+    this.hud.announce('ALL ABOARD THE DROP BUS', `[${jumpKey}] to jump \u00b7 [${this.input.label('map') || 'M'}] for the route`, 4000);
+    this.menus.hideAll();
+    this._showBusBanner();
+    sfx.stopMusic();
+    // the bus hum: the storm loop's low rumble, quietly (stormOn is false during the drop)
+    sfx.startLoop('storm_wind');
+    sfx.setLoopGain('storm_wind', 0.28);
+    this.input.lock();
+  }
+
+  /** Seconds until the Drop Bus leaves the map (auto-eject). */
+  get busLeft() {
+    return this.busRoute ? Math.max(0, this.busRoute.tClose - this.busT) : 0;
+  }
+
+  _showBusBanner() {
+    const r = this.busRoute;
+    const waiting = r && this.busT < r.tOpen;
+    this.menus.showDropBanner(true, this.busLeft, null, {
+      title: `[${this.input.label('jump') || 'SPACE'}] Jump from the Drop Bus`,
+      sub: waiting ? 'Approaching the map\u2026' : 'Seconds until the bus leaves the map',
+    });
   }
 
   /** Free build: skip the bus and stand on open ground near the landmark. */
   _startFreeBuild(lm) {
     const p = this.player;
+    this.busRoute = null; // no Drop Bus in the sandbox
+    p.inBus = false;
+    if (this.dropBus) this.dropBus.root.visible = false;
     let x = lm.x;
     let z = lm.z;
     for (let i = 0; i < 40; i++) {
@@ -399,26 +461,31 @@ export class Game {
     p.id = start.you;
     p.team = start.you;
     this.combat.register(p);
-    const m = start.marker || lm;
-    this.dropMarker = { x: m.x, z: m.z };
-    p.pos.set(m.x, PLAYER.dropHeight, m.z);
-    p.heading = 0;
-    p.pitch = -0.6;
-    p.mode = 'bus';
-    if (p.character) p.character.root.visible = false;
+    // the host's route when it sent one, else the same route derived from the shared seed
+    this._boardBus(start.bus ? makeRoute(start.bus) : planBusRoute(start.seed, this.world.bounds));
 
     net.begin(this, start);
     this.totalActors = start.total;
+    this._enterBusPhase();
+  }
 
-    this.state = 'drop';
-    this.dropLeft = DROP_SECONDS;
-    this.hud.setVisible(true);
-    this.hud.showFullMap(true);
-    this._setFullMapInteractive(true);
-    this.hud.announce('PICK YOUR DROP', 'Click the map, then press SPACE to jump', 4000);
-    this.menus.hideAll();
-    this.menus.showDropBanner(true, this.dropLeft, zone.label);
-    sfx.stopMusic();
+  /** Drop Bus clock: the host's match clock on a client (once snapshots arrive), else local. */
+  _tickBusClock(dt) {
+    const net = this.net;
+    if (net && net.isClient && net.offset != null) {
+      const ht = performance.now() / 1000 + net.offset;
+      if (Number.isFinite(ht)) {
+        // follow the host clock: snap on a big error (first offset, re-estimate), else ease
+        // toward it (small decreases allowed, so a lowered offset estimate is honoured)
+        if (Math.abs(ht - this.busT) > 0.75) this.busT = ht;
+        else {
+          this.busT += dt;
+          this.busT += (ht - this.busT) * (1 - Math.exp(-5 * dt));
+        }
+        return;
+      }
+    }
+    this.busT += dt;
   }
 
   /** Multiplayer client: the host says we were eliminated. */
@@ -448,21 +515,36 @@ export class Game {
     if (this.player.character) this.player.character.emote(true);
   }
 
-  /** Leave the bus at the marker. */
-  jump() {
-    if (this.state !== 'drop') return;
+  /**
+   * Leave the Drop Bus where it is now. Refused before the bus is over the map unless
+   * `force` (auto-eject, QA). `at` {x, z}: QA override of the exit point.
+   */
+  jump(force = false, at = null) {
+    if (this.state !== 'drop') return false;
+    const r = this.busRoute;
+    // a client's bus clock can run up to ~0.75 s ahead of the host's, which accepts exits from
+    // tOpen - 0.5: wait a beat longer so an honest jump is never corrected
+    const open = r ? r.tOpen + (this.net && this.net.isClient ? 0.3 : 0) : 0;
+    if (!force && r && this.busT < open) return false;
     const p = this.player;
-    const m = this.dropMarker;
-    p.spawnDrop(m.x, m.z);
+    const bp = r ? busPosAt(r, Math.min(this.busT, r.tClose)) : { x: p.pos.x, y: PLAYER.dropHeight, z: p.pos.z };
+    const x = at ? at.x : bp.x;
+    const z = at ? at.z : bp.z;
+    p.spawnDrop(x, z, bp.y - 1);
+    if (r && !at) p.vel.set(r.dx * 8, 0, r.dz * 8); // a little of the bus's momentum
+    p.inBus = false;
     if (p.character) p.character.root.visible = true;
     this.state = 'play';
+    this.fullMapOpen = false;
     this.hud.showFullMap(false);
     this._setFullMapInteractive(false);
     this.menus.showDropBanner(false);
+    sfx.stopLoop('storm_wind'); // the bus hum
     this.hud.announce('DROP!', 'SPACE opens your glider early', 2200);
     sfx.play('zone_enter', { volume: 0.6 });
     sfx.startLoop('glide_wind');
-    this.input.lock();
+    if (!this.paused) this.input.lock(); // multiplayer auto-eject under the pause menu: keep the menu
+    return true;
   }
 
   pause(on) {
@@ -470,12 +552,13 @@ export class Game {
     if (on === this.paused) return;
     this.paused = on;
     if (on) {
+      this.closeInventory(false);
       this.input.unlock();
       this.input.releaseAll();
       this.menus.showPause();
     } else {
       this.menus.hideAll();
-      if (this.state === 'drop') this.menus.showDropBanner(true, this.dropLeft, this.dropZone.label);
+      if (this.state === 'drop') this._showBusBanner();
       this.input.lock();
     }
   }
@@ -487,6 +570,7 @@ export class Game {
       this.net = null;
       this.combat.authoritative = true;
     }
+    this.closeInventory(false);
     this.state = 'menu';
     this.paused = false;
     this.input.unlock();
@@ -502,6 +586,7 @@ export class Game {
 
   _endMatch(victory) {
     if (this.state === 'over') return;
+    this.closeInventory(false);
     this.state = 'over';
     const placement = victory ? 1 : this._deathPlacement || this.combat.aliveCount + 1;
     this.result = { victory, placement, kills: this.player.kills, total: this.totalActors, time: this.matchTime, killer: this.player.lastKillerName || null };
@@ -601,8 +686,13 @@ export class Game {
       return;
     }
 
+    input.inMatch = this.state === 'play' && !this.paused;
+    this._inventoryInput(input);
     if (input.hit('Escape') && !input.locked && (this.state === 'play' || this.state === 'drop')) this.pause(!this.paused);
-    if (input.actionHit('map') && this.state === 'play' && !this.paused) this.fullMapOpen = !this.fullMapOpen;
+    if (input.actionHit('map') && (this.state === 'play' || this.state === 'drop') && !this.paused) {
+      this.fullMapOpen = !this.fullMapOpen;
+      if (this.fullMapOpen) this.closeInventory();
+    }
 
     // a multiplayer match keeps running under the pause menu
     const live = (!this.paused || !!this.net) && (this.state === 'drop' || this.state === 'play' || this.state === 'over');
@@ -617,14 +707,25 @@ export class Game {
     const input = this.paused ? NO_INPUT : this.input;
     const client = !!(this.net && this.net.isClient);
 
+    let leftBus = false;
+    // the Drop Bus clock runs all match long: bots (and remote humans) leave it after we do
+    if (this.busRoute) this._tickBusClock(dt);
     if (this.state === 'drop') {
-      this.dropLeft -= dt;
-      this.menus.showDropBanner(true, this.dropLeft, this.dropZone.label);
-      if ((input.actionHit('jump') && !this.paused) || this.dropLeft <= 0) this.jump();
-      // slowly orbit the camera above the marker
-      const m = this.dropMarker;
-      p.pos.set(m.x, PLAYER.dropHeight, m.z);
-      p.heading += dt * 0.05;
+      const r = this.busRoute;
+      if (!r) {
+        this.jump(true); // no route (should not happen): drop straight in rather than crash every frame
+        return;
+      }
+      // ride along: the player sits in the bus (hidden), mouse look orbits the camera
+      busPosAt(r, Math.min(this.busT, r.tClose), p.pos);
+      const sens = (this.settings.sensitivity || 1) * 0.0022;
+      p.heading = (((p.heading + input.dx * sens) % TAU) + TAU) % TAU;
+      p.pitch = clamp(p.pitch - input.dy * sens * (this.settings.invertY ? -1 : 1), -1.25, 0.45);
+      this._showBusBanner();
+      if (this.busT >= r.tClose) {
+        leftBus = this.jump(true);
+        this.hud.announce('EJECTED', 'The Drop Bus left the map', 2200);
+      } else if (input.actionHit('jump') && !this.paused) leftBus = this.jump();
     } else {
       this.matchTime += dt;
       if (!client && !this.freeBuild) this.storm.update(dt); // free build: storm stays dormant
@@ -634,7 +735,8 @@ export class Game {
     if (this.state === 'play' || this.state === 'over') {
       if (p.alive) {
         const wasDrop = p.airborneDrop;
-        p.update(dt, this.state === 'play' ? input : NO_INPUT, this);
+        // the frame we leave the bus, the same jump press must not also open the glider
+        p.update(dt, this.state === 'play' && !leftBus ? input : NO_INPUT, this);
         if (wasDrop && !p.airborneDrop) sfx.stopLoop('glide_wind');
       } else {
         p.update(dt, NO_INPUT, this);
@@ -644,7 +746,7 @@ export class Game {
 
     if (!client) {
       try {
-        this.bots.update(dt, { player: p, storm: this.storm, time: this.time });
+        this.bots.update(dt, { player: p, storm: this.storm, time: this.time, busTime: this.busT });
       } catch (err) {
         this._error('bots.update', err);
       }
@@ -702,9 +804,9 @@ export class Game {
 
     // camera
     if (this.state === 'drop') {
-      const m = this.dropMarker;
-      _v.set(m.x, PLAYER.dropHeight * 0.6, m.z);
-      placeOrbitCamera(cam, null, _v, p.heading, -0.75, 220, 0, 0);
+      // third person behind the Drop Bus
+      _v.set(p.pos.x, p.pos.y + 6, p.pos.z);
+      placeOrbitCamera(cam, null, _v, p.heading, p.pitch, BUS_CAM_DIST, 0, 0);
     } else if (inMatch) {
       if (!p.alive && this.spectating) {
         const t = this.spectating;
@@ -717,6 +819,9 @@ export class Game {
         placeOrbitCamera(cam, this.world, _v, this._specYaw, -0.5, 8, 0);
       } else p.updateCamera(cam, dt, this.world, this.settings.fov || CAMERA.fov);
     }
+
+    // the Drop Bus keeps flying its route after everyone has jumped
+    if (this.dropBus) this.dropBus.update(this.busRoute, this.busT, dt, inMatch && !this.freeBuild && !!this.busRoute);
 
     // world culling a few times a second
     this._cullT = (this._cullT || 0) - dt;
@@ -754,11 +859,13 @@ export class Game {
     hud.setShield(p.shield, PLAYER.maxShield);
     hud.setMaterials(inv.mats, p.buildMat);
     hud.setHotbar(inv.hotbar(), p.buildPiece ? -1 : inv.selected);
+    if (this.inventoryOpen) this._updateInventoryPanel();
     hud.setBuildMode(p.buildPiece);
     const rl = p.reloadT > 0 ? 1 - p.reloadT / p.reloadTotal : 0;
     hud.setWeapon(p.buildPiece ? null : inv.weaponHud ? inv.weaponHud(rl) : null);
     const kind = p.buildPiece ? 'build' : inv.current() && inv.current().type === 'weapon' ? 'gun' : 'pickaxe';
     hud.setCrosshair({ spread01: clamp(p.computeSpread() / 0.06, 0, 1), hit: false, kind });
+    hud.el.classList.toggle('is-onbus', this.state === 'drop'); // no aiming UI while riding the Drop Bus
     const netAlive = this.net && this.net.aliveCount;
     hud.setCounts({ alive: netAlive != null ? netAlive : this.combat.aliveCount, eliminations: p.kills });
     hud.setCompass(((p.heading * 180) / Math.PI + 360) % 360);
@@ -797,15 +904,18 @@ export class Game {
     } else hud.setObjectBar(null);
 
     // minimap
-    const fullOpen = this.state === 'drop' || (this.state === 'play' && !!this.fullMapOpen);
-    if (this.state === 'play') hud.showFullMap(fullOpen);
+    const fullOpen = (this.state === 'drop' || this.state === 'play') && !!this.fullMapOpen;
+    if (this.state === 'play' || this.state === 'drop') hud.showFullMap(fullOpen);
     const blips = this.loot ? this.loot.blips() : [];
     this.minimap.update({
       player: { x: p.pos.x, z: p.pos.z, heading: p.heading },
       // dormant opening storm / free build: no next ring or guide line (nextR < 0 hides them)
       storm: s.dormant || this.freeBuild ? { cx: s.cx, cz: s.cz, r: s.r, nextCx: s.cx, nextCz: s.cz, nextR: -1 } : this.state === 'drop' ? { cx: s.cx, cz: s.cz, r: s.r, nextCx: s.nextCx, nextCz: s.nextCz, nextR: s.nextR } : s,
       fullOpen,
-      marker: this.state === 'drop' ? this.dropMarker : null,
+      marker: null,
+      // the Drop Bus flight line and the bus itself, while anyone can still ride it
+      route: this.state === 'drop' && this.busRoute ? this.busRoute : null,
+      bus: this.state === 'drop' && this.busRoute ? { x: p.pos.x, z: p.pos.z, heading: this.busRoute.heading } : null,
       blips,
     });
   }
@@ -832,6 +942,7 @@ export class Game {
     if (typeof document !== 'undefined') createFpsMeter(document.body).setVisible(!!this.settings.showFps); // shared with the settings screen
     if (this.input) this.input.setBindings(this.settings.bindings);
     if (this.hud && this.hud.setKeyLabels && this.input) this.hud.setKeyLabels((a) => this.input.label(a));
+    if (this.invPanel && this.input) this.invPanel.setKeyLabels((a) => this.input.label(a));
     this._applyPixelRatio();
     if (this.atmosphere && this.atmosphere.quality !== this.settings.quality) this.atmosphere.setQuality(this.settings.quality);
     if (this.fx && this.fx.quality !== this.settings.quality) this.fx.setQuality(this.settings.quality);
@@ -861,34 +972,125 @@ export class Game {
   }
 
   _onLockChange(locked) {
-    if (locked) this._wasLocked = true;
-    else if (this._wasLocked && this.state === 'play' && !this.paused) this.pause(true);
+    if (locked) {
+      this._wasLocked = true;
+      if (this.inventoryOpen) this.closeInventory(false); // something re-grabbed the pointer
+    } else if (this._wasLocked && (this.state === 'play' || this.state === 'drop') && !this.paused && !this.inventoryOpen) this.pause(true);
   }
 
-  _wireFullMapClicks() {
-    const c = this.hud.getFullMapCanvas();
-    c.addEventListener('pointerdown', (e) => {
-      if (this.state !== 'drop') return;
-      const w = this.minimap.fullClientToWorld(e.clientX, e.clientY);
-      if (w && w.inBounds) {
-        this.dropMarker = this.clampDropPoint(w.x, w.z);
-        sfx.play('ui_click');
+  // ---------------------------------------------------------------- inventory screen
+
+  _canOpenInventory() {
+    const p = this.player;
+    return this.state === 'play' && !this.paused && !!p && p.alive && !this._winPending;
+  }
+
+  /** Opens the inventory: frees the mouse for drag & drop without opening the pause menu. */
+  openInventory() {
+    if (this.inventoryOpen || !this._canOpenInventory() || !this.invPanel) return false;
+    this.inventoryOpen = true; // set before unlock(): _onLockChange must not pause
+    this.fullMapOpen = false;
+    this.input.trap = true;
+    this.input.releaseMouse();
+    this.input.unlock();
+    this.invPanel.show(true);
+    this._updateInventoryPanel();
+    sfx.play('ui_click');
+    return true;
+  }
+
+  /** Closes the inventory; `relock` grabs the pointer again (needs the key press's user activation). */
+  closeInventory(relock = true) {
+    if (!this.inventoryOpen) return;
+    this.inventoryOpen = false;
+    this.input.trap = false;
+    if (this.invPanel) this.invPanel.show(false);
+    if (relock && this.state === 'play' && !this.paused) {
+      this.input.lock();
+      // Esc grants no user activation, so the browser may refuse the lock: say how to get it back
+      setTimeout(() => {
+        if (!this.input.locked && !this.inventoryOpen && this.state === 'play' && !this.paused && this.hud) this.hud.toast('Click to aim again');
+      }, 400);
+    }
+  }
+
+  /** Inventory keys, run before the pause / map / gameplay handling of this frame. */
+  _inventoryInput(input) {
+    const invCode = input.bindings.inventory;
+    if (!this.inventoryOpen) {
+      if (input.actionHit('inventory') && this._canOpenInventory()) {
+        this.openInventory();
+        input.consume(invCode);
       }
-    });
+      return;
+    }
+    if (!this._canOpenInventory()) {
+      this.closeInventory(false);
+      return;
+    }
+    if (input.hit('Escape') || input.actionHit('inventory')) {
+      // Escape closes the inventory, not the game: swallow it so the pause check below skips it
+      input.consume('Escape');
+      input.consume(invCode);
+      this.closeInventory(true);
+      return;
+    }
+    // hover a card + press a slot key: move the hovered item to that slot
+    const hov = this.invPanel.hovered();
+    if (hov >= 0) {
+      for (let i = 0; i < 5; i++) {
+        if (input.actionHit('slot' + (i + 1))) {
+          input.consume(input.bindings['slot' + (i + 1)]); // the player must not also select it
+          if (i !== hov) this.swapSlots(hov, i, [this.invPanel.shownItem(hov), this.invPanel.shownItem(i)]);
+        }
+      }
+    }
   }
 
   /**
-   * Drop points must lie inside the live circle (the dormant opening storm covers the whole
-   * compact map, so any POI is fine); a click farther away is pulled onto that circle.
+   * Swaps hotbar slots a and b (inventory screen). Refused while reloading or using a
+   * consumable (both track the item/slot in flight). Multiplayer clients apply it locally
+   * and send it to the host, which owns the inventory and syncs it back.
+   * `expect` ([item at a, item at b], raw slot objects as the panel showed them) refuses a
+   * stale swap: if a host sync replaced the slots since, the player was looking at old items.
    */
-  clampDropPoint(x, z) {
-    const s = this.storm;
-    const max = Math.max(STORM.startRadius, s.r || 0) * 0.98;
-    const dx = x - s.cx;
-    const dz = z - s.cz;
-    const d = Math.hypot(dx, dz);
-    if (d <= max) return { x, z };
-    return { x: s.cx + (dx / d) * max, z: s.cz + (dz / d) * max };
+  swapSlots(a, b, expect) {
+    const p = this.player;
+    if (!p || !p.alive || this.state !== 'play') return false;
+    if (p.reloadT > 0 || p.useT > 0) return false;
+    if (expect && (p.inventory.slots[a] !== (expect[0] || null) || p.inventory.slots[b] !== (expect[1] || null))) {
+      this._updateInventoryPanel();
+      return false;
+    }
+    if (!p.inventory.swap(a, b)) return false;
+    if (this.combat) this.combat.cancelBurst(p);
+    if (this.net && this.net.isClient && this.net.sendSwap) this.net.sendSwap(a, b);
+    sfx.play('ui_click');
+    this._updateInventoryPanel();
+    return true;
+  }
+
+  /** Clicking a card equips that slot (like pressing its slot key). */
+  _selectSlot(i) {
+    const p = this.player;
+    if (!p || !p.alive || this.state !== 'play') return;
+    p.buildPiece = null;
+    p.inventory.select(i);
+    this._updateInventoryPanel();
+  }
+
+  _updateInventoryPanel() {
+    if (!this.inventoryOpen || !this.invPanel) return;
+    const p = this.player;
+    const inv = p.inventory;
+    this.invPanel.update({
+      slots: inv.hotbar(),
+      items: inv.slots,
+      selected: p.buildPiece ? -1 : inv.selected,
+      ammo: inv.ammo,
+      mats: inv.mats,
+      lockedReason: p.reloadT > 0 ? 'Reloading: can\'t reorder' : p.useT > 0 ? 'Healing: can\'t reorder' : null,
+    });
   }
 
   _setFullMapInteractive(on) {
@@ -909,17 +1111,15 @@ export class Game {
   _installDebug() {
     const game = this;
     const debug = {
-      /** Drop the player now (optionally at x,z). */
+      /** Jump from the Drop Bus now (optionally at x,z instead of the bus's position). */
       drop(x, z) {
         if (game.state !== 'drop') return false;
-        if (x != null && z != null) game.dropMarker = { x, z };
-        game.jump();
-        return true;
+        return game.jump(true, x != null && z != null ? { x, z } : null);
       },
       /** Instantly land the player at (x, z) (or the drop marker). */
       teleport(x, z, y) {
         const p = game.player;
-        if (game.state === 'drop') game.jump();
+        if (game.state === 'drop') game.jump(true);
         if (x == null) {
           x = p.pos.x;
           z = p.pos.z;
@@ -957,7 +1157,7 @@ export class Game {
         return { ok: true, leftover: left, label: itemLabel(item) };
       },
       skipPhase() {
-        if (game.state === 'drop') return game.jump();
+        if (game.state === 'drop') return game.jump(true);
         if (game.storm.skip) game.storm.skip();
         return { phase: game.storm.phase, mode: game.storm.mode };
       },

@@ -20,6 +20,7 @@ export const ACTIONS = Object.freeze([
   { id: 'aim', label: 'Aim down sights', group: 'Combat', def: 'Mouse2' },
   { id: 'reload', label: 'Reload', group: 'Combat', def: 'KeyR' },
   { id: 'interact', label: 'Interact / loot', group: 'Combat', def: 'KeyE' },
+  { id: 'inventory', label: 'Inventory', group: 'Inventory', def: 'Tab' },
   { id: 'pickaxe', label: 'Pickaxe', group: 'Inventory', def: 'KeyF' },
   { id: 'slot1', label: 'Slot 1', group: 'Inventory', def: 'Digit1' },
   { id: 'slot2', label: 'Slot 2', group: 'Inventory', def: 'Digit2' },

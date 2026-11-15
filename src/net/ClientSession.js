@@ -235,6 +235,11 @@ export class ClientSession {
     this.action({ k: 'tp', x: p.x, y: p.y, z: p.z });
   }
 
+  /** Inventory screen reorder; the host swaps its copy and the next sync confirms it. */
+  sendSwap(a, b) {
+    this.action({ k: 'mv', a, b }, true);
+  }
+
   debugGive(what, rarity) {
     this.action({ k: 'dbg', give: what, rarity }, true);
   }
@@ -527,7 +532,9 @@ export class ClientSession {
     // host inventory, once it reflects every inventory action we sent
     const inv = this.pendingInv;
     const p = g.player;
-    if (inv && inv.ack >= this.lastInvSeq && !(p.reloadT > 0) && !(p.useT > 0)) {
+    // (held while the inventory screen has a card pressed/lifted, so a drop swaps what was dragged)
+    const dragging = g.inventoryOpen && g.invPanel && g.invPanel.isDragging && g.invPanel.isDragging();
+    if (inv && inv.ack >= this.lastInvSeq && !(p.reloadT > 0) && !(p.useT > 0) && !dragging) {
       this.pendingInv = null;
       const I = p.inventory;
       for (let i = 0; i < I.slots.length; i++) I.slots[i] = inv.s[i] ? { ...inv.s[i] } : null;

@@ -1,0 +1,362 @@
+/* BENTONVILLE ROYALE — inventory screen (src/ui/inventoryPanel.js).
+ * Lives inside .br-hud, so it shares the --u unit and --br-* tokens from hud.css.
+ * Only transform and opacity are animated. */
+
+.br-inv {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: calc(var(--u) * 16);
+  background: rgba(13, 9, 40, 0.58);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.14s ease-in,
+    visibility 0s linear 0.14s;
+}
+.br-inv.is-on {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 0.14s ease-out;
+}
+.br-inv.is-dragging,
+.br-inv.is-dragging * {
+  cursor: grabbing !important;
+}
+
+.br-inv-frame {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 14);
+  max-width: 100%;
+  padding: calc(var(--u) * 14) calc(var(--u) * 18) calc(var(--u) * 12);
+  border: calc(var(--u) * 4) solid var(--br-ink);
+  border-radius: calc(var(--u) * 24);
+  background: var(--br-cream);
+  box-shadow: 0 calc(var(--u) * 8) 0 rgba(13, 9, 40, 0.6);
+  color: var(--br-ink);
+  transform: scale(0.94);
+  transition: transform 0.22s var(--br-spring);
+}
+.br-inv.is-on .br-inv-frame {
+  transform: scale(1);
+}
+
+.br-inv-head {
+  display: flex;
+  align-items: baseline;
+  gap: calc(var(--u) * 12);
+  min-height: calc(var(--u) * 28);
+}
+.br-inv-title {
+  font-family: var(--br-display);
+  font-weight: 400;
+  font-size: calc(var(--u) * 26);
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+.br-inv-status {
+  margin-left: auto;
+  color: #c0392b;
+  font-size: calc(var(--u) * 13);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ---- slot cards ---- */
+.br-inv-slots {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: calc(var(--u) * 12);
+  padding-top: calc(var(--u) * 8);
+}
+.br-inv-card {
+  --rar: #57628c;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: calc(var(--u) * 124);
+  height: calc(var(--u) * 156);
+  padding: calc(var(--u) * 10) calc(var(--u) * 8) calc(var(--u) * 8);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 16);
+  background: radial-gradient(
+    circle at 50% 32%,
+    color-mix(in srgb, var(--rar) 62%, #fff) 0%,
+    var(--rar) 55%,
+    color-mix(in srgb, var(--rar) 66%, var(--br-ink)) 100%
+  );
+  box-shadow:
+    inset 0 calc(var(--u) * 2.5) 0 rgba(255, 255, 255, 0.35),
+    0 calc(var(--u) * 4) 0 var(--br-ink);
+  color: #fff;
+  cursor: grab;
+  touch-action: none;
+  transition:
+    transform 0.16s var(--br-spring),
+    opacity 0.12s ease-out;
+}
+.br-inv-card[data-rarity='common'] {
+  --rar: var(--br-common);
+}
+.br-inv-card[data-rarity='uncommon'] {
+  --rar: var(--br-uncommon);
+}
+.br-inv-card[data-rarity='rare'] {
+  --rar: var(--br-rare);
+}
+.br-inv-card[data-rarity='epic'] {
+  --rar: var(--br-epic);
+}
+.br-inv-card[data-rarity='legendary'] {
+  --rar: var(--br-legendary);
+}
+.br-inv-card.is-empty {
+  border-style: dashed;
+  border-color: rgba(21, 16, 58, 0.55);
+  background: rgba(21, 16, 58, 0.1);
+  box-shadow: none;
+  color: rgba(21, 16, 58, 0.55);
+  cursor: pointer;
+}
+@media (hover: hover) {
+  .br-inv-card:not(.is-empty):hover {
+    transform: translateY(calc(var(--u) * -3));
+  }
+}
+.br-inv-card.is-active {
+  border-color: #fff;
+  box-shadow:
+    inset 0 calc(var(--u) * 2.5) 0 rgba(255, 255, 255, 0.35),
+    0 0 0 calc(var(--u) * 3) var(--br-ink),
+    0 calc(var(--u) * 6) 0 calc(var(--u) * 1) var(--br-ink);
+}
+.br-inv-card.is-lifted {
+  opacity: 0.35;
+  transform: scale(0.94);
+}
+.br-inv-card.is-target {
+  transform: translateY(calc(var(--u) * -6)) scale(1.05);
+  outline: calc(var(--u) * 3) solid var(--br-sun);
+  outline-offset: calc(var(--u) * 3);
+}
+.br-inv.is-locked .br-inv-card:not(.is-empty) {
+  cursor: not-allowed;
+}
+
+.br-inv-key {
+  /* reuses .br-slot-key from hud.css for the keycap look */
+  left: calc(var(--u) * -8);
+  top: calc(var(--u) * -10);
+}
+.br-inv-card.is-active .br-inv-key {
+  background: var(--br-sun);
+}
+.br-inv-tag {
+  position: absolute;
+  top: calc(var(--u) * -10);
+  right: calc(var(--u) * -6);
+  padding: calc(var(--u) * 3) calc(var(--u) * 6) calc(var(--u) * 2);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: calc(var(--u) * 6);
+  background: var(--br-sun);
+  color: var(--br-ink);
+  font-family: var(--br-display);
+  font-weight: 400;
+  font-size: calc(var(--u) * 10);
+  letter-spacing: 0.06em;
+  line-height: 1;
+  visibility: hidden;
+}
+.br-inv-card.is-active .br-inv-tag {
+  visibility: visible;
+}
+
+.br-inv-ico {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  width: 100%;
+  min-height: 0;
+  pointer-events: none;
+}
+.br-inv-ico .br-ico {
+  width: calc(var(--u) * 58);
+  filter: drop-shadow(0 calc(var(--u) * 2) 0 rgba(21, 16, 58, 0.45));
+}
+.br-inv-ico .br-ico-wide {
+  width: calc(var(--u) * 100);
+  transform: rotate(-14deg);
+}
+.br-inv-name {
+  width: 100%;
+  overflow: hidden;
+  font-family: var(--br-display);
+  font-weight: 400;
+  font-size: calc(var(--u) * 14);
+  line-height: 1.1;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 calc(var(--u) * 1.5) 0 var(--br-ink);
+}
+.br-inv-card.is-empty .br-inv-name {
+  margin-bottom: auto;
+  font-size: calc(var(--u) * 13);
+  text-shadow: none;
+}
+.br-inv-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--u) * 4);
+  width: 100%;
+  min-height: calc(var(--u) * 16);
+  margin-top: calc(var(--u) * 4);
+  font-size: calc(var(--u) * 10);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-shadow: 0 calc(var(--u) * 1) 0 var(--br-ink);
+}
+.br-inv-num {
+  font-family: var(--br-display);
+  font-weight: 400;
+  font-size: calc(var(--u) * 12);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.br-inv-num.is-zero {
+  color: #ffb1a5;
+}
+
+/* drag ghost follows the pointer (positioned with transform only) */
+.br-inv-ghost {
+  --rar: #57628c;
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  width: calc(var(--u) * 96);
+  height: calc(var(--u) * 96);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 16);
+  background: var(--rar);
+  box-shadow: 0 calc(var(--u) * 10) calc(var(--u) * 14) rgba(13, 9, 40, 0.45);
+  pointer-events: none;
+}
+.br-inv-ghost[data-rarity='common'] {
+  --rar: var(--br-common);
+}
+.br-inv-ghost[data-rarity='uncommon'] {
+  --rar: var(--br-uncommon);
+}
+.br-inv-ghost[data-rarity='rare'] {
+  --rar: var(--br-rare);
+}
+.br-inv-ghost[data-rarity='epic'] {
+  --rar: var(--br-epic);
+}
+.br-inv-ghost[data-rarity='legendary'] {
+  --rar: var(--br-legendary);
+}
+.br-inv-ghost .br-ico {
+  width: calc(var(--u) * 52);
+}
+.br-inv-ghost .br-ico-wide {
+  width: calc(var(--u) * 84);
+  transform: rotate(-14deg);
+}
+
+/* ---- ammo + materials ---- */
+.br-inv-lower {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 12);
+}
+.br-inv-group {
+  display: grid;
+  flex: 1 1 calc(var(--u) * 240);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(var(--u) * 6);
+  padding: calc(var(--u) * 10);
+  border-radius: calc(var(--u) * 14);
+  background: rgba(21, 16, 58, 0.08);
+}
+.br-inv-sub {
+  grid-column: 1 / -1;
+  font-size: calc(var(--u) * 11);
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  opacity: 0.75;
+}
+.br-inv-res {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 6);
+  min-width: 0;
+  padding: calc(var(--u) * 5) calc(var(--u) * 8);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: calc(var(--u) * 10);
+  background: #fff;
+  font-size: calc(var(--u) * 12);
+  font-weight: 900;
+}
+.br-inv-res-ico .br-ico {
+  width: calc(var(--u) * 20);
+}
+.br-inv-res-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.br-inv-res-num {
+  font-family: var(--br-display);
+  font-weight: 400;
+  font-size: calc(var(--u) * 16);
+  line-height: 1;
+}
+.br-inv-res.is-zero {
+  opacity: 0.5;
+}
+
+.br-inv-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--u) * 7);
+  min-height: calc(var(--u) * 26);
+  font-size: calc(var(--u) * 12);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+/* aiming UI steps aside while the inventory is open */
+.br-hud.has-inventory .br-center,
+.br-hud.has-inventory .br-objbar,
+.br-hud.has-inventory .br-floats,
+.br-hud.has-inventory .br-prompt {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .br-inv-frame,
+  .br-inv.is-on .br-inv-frame,
+  .br-inv-card,
+  .br-inv-card:hover,
+  .br-inv-card.is-target,
+  .br-inv-card.is-lifted {
+    transform: none !important;
+    transition: none !important;
+  }
+}

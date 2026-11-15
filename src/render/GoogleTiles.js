@@ -521,6 +521,13 @@ export function createGoogleTilesController({ getGame, onFail } = {}) {
   }
 
   async function start(game) {
+    // A designed tile-pack map (meta.composition without a real-position core) has nothing
+    // where the real world is: the photorealistic tiles would be in the wrong place everywhere.
+    const comp = game.world && game.world.data && game.world.data.meta && game.world.data.meta.composition;
+    if (comp && !coreRect(game.world)) {
+      fail(new Error('this map layout is not at real-world positions'));
+      return;
+    }
     starting = true;
     status = 'loading';
     const gen = ++generation;

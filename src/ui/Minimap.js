@@ -23,6 +23,8 @@
  *       storm:  { cx, cz, r, nextCx, nextCz, nextR } | null,
  *       fullOpen: boolean,
  *       marker: { x, z } | null,
+ *       route:  { ax, az, bx, bz } | null,   // Drop Bus flight line (full map only)
+ *       bus:    { x, z, heading } | null,    // Drop Bus position on that line
  *       blips:  [{ x, z, kind }]      // optional; kind: 'chest' | 'loot' | 'enemy' | 'drop'
  *     }
  *   mm.fullCanvasToWorld(px, py)      // full-canvas backing-store pixel -> { x, z, inBounds }
@@ -75,6 +77,8 @@ const C = {
   player: '#ffffff',
   playerEdge: '#16202b',
   marker: '#ff4f86',
+  route: '#ffc21f',
+  routeDark: 'rgba(29, 42, 54, 0.8)',
 };
 // areas, drawn in this order (water last so ponds inside parks/woods stay visible)
 const AREA_KINDS = ['grass', 'park', 'garden', 'wood', 'pitch', 'parking', 'water'];
@@ -1350,8 +1354,13 @@ export class Minimap {
   _fullChanged(state) {
     const bh = this._blipHash(state.blips);
     const changed = this._snapshot(state, this._fSnap, 0.4 / this._fs, false);
-    if (changed || this._fullForce || bh !== this._fBlipHash || this._version !== this._fSnap[13]) {
+    const rt = state.route || null;
+    const bus = state.bus || null;
+    const busMoved = !!bus !== !!this._fBus || (bus && Math.hypot(bus.x - this._fBus.x, bus.z - this._fBus.z) > 0.4 / this._fs);
+    if (changed || this._fullForce || bh !== this._fBlipHash || this._version !== this._fSnap[13] || rt !== this._fRoute || busMoved) {
       this._snapshot(state, this._fSnap, 0, true);
+      this._fRoute = rt;
+      this._fBus = bus ? { x: bus.x, z: bus.z } : null;
       this._fBlipHash = bh;
       this._fSnap[13] = this._version;
       this._fullForce = false;
@@ -1736,6 +1745,72 @@ export class Minimap {
 
     // ---- labels, scale bar, north indicator
     if (this.ready && this._overlay) ctx.drawImage(this._overlay, 0, 0);
+
+    // ---- Drop Bus route (dashed flight line with direction chevrons) and the bus
+    const rt = state.route;
+    if (rt) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(mx, my, mw, mh);
+      ctx.clip();
+      const x0 = rt.ax * s + ox;
+      const y0 = rt.az * s + oz;
+      const x1 = rt.bx * s + ox;
+      const y1 = rt.bz * s + oz;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = C.routeDark;
+      ctx.lineWidth = 13 * k;
+      ctx.stroke();
+      ctx.setLineDash([24 * k, 12 * k]);
+      ctx.strokeStyle = C.route;
+      ctx.lineWidth = 7 * k;
+      ctx.stroke();
+      ctx.setLineDash(DASH_NONE);
+      // chevrons every ~90 px pointing along the flight
+      const len = Math.hypot(x1 - x0, y1 - y0) || 1;
+      const ux = (x1 - x0) / len;
+      const uy = (y1 - y0) / len;
+      const step = 140 * k;
+      const c = 11 * k;
+      ctx.lineWidth = 3 * k;
+      for (let d = step * 0.5; d < len; d += step) {
+        const cx = x0 + ux * d;
+        const cy = y0 + uy * d;
+        ctx.beginPath();
+        ctx.moveTo(cx - ux * c - uy * c, cy - uy * c + ux * c);
+        ctx.lineTo(cx, cy);
+        ctx.lineTo(cx - ux * c + uy * c, cy - uy * c - ux * c);
+        ctx.strokeStyle = C.routeDark;
+        ctx.lineWidth = 8 * k;
+        ctx.stroke();
+        ctx.strokeStyle = C.route;
+        ctx.lineWidth = 4 * k;
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    const bus = state.bus;
+    if (bus) {
+      // a little yellow bus body, nose along the heading
+      const bx = bus.x * s + ox;
+      const by = bus.z * s + oz;
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.rotate(+bus.heading || 0);
+      ctx.fillStyle = C.route;
+      ctx.strokeStyle = C.ink;
+      ctx.lineWidth = 5 * k;
+      ctx.beginPath();
+      ctx.rect(-18 * k, -34 * k, 36 * k, 68 * k);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = C.ink;
+      ctx.fillRect(-13 * k, -26 * k, 26 * k, 10 * k);
+      ctx.restore();
+    }
 
     // ---- blips
     const spr = this._fullSprites;

@@ -45,15 +45,22 @@ Imagery courtesy of USDA FSA and the U.S. Geological Survey.
 - Fetched: 2026-11-14T21:24:08.738Z
 
 <!-- compose-map:start (written by scripts/compose-map.mjs) -->
-## Map composition (positions outside downtown are not geographic)
+## Map composition (positions are not geographic)
 
 `public/data/bentonville-osm.json` is a compact, designed layout cut from the full
 OpenStreetMap extract (`data-raw/bentonville-osm-full.json`) by `scripts/compose-map.mjs`.
-Only the downtown core (game metres x -250..1723, z -1400..1450) is at its real position.
-The school campuses below are real-map cut-outs moved next to it; the countryside and
-connector roads in the gaps between them are invented, and everything else is left out.
+Each POI below is a real-map cut-out moved into a 3 x 3 grid of tiles; no position on the
+game map matches the real world. The 20 m streets between the tiles and around the
+outside are invented, and everything else is left out.
 
-- bentonville_west: source rectangle -8410, -1080, -7700, -240 moved by (7050, 646) m
-- bentonville_high: source rectangle 880, 2060, 1560, 2730 moved by (23, -210) m
-- Gap between each island and downtown: 400 m; map bounds -1480..1843 x -1520..2640
+- compton_gardens: source rectangle -69, -548.5, 261, -203.5 moved by (-406, 68.5) m
+- crystal_bridges: source rectangle 344, -1245.5, 594, -900.5 moved by (-469, 765.5) m
+- memorial_park: source rectangle 1329, -557.5, 1579, -212.5 moved by (-1184, 77.5) m
+- market_8th: source rectangle 695, 730, 1025, 960 moved by (-1170, -845) m
+- square: source rectangle -75, -105, 175, 125 moved by (-50, -10) m
+- momentary: source rectangle 445, 575, 695, 805 moved by (-300, -690) m
+- bentonville_west: source rectangle -8144, -672, -7814, -347 moved by (7669, 807) m
+- bentonville_high: source rectangle 1098, 2235.5, 1348, 2560.5 moved by (-1223, -2100.5) m
+- home_office: source rectangle 1341, 907.5, 1591, 1232.5 moved by (-1196, -772.5) m
+- Map bounds -499..419 x -504..484
 <!-- compose-map:end -->

@@ -52,9 +52,9 @@ export const LOOT = {
 
 // placement (spawnMatch): see the comment above Loot._interiorGrid
 const PLACE = {
-  indoor: { chest: 0.6, ammoBox: 0.35, item: 0.4 }, // share placed inside enterable buildings
+  indoor: { chest: 0.65, ammoBox: 0.4, item: 0.45 }, // share placed inside enterable buildings
   candidates: { chest: 14, ammoBox: 12, item: 8 }, // best-of-K (indoor passes try 2K)
-  poiMin: { chest: 4, ammoBox: 2, item: 6 }, // every drop zone gets at least this many spots
+  poiMin: { chest: 12, ammoBox: 5, item: 14 }, // every drop zone gets at least this many spots
   reachMargin: 450, // playable area fades out over this beyond the storm circle / drop-zone disks
   settledR: 120, // an enterable building within this = settled; else filler
   fillerDensity: 0.2, // relative loot density in woods / meadow filler
@@ -446,6 +446,13 @@ export class Loot {
     }
     const b = w.bounds;
     const inset = 20;
+    // Composed (compact) map: the dormant opening storm covers all of it and players can drop
+    // anywhere along the bus route, so every composed area gets full reach, not just the disks.
+    this._comp = undefined;
+    this._inComposed(0, 0);
+    if (this._comp) {
+      return { disks, whole: true, minX: b.minX + inset, maxX: b.maxX - inset, minZ: b.minZ + inset, maxZ: b.maxZ - inset };
+    }
     return {
       disks,
       minX: Math.max(minX, b.minX + inset),
@@ -458,8 +465,8 @@ export class Loot {
   /** reach(p) x settled(p) in [0, 1]; 0 = outside the playable area. */
   _weight(x, z) {
     const M = PLACE.reachMargin;
-    let reach = 0;
-    for (const d of this._play.disks) {
+    let reach = this._play.whole ? 1 : 0;
+    if (!reach) for (const d of this._play.disks) {
       const e = Math.sqrt((x - d.x) ** 2 + (z - d.z) ** 2) - d.r;
       const v = e <= 0 ? 1 : 1 - e / M;
       if (v > reach) reach = v;
@@ -482,9 +489,10 @@ export class Loot {
       const meta = this.world.data && this.world.data.meta;
       const comp = meta && meta.composition;
       c = null;
-      if (comp && comp.core && Array.isArray(comp.core.rect)) {
+      if (comp && ((comp.core && Array.isArray(comp.core.rect)) || Array.isArray(comp.tiles))) {
         const pad = 60;
-        const rects = [comp.core.rect, ...(comp.islands || []).map((i) => i.rect)]
+        // core + islands (the old layout) or the tile pack; connectors = island roads / gap streets
+        const rects = [comp.core && comp.core.rect, ...(comp.islands || []).map((i) => i.rect), ...(comp.tiles || []).map((t) => t.rect)]
           .filter((r) => Array.isArray(r) && r.length === 4)
           .map(([x0, z0, x1, z1]) => [Math.min(x0, x1) - pad, Math.min(z0, z1) - pad, Math.max(x0, x1) + pad, Math.max(z0, z1) + pad]);
         const roads = (comp.connectors || []).filter((s) => Array.isArray(s.from) && Array.isArray(s.to));
@@ -668,8 +676,9 @@ export class Loot {
   /** Most spots of `kind` one building may hold. */
   _cap(kind, b) {
     const a = b.area;
-    if (kind === 'chest') return a < 1500 ? 1 : a < 6000 ? 2 : a < 20000 ? 3 : 4;
-    if (kind === 'ammoBox') return a < 3000 ? 1 : 2;
+    // small houses 1, mid-size 2, big halls 3-6 (schools / Home Office)
+    if (kind === 'chest') return a < 800 ? 1 : a < 5000 ? 2 : a < 15000 ? 3 : 4 + Math.min(2, Math.floor(a / 30000));
+    if (kind === 'ammoBox') return a < 3000 ? 1 : a < 15000 ? 2 : 3;
     return a < 400 ? 1 : a < 2500 ? 2 : 3 + Math.min(3, Math.floor(a / 6000));
   }
 

@@ -19,15 +19,21 @@ export class Input {
     this.dy = 0;
     this.wheel = 0;
     this.enabled = true;
+    this.trap = false; // keep preventDefault on game keys (Tab, Space, bound keys) while unlocked
+    this.inMatch = false; // set by Game while a match is playable: the inventory key never reaches the page
     this.onLockChange = null;
     this.bindings = { ...DEFAULT_BINDINGS };
 
     this._down = (e) => {
-      if (e.repeat) return;
       if (!this.enabled) return;
+      // `trap`: an in-game overlay (inventory) has the unlocked pointer but still owns the keys.
+      // `inMatch`: the inventory key is always ours mid-match, even if pointer lock was refused
+      // (otherwise Tab would move browser focus onto a hidden menu button).
+      const ours = this.locked || this.trap;
+      if ((ours && (e.code === 'Space' || e.code === 'Tab' || e.code.startsWith('Arrow') || this._isBound(e.code))) || (this.inMatch && e.code === this.bindings.inventory)) e.preventDefault();
+      if (e.repeat) return;
       this.keys.add(e.code);
       this.pressed.add(e.code);
-      if (this.locked && (e.code === 'Space' || e.code === 'Tab' || e.code.startsWith('Arrow') || this._isBound(e.code))) e.preventDefault();
     };
     this._up = (e) => this.keys.delete(e.code);
     this._mdown = (e) => {
@@ -54,7 +60,10 @@ export class Input {
       if (this.locked) this.wheel += Math.sign(e.deltaY);
     };
     this._lock = () => {
-      if (!this.locked) this.releaseAll();
+      if (!this.locked) {
+        if (this.trap) this.releaseMouse(); // inventory open: keep walking, never keep firing
+        else this.releaseAll();
+      }
       if (this.onLockChange) this.onLockChange(this.locked);
     };
     this._blur = () => this.releaseAll();
@@ -127,6 +136,21 @@ export class Input {
   releaseAll() {
     this.keys.clear();
     this.buttons[0] = this.buttons[1] = this.buttons[2] = false;
+  }
+
+  /** Drops held mouse buttons only (held keys stay down). */
+  releaseMouse() {
+    for (let i = 0; i < 5; i++) {
+      this.keys.delete('Mouse' + i);
+      this.pressed.delete('Mouse' + i);
+    }
+    this.buttons[0] = this.buttons[1] = this.buttons[2] = false;
+    this.clicked[0] = this.clicked[1] = this.clicked[2] = false;
+  }
+
+  /** Swallows a key press for the rest of this frame (actionHit / hit return false). */
+  consume(code) {
+    if (code) this.pressed.delete(code);
   }
 
   endFrame() {

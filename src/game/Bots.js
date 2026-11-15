@@ -18,6 +18,9 @@
 // near dropPoints[i % n]) or landmark keys; idBase (first actor id, default 1);
 // loadout (passed to Inventory.reset); quality. Bots start gliding from
 // PLAYER.dropHeight (+0..30 m, 30-120 m from their landing spot) at spawn time.
+// opts.bus (a DropBus route): every bot rides the Drop Bus (inBus, hidden, untargetable)
+// and jumps where the bus passes closest to its landing spot; update() then reads the
+// bus clock from ctx.busTime (falls back to the bots' own clock).
 //
 // Behaviour: glide in -> loot (Loot.near/open/take) -> wander / rotate toward the next
 // storm circle (hurry when outside) -> engage targets seen via world.clearLine within
@@ -52,13 +55,15 @@ import {
   PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, RARITIES, DIFFICULTY, QUALITY,
   BOT_NAMES, DROP_ZONES, STORM, angleDelta, clamp, weaponStats,
 } from '../core/config.js';
+import { busPosAt, jumpTimeFor } from './DropBus.js';
 
 const EYE = PLAYER.eyeHeight;
+const _busPt = { x: 0, y: 0, z: 0 };
 const CHEST = 1.2;
 const TURN_RATE = 7; // rad/s
 const FOV_COS = Math.cos(1.25); // ~72 degrees either side
 const INTERACT = 2.0; // metres to open / take loot
-const LOOT_SCAN = 45; // metres
+const LOOT_SCAN = 70; // metres (chests sit ~100 m apart on average)
 const MEMORY = 4; // seconds a lost target is chased
 const STUCK_WINDOW = 1.4;
 const PLAN_BUDGET = 350; // A* expansions per frame (~0.3-0.6 ms)
@@ -206,8 +211,16 @@ export class Bots {
         if (this.scene) this.scene.add(ch.root);
       }
       const b = newBrain(actor, t, rng);
-      b.launchAt = win > 0 ? (win * (order[i] + 0.15 + rng() * 0.7)) / count : 0;
-      actor.inBus = b.launchAt > 0;
+      if (opts.bus) {
+        // Drop Bus: jump where the flight passes closest to the landing spot (+-0.6 s)
+        const r = opts.bus;
+        b.busRoute = r;
+        b.launchAt = clamp(jumpTimeFor(r, t.x, t.z) + (rng() - 0.5) * 1.2, r.tOpen, r.tClose);
+        actor.inBus = true;
+      } else {
+        b.launchAt = win > 0 ? (win * (order[i] + 0.15 + rng() * 0.7)) / count : 0;
+        actor.inBus = b.launchAt > 0;
+      }
       actor._bot = b;
       this.actors.push(actor);
       this.brains.push(b);
@@ -292,6 +305,7 @@ export class Bots {
     if (!(dt > 0)) return;
     dt = Math.min(dt, 0.1);
     this.time += dt;
+    const busTime = Number.isFinite(ctx.busTime) ? ctx.busTime : this.time;
     const player = ctx.player || null;
     const storm = ctx.storm || null;
     const viewer = ctx.viewer || (player && player.pos) || null;
@@ -348,11 +362,19 @@ export class Bots {
       }
       // still in the bus: not launched yet (hidden, frozen, not a target)
       if (a.inBus) {
-        if (this.time < b.launchAt) {
+        if (busTime < b.launchAt) {
           if (a.character) a.character.root.visible = false;
           continue;
         }
         a.inBus = false;
+        if (b.busRoute) {
+          // leave the bus where it is now, a little below it, facing the landing spot
+          busPosAt(b.busRoute, busTime, _busPt);
+          a.pos.set(_busPt.x, _busPt.y - 1 - this.rng() * 2, _busPt.z);
+          a.vel.set(b.busRoute.dx * 6, 0, b.busRoute.dz * 6);
+          a.heading = Math.atan2(b.dropX - a.pos.x, -(b.dropZ - a.pos.z));
+          if (a.character) a.character.root.position.copy(a.pos);
+        }
       }
       // damage detection without a hook
       const hp = a.health + a.shield;
@@ -944,6 +966,18 @@ export class Bots {
   _needRotate(b, storm) {
     if (!storm || storm.mode === 'done') return false;
     const a = b.actor;
+    // Phase 1 closes from a map-wide dormant circle over a long shrink: running for the far
+    // target straight away would skip looting entirely. Move only once the live edge gets close.
+    if ((storm.phaseIndex | 0) === 0) {
+      const p0 = storm.phases ? storm.phases[0] : null;
+      const left = storm.mode === 'waiting' ? storm.secondsLeft + (p0 ? p0.shrink : 0) : storm.secondsLeft;
+      const far = Math.hypot(a.pos.x - storm.nextCx, a.pos.z - storm.nextCz) - storm.nextR * 0.7;
+      if (far <= 0) return false;
+      // leave in time to reach the phase-1 circle by sprinting, with slack for fights/detours
+      if (far / PLAYER.sprintSpeed * 1.35 + 15 + b.caution * 20 > left) return true;
+      const edge = storm.r - Math.hypot(a.pos.x - storm.cx, a.pos.z - storm.cz);
+      return storm.mode !== 'waiting' && edge < (b.state === 'rotate' ? 220 : 120);
+    }
     const d = Math.hypot(a.pos.x - storm.nextCx, a.pos.z - storm.nextCz);
     // hysteresis: once rotating, keep going until comfortably inside
     const inside = storm.nextR * (b.state === 'rotate' ? 0.6 : 0.85) - d;
@@ -979,7 +1013,10 @@ export class Bots {
       if (Math.abs(p.y - a.pos.y) > 6) continue;
       if (storm && storm.isOutside(p.x, p.z)) continue;
       // late in a wait (or while shrinking) only loot inside the next circle
-      if (storm && (storm.mode !== 'waiting' || storm.secondsLeft < 45) &&
+      if (storm && (storm.phaseIndex | 0) === 0) {
+        // phase 1: anything comfortably inside the live (slowly closing) circle is fair game
+        if (Math.hypot(p.x - storm.cx, p.z - storm.cz) > storm.r - 140) continue;
+      } else if (storm && (storm.mode !== 'waiting' || storm.secondsLeft < 45) &&
           Math.hypot(p.x - storm.nextCx, p.z - storm.nextCz) > storm.nextR * 0.85) continue;
       if (r.kind === 'item' && !this._wants(inv, r.item)) continue;
       b.lootId = r.id;
