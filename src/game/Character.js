@@ -20,6 +20,7 @@ const LOCO_CLIP = { idle: 'Idle', run: 'Running_A', back: 'Walking_Backwards', l
 const UPPER_CLIP = { aim2: '2H_Ranged_Aiming', aim1: '1H_Ranged_Aiming', shoot2: '2H_Ranged_Shoot', shoot1: '1H_Ranged_Shoot', swing: '2H_Melee_Attack_Chop', use: 'Use_Item', reload: '2H_Ranged_Reload' };
 const FULL_CLIP = { death: 'Death_A', emote: 'Cheer' };
 const HEIGHT = 1.8;
+const GAIT_SECONDS = 0.8; // one run cycle at normal speed (all locomotion loops share its phase)
 const GUN_SCALE = 1.45;
 
 /** Per-model shared data: the source scene and the split clips. */
@@ -260,6 +261,10 @@ export class Character {
 
   die() {
     if (this.mode === 'dead') return;
+    if (this._emA) {
+      this._emFade = this._emA; // stopped by update() as the death pose takes over
+      this._emA = this._emHold = null;
+    }
     this.mode = 'dead';
     const a = this.fullActions.death;
     if (a) {
@@ -285,11 +290,10 @@ export class Character {
     if (!on) {
       if (this.mode !== 'emote') return;
       this.mode = 'alive';
-      for (const a of [this._emA, this._emHold]) {
-        if (!a) continue;
-        a.setEffectiveWeight(0);
-        a.stop();
-      }
+      // the playing clip fades out in update(); any other part stops now
+      for (const a of [this._emA, this._emHold]) if (a && a !== this._emA) a.stop();
+      if (this._emFade && this._emFade !== this._emA) this._emFade.stop();
+      this._emFade = this._emA;
       this._emA = this._emHold = null;
       for (const k in this.guns) this.guns[k].visible = !this.downed && k === this.gunKey;
       if (this.pickaxe) this.pickaxe.visible = !this.downed && this.equipped === 'pickaxe';
@@ -299,7 +303,13 @@ export class Character {
     const a = (def && this.fullActions['e:' + def.clip]) || this.fullActions.emote;
     if (!a) return;
     if (this.mode === 'emote' && this._emA === a) return;
-    if (this.mode === 'emote') this.emote(false);
+    if (this.mode === 'emote') {
+      this.emote(false);
+      if (this._emFade) {
+        this._emFade.stop();
+        this._emFade = null;
+      }
+    }
     this.mode = 'emote';
     this.emoteId = id;
     const hold = def && def.hold ? this.fullActions['e:' + def.hold] : null;
@@ -308,7 +318,7 @@ export class Character {
       a.setLoop(THREE.LoopOnce, 1);
       a.clampWhenFinished = true;
     } else a.setLoop(THREE.LoopRepeat, Infinity);
-    a.setEffectiveWeight(1);
+    a.setEffectiveWeight(this._fw || 0); // update() fades it in
     a.play();
     this._emA = a;
     this._emHold = hold;
@@ -329,7 +339,7 @@ export class Character {
     const h = this._emHold;
     h.reset();
     h.setLoop(THREE.LoopRepeat, Infinity);
-    h.setEffectiveWeight(1);
+    h.setEffectiveWeight(this._fw || 1);
     h.play();
     this._emA = h;
   }
@@ -337,7 +347,8 @@ export class Character {
   /** Back to a fresh, standing state (match restart). */
   reset() {
     this.mode = 'alive';
-    this._emA = this._emHold = null;
+    this._emA = this._emHold = this._emFade = null;
+    this._fw = 0;
     for (const k in this.fullActions) {
       this.fullActions[k].stop();
       this.fullActions[k].setEffectiveWeight(0);
@@ -364,8 +375,14 @@ export class Character {
   update(dt, s) {
     this._emoteTick();
     this.heading = s.heading;
-    this.pitch = s.pitch || 0;
-    this.root.rotation.y = Math.PI - s.heading;
+    this.pitch = damp(this.pitch, s.pitch || 0, 18, dt);
+    // body yaw eases toward the heading (shortest way round): no snapping when a bot or a
+    // remote player's heading arrives in steps
+    if (this._yaw == null) this._yaw = s.heading;
+    let dy = s.heading - this._yaw;
+    dy -= Math.PI * 2 * Math.round(dy / (Math.PI * 2));
+    this._yaw += Math.abs(dy) > 2.6 ? dy : dy * (1 - Math.exp(-20 * dt));
+    this.root.rotation.y = Math.PI - this._yaw;
     this.canopy.visible = !!s.gliding && this.mode !== 'dead';
     // prone blend (runs even when the skeleton is not animated this frame)
     const downT = this.downed ? 1 : 0;
@@ -392,18 +409,23 @@ export class Character {
     let tg = 0;
     let ta = 0;
     if (!s.grounded) ta = 1;
-    else if (s.speed < 0.4) ti = 1;
     else {
-      const f = s.fwd;
-      const sd = s.side;
-      const sum = Math.abs(f) + Math.abs(sd) || 1;
-      if (f >= 0) tr = f / sum;
-      else tb = -f / sum;
-      if (sd > 0) tg = sd / sum;
-      else tl = -sd / sum;
+      // idle <-> moving fades with speed instead of flipping at a threshold
+      const move = clamp((s.speed - 0.25) / 1.6, 0, 1);
+      ti = 1 - move;
+      if (move > 0) {
+        const f = s.fwd;
+        const sd = s.side;
+        const sum = Math.abs(f) + Math.abs(sd) || 1;
+        if (f >= 0) tr = (f / sum) * move;
+        else tb = (-f / sum) * move;
+        if (sd > 0) tg = (sd / sum) * move;
+        else tl = (-sd / sum) * move;
+        if (tr + tb + tg + tl < 1e-3) tr = move;
+      }
     }
     const w = this.w;
-    const k = 12;
+    const k = 10;
     w.idle = damp(w.idle, ti, k, dt);
     w.run = damp(w.run, tr, k, dt);
     w.back = damp(w.back ?? 0, tb, k, dt);
@@ -424,7 +446,20 @@ export class Character {
       }
     }
     this.shotW = damp(this.shotW, shotTarget, 22, dt);
-    const fullW = full ? 0 : 1;
+    // full-body actions (emote / death) cross-fade in and out instead of popping
+    this._fw = damp(this._fw || 0, full ? 1 : 0, dead ? 14 : 9, dt);
+    if (this._fw > 0.999) this._fw = 1;
+    const fullW = 1 - this._fw;
+    const fa = dead ? this.fullActions.death : this._emA;
+    if (fa) fa.setEffectiveWeight(this._fw);
+    if (this._emFade) {
+      // an emote that just ended fades with the blend, then stops
+      this._emFade.setEffectiveWeight(Math.max(0, this._fw));
+      if (this._fw < 0.01 || full) {
+        if (!full || this._emFade !== this._emA) this._emFade.stop();
+        this._emFade = null;
+      }
+    }
     const over = Math.max(this.aim, this.shotW);
     const aimKey = this.twoHanded ? 'aim2' : 'aim1';
     for (const key in this.ov) {
@@ -433,16 +468,28 @@ export class Character {
       else if (key === aimKey) a.setEffectiveWeight(this.aim * (1 - this.shotW) * fullW);
       else a.setEffectiveWeight(0);
     }
-    const rate = this.downed ? 0.45 : clamp(s.speed / 6.6, 0.55, 1.45);
+    const rateT = this.downed ? 0.45 : clamp(s.speed / 6.6, 0.55, 1.45);
+    this._rate = damp(this._rate || rateT, rateT, 8, dt);
+    // run / backpedal / strafes share one gait phase so blending between them never makes
+    // the feet slide or stutter
+    const gait = this.lo.run ? this.lo.run.getClip().duration : GAIT_SECONDS;
+    this._phase = ((this._phase || 0) + (dt * this._rate) / gait) % 1;
     for (const key of LOCO) {
       const lo = this.lo[key];
       if (!lo) continue;
       const wk = w[key] || 0;
       lo.setEffectiveWeight(wk * fullW);
       this.up[key].setEffectiveWeight(wk * (1 - over) * fullW);
-      const ts = key === 'idle' || key === 'air' ? 1 : rate;
-      lo.timeScale = ts;
-      this.up[key].timeScale = ts;
+      if (key === 'idle' || key === 'air') {
+        lo.timeScale = 1;
+        this.up[key].timeScale = 1;
+      } else {
+        const d = lo.getClip().duration;
+        lo.timeScale = 0;
+        this.up[key].timeScale = 0;
+        lo.time = this._phase * d;
+        this.up[key].time = this._phase * d;
+      }
     }
 
     this.mixer.update(dt);

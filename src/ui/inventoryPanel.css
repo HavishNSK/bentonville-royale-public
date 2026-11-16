@@ -454,3 +454,51 @@
   outline: calc(var(--u) * 3) solid var(--br-sky);
   outline-offset: calc(var(--u) * 2);
 }
+
+/* drag preview: the dragged item appears in the target slot, the target's in ours */
+.br-inv-preview {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(var(--u) * 22);
+  bottom: calc(var(--u) * 46);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity 0.12s ease, transform 0.16s var(--br-spring);
+}
+.br-inv-preview .br-ico {
+  width: calc(var(--u) * 58);
+  filter: drop-shadow(0 calc(var(--u) * 2) 0 rgba(21, 16, 58, 0.45));
+}
+.br-inv-preview .br-ico-wide {
+  width: calc(var(--u) * 100);
+}
+.br-inv-card.is-target .br-inv-preview,
+.br-inv-card.is-swapsrc .br-inv-preview {
+  opacity: 0.85;
+  transform: none;
+}
+.br-inv-card.is-target .br-inv-ico,
+.br-inv-card.is-swapsrc .br-inv-ico {
+  opacity: 0.15;
+}
+.br-inv-card.is-swapsrc {
+  opacity: 1;
+  outline: calc(var(--u) * 3) dashed rgba(21, 16, 58, 0.45);
+  outline-offset: calc(var(--u) * 3);
+}
+.br-inv-card .br-inv-ico {
+  transition: opacity 0.12s ease;
+}
+.br-inv-ghost {
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .br-inv-preview,
+  .br-inv-card .br-inv-ico {
+    transition: none !important;
+  }
+}

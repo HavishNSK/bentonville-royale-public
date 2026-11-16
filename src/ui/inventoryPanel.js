@@ -66,9 +66,11 @@ export function createInventoryPanel(hudEl, opts = {}) {
     const num = h('b', 'br-inv-num');
     meta.append(rar, num);
     const tag = h('span', 'br-inv-tag', 'EQUIPPED');
-    el.append(key, tag, ico, name, meta);
+    const preview = h('div', 'br-inv-preview');
+    preview.setAttribute('aria-hidden', 'true');
+    el.append(key, tag, ico, preview, name, meta);
     row.appendChild(el);
-    cards.push({ el, key, ico, name, rar, num, sig: null, active: null });
+    cards.push({ el, key, ico, preview, name, rar, num, sig: null, active: null });
   }
 
   const lower = h('div', 'br-inv-lower');
@@ -120,19 +122,84 @@ export function createInventoryPanel(hudEl, opts = {}) {
   let shown = new Array(SLOTS).fill(null); // raw slot objects the cards show (identity checks)
 
   // ---- drag & drop -------------------------------------------------------------
+  // forgiving drop target: the nearest card while the pointer is anywhere in the card row's
+  // band (no need to land exactly on a card)
   const cardAt = (x, y) => {
-    const t = document.elementFromPoint(x, y);
-    const c = t && t.closest ? t.closest('.br-inv-card') : null;
-    return c && root.contains(c) ? +c.dataset.slot : -1;
+    const rr = row.getBoundingClientRect();
+    const band = rr.height * 0.6;
+    if (y < rr.top - band || y > rr.bottom + band || x < rr.left - 40 || x > rr.right + 40) return -1;
+    let best = -1;
+    let bd = Infinity;
+    for (let i = 0; i < SLOTS; i++) {
+      const r = cards[i].el.getBoundingClientRect();
+      const d = Math.abs(x - (r.left + r.width / 2));
+      if (d < bd) {
+        bd = d;
+        best = i;
+      }
+    }
+    return best;
   };
+  // live preview: the dragged item shows in the target slot, the target's item in ours
+  function clearPreview() {
+    for (const c of cards) {
+      c.el.classList.remove('is-target', 'is-swapsrc');
+      c.preview.innerHTML = '';
+    }
+  }
   function setTarget(i) {
     if (!drag || drag.target === i) return;
-    if (drag.target >= 0) cards[drag.target].el.classList.remove('is-target');
+    clearPreview();
     drag.target = i;
-    if (i >= 0 && i !== drag.from) cards[i].el.classList.add('is-target');
+    if (i < 0 || i === drag.from) return;
+    const src = cards[drag.from];
+    const dst = cards[i];
+    dst.el.classList.add('is-target');
+    dst.preview.innerHTML = src.ico.innerHTML; // our own SVG markup
+    if (!dst.el.classList.contains('is-empty')) {
+      src.el.classList.add('is-swapsrc');
+      src.preview.innerHTML = dst.ico.innerHTML;
+    }
   }
+  // the ghost eases toward the pointer (smooth, not jittery) on its own frame loop
   function placeGhost(x, y) {
-    if (drag && drag.ghost) drag.ghost.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px) translate(-50%, -50%) rotate(-4deg)`;
+    if (!drag || !drag.ghost) return;
+    drag.gx = x;
+    drag.gy = y;
+    if (drag.cx == null) {
+      drag.cx = x;
+      drag.cy = y;
+    }
+    if (!drag.raf) {
+      const step = () => {
+        const d = drag;
+        if (!d || !d.ghost) return;
+        d.cx += (d.gx - d.cx) * 0.45;
+        d.cy += (d.gy - d.cy) * 0.45;
+        const tilt = Math.max(-12, Math.min(12, (d.gx - d.cx) * 0.4));
+        d.ghost.style.transform = `translate(${d.cx.toFixed(1)}px, ${d.cy.toFixed(1)}px) translate(-50%, -50%) rotate(${(tilt - 4).toFixed(1)}deg) scale(1.06)`;
+        d.raf = requestAnimationFrame(step);
+      };
+      drag.raf = requestAnimationFrame(step);
+    }
+  }
+  /** After a swap: both icons slide from where they were to their new slot. */
+  let flip = null;
+  function playFlip() {
+    if (!flip) return;
+    const { a, b } = flip;
+    flip = null;
+    const ra = cards[a].el.getBoundingClientRect();
+    const rb = cards[b].el.getBoundingClientRect();
+    const dx = rb.left - ra.left;
+    for (const [i, from] of [[a, dx], [b, -dx]]) {
+      const ico = cards[i].ico;
+      ico.style.transition = 'none';
+      ico.style.transform = `translateX(${from}px)`;
+      void ico.offsetWidth;
+      ico.style.transition = 'transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.15)';
+      ico.style.transform = '';
+    }
   }
   // outside the frame = drop on the ground
   const outside = (x, y) => {
@@ -148,10 +215,11 @@ export function createInventoryPanel(hudEl, opts = {}) {
     if (!drag) return;
     const d = drag;
     drag = null;
+    if (d.raf) cancelAnimationFrame(d.raf);
     if (d.ghost) d.ghost.remove();
     if (d.res) d.res.el.classList.remove('is-lifted');
     else cards[d.from].el.classList.remove('is-lifted');
-    if (d.target >= 0) cards[d.target].el.classList.remove('is-target');
+    clearPreview();
     root.classList.remove('is-dragging', 'is-dropping');
     if (!commit) return;
     if (d.res) {
@@ -161,7 +229,11 @@ export function createInventoryPanel(hudEl, opts = {}) {
     if (d.moved && d.out) {
       if (opts.onDrop) opts.onDrop({ s: d.from }, d.items[d.from]);
     } else if (d.moved) {
-      if (d.target >= 0 && d.target !== d.from && opts.onSwap) opts.onSwap(d.from, d.target, [d.items[d.from], d.items[d.target]]);
+      if (d.target >= 0 && d.target !== d.from && opts.onSwap) {
+        flip = { a: d.from, b: d.target };
+        opts.onSwap(d.from, d.target, [d.items[d.from], d.items[d.target]]);
+        playFlip();
+      }
     } else if (opts.onSelect) opts.onSelect(d.from);
   }
 

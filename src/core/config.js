@@ -293,7 +293,7 @@ export const STORM = {
 // Loot totals for the ~0.7 km2 of tiles: denser per m2 than the old 8 km2 map (which had
 // 320 / 180 / 450) because 100 players still need ~1 chest each.
 export const MATCH = {
-  bots: 74, // solo = 75 players (a crowded ~0.9 km tile map); in multiplayer remote humans take slots first
+  bots: 99, // solo = 100 players, landing spread over the whole map (DropBus.planBotTargets); in multiplayer remote humans take slots first
   chests: 200,
   floorLoot: 630,
   ammoBoxes: 270,
@@ -357,7 +357,7 @@ export const DROP_ZONES = [
   { key: 'bentonville_west', label: 'Bentonville West' },
   { key: 'bentonville_high', label: 'Bentonville High' },
   { key: 'square', label: 'Downtown Square' },
-  { key: 'home_office', label: 'Walmart Home Office' },
+  { key: 'community_center', label: 'Community Center' },
   { key: 'crystal_bridges', label: 'Crystal Bridges' },
   { key: 'memorial_park', label: 'Memorial Park' },
 ];
