@@ -26,6 +26,7 @@
  *       route:  { ax, az, bx, bz } | null,   // Drop Bus flight line (full map only)
  *       bus:    { x, z, heading } | null,    // Drop Bus position on that line
  *       blips:  [{ x, z, kind }]      // optional; kind: 'chest' | 'loot' | 'enemy' | 'drop'
+ *                                     //   | 'mate0'..'mate3' (teammate, slot colour) | 'mateDown' (knocked teammate)
  *     }
  *   mm.fullCanvasToWorld(px, py)      // full-canvas backing-store pixel -> { x, z, inBounds }
  *   mm.worldToFullCanvas(x, z)        // -> { px, py }
@@ -105,7 +106,10 @@ const ROAD_STYLE = [
   { fill: '#fff3c9', casing: '#b39b5c', minPx: 3, minOv: 2.3, alphaOv: 1 },
   { fill: '#ffdf8a', casing: '#a9802f', minPx: 3.6, minOv: 3.1, alphaOv: 1 },
 ];
-const BLIP_KINDS = ['chest', 'loot', 'enemy', 'drop'];
+const BLIP_KINDS = ['chest', 'loot', 'enemy', 'drop', 'mate0', 'mate1', 'mate2', 'mate3', 'mateDown'];
+const MATE_COLORS = ['#ffc21f', '#5ec8ff', '#7dff6b', '#ff5d8f']; // = Teams.js TEAM_COLORS
+/** Blips that stay pinned to the minimap edge at any distance. */
+const isPinnedBlip = (kind) => kind === 'enemy' || kind === 'drop' || kind.startsWith('mate');
 const DASH_GUIDE = [7, 6];
 const DASH_NONE = [];
 
@@ -471,6 +475,35 @@ function makeBlipSprites(k) {
     g.beginPath();
     g.arc(7 * k, 7 * k, 4.6 * k, 0, TAU);
     g.fill();
+    g.stroke();
+  });
+  // teammates: a slot-coloured dot with an ink edge; knocked: a red dot with a white cross
+  MATE_COLORS.forEach((col, i) => {
+    out['mate' + i] = makeSprite(16 * k, 16 * k, 8 * k, 8 * k, (g) => {
+      g.fillStyle = col;
+      g.strokeStyle = edge;
+      g.lineWidth = 2.2 * k;
+      g.beginPath();
+      g.arc(8 * k, 8 * k, 5.6 * k, 0, TAU);
+      g.fill();
+      g.stroke();
+    });
+  });
+  out.mateDown = makeSprite(16 * k, 16 * k, 8 * k, 8 * k, (g) => {
+    g.fillStyle = '#ff3b3b';
+    g.strokeStyle = edge;
+    g.lineWidth = 2.2 * k;
+    g.beginPath();
+    g.arc(8 * k, 8 * k, 5.6 * k, 0, TAU);
+    g.fill();
+    g.stroke();
+    g.strokeStyle = '#ffffff';
+    g.lineWidth = 1.8 * k;
+    g.beginPath();
+    g.moveTo(8 * k, 4.8 * k);
+    g.lineTo(8 * k, 11.2 * k);
+    g.moveTo(4.8 * k, 8 * k);
+    g.lineTo(11.2 * k, 8 * k);
     g.stroke();
   });
   // drop: sky-blue canopy over a small crate
@@ -1333,7 +1366,7 @@ export class Minimap {
       const b = blips[i];
       h = (Math.imul(h, 31) + ((b.x * 4) | 0)) | 0;
       h = (Math.imul(h, 31) + ((b.z * 4) | 0)) | 0;
-      h = (Math.imul(h, 31) + (b.kind ? b.kind.charCodeAt(0) + b.kind.length : 0)) | 0;
+      h = (Math.imul(h, 31) + (b.kind ? b.kind.charCodeAt(0) + b.kind.length * 7 + b.kind.charCodeAt(b.kind.length - 1) * 131 : 0)) | 0;
     }
     return h;
   }
@@ -1584,7 +1617,7 @@ export class Minimap {
         this._toMini(bl.x, bl.z);
         this._clampMini(9 * k);
         if (this._clamped) {
-          if (bl.kind !== 'enemy' && bl.kind !== 'drop') {
+          if (!isPinnedBlip(bl.kind)) {
             const ddx = bl.x - p.x;
             const ddz = bl.z - p.z;
             if (ddx * ddx + ddz * ddz > range2) continue;

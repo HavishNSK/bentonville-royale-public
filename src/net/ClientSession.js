@@ -18,7 +18,7 @@ import { Character } from '../game/Character.js';
 import { itemLabel } from '../game/Player.js';
 import { impactSound } from '../game/Combat.js';
 import {
-  STATE_HZ, INTERP_DELAY, FLAG, EQUIP, SURF, decodeSnapshot, encodeState, seqNewer, rnd,
+  STATE_HZ, INTERP_DELAY, FLAG, XFLAG, EQUIP, SURF, decodeSnapshot, encodeState, seqNewer, rnd,
 } from './protocol.js';
 
 const _v = new THREE.Vector3();
@@ -45,6 +45,7 @@ export class Puppet {
     this.id = info.id;
     this.name = info.n;
     this.human = !!info.h;
+    this.team = info.tm != null ? info.tm : info.id;
     this.isPlayer = false;
     this.isPuppet = true;
     this.character = character;
@@ -62,12 +63,16 @@ export class Puppet {
     this.kills = 0;
     this.flags = 0;
     this.equip = 'pickaxe';
+    this.downed = false;
+    this.downHp = 0;
+    this.beingRevived = false;
+    this.reviveT = 0;
     this.seen = false;
     this._prev = new THREE.Vector3();
   }
 
   get mode() {
-    return !this.alive ? 'dead' : this.inBus ? 'bus' : this.flags & FLAG.gliding ? 'glide' : this.flags & FLAG.grounded ? 'ground' : 'freefall';
+    return !this.alive ? 'dead' : this.downed ? 'downed' : this.inBus ? 'bus' : this.flags & FLAG.gliding ? 'glide' : this.flags & FLAG.grounded ? 'ground' : 'freefall';
   }
 
   setRow(r) {
@@ -75,7 +80,12 @@ export class Puppet {
     this.flags = r.flags;
     this.inBus = !!(r.flags & FLAG.bus);
     this.crouching = !!(r.flags & FLAG.crouch);
-    this.health = r.health;
+    this.downed = this.alive && !!(r.xf & XFLAG.downed);
+    this.beingRevived = this.downed && !!(r.xf & XFLAG.revived);
+    if (this.downed) {
+      this.downHp = r.health;
+      this.health = 0;
+    } else this.health = r.health;
     this.shield = r.shield;
     this.kills = r.kills;
     const eq = EQUIP[r.equip] || 'pickaxe';
@@ -93,6 +103,7 @@ export class Puppet {
   kill() {
     if (!this.alive) return;
     this.alive = false;
+    this.downed = false;
     if (this.character) this.character.die();
   }
 
@@ -108,6 +119,7 @@ export class Puppet {
     c.root.position.copy(this.pos);
     const far = viewer && (this.pos.x - viewer.x) ** 2 + (this.pos.z - viewer.z) ** 2 > cd2;
     c.root.visible = this.seen && !this.inBus && !far;
+    c.setDowned(this.downed);
     if (!c.root.visible) return;
     const v = this.vel;
     const hs = this.alive ? Math.hypot(v.x, v.z) : 0;
@@ -296,7 +308,14 @@ export class ClientSession {
     const me = s.byId.get(this.id);
     const p = g.player;
     if (me && p.alive) {
-      p.health = me.health;
+      const down = !!(me.xf & XFLAG.downed);
+      if (down && !p.downed) g.netKnock(null); // the 'kn' event normally gets here first
+      p.downed = down;
+      p.beingRevived = down && !!(me.xf & XFLAG.revived);
+      if (down) {
+        p.downHp = me.health;
+        p.health = 0;
+      } else p.health = me.health;
       p.shield = me.shield;
       p.kills = me.kills;
     }
@@ -343,6 +362,27 @@ export class ClientSession {
         return this._hit(e);
       case 'el':
         return this._elim(e);
+      case 'kn':
+        return this._knock(e);
+      case 'rv': {
+        const v = this.actorById(e.v);
+        const by = e.by >= 0 ? this.actorById(e.by) : null;
+        if (!v) return;
+        v.downed = false;
+        v.health = e.hp;
+        v.reviveT = 0;
+        if (v === g.player) {
+          g.player.beingRevived = false;
+          g.hud.announce('REVIVED', by ? `by ${by.name}` : '', 1800);
+        }
+        if (by === g.player && g.player.revivingTarget) {
+          g.player.revivingTarget = null;
+          g.player.reviveLocalT = 0;
+        }
+        if (fx && fx.aura) fx.aura(v.pos, 'heal', 1.2);
+        g.hud.killFeed(by ? `${by.name} revived ${v.name}` : `${v.name} is back up`, 'revive');
+        return;
+      }
       case 'au': {
         const a = this.puppets.get(e.a);
         if (a && fx) fx.aura(a.pos, e.kind, 1.2);
@@ -416,7 +456,7 @@ export class ClientSession {
         return;
       case 'end':
         this.ended = true;
-        if (e.w === this.id) g.netWin();
+        if (e.w === this.id || (g.teamMode && e.tm != null && e.tm >= 0 && e.tm === g.player.team)) g.netWin();
         return;
       default:
     }
@@ -458,7 +498,8 @@ export class ClientSession {
     const p = g.player;
     const victim = this.actorById(e.v);
     if (victim && victim !== p) {
-      victim.health = e.hp;
+      if (e.dn) victim.downHp = e.hp;
+      else victim.health = e.hp;
       victim.shield = e.sp;
     }
     if (e.sh > 0 && e.sp <= 0 && victim) {
@@ -467,8 +508,10 @@ export class ClientSession {
       g.sfx.play('shield_break', { x: _v.x, y: _v.y, z: _v.z });
     }
     if (e.v === this.id) {
-      p.health = e.hp;
+      if (e.dn) p.downHp = e.hp;
+      else p.health = e.hp;
       p.shield = e.sp;
+      if (p.revivingTarget && p._stopRevive) p._stopRevive(g); // hurt while reviving: cancelled
       g.hud.damageFlash(Math.max(0.15, Math.min(1, e.d / 40)));
       if (!e.st) g.sfx.play('hurt', { volume: 0.7 });
     }
@@ -497,6 +540,8 @@ export class ClientSession {
       text = `${vName} was lost in the storm`;
       kind = 'storm';
     } else if (e.how === 'fall') text = `${vName} fell too far`;
+    else if (e.how === 'bleed') text = kName ? `${vName} bled out (${kName})` : `${vName} bled out`;
+    else if (e.how === 'wipe') text = kName ? `${kName} wiped ${vName}` : `${vName} was eliminated`;
     else if (kName) text = `${kName} ${e.how === 'pickaxe' ? 'bonked' : e.how === 'headshot' ? 'headshot' : 'eliminated'} ${vName}`;
     else text = `${vName} was eliminated`;
     if (e.k === this.id) kind = 'kill';
@@ -512,8 +557,33 @@ export class ClientSession {
       p.kills = e.kk;
       g.hud.announce(`ELIMINATED ${vName.toUpperCase()}`, `${p.kills} elimination${p.kills === 1 ? '' : 's'}`, 1800);
     }
+    // team modes: our place, once the last of our team goes (pl 0 while teammates live on)
+    if (e.pl > 0 && victim && g.teamMode && victim.team === p.team) g._deathPlacement = e.pl;
     if (e.v === this.id) {
       g.netDeath({ killer: killer && killer.alive ? killer : null, killerName: kName || (e.how === 'storm' ? 'the storm' : null), placement: e.pl, how: e.how });
+    }
+  }
+
+  _knock(e) {
+    const g = this.game;
+    const p = g.player;
+    const victim = this.actorById(e.v);
+    const by = e.k >= 0 ? this.actorById(e.k) : null;
+    if (!victim || !victim.alive) return;
+    const vName = victim.name;
+    const kName = by ? by.name : null;
+    let text;
+    if (e.how === 'storm') text = `${vName} was knocked by the storm`;
+    else if (e.how === 'fall') text = `${vName} fell and was knocked`;
+    else if (kName) text = `${kName} ${e.how === 'pickaxe' ? 'bonked' : 'knocked'} ${vName}`;
+    else text = `${vName} was knocked`;
+    g.hud.killFeed(text, e.k === this.id ? 'kill' : e.v === this.id ? 'self' : victim.team === p.team ? 'mate' : 'knock');
+    if (e.k === this.id) g.hud.announce(`KNOCKED ${vName.toUpperCase()}`, 'Finish them before they are revived', 1600);
+    if (victim === p) g.netKnock(kName);
+    else {
+      victim.downed = true;
+      victim.health = 0;
+      victim.shield = 0;
     }
   }
 

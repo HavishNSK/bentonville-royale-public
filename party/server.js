@@ -5,7 +5,7 @@
 // It only routes frames between the host and its guests and keeps the lobby
 // rules (one host per room, MAX_HUMANS, no joining a started match).
 //
-// Connect:  /parties/main/<CODE>?role=host|guest&v=<PROTO_VERSION>&name=<name>
+// Connect:  /parties/main/<CODE>?role=host|guest&v=<PROTO_VERSION>&name=<name>[&token=<party token>]
 //
 // Text frames (JSON payloads, forwarded verbatim, never parsed except control):
 //   host  -> server   "<to>:<json>"   to = guest slot id, '*' (all guests) or '@' (control)
@@ -16,13 +16,17 @@
 //   server -> host    [from u8][payload]
 //   guest <-> server  [payload]         (no prefix)
 //
-// Server notices to the host ('@'):  ready, join {id,name}, leave {id}, taken
+// Server notices to the host ('@'):  ready, join {id,name,token}, leave {id}, taken
 // Host control ('@'):                 started {on}, kick {id, reason?}
 // To guests:                          {t:'reject', reason} then close; {t:'bye', reason:'host-left'}
 // Reject reasons match Net.js MSG keys: notFound, full, started, version, kicked.
 
 import { Server, routePartykitRequest } from 'partyserver';
 import { MAX_HUMANS } from '../src/net/protocol.js';
+
+// The party lobby and matchmaker run in the same Worker (wrangler.jsonc binds all three).
+export { Party } from './partyRoom.js';
+export { Matchmaker } from './matchmaker.js';
 
 const BROADCAST = 255;
 
@@ -46,7 +50,8 @@ export class Main extends Server {
   _reject(conn, reason) {
     try {
       conn.send(JSON.stringify({ t: 'reject', reason }));
-      conn.close(4000, reason);
+      // 4002 = removed by the host (Net.js shows "You were removed"); 4000 = refused at the door
+      conn.close(reason === 'kicked' ? 4002 : 4000, reason);
     } catch {
       /* already gone */
     }
@@ -71,6 +76,7 @@ export class Main extends Server {
     const role = url.searchParams.get('role');
     const v = url.searchParams.get('v') || '';
     const name = cleanName(url.searchParams.get('name'));
+    const token = String(url.searchParams.get('token') || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
 
     if (role === 'host') {
       if (this.hostId && this._host()) {
@@ -94,7 +100,7 @@ export class Main extends Server {
     if (slot < 0) return this._reject(conn, 'full');
     this.guests.set(slot, conn);
     conn.setState({ role: 'guest', slot });
-    this._toHost('@:' + JSON.stringify({ t: 'join', id: slot, name }));
+    this._toHost('@:' + JSON.stringify({ t: 'join', id: slot, name, token }));
   }
 
   onMessage(sender, message) {

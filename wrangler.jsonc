@@ -7,8 +7,15 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
-    "bindings": [{ "name": "Main", "class_name": "Main" }]
+    "bindings": [
+      { "name": "Main", "class_name": "Main" },
+      { "name": "Party", "class_name": "Party" },
+      { "name": "Matchmaker", "class_name": "Matchmaker" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Main"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Main"] },
+    { "tag": "v2", "new_sqlite_classes": ["Party", "Matchmaker"] }
+  ],
   "dev": { "port": 1999 }
 }

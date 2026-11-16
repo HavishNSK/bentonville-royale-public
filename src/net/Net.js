@@ -8,17 +8,19 @@
 // Relay address: ?party=host:port (page URL) > VITE_PARTYKIT_HOST > localhost:1999.
 // ws:// is used for localhost / LAN addresses, wss:// for everything else.
 //
-//   const room = await hostRoom({ name })          -> HostRoom
-//   const conn = await joinRoom(code, { name })     -> ClientConn (rejects with a readable Error)
+//   const room = await hostRoom({ name, code? })   -> HostRoom (code: fixed room code from the matchmaker)
+//   const conn = await joinRoom(code, { name, token?, retryMs? }) -> ClientConn (rejects with a readable Error)
+//     token: the player's party token (the host maps it to a team); retryMs: keep retrying
+//     'notFound' this long (a matchmade guest can arrive before its host)
 //
 // HostRoom
-//   code, link, players -> [{ id, name, host }], fill (bots on/off), started
-//   setFill(on), onLobby(fn), close()
-//   clients: Map<id, Client>; Client = { id, name, bytesOut, bytesIn }
+//   code, link, players -> [{ id, name, host, ready }], fill (bots on/off), mode, started
+//   setFill(on), setMode(mode), allReady(), onLobby(fn), close()
+//   clients: Map<id, Client>; Client = { id, name, token, ready, seq, bytesOut, bytesIn }
 //   sendTo(id, msg) / broadcast(msg) (JSON) / sendRawTo(id, buf) / broadcastRaw(buf)
 //   handlers for the match: onMessage(client, msg), onState(client, buf), onLeave(client)
 // ClientConn
-//   id (slot; host = 0), code, players, fill, send(msg), sendRaw(buf), close()
+//   id (slot; host = 0), code, players, fill, mode, send(msg), sendRaw(buf), setReady(on), close()
 //   onLobby(info), onStart(msg), onMessage(msg), onRaw(buf), onClose(reason)
 //
 // Everything travels over one ordered, reliable WebSocket (no separate
@@ -65,11 +67,17 @@ function isLocal(host) {
   return h === 'localhost' || h === '0.0.0.0' || /^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || h.endsWith('.local');
 }
 
-function roomUrl(code, role, name) {
+/** ws(s)://host/parties/<party>/<id>?query — shared with src/net/Party.js. */
+export function partyUrl(party, id, query) {
   const host = partyHost();
   const scheme = isLocal(host) ? 'ws' : 'wss';
-  const q = new URLSearchParams({ role, v: String(PROTO_VERSION), name });
-  return `${scheme}://${host}/parties/main/${code}?${q}`;
+  return `${scheme}://${host}/parties/${party}/${id}?${new URLSearchParams(query)}`;
+}
+
+function roomUrl(code, role, name, token) {
+  const q = { role, v: String(PROTO_VERSION), name };
+  if (token) q.token = token;
+  return partyUrl('main', code, q);
 }
 
 function openSocket(url) {
@@ -118,8 +126,10 @@ export function cleanName(name) {
 
 // ------------------------------------------------------------------ host
 
-export function hostRoom({ name }) {
+export function hostRoom({ name, code: fixed = null }) {
   const who = cleanName(name);
+  fixed = fixed ? normalizeCode(fixed) : null;
+  if (fixed && !validCode(fixed)) return Promise.reject(new Error(MSG.badCode));
   return new Promise((resolve, reject) => {
     let tries = 0;
     let settled = false;
@@ -129,7 +139,8 @@ export function hostRoom({ name }) {
       reject(new Error(MSG.broker));
     }, OPEN_MS);
     const attempt = () => {
-      const code = randomCode();
+      if (settled) return;
+      const code = fixed || randomCode();
       let ws;
       try {
         ws = openSocket(roomUrl(code, 'host', who));
@@ -152,7 +163,11 @@ export function hostRoom({ name }) {
         } else if (msg.t === 'taken') {
           ws.onclose = null;
           ws.close();
-          if (tries++ < 5) attempt();
+          // a fixed (matchmade) code can't move: wait for a stale host to drop, then retry it
+          if (tries++ < 5) {
+            if (fixed) setTimeout(attempt, 800);
+            else attempt();
+          }
           else {
             settled = true;
             clearTimeout(timer);
@@ -178,6 +193,8 @@ class HostRoom {
     this.link = shareLink(code);
     this.name = name;
     this.fill = true;
+    this.mode = 'solo';
+    this._seq = 0;
     this._started = false;
     this.closed = false;
     this.clients = new Map(); // slot id -> client
@@ -210,13 +227,20 @@ class HostRoom {
   }
 
   get players() {
-    const out = [{ id: 0, name: this.name, host: true }];
-    for (const c of [...this.clients.values()].sort((a, b) => a.id - b.id)) out.push({ id: c.id, name: c.name, host: false });
+    // join order (seq), not slot order: private-match teams pack in this order
+    const out = [{ id: 0, name: this.name, host: true, ready: true }];
+    for (const c of [...this.clients.values()].sort((a, b) => a.seq - b.seq)) out.push({ id: c.id, name: c.name, host: false, ready: !!c.ready });
     return out;
   }
 
+  /** Every guest has readied up (the host is always ready). */
+  allReady() {
+    for (const c of this.clients.values()) if (!c.ready) return false;
+    return true;
+  }
+
   lobbyInfo() {
-    return { code: this.code, link: this.link, players: this.players, fill: this.fill, max: MAX_HUMANS, started: this.started };
+    return { code: this.code, link: this.link, players: this.players, fill: this.fill, mode: this.mode, max: MAX_HUMANS, started: this.started };
   }
 
   onLobby(fn) {
@@ -226,11 +250,17 @@ class HostRoom {
   _lobbyChanged() {
     const info = this.lobbyInfo();
     for (const fn of this._lobbyFns) fn(info);
-    this.broadcast({ t: 'lobby', players: info.players, fill: info.fill, max: info.max });
+    this.broadcast({ t: 'lobby', players: info.players, fill: info.fill, mode: info.mode, max: info.max });
   }
 
   setFill(on) {
     this.fill = !!on;
+    this._lobbyChanged();
+  }
+
+  setMode(mode) {
+    if (typeof mode !== 'string' || mode === this.mode) return;
+    this.mode = mode;
     this._lobbyChanged();
   }
 
@@ -263,7 +293,7 @@ class HostRoom {
     if (from === '@') {
       const msg = parse(body);
       if (!msg) return;
-      if (msg.t === 'join') this._join(msg.id, msg.name);
+      if (msg.t === 'join') this._join(msg.id, msg.name, msg.token);
       else if (msg.t === 'leave') this._drop(msg.id);
       return;
     }
@@ -273,13 +303,18 @@ class HostRoom {
     const msg = c.reasm(parse(body));
     if (!msg || typeof msg.t !== 'string') return;
     if (msg.t === 'leave') return this.kick(c.id);
+    if (msg.t === 'lobbyReady') {
+      if (this.started) return;
+      c.ready = !!msg.on;
+      return this._lobbyChanged();
+    }
     if (this.onMessage) this.onMessage(c, msg);
   }
 
-  _join(id, name) {
+  _join(id, name, token) {
     if (this.started) return this._ctl({ t: 'kick', id, reason: 'started' });
     if (this.clients.size >= MAX_HUMANS - 1) return this._ctl({ t: 'kick', id, reason: 'full' });
-    const c = { id, name: cleanName(name), bytesOut: 0, bytesIn: 0, reasm: makeReassembler() };
+    const c = { id, name: cleanName(name), token: token || null, ready: false, seq: ++this._seq, bytesOut: 0, bytesIn: 0, reasm: makeReassembler() };
     this.clients.set(id, c);
     this.sendTo(id, { t: 'welcome', id, code: this.code });
     this._lobbyChanged();
@@ -362,20 +397,31 @@ class HostRoom {
 
 // ------------------------------------------------------------------ client
 
-export function joinRoom(rawCode, { name }) {
+export function joinRoom(rawCode, { name, token = null, retryMs = 0 }) {
   const code = normalizeCode(rawCode);
   if (!validCode(code)) return Promise.reject(new Error(MSG.badCode));
+  const until = Date.now() + retryMs;
+  const once = () =>
+    joinOnce(code, name, token).catch((err) => {
+      // matchmade guests can beat their host to the room: retry 'notFound' for a while
+      if (err.reason === 'notFound' && Date.now() < until) return new Promise((r) => setTimeout(r, 700)).then(once);
+      throw err;
+    });
+  return once();
+}
+
+function joinOnce(code, name, token) {
   return new Promise((resolve, reject) => {
     let ws;
     try {
-      ws = openSocket(roomUrl(code, 'guest', cleanName(name)));
+      ws = openSocket(roomUrl(code, 'guest', cleanName(name), token));
     } catch {
       reject(new Error(MSG.broker));
       return;
     }
     let settled = false;
     let opened = false;
-    const fail = (text) => {
+    const fail = (text, reason) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -385,7 +431,9 @@ export function joinRoom(rawCode, { name }) {
       } catch {
         /* ignore */
       }
-      reject(new Error(text));
+      const err = new Error(text);
+      err.reason = reason || null;
+      reject(err);
     };
     const timer = setTimeout(() => fail(opened ? MSG.timeout : MSG.broker), OPEN_MS);
     const conn = new ClientConn(ws, code);
@@ -407,7 +455,7 @@ export function joinRoom(rawCode, { name }) {
           clearTimeout(timer);
           conn.id = msg.id;
           resolve(conn);
-        } else if (msg.t === 'reject') fail(rejectText(msg.reason, code));
+        } else if (msg.t === 'reject') fail(rejectText(msg.reason, code), msg.reason);
         else if (msg.t === 'bye') fail(MSG.hostLeft);
         return;
       }
@@ -427,6 +475,7 @@ class ClientConn {
     this.id = -1;
     this.players = [];
     this.fill = true;
+    this.mode = 'solo';
     this.max = MAX_HUMANS;
     this.closed = false;
     this.bytesOut = 0;
@@ -448,6 +497,7 @@ class ClientConn {
     if (msg.t === 'lobby') {
       this.players = msg.players || [];
       this.fill = !!msg.fill;
+      if (msg.mode) this.mode = msg.mode;
       this.max = msg.max || MAX_HUMANS;
       if (this.onLobby) this.onLobby(this.lobbyInfo());
     } else if (msg.t === 'start') {
@@ -460,7 +510,12 @@ class ClientConn {
   }
 
   lobbyInfo() {
-    return { code: this.code, link: shareLink(this.code), players: this.players, fill: this.fill, max: this.max, you: this.id };
+    return { code: this.code, link: shareLink(this.code), players: this.players, fill: this.fill, mode: this.mode, max: this.max, you: this.id };
+  }
+
+  /** Private-match lobby: tell the host this player is ready (or not). */
+  setReady(on) {
+    return this.send({ t: 'lobbyReady', on: !!on });
   }
 
   send(msg) {
