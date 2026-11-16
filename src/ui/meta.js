@@ -120,7 +120,7 @@ export function createMeta(menus, account, opts = {}) {
   const whoSub = h('small');
   who.append(whoName, whoSub);
   const coins = h('div', 'mt-coins');
-  coins.title = 'Coins: earn them in matches, spend them in the shop';
+  coins.title = 'Coins: sign in to earn them in matches and spend them in the shop';
   const coinsNum = h('b', 'br-ol', '0');
   coins.append(h('i', 'mt-coin', ''), coinsNum);
   const bShop = btn('SHOP', 'mn-chip mt-chip', 'shop');
@@ -287,7 +287,7 @@ export function createMeta(menus, account, opts = {}) {
         go.disabled = false;
       }
     });
-    const guest = h('p', 'mt-hint', 'Playing as a guest keeps your coins and items on this device only.');
+    const guest = h('p', 'mt-hint', 'Guests can play with free defaults. Sign in to earn coins, unlock outfits, and keep progress on any device.');
     panelBody.append(tabs, form, guest);
 
     // Clever first: Bentonville Google Workspace blocks unverified 3rd-party apps (admin_policy_enforced).
@@ -413,6 +413,16 @@ export function createMeta(menus, account, opts = {}) {
     const bar = panelBody.querySelector('[data-ref=buy]');
     if (!bar) return;
     bar.replaceChildren();
+    if (!account.signedIn) {
+      bar.appendChild(h('span', 'mt-hint', 'Sign in to earn coins from matches and unlock outfits & emotes.'));
+      const sign = btn('SIGN IN', 'mn-btn mn-btn-hero');
+      sign.addEventListener('click', () => {
+        click();
+        openPanel('auth');
+      });
+      bar.appendChild(sign);
+      return;
+    }
     if (!pending) {
       bar.appendChild(h('span', 'mt-hint', 'Pick an item to try it on. Earn coins in matches: placing well, eliminations and wins.'));
       return;
@@ -684,8 +694,8 @@ export function createMeta(menus, account, opts = {}) {
   function renderBar() {
     const p = account.profile;
     whoName.textContent = p.guest ? 'GUEST' : p.name;
-    whoSub.textContent = p.guest ? 'Not signed in' : `${p.stats.wins} wins · ${p.stats.kills} elims`;
-    coinsNum.textContent = p.coins.toLocaleString();
+    whoSub.textContent = p.guest ? 'Sign in for coins & skins' : `${p.stats.wins} wins · ${p.stats.kills} elims`;
+    coinsNum.textContent = p.guest ? '—' : p.coins.toLocaleString();
     bAuth.querySelector('span').textContent = account.signedIn ? 'SIGN OUT' : 'SIGN IN';
     bAuth.classList.toggle('mt-chip-sun', !account.signedIn);
     const n = account.friends.incoming.length;
