@@ -253,3 +253,78 @@ if (fails.length) {
   process.exit(1);
 }
 console.log('OK');
+
+// Phase 2C: landmark recipes. Every landmark id plans with recipe 'landmark' (not its generic
+// fallback), every room is labelled, 8th & Plate gets one stall per eatery POI, and every level
+// tree a landmark returns (the { levels } form, asked for up to 8 storeys) partitions into one
+// connected room graph on its own (upper levels have no exterior doors; stairs come from Phase 2A).
+{
+  const { LANDMARK_IDS, LANDMARK_RECIPES } = await import('../src/world/interiors/landmarks.js');
+  const { toLocal, partition, placeDoors, q } = await import('../src/world/interiors/layout.js');
+  const lfails = [];
+  const captured = {};
+  const orig = {};
+  for (const id of Object.keys(LANDMARK_RECIPES)) {
+    orig[id] = LANDMARK_RECIPES[id];
+    LANDMARK_RECIPES[id] = (f) => {
+      captured[id] = f;
+      return orig[id](f);
+    };
+  }
+  const w3 = build();
+  for (const id of Object.keys(orig)) LANDMARK_RECIPES[id] = orig[id];
+  if (w3.interiorHash !== world.interiorHash) lfails.push('landmark recipes are not deterministic across builds');
+  const byId = new Map(w3.buildingInteriors().map((b) => [String(b.collider.ref.id), b.collider]));
+  const HUBK = { corridor: 1, hall: 1, lobby: 1, sales: 1, living: 1, open: 1 };
+  console.log('\nlandmarks:');
+  for (const id of Object.keys(LANDMARK_IDS)) {
+    const c = byId.get(id);
+    const key = LANDMARK_IDS[id].key;
+    if (!c) {
+      lfails.push(`landmark ${id} ${key}: not a hollow building`);
+      continue;
+    }
+    const plan = c.shell.plan;
+    if (plan.recipe !== 'landmark') lfails.push(`landmark ${id} ${key}: planned with '${plan.recipe}', expected 'landmark'`);
+    const L0 = plan.levels[0];
+    for (const r of L0.rooms) if (!r.label) lfails.push(`landmark ${id} ${key}: room ${r.id} (${r.kind}) has no label`);
+    if (L0.rooms.length < 3) lfails.push(`landmark ${id} ${key}: only ${L0.rooms.length} rooms`);
+    console.log(`  ${key} (${id}): ${L0.rooms.length} rooms - ${L0.rooms.map((r) => r.label).join(', ')}`);
+    // every level tree on its own forms one connected room graph
+    const f = captured[id];
+    if (!f) continue;
+    const out = orig[id]({ ...f, levels: 8 });
+    const trees = out && out.levels ? out.levels : [out];
+    const F = plan.frame;
+    const P = [];
+    for (let i = 0; i < c.shell.inner.length; i += 2) {
+      const [a, b] = toLocal(F, c.shell.inner[i], c.shell.inner[i + 1]);
+      P.push(q(a), q(b));
+    }
+    trees.forEach((tree, k) => {
+      const lay = partition(tree, P, F, []);
+      placeDoors(lay.rooms, lay.pieces, () => 1.7, (r) => !!HUBK[r.kind]);
+      const par = lay.rooms.map((_, i) => i);
+      const find = (i) => (par[i] === i ? i : (par[i] = find(par[i])));
+      for (const p of lay.pieces) if ((p.door || p.open) && p.ra >= 0 && p.rb >= 0) par[find(p.ra)] = find(p.rb);
+      const comps = new Set(lay.rooms.map((_, i) => find(i))).size;
+      if (comps !== 1) lfails.push(`landmark ${id} ${key}: level ${k} tree splits into ${comps} room groups`);
+      if (k > 0) console.log(`    level ${k}: ${lay.rooms.length} rooms - ${lay.rooms.map((r) => r.label).join(', ')}`);
+    });
+    if (out && out.stairs) for (const s of out.stairs) if (!(s.a > 0 && s.a < F.L && s.b > 0 && s.b < F.W)) lfails.push(`landmark ${id} ${key}: stair hint outside the frame`);
+  }
+  // 8th & Plate: one labelled stall per eatery POI
+  const ep = byId.get('949466253');
+  if (ep) {
+    const stalls = ep.shell.plan.levels[0].rooms.filter((r) => r.kind === 'stall').map((r) => r.label);
+    const eats = (data.pois || []).filter((p) => /amenity=(fast_food|restaurant|cafe)/.test(p.k || '') && pointInPoly(ep.p, ep.n, p.x, p.z)).map((p) => p.n);
+    for (const n of eats) if (!stalls.includes(n)) lfails.push(`8th & Plate: no stall labelled "${n}"`);
+    if (stalls.length !== eats.length) lfails.push(`8th & Plate: ${stalls.length} stalls for ${eats.length} eatery POIs`);
+  }
+  if (lfails.length) {
+    console.log(`\nFAIL Phase 2C (${lfails.length})`);
+    for (const f of lfails.slice(0, 80)) console.log('  ' + f);
+    process.exit(1);
+  }
+  console.log('OK');
+}
