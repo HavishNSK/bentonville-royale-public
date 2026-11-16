@@ -219,6 +219,19 @@
 .mt-clever {
   width: 100%;
 }
+.mt-signout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 10);
+  margin-top: calc(var(--u) * 12);
+}
+.mt-signout-actions .mn-btn {
+  flex: 1 1 auto;
+  min-width: calc(var(--u) * 120);
+}
+.mt-signout-confirm {
+  background: var(--br-coral);
+}
 .mt-sub {
   margin-top: calc(var(--u) * 6);
 }

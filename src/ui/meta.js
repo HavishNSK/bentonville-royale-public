@@ -187,9 +187,10 @@ export function createMeta(menus, account, opts = {}) {
     if (!b) return;
     click();
     const act = b.dataset.act;
+    // Signed-in SIGN OUT opens a confirm panel (no one-click logout).
     if (act === 'auth' && account.signedIn) {
-      account.logout();
-      closePanel();
+      if (open === 'signout') closePanel();
+      else openPanel('signout');
       return;
     }
     if (open === act) closePanel();
@@ -200,9 +201,32 @@ export function createMeta(menus, account, opts = {}) {
   function render() {
     panelBody.replaceChildren();
     if (open === 'auth') renderAuth();
+    else if (open === 'signout') renderSignOut();
     else if (open === 'shop') renderShop();
     else if (open === 'locker') renderLocker();
     else if (open === 'friends') renderFriends();
+  }
+
+  function renderSignOut() {
+    panelTitle.textContent = 'SIGN OUT';
+    const name = account.profile && account.profile.name ? account.profile.name : 'your account';
+    panelBody.appendChild(h('p', 'mt-hint', `Sign out of ${name}? You’ll keep playing as a guest on this device until you sign in again.`));
+    const row = h('div', 'mt-signout-actions');
+    const cancel = btn('CANCEL', 'mn-btn mn-btn-small');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => {
+      click();
+      closePanel();
+    });
+    const confirm = btn('SIGN OUT', 'mn-btn mn-btn-hero mt-signout-confirm');
+    confirm.type = 'button';
+    confirm.addEventListener('click', () => {
+      click();
+      account.logout();
+      closePanel();
+    });
+    row.append(cancel, confirm);
+    panelBody.appendChild(row);
   }
 
   let authTab = 'login';
