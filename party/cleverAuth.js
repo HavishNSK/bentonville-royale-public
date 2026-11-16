@@ -155,10 +155,11 @@ export async function cleverCallback(request, env) {
 
 export async function handleCleverAuth(request, env) {
   const path = new URL(request.url).pathname.replace(/\/+$/, '') || '/';
+  // Only handle Clever OAuth routes. Everything else (PartyServer WS/POST) must fall through.
+  if (path !== '/auth/clever' && path !== '/auth/clever/callback') return null;
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     return new Response('Method not allowed', { status: 405 });
   }
   if (path === '/auth/clever') return cleverStart(request, env);
-  if (path === '/auth/clever/callback') return cleverCallback(request, env);
-  return null;
+  return cleverCallback(request, env);
 }
