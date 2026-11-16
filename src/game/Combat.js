@@ -30,12 +30,22 @@
 // - Hooks: onFire(shooter, weapon, origin, records), onColliderDestroyed(c, point),
 //   onBurstShot(shooter, item, origin, dirs, records) after each follow-up round of a
 //   burst gun (a multiplayer client forwards it to the host like a trigger pull).
+//
+// Teams (src/game/Teams.js; `combat.teamMode` true in Duos / Trios / Squads):
+// - no friendly fire: bullets and swings pass through teammates, applyDamage ignores them.
+// - lethal damage knocks (actor.downed, actor.downHp) instead of eliminating while the team
+//   still has someone standing; damage to a downed actor hits downHp; when nobody on a team
+//   is left standing every downed member is eliminated (team wipe).
+// - tickTeams(dt) (authoritative only): bleed-out and revives. A reviver sets
+//   `actor.revivingTarget = downedMate`; progress lives on the target (reviveT, reviver).
+// - Hooks: onKnock(victim, attacker, info), onRevive(victim, by).
 // - Burst guns (WEAPONS[id].burst > 1): a locally-originated trigger pull (no opts.dirs)
 //   fires the first round and schedules the rest `burstDelay` apart; each follow-up
 //   takes one round from item.mag and stops if the shooter dies, reloads or swaps.
 
 import * as THREE from 'three';
-import { WEAPONS, PICKAXE, PLAYER, lerp, weaponStats } from '../core/config.js';
+import { WEAPONS, PICKAXE, PLAYER, KNOCK, lerp, weaponStats } from '../core/config.js';
+import { sameTeam, teamStanding, aliveTeamCount } from './Teams.js';
 
 const _dir = new THREE.Vector3();
 const _pt = new THREE.Vector3();
@@ -52,7 +62,7 @@ const SURFACE = { wood: 'wood', brick: 'brick', metal: 'metal' };
 /** Ray (o + t d, |d| = 1) vs. an actor's vertical cylinder. Returns t or Infinity. */
 function rayActor(ox, oy, oz, dx, dy, dz, actor, maxT) {
   const r = (actor.radius || PLAYER.radius) + 0.08;
-  const h = actor.crouching ? (actor.height || PLAYER.height) * 0.7 : actor.height || PLAYER.height;
+  const h = actor.downed ? (actor.height || PLAYER.height) * 0.45 : actor.crouching ? (actor.height || PLAYER.height) * 0.7 : actor.height || PLAYER.height;
   const feet = actor.pos.y;
   const fx = ox - actor.pos.x;
   const fz = oz - actor.pos.z;
@@ -103,6 +113,9 @@ export class Combat {
     this.onFire = null;
     this.onBurstShot = null;
     this.onColliderDestroyed = null;
+    this.onKnock = null;
+    this.onRevive = null;
+    this.teamMode = false;
     this._burstEpoch = 0;
     this.authoritative = true;
     this.lastDirs = [];
@@ -138,12 +151,18 @@ export class Combat {
     return n;
   }
 
+  /** Teams with anyone alive (= aliveCount in solo, where every actor is its own team). */
+  get aliveTeams() {
+    return aliveTeamCount(this.actors);
+  }
+
   /** Nearest actor hit by the ray within maxT (excluding `ignore`). */
   rayActors(ox, oy, oz, dx, dy, dz, maxT, ignore) {
     let best = maxT;
     let hit = null;
     for (const a of this.actors) {
       if (!a.alive || a === ignore || a.inBus) continue;
+      if (this.teamMode && sameTeam(a, ignore)) continue; // shots pass through teammates
       const t = rayActor(ox, oy, oz, dx, dy, dz, a, best);
       if (t < best) {
         best = t;
@@ -210,7 +229,7 @@ export class Combat {
       used.push(_dir.clone());
       let res = this._trace(shooter, origin, _dir, w.range);
       const claim = claims && claims[p];
-      if (claim && !res.actor && claim !== shooter && claim.alive && !claim.inBus) {
+      if (claim && !res.actor && claim !== shooter && claim.alive && !claim.inBus && !(this.teamMode && sameTeam(claim, shooter))) {
         const t = this._claimT(origin, _dir, claim, res.t);
         if (t != null) res = { t, actor: claim, hit: null };
       }
@@ -224,7 +243,7 @@ export class Combat {
       const record = { hitActor: null, point: _pt.clone(), headshot: false, surface: 'none' };
       if (res.actor) {
         const a = res.actor;
-        const head = _pt.y > a.pos.y + (a.crouching ? a.height * 0.7 : a.height) * 0.8;
+        const head = _pt.y > a.pos.y + (a.downed ? a.height * 0.45 : a.crouching ? a.height * 0.7 : a.height) * 0.8;
         record.hitActor = a;
         record.headshot = head;
         record.surface = a.shield > 0 ? 'shield' : 'body';
@@ -408,10 +427,25 @@ export class Combat {
     return out;
   }
 
-  /** Shield first (unless storm), then health. Eliminates at 0 health. */
+  /**
+   * Shield first (unless storm), then health. Eliminates at 0 health, or knocks in a team
+   * mode while a teammate is still standing. A downed target takes damage on its downHp.
+   */
   applyDamage(target, amount, info = {}) {
     if (!target || !target.alive || !(amount > 0)) return 0;
     if (target.invulnerable) return 0;
+    const src = info.source;
+    if (src && src !== target && this.teamMode && sameTeam(src, target)) return 0; // no friendly fire
+    if (target.revivingTarget) this.stopRevive(target); // hurt while reviving: cancelled
+    if (target.downed) {
+      if (target.reviver) this.stopRevive(target.reviver);
+      const dealt = Math.min(target.downHp, amount);
+      target.downHp = Math.max(0, target.downHp - amount);
+      target.lastHitTime = performance.now();
+      if (this.onDamage) this.onDamage(target, dealt, { ...info, shieldHit: 0, downed: true });
+      if (target.downHp <= 0 && target.alive) this._eliminate(target, { ...info, source: src || target.knockedBy || null, finished: true });
+      return dealt;
+    }
     let left = amount;
     let shieldHit = 0;
     if (!info.storm && target.shield > 0) {
@@ -429,20 +463,114 @@ export class Combat {
     target.lastAttacker = info.source || target.lastAttacker || null;
     const dealt = shieldHit + Math.min(left, amount);
     if (this.onDamage) this.onDamage(target, dealt, { ...info, shieldHit });
-    if (target.health <= 0) this._eliminate(target, info);
+    if (target.health <= 0 && target.alive) {
+      if (this._canKnock(target, info)) this._knock(target, info);
+      else this._eliminate(target, info);
+    }
     return dealt;
   }
 
+  /** Team mode, not leaving, and someone else on the team is still on their feet. */
+  _canKnock(target, info) {
+    return this.teamMode && !info.left && !target.inBus && teamStanding(this.actors, target.team, target);
+  }
+
+  _knock(victim, info) {
+    const by = info.source && info.source !== victim ? info.source : null;
+    victim.downed = true;
+    victim.downHp = KNOCK.downHp;
+    victim.health = 0;
+    victim.shield = 0;
+    victim.knockedBy = by;
+    victim.reviveT = 0;
+    victim.reviver = null;
+    if (victim.revivingTarget) this.stopRevive(victim);
+    if (this.sfx) this.sfx.play('shield_break', { x: victim.pos.x, y: victim.pos.y + 1, z: victim.pos.z, volume: 0.8 });
+    if (this.onKnock) this.onKnock(victim, by, info);
+  }
+
   _eliminate(victim, info) {
+    const wasDowned = !!victim.downed;
     victim.alive = false;
     victim.health = 0;
     victim.shield = 0;
+    victim.downed = false;
+    victim.downHp = 0;
+    if (victim.reviver) this.stopRevive(victim.reviver);
+    if (victim.revivingTarget) this.stopRevive(victim);
     const killer = info.source && info.source !== victim ? info.source : null;
     if (killer) killer.kills = (killer.kills || 0) + 1;
-    if (victim.character) victim.character.die();
+    if (victim.character) {
+      if (victim.character.setDowned) victim.character.setDowned(false);
+      victim.character.die();
+    }
     if (this.fx) this.fx.elimination(victim.pos, killer && killer.isPlayer ? 0xffc21f : 0xa66bff);
     if (this.sfx) this.sfx.play(victim.isPlayer ? 'death' : 'elimination', { x: victim.pos.x, y: victim.pos.y + 1, z: victim.pos.z });
-    if (this.onEliminate) this.onEliminate(victim, killer, info);
+    if (this.onEliminate) this.onEliminate(victim, killer, { ...info, wasDowned });
+    // team wipe: nobody left standing, so every knocked teammate goes too (credited to whoever knocked them)
+    if (this.teamMode && !teamStanding(this.actors, victim.team)) {
+      for (const a of this.actors.slice()) {
+        if (a.alive && a.downed && a.team === victim.team) this._eliminate(a, { source: a.knockedBy || null, wipe: true, weapon: 'wipe' });
+      }
+    }
+  }
+
+  /** `reviver` stops reviving (moved away, hurt, let go, or done). */
+  stopRevive(reviver) {
+    const t = reviver && reviver.revivingTarget;
+    if (reviver) reviver.revivingTarget = null;
+    if (t && t.reviver === reviver) {
+      t.reviver = null;
+      t.reviveT = 0;
+    }
+  }
+
+  /** Brings a downed actor back up. */
+  revive(target, by = null) {
+    if (!target || !target.alive || !target.downed) return false;
+    target.downed = false;
+    target.downHp = 0;
+    target.health = KNOCK.reviveHp;
+    target.shield = 0;
+    target.knockedBy = null;
+    target.reviveT = 0;
+    if (by && by.revivingTarget === target) by.revivingTarget = null;
+    target.reviver = null;
+    if (target.character && target.character.setDowned) target.character.setDowned(false);
+    if (this.fx && this.fx.aura) this.fx.aura(target.pos, 'heal', 1.2);
+    if (this.onRevive) this.onRevive(target, by);
+    return true;
+  }
+
+  /** Authoritative team upkeep: revive progress, then bleed-out. */
+  tickTeams(dt) {
+    if (!this.teamMode || !(dt > 0)) return;
+    const range2 = (KNOCK.reviveRange + 0.4) ** 2;
+    for (const a of this.actors) {
+      const t = a.revivingTarget;
+      if (!t) continue;
+      const dx = t.pos.x - a.pos.x;
+      const dz = t.pos.z - a.pos.z;
+      const ok = a.alive && !a.downed && t.alive && t.downed && sameTeam(a, t) && dx * dx + dz * dz <= range2 && Math.abs(t.pos.y - a.pos.y) < 2.5 && (!t.reviver || t.reviver === a);
+      if (!ok) {
+        if (t.reviver === a) this.stopRevive(a);
+        else a.revivingTarget = null;
+        continue;
+      }
+      t.reviver = a;
+      t.reviveT = (t.reviveT || 0) + dt;
+      if (t.reviveT >= KNOCK.reviveTime) this.revive(t, a);
+    }
+    for (const a of this.actors.slice()) {
+      if (!a.alive || !a.downed) continue;
+      if (a.reviver && a.reviver.revivingTarget === a) continue; // no bleeding while being revived
+      if (a.reviver) {
+        a.reviver = null;
+        a.reviveT = 0;
+      }
+      a.downHp -= KNOCK.bleed * dt;
+      if (a.downHp <= 0) this._eliminate(a, { source: a.knockedBy || null, bleed: true, weapon: 'bleed' });
+    }
   }
 }
 

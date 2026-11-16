@@ -17,7 +17,8 @@
 
 import * as THREE from 'three';
 import { rampDragQuarter, validEdit } from './Structures.js';
-import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, clamp, damp, TAU, weaponStats } from '../core/config.js';
+import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, KNOCK, clamp, damp, TAU, weaponStats } from '../core/config.js';
+import { sameTeam } from './Teams.js';
 
 const PIECE_ACTIONS = { buildWall: 'wall', buildFloor: 'floor', buildRamp: 'ramp', buildCone: 'cone' };
 export const FREEFALL_SPEED = 38;
@@ -109,6 +110,14 @@ export class Player {
     this.lastEquipped = null;
     this.emoting = false;
     this.god = false;
+    // team modes (see Combat): knocked state and revives
+    this.downed = false;
+    this.downHp = 0;
+    this.knockedBy = null;
+    this.reviver = null; // who is reviving us (host / solo)
+    this.reviveT = 0; // our revive progress (s)
+    this.revivingTarget = null; // downed teammate we are reviving
+    this.reviveLocalT = 0; // our own revive hold time (drives the HUD ring; clients predict it)
   }
 
   reset() {
@@ -126,6 +135,14 @@ export class Player {
     this.editing = null;
     this.emoting = false;
     this.lastEquipped = null;
+    this.downed = false;
+    this.downHp = 0;
+    this.knockedBy = null;
+    this.reviver = null;
+    this.reviveT = 0;
+    this.revivingTarget = null;
+    this.reviveLocalT = 0;
+    this._wasDown = false;
     if (this.inventory) this.inventory.reset();
     if (this.character) this.character.reset();
   }
@@ -164,9 +181,23 @@ export class Player {
     if (this.heading < 0) this.heading += TAU;
     this.pitch = clamp(this.pitch - input.dy * sens * (g.settings.invertY ? -1 : 1), CAMERA.minPitch, CAMERA.maxPitch);
 
-    // ---- loadout keys (ignored while dropping)
+    // ---- knocked: drop whatever was in hand (build / edit / reload / heal / emote)
+    const down = !!this.downed;
+    if (down && !this._wasDown) {
+      this._endEdit(g);
+      this.buildPiece = null;
+      this._cancelReload();
+      this._cancelUse();
+      if (this.revivingTarget) this._stopRevive(g);
+      if (this.emoting && this.character) this.character.emote(false);
+      this.emoting = false;
+      if (g.structures) g.structures.setGhost(null);
+    }
+    this._wasDown = down;
+
+    // ---- loadout keys (ignored while dropping or knocked)
     const inv = this.inventory;
-    if (!this.airborneDrop) this._handleLoadoutKeys(input, g);
+    if (!this.airborneDrop && !down) this._handleLoadoutKeys(input, g);
 
     // ---- movement wish
     let mf = 0;
@@ -185,9 +216,9 @@ export class Player {
     const wx = sh * mf + ch * ms;
     const wz = -ch * mf + sh * ms;
 
-    this.crouching = this.mode === 'ground' && (input.action('crouch') || input.action('crouchAlt'));
-    this.sprinting = this.mode === 'ground' && input.action('sprint') && mf > 0 && !this.ads && !this.crouching && this.useT <= 0;
-    this.ads = this.mode === 'ground' && input.action('aim') && !this.buildPiece && !this.editing && !!this._gun();
+    this.crouching = this.mode === 'ground' && !down && (input.action('crouch') || input.action('crouchAlt'));
+    this.sprinting = this.mode === 'ground' && !down && input.action('sprint') && mf > 0 && !this.ads && !this.crouching && this.useT <= 0;
+    this.ads = this.mode === 'ground' && !down && input.action('aim') && !this.buildPiece && !this.editing && !!this._gun();
     // scoped guns: a short raise-to-eye, then the view snaps into the scope; lowering is instant
     const scoping = this.ads && !!WEAPONS[this._gun().id].scope;
     this.scopeT = scoping ? Math.min(1, this.scopeT + dt / 0.16) : 0;
@@ -197,6 +228,8 @@ export class Player {
     if (this.sprinting) speed = PLAYER.sprintSpeed;
     if (this.ads || this.useT > 0) speed = PLAYER.walkSpeed;
     if (this.crouching) speed = PLAYER.walkSpeed * 0.65;
+    if (down) speed = PLAYER.runSpeed * KNOCK.crawlSpeed;
+    if (this.revivingTarget) speed = 0; // kneeling over a teammate (a move key lets go, see _reviveInput)
 
     const p = this.pos;
     const v = this.vel;
@@ -227,7 +260,7 @@ export class Player {
         v.x += (dx / dl) * step;
         v.z += (dz / dl) * step;
       }
-      if (this.grounded && input.actionHit('jump') && !this.crouching) {
+      if (this.grounded && input.actionHit('jump') && !this.crouching && !down && !this.revivingTarget) {
         v.y = PLAYER.jumpSpeed;
         this.grounded = false;
         g.sfx.play('jump', { volume: 0.5 });
@@ -264,7 +297,10 @@ export class Player {
     this.surface = world.surface;
 
     // ---- actions
-    if (!this.airborneDrop) this._actions(dt, input, g);
+    if (down) {
+      hud.prompt(null);
+      if (hud.setRevive) hud.setRevive(null);
+    } else if (!this.airborneDrop) this._actions(dt, input, g);
     else {
       hud.prompt(null);
       if (g.structures) g.structures.setGhost(null);
@@ -280,6 +316,7 @@ export class Player {
       }
       c.root.position.copy(p);
       c.root.visible = !this.scopeView; // first person through the scope: don't draw our own body
+      c.setDowned(down);
       c.update(dt, {
         fwd: hspeed > 0.1 ? (v.x * sh - v.z * ch) / hspeed : 0,
         side: hspeed > 0.1 ? (v.x * ch + v.z * sh) / hspeed : 0,
@@ -428,8 +465,15 @@ export class Player {
       if (this.useT <= 0) this._finishUse(g);
     }
 
-    // ---- interact
-    this._interact(input, g, dt);
+    // ---- interact (revive a knocked teammate first)
+    const rv = this._reviveInput(input, g, dt);
+    if (rv === 2) {
+      if (g.structures) g.structures.setGhost(null);
+      this.placement = null;
+      this.triggerHeld = lmb;
+      return;
+    }
+    if (rv !== 1) this._interact(input, g, dt);
 
     // ---- edit (T): opens edit mode on your own piece and it stays open; T again confirms.
     // With "Confirm edit on release" on, letting go of the mouse after selecting confirms too.
@@ -486,6 +530,78 @@ export class Player {
       this.interactWith(rec, g);
     }
     if (sent.size > 64) for (const [id, t] of sent) if (now - t > 2) sent.delete(id);
+  }
+
+  /** Nearest knocked teammate within revive range, or null. */
+  _reviveCandidate(g) {
+    if (!g.teamMode || !g.combat) return null;
+    let best = null;
+    let bd = KNOCK.reviveRange * KNOCK.reviveRange;
+    for (const a of g.combat.actors) {
+      if (!a.alive || !a.downed || !sameTeam(a, this)) continue;
+      if (a.reviver && a.reviver !== this) continue; // someone else is on it
+      const dx = a.pos.x - this.pos.x;
+      const dz = a.pos.z - this.pos.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 <= bd && Math.abs(a.pos.y - this.pos.y) < 2.5) {
+        bd = d2;
+        best = a;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Hold interact next to a knocked teammate for KNOCK.reviveTime. Letting go, moving or
+   * taking damage cancels. Solo / host: Combat.tickTeams runs the authoritative timer from
+   * revivingTarget; a client sends 'rv' start / stop and the host validates it.
+   * Returns 2 while reviving (no other action this frame), 1 when it shows the revive prompt
+   * (no loot / door prompt), else 0.
+   */
+  _reviveInput(input, g, dt) {
+    const hud = g.hud;
+    if (!g.teamMode) return 0;
+    let t = this.revivingTarget;
+    if (t) {
+      const moving = input.action('moveForward') || input.action('moveBack') || input.action('moveLeft') || input.action('moveRight') || input.actionHit('jump');
+      const dx = t.pos.x - this.pos.x;
+      const dz = t.pos.z - this.pos.z;
+      if (!input.action('interact') || moving || !t.alive || !t.downed || dx * dx + dz * dz > (KNOCK.reviveRange + 0.4) ** 2) {
+        this._stopRevive(g);
+        t = null;
+      }
+    }
+    const cand = t ? null : this._reviveCandidate(g);
+    if (!t && cand && input.actionHit('interact')) {
+      t = this.revivingTarget = cand;
+      this.reviveLocalT = 0;
+      this._cancelReload();
+      this._cancelUse();
+      this._endEdit(g);
+      const net = clientNet(g);
+      if (net) net.action({ k: 'rv', id: cand.id });
+    }
+    if (t) {
+      this.reviveLocalT += dt;
+      hud.prompt(null);
+      if (hud.setRevive) hud.setRevive({ pct: Math.min(1, this.reviveLocalT / KNOCK.reviveTime), name: t.name });
+      return 2;
+    }
+    if (hud.setRevive) hud.setRevive(null);
+    if (cand) {
+      hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] Hold to revive ' + cand.name);
+      return 1;
+    }
+    return 0;
+  }
+
+  _stopRevive(g) {
+    if (!this.revivingTarget) return;
+    const net = clientNet(g);
+    if (net) net.action({ k: 'rv', id: -1 });
+    if (g.combat && g.combat.stopRevive) g.combat.stopRevive(this);
+    this.revivingTarget = null;
+    this.reviveLocalT = 0;
   }
 
   _interact(input, g, dt = 0) {

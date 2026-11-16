@@ -5,12 +5,19 @@
 //     settings,                       // current settings object (src/ui/settings.js shape)
 //     onPlay(), onSettings(settings), onResume(), onLeave(), onPlayAgain(),
 //     onFreeBuild(name),                           // solo sandbox: no bots, no storm, full mats
-//     onHost(name), onJoin(code, name),           // multiplayer (main.js lazy-loads src/net)
-//     onLobbyStart(), onLobbyLeave(), onLobbyFill(on),
+//     onHost(name), onJoin(code, name),           // private match (main.js lazy-loads src/net)
+//     onLobbyStart(), onLobbyLeave(), onLobbyFill(on), onLobbyMode(mode), onLobbyReady(on),
+//     onPartyReady(on), onPartyCancel(), onPartyMode(mode), onPartyFill(on),   // party lobby (title)
+//     onPartyKick(id), onPartyPromote(id), onPartyJoin(code), onPartyLeave(), onPartyRetry(),
+//     onNameChange(name),
 //     googleTilesAvailable,          // false -> "Real-world 3D view" toggle shown disabled with a hint
 //   });
-//   menus.showLobby(info)   info = { isHost, code, link, players:[{id,name,host}], max, fill,
-//                                   status, canStart, error }
+//   menus.showLobby(info)   info = { isHost, code, link, players:[{id,name,host,ready,you}], max, fill,
+//                                   mode, ready (guest's own), status, canStart, error }
+//   menus.setParty(view)    title party panel: { online, connecting, code, link, isLeader, mode, fill,
+//                                   state: idle|queued|matched, queuedSince (performance.now ms),
+//                                   members:[{id,name,ready,leader,you}], match (hand-off status text) }
+//   menus.partyNotice(text, isError)
 //   menus.showNotice(text)  title screen with a message (host left, room full, ...)
 //   menus.playerName()      saved name (localStorage)
 //   menus.setSettings(settings)       // update the shown settings without firing onSettings
@@ -25,6 +32,10 @@ import { icon } from './icons.js';
 import { QUALITY_OPTIONS, DIFFICULTY_OPTIONS, sanitizeSettings, ACTIONS, DEFAULT_BINDINGS, RESERVED_CODES, keyLabel, rebind } from './settings.js';
 import { createFpsMeter } from './fpsMeter.js';
 import { MATCH } from '../core/config.js';
+import { TEAM_MODES, MODE_LABELS, teamSize } from '../game/Teams.js';
+
+const MODE_IDS = Object.keys(TEAM_MODES);
+const PARTY_SLOTS = 4;
 
 // Functions get the current key bindings (tips follow rebinds).
 const TIPS = [
@@ -70,23 +81,55 @@ export function createMenus(root, opts = {}) {
        <div class="mn-logo-main br-ol-xl">ROYALE</div>
        <div class="mn-logo-tag">100 players &middot; one town square &middot; build to survive</div>
      </div>
-     <div class="mn-stack">
-       <button class="mn-btn mn-btn-hero" data-act="play">${icon('play')}<span>PLAY VS BOTS</span></button>
-       <button class="mn-btn" data-act="freebuild">${icon('wall')}<span>FREE BUILD</span></button>
-       <button class="mn-btn" data-act="host">${icon('people')}<span>HOST MULTIPLAYER</span></button>
-       <div class="mn-join">
-         <input class="mn-field mn-code" data-ref="code" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Room code">
-         <button class="mn-btn" data-act="join"><span>JOIN</span></button>
+     <div class="mn-party mn-card" aria-label="Party">
+       <div class="mn-party-head">
+         <span class="mn-party-label">PARTY</span>
+         <b class="mn-party-code br-ol" data-ref="pcode">····</b>
+         <button type="button" class="mn-chip" data-act="party-copy" data-ref="pcopy"><span>COPY INVITE</span></button>
+         <button type="button" class="mn-chip" data-act="party-leave" data-ref="pleave"><span>LEAVE PARTY</span></button>
+         <button type="button" class="mn-chip" data-act="party-retry" data-ref="pretry"><span>RECONNECT</span></button>
        </div>
-       <label class="mn-name"><span>Name</span><input class="mn-field" data-ref="name" maxlength="16" autocomplete="nickname" spellcheck="false"></label>
+       <ul class="mn-slots" data-ref="slots"></ul>
+       <div class="mn-slot-acts" data-ref="slotActs" hidden>
+         <span data-ref="slotName"></span>
+         <button type="button" class="mn-chip" data-act="party-promote"><span>MAKE LEADER</span></button>
+         <button type="button" class="mn-chip mn-chip-danger" data-act="party-kick"><span>KICK</span></button>
+         <button type="button" class="mn-chip" data-act="party-unselect"><span>CLOSE</span></button>
+       </div>
+       <div class="mn-party-opts">
+         <div class="mn-seg" data-ref="pmode" role="group" aria-label="Mode">${MODE_IDS.map((m) => `<button type="button" data-mode="${m}">${MODE_LABELS[m]}</button>`).join('')}</div>
+         <div class="mn-seg" data-ref="pfill" role="group" aria-label="Fill"><button type="button" data-fill="1">FILL</button><button type="button" data-fill="0">NO FILL</button></div>
+       </div>
+       <p class="mn-party-status" data-ref="pstatus" role="status" aria-live="polite"></p>
+       <button class="mn-btn mn-btn-hero mn-party-go" data-act="party-go">${icon('play')}<span data-ref="pgo">PLAY</span></button>
        <div class="mn-notice" data-ref="notice" role="status"></div>
-       <button class="mn-btn mn-btn-small" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
+       <div class="mn-party-foot">
+         <label class="mn-name"><span>Name</span><input class="mn-field" data-ref="name" maxlength="16" autocomplete="nickname" spellcheck="false"></label>
+         <div class="mn-join">
+           <input class="mn-field mn-code" data-ref="pjoin" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Party code to join">
+           <button type="button" class="mn-btn" data-act="party-join"><span>JOIN PARTY</span></button>
+         </div>
+       </div>
      </div>
+     <div class="mn-title-side">
+       <div class="mn-stack mn-stack-row">
+         <button class="mn-btn mn-btn-small" data-act="freebuild">${icon('wall')}<span>FREE BUILD</span></button>
+         <button class="mn-btn mn-btn-small" data-act="private" aria-expanded="false" data-ref="privBtn">${icon('people')}<span>PRIVATE MATCH</span></button>
+         <button class="mn-btn mn-btn-small" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
+       </div>
+       <div class="mn-private" data-ref="private" hidden>
+         <button class="mn-btn" data-act="host"><span>HOST PRIVATE MATCH</span></button>
+         <div class="mn-join">
+           <input class="mn-field mn-code" data-ref="code" maxlength="4" placeholder="ROOM" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Room code">
+           <button class="mn-btn" data-act="join"><span>JOIN</span></button>
+         </div>
+       </div>
      <div class="mn-controls">
        <span><kbd class="br-key" data-bind="moveForward moveLeft moveBack moveRight">WASD</kbd>move</span><span><kbd class="br-key" data-bind="jump">SPACE</kbd>jump</span>
        <span><kbd class="br-key" data-bind="fire">LMB</kbd>fire</span><span><kbd class="br-key" data-bind="aim">RMB</kbd>aim</span>
        <span><kbd class="br-key" data-bind="interact">E</kbd>loot</span><span><kbd class="br-key" data-bind="buildWall buildFloor buildRamp buildCone">Q C V X</kbd>build</span>
        <span><kbd class="br-key" data-bind="pickaxe">F</kbd>pickaxe</span><span><kbd class="br-key" data-bind="map">M</kbd>map</span>
+     </div>
      </div>
      <div class="mn-foot">Map data &copy; OpenStreetMap contributors &middot; An original fan-made game, not affiliated with any other battle royale</div>`
   );
@@ -108,13 +151,20 @@ export function createMenus(root, opts = {}) {
     } catch {
       /* private mode */
     }
+    if (opts.onNameChange) opts.onNameChange(T.name.value.trim().slice(0, 16) || 'Player');
+    if (partyView && !partyView.online) renderParty();
   });
-  T.code.addEventListener('input', () => {
-    T.code.value = T.code.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
-  });
-  T.code.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') title.querySelector('[data-act=join]').click();
-  });
+  for (const [input, act] of [
+    [T.code, 'join'],
+    [T.pjoin, 'party-join'],
+  ]) {
+    input.addEventListener('input', () => {
+      input.value = input.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') title.querySelector(`[data-act=${act}]`).click();
+    });
+  }
 
   // ---------------------------------------------------------------- lobby
   const lobby = el(
@@ -126,10 +176,12 @@ export function createMenus(root, opts = {}) {
        <div class="mn-link"><input class="mn-field" data-ref="link" readonly aria-label="Share link"><button class="mn-btn mn-btn-small" data-act="copy"><span>COPY LINK</span></button></div>
        <div class="mn-roster-head"><span>Players</span><b data-ref="count">0/16</b></div>
        <ul class="mn-roster" data-ref="roster"></ul>
+       <div class="mn-row"><span>Mode<small class="mn-hint">Players join teams in the order they joined.</small></span><div class="mn-seg" data-ref="mode" role="group" aria-label="Mode">${MODE_IDS.map((m) => `<button type="button" data-mode="${m}">${MODE_LABELS[m]}</button>`).join('')}</div></div>
        <label class="mn-row"><span>Fill empty spots with bots<small class="mn-hint" data-ref="fillHint"></small></span><input type="checkbox" class="mn-toggle" data-ref="fill"></label>
        <p class="mn-status" data-ref="status" role="status"></p>
        <p class="mn-status mn-error" data-ref="error" role="alert"></p>
        <button class="mn-btn mn-btn-hero" data-act="lobby-start">${icon('play')}<span>START MATCH</span></button>
+       <button class="mn-btn mn-btn-hero" data-act="lobby-ready"><span data-ref="readyLabel">READY</span></button>
        <button class="mn-btn mn-btn-small" data-act="lobby-leave">${icon('back')}<span>LEAVE</span></button>
      </div>`
   );
@@ -137,6 +189,12 @@ export function createMenus(root, opts = {}) {
   const LB = {};
   lobby.querySelectorAll('[data-ref]').forEach((e) => (LB[e.dataset.ref] = e));
   LB.fill.addEventListener('change', () => opts.onLobbyFill && opts.onLobbyFill(LB.fill.checked));
+  LB.mode.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-mode]');
+    if (!b || !lobbyInfo || !lobbyInfo.isHost) return;
+    if (opts.onClick) opts.onClick();
+    if (opts.onLobbyMode) opts.onLobbyMode(b.dataset.mode);
+  });
   let lobbyInfo = null;
 
   // ---------------------------------------------------------------- settings
@@ -456,7 +514,38 @@ export function createMenus(root, opts = {}) {
           return n;
         };
         if (act === 'play') opts.onPlay && opts.onPlay();
-        else if (act === 'freebuild') opts.onFreeBuild && opts.onFreeBuild(name());
+        else if (act === 'party-go') partyGo();
+        else if (act === 'party-copy') {
+          if (!partyView || !partyView.link) return;
+          if (navigator.clipboard) navigator.clipboard.writeText(partyView.link).catch(() => {});
+          b.querySelector('span').textContent = 'COPIED';
+          setTimeout(() => (b.querySelector('span').textContent = 'COPY INVITE'), 1400);
+        } else if (act === 'party-leave') opts.onPartyLeave && opts.onPartyLeave();
+        else if (act === 'party-retry') opts.onPartyRetry && opts.onPartyRetry();
+        else if (act === 'party-join') {
+          if (T.pjoin.value.length !== 4) {
+            api.partyNotice('Enter the 4-letter party code from your friend.', true);
+            T.pjoin.focus();
+          } else if (partyView && T.pjoin.value === partyView.code) api.partyNotice('You are already in that party.', false);
+          else if (opts.onPartyJoin) {
+            opts.onPartyJoin(T.pjoin.value);
+            T.pjoin.value = '';
+          }
+        } else if (act === 'party-promote' || act === 'party-kick') {
+          const id = selectedSlot;
+          selectSlot(null);
+          if (id == null) return;
+          if (act === 'party-promote') opts.onPartyPromote && opts.onPartyPromote(id);
+          else opts.onPartyKick && opts.onPartyKick(id);
+        } else if (act === 'party-unselect') selectSlot(null);
+        else if (act === 'private') {
+          const open = T.private.hidden;
+          T.private.hidden = !open;
+          T.privBtn.setAttribute('aria-expanded', String(open));
+          if (open) T.private.querySelector('[data-act=host]').focus();
+        } else if (act === 'lobby-ready') {
+          if (lobbyInfo && !lobbyInfo.isHost && opts.onLobbyReady) opts.onLobbyReady(!lobbyInfo.ready);
+        } else if (act === 'freebuild') opts.onFreeBuild && opts.onFreeBuild(name());
         else if (act === 'host') opts.onHost && opts.onHost(name());
         else if (act === 'join') {
           if (T.code.value.length !== 4) {
@@ -487,6 +576,162 @@ export function createMenus(root, opts = {}) {
     return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
   };
 
+  // ---------------------------------------------------------------- party (title)
+  let partyView = null;
+  let selectedSlot = null;
+  let queueTimer = 0;
+  let noticeTimer = 0;
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+  function selectSlot(id, focus = true) {
+    selectedSlot = id;
+    const m = id != null && partyView ? partyView.members.find((x) => x.id === id) : null;
+    if (!m) selectedSlot = null;
+    T.slotActs.hidden = !m;
+    T.slotName.textContent = m ? m.name : '';
+    for (const li of T.slots.children) li.classList.toggle('is-selected', !!m && li.dataset.id === String(id));
+    if (m && focus) T.slotActs.querySelector('[data-act=party-promote]').focus();
+  }
+
+  function partyStatus(v) {
+    if (v.match) return v.match;
+    if (!v.online) return v.connecting ? 'Connecting to the party server…' : 'Party server offline. PLAY starts a match with bots.';
+    if (v.state === 'matched') return 'Match found!';
+    if (v.state === 'queued') return `Finding match… ${fmt((performance.now() - (v.queuedSince || performance.now())) / 1000)}`;
+    const waiting = v.members.filter((m) => !m.leader && !m.ready).length;
+    if (v.isLeader) {
+      if (waiting) return `Waiting for ${waiting} to ready up`;
+      return v.members.length > 1 ? 'Everyone is ready. Press PLAY.' : 'Invite friends, or press PLAY to find a match.';
+    }
+    const me = v.members.find((m) => m.you);
+    return me && me.ready ? 'Ready. Waiting for the leader…' : 'Ready up when you are set.';
+  }
+
+  function renderParty() {
+    const v = partyView;
+    if (!v) return;
+    const size = teamSize(v.mode);
+    T.pcode.textContent = v.online ? v.code : v.connecting ? '····' : 'OFFLINE';
+    T.pcode.classList.toggle('is-offline', !v.online && !v.connecting);
+    T.pcopy.hidden = !v.online;
+    T.pleave.hidden = !v.online || v.members.length < 2;
+    T.pretry.hidden = v.online || v.connecting;
+
+    // member slots
+    T.slots.replaceChildren();
+    for (let i = 0; i < PARTY_SLOTS; i++) {
+      const m = v.members[i];
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mn-slot';
+      if (m) {
+        li.dataset.id = String(m.id);
+        btn.classList.toggle('is-ready', !!m.ready);
+        btn.classList.toggle('is-you', !!m.you);
+        btn.classList.toggle('is-leader', !!m.leader);
+        btn.innerHTML = `${m.leader ? `<span class="mn-slot-crown" title="Party leader">${icon('crown')}</span>` : ''}<b class="mn-slot-name">${esc(m.name)}</b><span class="mn-slot-state">${m.ready ? '<i aria-hidden="true">&#10003;</i>READY' : 'NOT READY'}</span>${m.you ? '<em>YOU</em>' : ''}`;
+        const canManage = v.online && v.isLeader && !m.you;
+        btn.disabled = !canManage;
+        btn.setAttribute('aria-label', `${m.name}${m.leader ? ', leader' : ''}, ${m.ready ? 'ready' : 'not ready'}${canManage ? '. Kick or make leader' : ''}`);
+        if (canManage) btn.dataset.member = String(m.id);
+      } else {
+        btn.classList.add('is-empty');
+        btn.innerHTML = `<b class="mn-slot-name">+</b><span class="mn-slot-state">${v.online ? 'INVITE' : 'EMPTY'}</span>`;
+        btn.disabled = !v.online;
+        btn.dataset.invite = '1';
+        btn.setAttribute('aria-label', 'Copy party invite link');
+      }
+      li.appendChild(btn);
+      T.slots.appendChild(li);
+    }
+    // keep the kick / promote row only while that member is still here and we still lead
+    if (selectedSlot != null) selectSlot(v.isLeader && v.members.some((m) => m.id === selectedSlot && !m.you) ? selectedSlot : null, false);
+
+    // mode + fill (leader, idle only)
+    const idle = (v.state || 'idle') === 'idle' && !v.match;
+    const canEdit = v.isLeader && idle;
+    T.pmode.querySelectorAll('button').forEach((b) => {
+      const mode = b.dataset.mode;
+      b.classList.toggle('is-on', mode === v.mode);
+      b.disabled = !canEdit || teamSize(mode) < v.members.length;
+      b.setAttribute('aria-pressed', String(mode === v.mode));
+    });
+    T.pfill.querySelectorAll('button').forEach((b) => {
+      const on = b.dataset.fill === '1';
+      const solo = size === 1;
+      b.classList.toggle('is-on', solo ? on : on === !!v.fill);
+      b.disabled = !canEdit || solo;
+      b.setAttribute('aria-pressed', String(solo ? on : on === !!v.fill));
+    });
+    T.pfill.title = size === 1 ? 'Fill does not apply to Solo' : v.fill ? 'Bots or other players fill your empty team spots' : 'Your team plays short-handed';
+
+    // big button
+    const go = title.querySelector('[data-act=party-go]');
+    const me = v.members.find((m) => m.you);
+    let label = 'PLAY';
+    let disabled = false;
+    let kind = 'play';
+    if (v.match || v.state === 'matched') {
+      label = 'MATCH FOUND';
+      disabled = true;
+    } else if (v.isLeader) {
+      if (v.state === 'queued') {
+        label = 'CANCEL';
+        kind = 'cancel';
+      } else disabled = v.members.some((m) => !m.leader && !m.ready);
+    } else {
+      label = me && me.ready ? 'UNREADY' : 'READY';
+      kind = me && me.ready ? 'unready' : 'ready';
+    }
+    T.pgo.textContent = label;
+    go.dataset.kind = kind;
+    go.disabled = disabled;
+    go.classList.toggle('is-disabled', disabled);
+    T.pstatus.textContent = partyStatus(v);
+    T.pstatus.classList.toggle('is-queued', v.state === 'queued' || !!v.match || v.state === 'matched');
+
+    clearInterval(queueTimer);
+    queueTimer = 0;
+    if (v.state === 'queued' && !v.match) queueTimer = setInterval(() => (T.pstatus.textContent = partyStatus(partyView)), 500);
+  }
+
+  function partyGo() {
+    const v = partyView;
+    if (!v || v.match || v.state === 'matched') return;
+    if (v.isLeader) {
+      if (v.state === 'queued') opts.onPartyCancel && opts.onPartyCancel();
+      else opts.onPlay && opts.onPlay();
+      return;
+    }
+    const me = v.members.find((m) => m.you);
+    if (opts.onPartyReady) opts.onPartyReady(!(me && me.ready));
+  }
+
+  T.slots.addEventListener('click', (e) => {
+    const b = e.target.closest('button.mn-slot');
+    if (!b || b.disabled) return;
+    if (opts.onClick) opts.onClick();
+    if (b.dataset.invite) {
+      title.querySelector('[data-act=party-copy]').click();
+      return;
+    }
+    const id = partyView && partyView.members.find((m) => String(m.id) === b.dataset.member);
+    if (id) selectSlot(selectedSlot === id.id ? null : id.id);
+  });
+  T.pmode.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-mode]');
+    if (!b || b.disabled) return;
+    if (opts.onClick) opts.onClick();
+    if (opts.onPartyMode) opts.onPartyMode(b.dataset.mode);
+  });
+  T.pfill.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-fill]');
+    if (!b || b.disabled) return;
+    if (opts.onClick) opts.onClick();
+    if (opts.onPartyFill) opts.onPartyFill(b.dataset.fill === '1');
+  });
+
   const api = {
     el: wrap,
     get current() {
@@ -497,17 +742,38 @@ export function createMenus(root, opts = {}) {
       T.notice.textContent = '';
       T.notice.classList.remove('is-on');
       show(title, true);
+      renderParty();
+    },
+    /** Title party panel (see the header comment for the view shape). */
+    setParty(view) {
+      partyView = view;
+      renderParty();
+    },
+    /** Short message on the party panel (errors stay until the next one; info fades). */
+    partyNotice(text, isError) {
+      clearTimeout(noticeTimer);
+      T.notice.textContent = text || '';
+      T.notice.classList.toggle('is-on', !!text);
+      T.notice.classList.toggle('is-info', !isError);
+      if (text && !isError) noticeTimer = setTimeout(() => T.notice.classList.remove('is-on'), 5000);
     },
     /** Title screen with a message (errors from joining, "Host left the match"). */
     showNotice(text) {
       api.showDropBanner(false);
+      clearTimeout(noticeTimer);
       T.notice.textContent = text || '';
       T.notice.classList.toggle('is-on', !!text);
+      T.notice.classList.remove('is-info');
       show(title, true);
+      renderParty();
     },
     playerName: () => T.name.value.trim().slice(0, 16) || 'Player',
     setJoinCode(code) {
       T.code.value = String(code || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
+      if (T.code.value) {
+        T.private.hidden = false;
+        T.privBtn.setAttribute('aria-expanded', 'true');
+      }
     },
     showLobby(info) {
       lobbyInfo = info;
@@ -518,16 +784,26 @@ export function createMenus(root, opts = {}) {
       LB.roster.replaceChildren();
       for (const p of info.players || []) {
         const li = document.createElement('li');
+        li.classList.toggle('is-ready', !!p.ready);
         const nm = document.createElement('span');
         nm.textContent = p.name;
         li.appendChild(nm);
-        if (p.host || p.you) {
-          const tag = document.createElement('em');
-          tag.textContent = [p.host ? 'HOST' : '', p.you ? 'YOU' : ''].filter(Boolean).join(' · ');
-          li.appendChild(tag);
-        }
+        const tags = [p.host ? 'HOST' : p.ready ? '\u2713 READY' : 'NOT READY', p.you ? 'YOU' : ''].filter(Boolean);
+        const tag = document.createElement('em');
+        tag.textContent = tags.join(' · ');
+        li.appendChild(tag);
         LB.roster.appendChild(li);
       }
+      const mode = info.mode || 'solo';
+      LB.mode.querySelectorAll('button').forEach((b) => {
+        b.classList.toggle('is-on', b.dataset.mode === mode);
+        b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
+        b.disabled = !info.isHost;
+      });
+      const readyBtn = lobby.querySelector('[data-act=lobby-ready]');
+      readyBtn.hidden = !!info.isHost;
+      LB.readyLabel.textContent = info.ready ? 'UNREADY' : 'READY';
+      readyBtn.dataset.kind = info.ready ? 'unready' : 'ready';
       LB.fill.checked = !!info.fill;
       LB.fill.disabled = !info.isHost;
       const humans = (info.players || []).length;
@@ -568,13 +844,25 @@ export function createMenus(root, opts = {}) {
       api.showDropBanner(false);
       result.dataset.kind = r.victory ? 'win' : 'loss';
       R.place.textContent = '#' + r.placement;
-      R.title.textContent = r.victory ? 'LAST ONE STANDING' : 'ELIMINATED';
-      R.sub.textContent = r.victory
-        ? `You outlasted ${r.total - 1} rivals in Bentonville.`
-        : r.killer
-          ? `Taken out by ${r.killer}. ${r.placement - 1} left standing.`
-          : `${r.placement - 1} left standing.`;
-      R.placement.textContent = `${r.placement}/${r.total}`;
+      // team modes (r.mode duo / trio / squad, r.teams = teams in the match): placement is the team's
+      const team = r.mode && r.mode !== 'solo' && r.teams > 0;
+      const noun = { duo: 'duo', trio: 'trio', squad: 'squad' }[r.mode] || 'team';
+      const left = r.placement - 1;
+      if (team) {
+        R.title.textContent = r.victory ? 'LAST TEAM STANDING' : `YOUR ${noun.toUpperCase()} IS OUT`;
+        R.sub.textContent = r.victory
+          ? `Your ${noun} outlasted ${r.teams - 1} team${r.teams - 1 === 1 ? '' : 's'} in Bentonville.`
+          : `${r.killer ? `Taken out by ${r.killer}. ` : ''}${left} team${left === 1 ? '' : 's'} left standing.`;
+        R.placement.textContent = `${r.placement}/${r.teams}`;
+      } else {
+        R.title.textContent = r.victory ? 'LAST ONE STANDING' : 'ELIMINATED';
+        R.sub.textContent = r.victory
+          ? `You outlasted ${r.total - 1} rivals in Bentonville.`
+          : r.killer
+            ? `Taken out by ${r.killer}. ${r.placement - 1} left standing.`
+            : `${r.placement - 1} left standing.`;
+        R.placement.textContent = `${r.placement}/${r.total}`;
+      }
       R.kills.textContent = String(r.kills);
       R.time.textContent = fmt(r.time);
       // multiplayer: no instant rematch; the host makes a new room

@@ -8,6 +8,7 @@
 //   await game.load(onProgress)      // map, models, world meshes (once)
 //   game.startMatch()                // drop phase -> play -> over
 //   game.startMatch(seed, { freeBuild: true })  // solo sandbox: no bots, storm off, full mats, start on the ground
+//   game.startMatch(seed, { mode: 'squad', fill: true })  // team mode vs bot teams (Teams.js); fill = bot teammates
 //   game.pause(on) / game.leave()    // back to the menu
 //   game.applySettings(settings)
 //
@@ -20,7 +21,8 @@
 // storm, bots, storm damage and the win check are left to the host.
 
 import * as THREE from 'three';
-import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, STORM, MATERIALS, makeRng, clamp, damp, TAU } from '../core/config.js';
+import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, STORM, MATERIALS, KNOCK, makeRng, clamp, damp, TAU } from '../core/config.js';
+import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
 import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
 import { World } from '../world/World.js';
@@ -196,6 +198,8 @@ export class Game {
     this.combat = new Combat({ world: this.world, structures: this.structures, fx: this.fx, sfx, view: this.view });
     this.combat.onDamage = (t, a, info) => this._onDamage(t, a, info);
     this.combat.onEliminate = (v, k, info) => this._onEliminate(v, k, info);
+    this.combat.onKnock = (v, k, info) => this._onKnock(v, k, info);
+    this.combat.onRevive = (v, by) => this._onRevive(v, by);
 
     const lootModels = {};
     for (const k of [...LOOT_MODELS, ...WEAPON_MODELS]) lootModels[k] = models[k];
@@ -252,6 +256,8 @@ export class Game {
     this.spectating = null;
     this._deathPlacement = 0;
     this._winPending = false;
+    const net0 = this.net && this.net.isHost ? this.net : null;
+    this._setMode(freeBuild ? 'solo' : net0 ? net0.mode : opts.mode);
 
     // world back to pristine
     this.combat.restoreWorld();
@@ -275,6 +281,7 @@ export class Game {
     // player
     const p = this.player;
     p.reset();
+    p.team = p.id;
     p.god = p.invulnerable = freeBuild; // free build: nothing can end the session but Leave
     if (freeBuild) this._refillMats();
     this.combat.register(p);
@@ -290,17 +297,29 @@ export class Game {
       const plan = net.prepareMatch(this, lm);
       botCount = plan.botCount;
       spawnOpts.idBase = plan.idBase;
+      if (this.teamMode) {
+        spawnOpts.teams = plan.botTeams;
+        if (plan.playerTeam != null) p.team = plan.playerTeam;
+      }
+    } else if (this.teamMode) {
+      // local team match: the player's team (+ bot teammates with fill), then full bot teams
+      const plan = assignTeams(this.mode, [{ ids: [p.id], allowBots: opts.fill !== false }], { slots: MATCH.bots + 1, bots: true });
+      p.team = plan.humanTeam.get(p.id);
+      botCount = plan.botTeams.length;
+      spawnOpts.teams = plan.botTeams;
     }
     this.bots.clear();
     const names = botNames(botCount, rng);
     // bots ride the bus too: landing spots spread over POIs and open ground, busier near the route
-    const dropPoints = planBotTargets(this.busRoute, this.world, rng, botCount);
+    // (team modes: one landing spot per bot team, shared by its members)
+    const dropPoints = spawnOpts.teams ? teamDropPoints(this.busRoute, this.world, rng, spawnOpts.teams) : planBotTargets(this.busRoute, this.world, rng, botCount);
     try {
       this.bots.spawn(botCount, rng, { names, difficulty: this.settings.difficulty, dropPoints, bus: this.busRoute, ...spawnOpts });
     } catch (err) {
       this._error('bots.spawn', err);
     }
     this.totalActors = 1 + (net ? net.remotes.size : 0) + this.bots.list.length;
+    this._setupTeam();
 
     if (freeBuild) {
       this._startFreeBuild(lm);
@@ -428,6 +447,7 @@ export class Game {
     this.spectating = null;
     this._deathPlacement = 0;
     this._winPending = false;
+    this._setMode(start.mode);
 
     this.combat.restoreWorld();
     this.combat.clear();
@@ -459,14 +479,46 @@ export class Game {
     const p = this.player;
     p.reset();
     p.id = start.you;
-    p.team = start.you;
+    const me = (start.roster || []).find((r) => r.id === start.you);
+    p.team = me && me.tm != null ? me.tm : start.you;
     this.combat.register(p);
     // the host's route when it sent one, else the same route derived from the shared seed
     this._boardBus(start.bus ? makeRoute(start.bus) : planBusRoute(start.seed, this.world.bounds));
 
     net.begin(this, start);
     this.totalActors = start.total;
+    this._setupTeam();
     this._enterBusPhase();
+  }
+
+  /** Match mode: solo, or a team mode (knocks, revives, team win). */
+  _setMode(mode) {
+    this.mode = normalizeMode(mode);
+    this.teamMode = this.mode !== 'solo';
+    this.combat.teamMode = this.teamMode;
+    if (this.hud && this.hud.setTeam) {
+      this.hud.setTeam(null);
+      this.hud.setTags(null);
+      this.hud.setDowned(null);
+      this.hud.setRevive(null);
+    }
+  }
+
+  /** After every actor exists: team count, our teammates and their slot colours. */
+  _setupTeam() {
+    const p = this.player;
+    const actors = this.combat.actors;
+    this.totalTeams = this.teamMode ? teamCount(actors) : this.totalActors;
+    const members = this.teamMode ? actors.filter((a) => a === p || sameTeam(a, p)).sort((a, b) => a.id - b.id) : [p];
+    members.forEach((a, i) => (a.teamSlot = i));
+    this.mates = members.filter((a) => a !== p);
+  }
+
+  /** Teammates still alive (knocked or not). */
+  _mateAlive() {
+    if (!this.teamMode) return null;
+    for (const m of this.mates) if (m.alive) return m;
+    return null;
   }
 
   /** Drop Bus clock: the host's match clock on a client (once snapshots arrive), else local. */
@@ -499,20 +551,35 @@ export class Game {
     if (p.character) p.character.die();
     sfx.play('death', { volume: 0.9 });
     this.fx.elimination(p.pos, 0xa66bff);
-    this._deathPlacement = placement;
-    this.spectating = killer || null;
+    p.downed = false;
+    if (placement) this._deathPlacement = placement;
+    this.spectating = this._mateAlive() || killer || null;
     this._endTimer = DEATH_SCREEN_DELAY;
     this.hud.announce('ELIMINATED', killerName ? `by ${killerName}` : '', 3000);
     sfx.stopLoop('glide_wind');
   }
 
+  /** Multiplayer client: the host says we were knocked (the snapshot carries the state). */
+  netKnock(killerName) {
+    const p = this.player;
+    if (!p.alive) return;
+    const was = p.downed;
+    p.downed = true;
+    if (!was) p.downHp = KNOCK.downHp;
+    p.health = 0;
+    p.shield = 0;
+    if (!was) sfx.play('hurt', { volume: 0.9 }); // the knocked overlay says the rest
+    void killerName;
+  }
+
   /** Multiplayer client: the host says we are the last one standing. */
   netWin() {
-    if (this.state !== 'play' || !this.player.alive || this._winPending) return;
+    // team modes: the whole winning team wins, eliminated members included
+    if (this.state !== 'play' || (!this.player.alive && !this.teamMode) || this._winPending) return;
     this._winPending = true;
     this._endTimer = WIN_SCREEN_DELAY;
-    this.hud.announce('#1 IN BENTONVILLE', 'Last one standing!', 3000);
-    if (this.player.character) this.player.character.emote(true);
+    this.hud.announce('#1 IN BENTONVILLE', this.teamMode ? 'Last team standing!' : 'Last one standing!', 3000);
+    if (this.player.character && this.player.alive && !this.player.downed) this.player.character.emote(true);
   }
 
   /**
@@ -588,8 +655,17 @@ export class Game {
     if (this.state === 'over') return;
     this.closeInventory(false);
     this.state = 'over';
-    const placement = victory ? 1 : this._deathPlacement || this.combat.aliveCount + 1;
-    this.result = { victory, placement, kills: this.player.kills, total: this.totalActors, time: this.matchTime, killer: this.player.lastKillerName || null };
+    const placement = victory ? 1 : this._deathPlacement || (this.teamMode ? this.combat.aliveTeams + 1 : this.combat.aliveCount + 1);
+    this.result = {
+      victory,
+      placement,
+      kills: this.player.kills,
+      total: this.totalActors,
+      time: this.matchTime,
+      killer: this.player.lastKillerName || null,
+      mode: this.mode,
+      teams: this.totalTeams || this.totalActors,
+    };
     if (this.net) {
       this.result.mp = true;
       // the host keeps simulating for everyone until it leaves
@@ -600,6 +676,8 @@ export class Game {
     sfx.stopLoop('glide_wind');
     sfx.playMusic(victory ? 'victory' : 'defeat');
     this.hud.prompt(null);
+    this.hud.setRevive(null);
+    this.hud.setDowned(null);
     this.menus.showResult(this.result);
   }
 
@@ -641,6 +719,8 @@ export class Game {
       text = `${victim.name} was lost in the storm`;
       kind = 'storm';
     } else if (info.fall) text = `${victim.name} fell too far`;
+    else if (info.bleed) text = killer ? `${victim.name} bled out (${killer.name})` : `${victim.name} bled out`;
+    else if (info.wipe) text = killer ? `${killer.name} wiped ${victim.name}` : `${victim.name} was eliminated`;
     else if (killer) {
       const how = info.weapon === 'pickaxe' ? 'bonked' : info.headshot ? 'headshot' : 'eliminated';
       text = `${killer.name} ${how} ${victim.name}`;
@@ -654,12 +734,36 @@ export class Game {
     }
     if (victim === p) {
       p.lastKillerName = killer ? killer.name : info.storm ? 'the storm' : null;
-      this._deathPlacement = this.combat.aliveCount + 1;
-      this.spectating = killer && killer.alive ? killer : null;
+      if (!this.teamMode) this._deathPlacement = this.combat.aliveCount + 1;
+      this.spectating = this._mateAlive() || (killer && killer.alive ? killer : null);
       this._endTimer = DEATH_SCREEN_DELAY;
       this.hud.announce('ELIMINATED', killer ? `by ${killer.name}` : info.storm ? 'by the storm' : '', 3000);
       sfx.stopLoop('glide_wind');
     }
+    // team modes: our place is fixed when the last of us goes
+    if (this.teamMode && victim.team === p.team && !teamAlive(this.combat.actors, p.team)) this._deathPlacement = this.combat.aliveTeams + 1;
+  }
+
+  _onKnock(victim, by, info) {
+    const p = this.player;
+    if (this.net && this.net.isHost && this.net.onKnock) this.net.onKnock(victim, by, info);
+    let text;
+    if (info.storm && !by) text = `${victim.name} was knocked by the storm`;
+    else if (info.fall) text = `${victim.name} fell and was knocked`;
+    else if (by) text = `${by.name} ${info.weapon === 'pickaxe' ? 'bonked' : 'knocked'} ${victim.name}`;
+    else text = `${victim.name} was knocked`;
+    if (victim === p && !by && !info.storm && !info.fall) text = 'You were knocked';
+    this.hud.killFeed(text, by === p ? 'kill' : victim === p ? 'self' : victim.team === p.team ? 'mate' : 'knock');
+    if (by === p) this.hud.announce(`KNOCKED ${victim.name.toUpperCase()}`, 'Finish them before they are revived', 1600);
+    if (victim === p) sfx.play('hurt', { volume: 0.9 }); // the knocked overlay says the rest
+  }
+
+  _onRevive(victim, by) {
+    const p = this.player;
+    if (this.net && this.net.isHost && this.net.onRevive) this.net.onRevive(victim, by);
+    this.hud.killFeed(by ? `${by.name} revived ${victim.name}` : `${victim.name} is back up`, 'revive');
+    if (victim === p) this.hud.announce('REVIVED', by ? `by ${by.name}` : '', 1800);
+    sfx.play('pickup', { x: victim.pos.x, y: victim.pos.y + 1, z: victim.pos.z, volume: 0.6 });
   }
 
   // ---------------------------------------------------------------- per frame
@@ -742,6 +846,7 @@ export class Game {
         p.update(dt, NO_INPUT, this);
       }
       if (!client && !this.freeBuild) this._stormDamage(dt);
+      if (!client && this.teamMode) this.combat.tickTeams(dt);
     }
 
     if (!client) {
@@ -761,25 +866,33 @@ export class Game {
     if (this.structures) this.structures.update(dt);
     if (this.loot) this.loot.update(dt, this.camera.position);
 
-    // match end
+    // match end (team modes: a team is out once nobody on it is alive; dead members wait)
     if (this.state === 'play') {
-      const alive = this.combat.aliveCount;
-      if (!p.alive) {
+      const mate = p.alive ? null : this._mateAlive();
+      const won = client
+        ? this._winPending
+        : this.teamMode
+          ? this.totalTeams > 1 && this.combat.aliveTeams <= 1
+          : this.totalActors > 1 && this.combat.aliveCount <= 1;
+      if (!p.alive && !mate) {
         this._endTimer -= dt;
         if (this.spectating && !this.spectating.alive) this.spectating = this.combat.actors.find((a) => a.alive) || null;
         if (this._endTimer <= 0) this._endMatch(false);
-      } else if (client ? this._winPending : this.totalActors > 1 && alive <= 1) {
+      } else if (won) {
+        if (!p.alive) this.spectating = mate;
         if (!this._winPending) {
           this._winPending = true;
           this._endTimer = WIN_SCREEN_DELAY;
-          this.hud.announce('#1 IN BENTONVILLE', 'Last one standing!', 3000);
-          if (p.character) p.character.emote(true);
+          this.hud.announce('#1 IN BENTONVILLE', this.teamMode ? 'Last team standing!' : 'Last one standing!', 3000);
+          if (p.character && p.alive && !p.downed) p.character.emote(true);
         }
         this._endTimer -= dt;
         if (this._endTimer <= 0) {
           this._winPending = false;
           this._endMatch(true);
         }
+      } else if (!p.alive && (!this.spectating || !this.spectating.alive || !sameTeam(this.spectating, p))) {
+        this.spectating = mate; // eliminated, team still in it: watch a teammate
       }
     }
   }
@@ -873,7 +986,8 @@ export class Game {
     hud.el.classList.toggle('is-onbus', this.state === 'drop'); // no aiming UI while riding the Drop Bus
     hud.el.classList.toggle('is-scoped', this.state === 'play' && p.alive && p.scopeView); // sniper scope overlay
     const netAlive = this.net && this.net.aliveCount;
-    hud.setCounts({ alive: netAlive != null ? netAlive : this.combat.aliveCount, eliminations: p.kills });
+    hud.setCounts({ alive: netAlive != null ? netAlive : this.combat.aliveCount, eliminations: p.kills, teams: this.teamMode ? this.combat.aliveTeams : null });
+    if (this.teamMode) this._updateTeamHud(dt);
     hud.setCompass(((p.heading * 180) / Math.PI + 360) % 360);
     const s = this.storm;
     if (!this.freeBuild) {
@@ -912,7 +1026,14 @@ export class Game {
     // minimap
     const fullOpen = (this.state === 'drop' || this.state === 'play') && !!this.fullMapOpen;
     if (this.state === 'play' || this.state === 'drop') hud.showFullMap(fullOpen);
-    const blips = this.loot ? this.loot.blips() : [];
+    let blips = this.loot ? this.loot.blips() : [];
+    if (this.teamMode && this.mates && this.mates.length && this.state === 'play') {
+      blips = blips.slice();
+      for (const m of this.mates) {
+        if (!m.alive || m.inBus) continue;
+        blips.push({ x: m.pos.x, z: m.pos.z, kind: m.downed ? 'mateDown' : 'mate' + Math.min(3, m.teamSlot || 0) });
+      }
+    }
     this.minimap.update({
       player: { x: p.pos.x, z: p.pos.z, heading: p.heading },
       // dormant opening storm / free build: no next ring or guide line (nextR < 0 hides them)
@@ -924,6 +1045,48 @@ export class Game {
       bus: this.state === 'drop' && this.busRoute ? { x: p.pos.x, z: p.pos.z, heading: this.busRoute.heading } : null,
       blips,
     });
+  }
+
+  /** Team modes: teammate panel, name tags over heads, knocked overlay, revive ring. */
+  _updateTeamHud(dt) {
+    const hud = this.hud;
+    const p = this.player;
+    const client = !!(this.net && this.net.isClient);
+    // being revived: the host / solo knows the timer; a client counts while the snapshot says so
+    if (client) p.reviveT = p.alive && p.downed && p.beingRevived ? (p.reviveT || 0) + dt : 0;
+    for (const m of this.mates) if (m.isPuppet) m.reviveT = m.alive && m.downed && m.beingRevived ? (m.reviveT || 0) + dt : 0;
+
+    const rows = this.mates.map((m) => ({
+      id: m.id,
+      name: m.name,
+      color: TEAM_CSS[Math.min(3, m.teamSlot || 0)],
+      health: m.health,
+      shield: m.shield,
+      alive: m.alive,
+      downed: !!m.downed,
+      down01: m.downed ? clamp((m.downHp || 0) / KNOCK.downHp, 0, 1) : 0,
+      revive01: m.downed && m.reviveT > 0 ? clamp(m.reviveT / KNOCK.reviveTime, 0, 1) : 0,
+    }));
+    hud.setTeam({ rows, selfColor: TEAM_CSS[Math.min(3, p.teamSlot || 0)], noun: TEAM_NOUN[this.mode] });
+
+    // name tags (screen space, visible through walls)
+    const tags = [];
+    if (this.state === 'play' || this.state === 'over') {
+      for (const m of this.mates) {
+        if (!m.alive || m.inBus) continue;
+        const sc = this.project(_v.set(m.pos.x, m.pos.y + (m.downed ? 1.0 : 2.15), m.pos.z));
+        if (!sc) continue;
+        const d = Math.hypot(m.pos.x - this.camera.position.x, m.pos.z - this.camera.position.z);
+        tags.push({ id: m.id, x: sc.x, y: sc.y, name: m.name, color: TEAM_CSS[Math.min(3, m.teamSlot || 0)], downed: !!m.downed, dist: Math.round(d) });
+      }
+    }
+    hud.setTags(tags);
+
+    // knocked overlay
+    if (p.alive && p.downed) {
+      hud.setDowned({ down01: clamp((p.downHp || 0) / KNOCK.downHp, 0, 1), revive01: p.reviveT > 0 ? clamp(p.reviveT / KNOCK.reviveTime, 0, 1) : 0, by: p.reviver ? p.reviver.name : null });
+    } else hud.setDowned(null);
+    if (!p.alive) hud.setRevive(null);
   }
 
   // ---------------------------------------------------------------- helpers
@@ -988,7 +1151,7 @@ export class Game {
 
   _canOpenInventory() {
     const p = this.player;
-    return this.state === 'play' && !this.paused && !!p && p.alive && !this._winPending;
+    return this.state === 'play' && !this.paused && !!p && p.alive && !p.downed && !this._winPending;
   }
 
   /** Opens the inventory: frees the mouse for drag & drop without opening the pause menu. */
@@ -1289,6 +1452,36 @@ export class Game {
       damagePlayer(n) {
         return game.combat.applyDamage(game.player, n, { source: null });
       },
+      /** Team modes: mode, our team, teammates and team counts. */
+      team() {
+        const p = game.player;
+        return {
+          mode: game.mode,
+          teamMode: !!game.teamMode,
+          team: p.team,
+          downed: !!p.downed,
+          downHp: p.downHp,
+          totalTeams: game.totalTeams,
+          aliveTeams: game.combat.aliveTeams,
+          mates: (game.mates || []).map((m) => ({ id: m.id, name: m.name, alive: m.alive, downed: !!m.downed, downHp: m.downHp, state: m.botState || null, d: Math.round(m.pos.distanceTo(p.pos)), reviving: m.revivingTarget ? m.revivingTarget.id : null })),
+        };
+      },
+      /** QA: knock actor `id` (lethal damage from an enemy-less source); the player by default. */
+      knock(id = null) {
+        const a = id == null ? game.player : game.combat.actors.find((x) => x.id === id);
+        if (!a || !a.alive) return null;
+        game.combat.applyDamage(a, a.health + a.shield + 1, { source: null });
+        return { alive: a.alive, downed: !!a.downed };
+      },
+      /** QA: put teammate `i` (default the first alive) next to the player. */
+      bringMate(i = 0) {
+        const m = (game.mates || []).filter((x) => x.alive)[i];
+        if (!m) return null;
+        const p = game.player;
+        m.pos.set(p.pos.x + 1.4, p.pos.y, p.pos.z);
+        if (m.vel) m.vel.set(0, 0, 0);
+        return { id: m.id, x: m.pos.x, z: m.pos.z };
+      },
       god(on = true) {
         game.player.god = on;
         game.player.invulnerable = on;
@@ -1362,7 +1555,7 @@ export class Game {
         };
       },
       get bots() {
-        return game.bots ? game.bots.list.map((b) => ({ name: b.name, alive: b.alive, x: b.pos.x, y: b.pos.y, z: b.pos.z, health: b.health })) : [];
+        return game.bots ? game.bots.list.map((b) => ({ id: b.id, name: b.name, team: b.team, alive: b.alive, downed: !!b.downed, x: b.pos.x, y: b.pos.y, z: b.pos.z, health: b.health })) : [];
       },
       get storm() {
         const s = game.storm;
@@ -1395,6 +1588,23 @@ const NO_INPUT = {
   actionHit: () => false,
   label: () => '',
 };
+
+/**
+ * Team modes: one landing spot per bot team (consecutive bots sharing a team id), repeated for
+ * each member, so a bot team drops and lands together.
+ */
+function teamDropPoints(route, world, rng, teams) {
+  const groups = [];
+  for (let i = 0; i < teams.length; i++) if (i === 0 || teams[i] !== teams[i - 1]) groups.push(i);
+  const spots = planBotTargets(route, world, rng, groups.length);
+  const out = [];
+  let g = -1;
+  for (let i = 0; i < teams.length; i++) {
+    if (i === 0 || teams[i] !== teams[i - 1]) g++;
+    out.push(spots[g]);
+  }
+  return out;
+}
 
 /** `n` unique bot names: BOT_NAMES shuffled, then numbered repeats once they run out. */
 function botNames(n, rng) {

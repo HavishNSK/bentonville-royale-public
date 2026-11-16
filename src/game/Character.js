@@ -69,6 +69,7 @@ export class Character {
     this.model = cloneSkinned(kit.scene);
     this.model.scale.setScalar(kit.scale);
     this.root.add(this.model);
+    this._modelPos = this.model.position.clone();
     this.bones = {};
     this.model.traverse((o) => {
       if (o.isBone) this.bones[o.name] = o;
@@ -152,6 +153,22 @@ export class Character {
     this.root.add(canopy);
     this.canopy = canopy;
 
+    // knocked (team modes): a pulsing red ring on the ground under the crawling body (its own
+    // material: the toon materials above are shared by every clone and must not be tinted)
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.75, 1.05, 28),
+      new THREE.MeshBasicMaterial({ color: 0xff3b3b, transparent: true, opacity: 0.6, depthWrite: false, side: THREE.DoubleSide })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(0, 0.06, 0);
+    ring.visible = false;
+    ring.renderOrder = 2;
+    this.root.add(ring);
+    this.downRing = ring;
+    this.downed = false;
+    this._down = 0; // 0..1 blend into the prone pose
+    this._downClock = 0;
+
     this.heading = 0;
     this.pitch = 0;
     this.aim = 0; // 0..1 how much the upper body is in the aim pose
@@ -207,6 +224,17 @@ export class Character {
     this.shotLeft = 0;
   }
 
+  /** Knocked: low prone crawl pose, weapons away, red ring underneath. Idempotent. */
+  setDowned(on) {
+    on = !!on && this.mode !== 'dead';
+    if (on === this.downed) return;
+    this.downed = on;
+    if (on && this.mode === 'emote') this.emote(false);
+    for (const k in this.guns) this.guns[k].visible = !on && k === this.gunKey;
+    if (this.pickaxe) this.pickaxe.visible = !on && this.equipped === 'pickaxe';
+    if (on) this.cancelOneShot();
+  }
+
   die() {
     if (this.mode === 'dead') return;
     this.mode = 'dead';
@@ -221,6 +249,8 @@ export class Character {
     for (const k in this.guns) this.guns[k].visible = false;
     if (this.pickaxe) this.pickaxe.visible = false;
     this.canopy.visible = false;
+    this.downed = false;
+    this.downRing.visible = false;
   }
 
   emote(on) {
@@ -250,6 +280,11 @@ export class Character {
     this.shot = null;
     this.shotW = 0;
     this.aim = 0;
+    this.downed = false;
+    this._down = 0;
+    this.downRing.visible = false;
+    this.model.rotation.x = 0;
+    this.model.position.copy(this._modelPos);
     const eq = this.equipped;
     this.equipped = null;
     this.setEquipped(eq || 'pickaxe', this.twoHanded);
@@ -266,6 +301,18 @@ export class Character {
     this.pitch = s.pitch || 0;
     this.root.rotation.y = Math.PI - s.heading;
     this.canopy.visible = !!s.gliding && this.mode !== 'dead';
+    // prone blend (runs even when the skeleton is not animated this frame)
+    const downT = this.downed ? 1 : 0;
+    if (this._down !== downT || this.downed) {
+      this._down = damp(this._down, downT, 8, dt);
+      if (Math.abs(this._down - downT) < 0.002) this._down = downT;
+      // tip forward around the feet and slide back so the body lies over the actor's position
+      this.model.rotation.x = this._down * 1.32;
+      this.model.position.set(this._modelPos.x, this._modelPos.y + this._down * 0.22, this._modelPos.z - this._down * 0.8);
+      this._downClock += dt;
+      this.downRing.visible = this.downed;
+      if (this.downed) this.downRing.material.opacity = 0.35 + 0.3 * (0.5 + 0.5 * Math.sin(this._downClock * 6));
+    }
     if (!this.animate) return;
 
     const dead = this.mode === 'dead';
@@ -299,7 +346,7 @@ export class Character {
     w.air = damp(w.air ?? 0, ta, k, dt);
 
     // upper-body override: aim pose while a gun is out, plus one-shots
-    const wantAim = !full && this.equipped && this.equipped !== 'pickaxe' ? 1 : 0;
+    const wantAim = !full && !this.downed && this.equipped && this.equipped !== 'pickaxe' ? 1 : 0;
     this.aim = damp(this.aim, wantAim, 14, dt);
     let shotTarget = 0;
     if (this.shot) {
@@ -320,7 +367,7 @@ export class Character {
       else if (key === aimKey) a.setEffectiveWeight(this.aim * (1 - this.shotW) * fullW);
       else a.setEffectiveWeight(0);
     }
-    const rate = clamp(s.speed / 6.6, 0.55, 1.45);
+    const rate = this.downed ? 0.45 : clamp(s.speed / 6.6, 0.55, 1.45);
     for (const key of LOCO) {
       const lo = this.lo[key];
       if (!lo) continue;
@@ -344,7 +391,7 @@ export class Character {
     // keep the gun in the right hand, pointing exactly where the character aims
     const hand = this.bones.handslotr || this.bones.handr;
     const gun = this.guns[this.gunKey];
-    if (gun && hand && !dead) {
+    if (gun && hand && !dead && !this.downed) {
       this.model.updateWorldMatrix(true, false);
       hand.updateWorldMatrix(true, false);
       _v.setFromMatrixPosition(hand.matrixWorld);
@@ -373,6 +420,8 @@ export class Character {
     this.root.removeFromParent();
     this.canopy.geometry.dispose();
     this.canopy.material.dispose();
+    this.downRing.geometry.dispose();
+    this.downRing.material.dispose();
   }
 }
 

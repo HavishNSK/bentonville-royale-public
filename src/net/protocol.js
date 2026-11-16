@@ -15,11 +15,13 @@
 //       nextR                               u16 heading      (0..2pi -> 0..65535)
 //   u8  phase, u8 mode, u16 secondsLeft*10  i16 pitch        (x10000)
 //   u8  dps, u8 alive, u8 nActors           u8  flags  (see FLAG below)
-//   per actor (16 bytes):                   u8  mode   (MODES index)
+//   per actor (17 bytes):                   u8  mode   (MODES index)
 //     u8  id, u8 flags                      u8  equip  (EQUIP index)
 //     i16 x*10, i16 y*20, i16 z*10          = 32 bytes
 //     u16 heading, i8 pitch*80
 //     u8  equip, u8 health, u8 shield, u8 kills
+//     u8  xflags (XFLAG: downed, being revived)
+//         (a downed actor's health byte carries its down HP)
 //
 // Reliable messages are JSON objects { t: <type>, ... }. Anything longer than
 // the sender's chunk size is split into { t: '_c', id, i, n, s } parts and
@@ -27,7 +29,7 @@
 
 import { WEAPONS, TAU } from '../core/config.js';
 
-export const PROTO_VERSION = 1;
+export const PROTO_VERSION = 2; // 2: teams (roster tm, start mode, snapshot xflags, knock / revive events)
 export const MAX_HUMANS = 16;
 export const SNAP_HZ = 20;
 export const STATE_HZ = 30;
@@ -39,7 +41,8 @@ export const T_SNAP = 1;
 export const T_STATE = 2;
 
 export const FLAG = { alive: 1, grounded: 2, gliding: 4, crouch: 8, bus: 16, emote: 32, ads: 64, reloading: 128 };
-export const MODES = ['ground', 'freefall', 'glide', 'bus', 'dead'];
+export const XFLAG = { downed: 1, revived: 2 }; // revived = a teammate is reviving this actor right now
+export const MODES = ['ground', 'freefall', 'glide', 'bus', 'dead', 'downed'];
 export const STORM_MODES = ['waiting', 'shrinking', 'final', 'done'];
 export const EQUIP = ['pickaxe', 'none', ...Object.keys(WEAPONS)];
 export const SURF = ['none', 'body', 'shield', 'dirt', 'wood', 'brick', 'metal', 'glass', 'water'];
@@ -69,9 +72,9 @@ const u8 = (v) => Math.max(0, Math.min(255, Math.round(v || 0)));
 // ------------------------------------------------------------------ snapshot
 
 export const SNAP_HEADER = 1 + 2 + 4 + 24 + 1 + 1 + 2 + 1 + 1 + 1;
-export const SNAP_ACTOR = 16;
+export const SNAP_ACTOR = 17;
 
-/** actors: [{ id, flags, x, y, z, heading, pitch, equip, health, shield, kills }] */
+/** actors: [{ id, flags, x, y, z, heading, pitch, equip, health, shield, kills, xf }] */
 export function encodeSnapshot(seq, hostTime, storm, alive, actors) {
   const buf = new ArrayBuffer(SNAP_HEADER + SNAP_ACTOR * actors.length);
   const d = new DataView(buf);
@@ -101,6 +104,7 @@ export function encodeSnapshot(seq, hostTime, storm, alive, actors) {
     d.setUint8(o, u8(a.health)); o += 1;
     d.setUint8(o, u8(a.shield)); o += 1;
     d.setUint8(o, u8(a.kills)); o += 1;
+    d.setUint8(o, (a.xf || 0) & 0xff); o += 1;
   }
   return buf;
 }
@@ -137,6 +141,7 @@ export function decodeSnapshot(buf) {
     a.health = d.getUint8(o); o += 1;
     a.shield = d.getUint8(o); o += 1;
     a.kills = d.getUint8(o); o += 1;
+    a.xf = d.getUint8(o); o += 1;
     actors[i] = a;
   }
   return { seq, time, storm, alive, actors };
