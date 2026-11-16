@@ -243,10 +243,181 @@ for (const f of srcs) {
   if (m) fail(`${path.relative(root, f)} uses ${[...new Set(m)].join(', ')}`);
 }
 
+// Phase 2D: bots route through rooms (interior doors, stairs), react to broken panels; loot
+// spawns at plan.lootSpots. Headless Bots / Loot (no kits, no scene), seeded, fixed dt.
+const phase2d = await (async () => {
+  const { Bots } = await import('../src/game/Bots.js');
+  const { Loot } = await import('../src/game/Loot.js');
+  const { route } = await import('../src/world/Interiors.js');
+  const { MATCH } = await import('../src/core/config.js');
+  world.restoreAllPanels();
+  const seeded = (a) => () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const roomOf = (plan, x, z) => {
+    const F = plan.frame;
+    const a = (x - F.ox) * F.ux + (z - F.oz) * F.uz;
+    const b = (x - F.ox) * F.vx + (z - F.oz) * F.vz;
+    let best = -1;
+    let bd = Infinity;
+    for (const r of plan.levels[0].rooms) {
+      const da = Math.max(r.a0 - a, 0, a - r.a1);
+      const db = Math.max(r.b0 - b, 0, b - r.b1);
+      if (da * da + db * db < bd) {
+        bd = da * da + db * db;
+        best = r.id;
+      }
+    }
+    return best;
+  };
+  const bots = new Bots({ world, kits: [] });
+  bots._nearShell = () => null; // no indoor wander detours: the goal stays where the test puts it
+  const rop = world.randomOpenPoint.bind(world);
+  let pin = null; // wander re-picks its goal inside 4 m: every re-pick returns the pinned goal
+  world.randomOpenPoint = (r, cx, cz, rad, cl, out) => (pin ? ((out.x = pin.x), (out.z = pin.z), out) : rop(r, cx, cz, rad, cl, out));
+  const rng = seeded(7);
+  /** Bot standing at (x, z) walks (wander) toward (gx, gz); returns seconds to reach the goal's room or -1. */
+  const walk = (c, x, z, gx, gz, maxT) => {
+    bots.spawn(1, rng, { dropPoints: [{ x, z }] });
+    const b = bots.brains[0];
+    const a = b.actor;
+    a.pos.set(x, world.groundHeight(x, z, 1e4), z);
+    a.gliding = false;
+    a.grounded = true;
+    b.state = 'wander';
+    for (const m of ['wood', 'brick', 'metal']) a.inventory.mats[m] = 200; // no harvest detours
+    b.wanderGoal = true;
+    b.goalX = gx;
+    b.goalZ = gz;
+    b.wanderUntil = 1e9;
+    pin = { x: gx, z: gz };
+    const gr = roomOf(c.shell.plan, gx, gz);
+    for (let t = 0; t < maxT; t += 0.05) {
+      bots.update(0.05, {});
+      if (Math.hypot(a.pos.x - gx, a.pos.z - gz) < 2.5 && world.interiorAt(a.pos.x, a.pos.z) === c && roomOf(c.shell.plan, a.pos.x, a.pos.z) === gr) return t;
+    }
+    return -1;
+  };
+  /** Outside the main door to the room the most interior doors away (kind preferred). */
+  const deepWalk = (c, kind) => {
+    const s = c.shell;
+    const plan = s.plan;
+    const d = s.doors.find((q) => q.main) || s.doors[0];
+    const r0 = roomOf(plan, d.x - d.nx * 1.3, d.z - d.nz * 1.3);
+    let best = null;
+    for (const r of plan.levels[0].rooms) {
+      const rt = route(plan, r0, r.id, []);
+      if (!rt) continue;
+      const score = (kind && r.kind === kind ? 1e4 : 0) + rt.length * 100 + Math.hypot(r.cx - d.x, r.cz - d.z);
+      if (!best || score > best.score) best = { r, hops: rt.length, score };
+    }
+    const t = walk(c, d.x + d.nx * 3, d.z + d.nz * 3, best.r.cx, best.r.cz, 60);
+    return { id: c.ref.id, room: best.r.kind, hops: best.hops, t: +t.toFixed(2) };
+  };
+  const out = { named: [], random: 0, arrived: 0 };
+  // named deep rooms: office_block 1427720556's far office, the bank's vault
+  for (const [id, kind] of [[1427720556, null], [912573732, 'vault']]) {
+    const c = world.buildingById(id);
+    if (!c || !c.shell.plan) {
+      fail(`phase 2D: building ${id} has no plan`);
+      continue;
+    }
+    const r = deepWalk(c, kind);
+    out.named.push(r);
+    if (r.t < 0) fail(`phase 2D: bot did not reach ${r.room} of ${id} (${r.hops} doors) in 60 s`);
+  }
+  // a seeded sample of multi-room buildings
+  const pick = seeded(11);
+  const pool = shells.filter((c) => c.shell.plan && c.shell.plan.levels[0].rooms.length >= 3 && c.shell.doors.length);
+  for (let i = 0; i < 40 && pool.length; i++) {
+    const r = deepWalk(pool[Math.floor(pick() * pool.length)]);
+    out.random++;
+    if (r.t >= 0) out.arrived++;
+    else if (verbose) console.log('phase 2D: no arrival', JSON.stringify(r));
+  }
+  if (out.arrived < Math.ceil(out.random * 0.95)) fail(`phase 2D: only ${out.arrived}/${out.random} deep-room walks arrived (want >= 95%)`);
+
+  // broken partition: a straight walk through the hole replaces the door route
+  {
+    const c = world.buildingById(912514434);
+    const plan = c && c.shell.plan;
+    const L = plan && plan.levels[0];
+    let done = false;
+    for (let w = 0; L && w < L.wallMeta.length && !done; w++) {
+      const m = L.wallMeta[w];
+      if (m.kind !== 'wall' || m.ra < 0 || m.rb < 0) continue;
+      const k = w * 7;
+      const W = L.walls;
+      if (Math.hypot(W[k + 2] - W[k], W[k + 3] - W[k + 1]) < 1.5) continue;
+      const mx = (W[k] + W[k + 2]) / 2;
+      const mz = (W[k + 1] + W[k + 3]) / 2;
+      const ax = mx - m.nx * 1.2;
+      const az = mz - m.nz * 1.2;
+      const bx = mx + m.nx * 1.2;
+      const bz = mz + m.nz * 1.2;
+      if (world.interiorAt(ax, az) !== c || world.interiorAt(bx, bz) !== c || world.blockedAt(ax, az, 0.5, true) || world.blockedAt(bx, bz, 0.5, true)) continue;
+      done = true;
+      bots.spawn(1, rng, { dropPoints: [{ x: ax, z: az }] });
+      const b = bots.brains[0];
+      b.actor.pos.set(ax, c.shell.floor, az);
+      b.inB = c;
+      const routed = bots._doorRoute(b, bx, bz);
+      world.breakPanel(c, m.panel);
+      b.pathN = 0;
+      b.walkAt = 0;
+      const routedBroken = bots._doorRoute(b, bx, bz);
+      // walk toward a goal 3 m past the wall: time until the bot is 0.6 m beyond the wall line
+      const gx = mx + m.nx * 3;
+      const gz = mz + m.nz * 3;
+      walk(c, ax, az, gx, gz, 0.05);
+      const a = bots.brains[0].actor;
+      let t = 0;
+      while (t < 6 && (a.pos.x - mx) * m.nx + (a.pos.z - mz) * m.nz < 0.6) {
+        bots.update(0.05, {});
+        t += 0.05;
+      }
+      world.restoreAllPanels();
+      if (!routed) fail('phase 2D: no door route around an intact partition');
+      if (routedBroken) fail('phase 2D: door route kept after the partition broke (expected a straight walk)');
+      if (t >= 3) fail(`phase 2D: bot did not walk through a broken partition (${t.toFixed(2)} s)`);
+      out.broken = { panel: m.panel, routed, routedBroken, t: +t.toFixed(2) };
+    }
+    if (!done) fail('phase 2D: no partition found for the broken-panel walk');
+  }
+  world.randomOpenPoint = rop;
+  pin = null;
+
+  // loot: exact counts, indoor share, indoor records on a room floor clear of walls
+  const loot = new Loot({ scene: null, world });
+  const ls = loot.spawnMatch(seeded(3));
+  if (ls.chests !== MATCH.chests || ls.ammoBoxes !== MATCH.ammoBoxes) fail(`phase 2D: loot counts ${JSON.stringify(ls)}`);
+  if (ls.indoorChests < MATCH.chests * 0.3) fail(`phase 2D: only ${ls.indoorChests} indoor chests`);
+  let indoor = 0;
+  let badLoot = 0;
+  for (const r of loot.records) {
+    const c = world.interiorAt(r.x, r.z);
+    if (!c) continue;
+    indoor++;
+    if (world.blockedAt(r.x, r.z, 0.25, true) || Math.abs(r.y - c.shell.floor) > 0.6) badLoot++;
+  }
+  if (badLoot) fail(`phase 2D: ${badLoot} indoor loot records in a wall or off the floor`);
+  out.loot = { ...ls, ms: undefined, indoorRecords: indoor, records: loot.records.length };
+  // spacing: marked spots on another storey are not neighbours
+  loot._grid = new Map();
+  loot._mark(0, 0, 3, 1);
+  if (!loot._spaced(1, 0, 3, 2) || loot._spaced(1, 0, 3, 1) || loot._spaced(1, 0, 3, -1)) fail('phase 2D: Loot._spaced storey term');
+  loot._grid = null;
+  return out;
+})();
+
 console.log(`buildings ${data.buildings.length}, hollow ${shells.length}, rooms ${rooms}, interior walls ${walls}, interior doors ${idoors}, panels ${panels} (outer ${outerPanels}, inner ${panels - outerPanels})`);
 console.log('recipes', JSON.stringify(recipes));
 console.log(`ray checks: inner ${rayChecked}, outer ${outerChecked}; plan time ${ms} ms (whole World build)`);
 console.log('interiorHash', world.interiorHash);
+console.log('phase 2D', JSON.stringify(phase2d));
 if (fails.length) {
   console.log(`\nFAIL (${fails.length})`);
   for (const f of fails.slice(0, 80)) console.log('  ' + f);

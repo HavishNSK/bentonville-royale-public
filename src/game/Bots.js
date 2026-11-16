@@ -33,8 +33,11 @@
 // Stuck bots jump, flip their wall-following side, then get an A* detour from a shared,
 // time-sliced grid planner (PLAN_BUDGET expansions per frame).
 // Enterable buildings: a goal on the other side of a building wall (loot / cover / a wander
-// spot inside, or the way out) gets door waypoints (_doorRoute, every LOD tier); the A*
-// grid treats interiors as open, only the thin walls block, and door cells are forced open.
+// spot inside, or the way out) gets door waypoints (_doorRoute, every LOD tier); inside a
+// building with an interior plan the route continues room to room through interior doors
+// (and plan.stairs between storeys, _roomRoute) unless a straight walk is open (a broken
+// panel). The A* grid samples only the thin walls / partitions, and exterior and ground-storey
+// interior door cells are forced open; a door route that stalls hands over to A*.
 // Bots only open / take loot on the same side of a wall; hurt bots heal / retreat indoors.
 // Teams (combat.teamMode): opts.teams[i] is bot i's team (default: its own id). Bots never
 // target or react to teammates; a knocked bot (actor.downed) crawls toward its nearest
@@ -61,6 +64,7 @@ import {
 } from '../core/config.js';
 import { sameTeam } from './Teams.js';
 import { busPosAt, jumpTimeFor } from './DropBus.js';
+import { route as roomRoute } from '../world/Interiors.js';
 
 const EYE = PLAYER.eyeHeight;
 const _busPt = { x: 0, y: 0, z: 0 };
@@ -94,11 +98,21 @@ const WP_REACH = 1.8;
 const COVER_RANGE = 30; // metres: buildings this close are used for cover / healing
 const INDOOR_WANDER = 0.3; // share of new wander goals placed inside a nearby building
 const SHELL_CELL = 64; // metres: spatial hash cell for enterable buildings (Bots._shellGrid)
+// interiors (shell.plan): room-graph routes through interior doors and stairs, see _roomRoute
+const INNER_STEP = 0.9; // metres either side of an interior door's wall line: its two waypoints
+const DOOR_STEPS = [INNER_STEP, 0.7, 0.55]; // fallbacks when that point is in a wall (_doorStep)
+const STAIR_STEP = 1.0; // metres before a stair foot / beyond its landing: the approach points
+const LEVEL_SLACK = 0.6; // metres: feet this far below a storey's floor still count as on it
+const CLEAR_WALK = 30; // metres: a same-building goal closer than this is checked for a straight walk
+const CLEAR_STEP = 0.6; // metres between clear-walk samples
+const INDOOR_FEELER = 0.7; // steering feeler height above the feet indoors (partitions, furniture)
+const OUTDOOR_FEELER = 0.95;
 
 const _v = new THREE.Vector3();
 const _origin = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const _pt = { x: 0, z: 0 };
+const _route = []; // reused room-graph route (door indices)
 const _anim = { fwd: 0, side: 0, speed: 0, grounded: true, gliding: false, heading: 0, pitch: 0 };
 const _cand = [null, null, null, null];
 const _candD = [0, 0, 0, 0];
@@ -429,6 +443,7 @@ export class Bots {
       done.pathGoalZ = done.planGZ;
       done.pathUntil = this.time + 25;
       done.stuck = 0;
+      done.routeHold = 0;
       done.paths++;
     }
 
@@ -812,7 +827,7 @@ export class Bots {
         const d = Math.hypot(gx - a.pos.x, gz - a.pos.z);
         // not through a building wall: the loot and the bot must be on the same side of it
         // (walkable interior of the same building, or both outside) with a clear line to it
-        if (d < INTERACT && b.lootIn === b.inB) {
+        if (d < INTERACT && b.lootIn === b.inB && this._sameStorey(b.inB, a.pos.y, b.lootY)) {
           if (this.world.clearLine(a.pos.x, a.pos.y + CHEST, a.pos.z, gx, b.lootY + 0.4, gz)) this._interact(b);
           else {
             this.navStats.lootLos++;
@@ -891,7 +906,10 @@ export class Bots {
       }
     }
     // a goal on the other side of a building wall: go through a door (cheap, every LOD tier)
-    if (routed && b.pathN === 0) this._doorRoute(b, rgx, rgz, state === 'loot' ? b.lootIn : undefined);
+    if (routed && b.pathN === 0 && t >= b.routeHold) {
+      if (state === 'loot') this._doorRoute(b, rgx, rgz, b.lootIn, b.lootY);
+      else this._doorRoute(b, rgx, rgz);
+    }
     // follow the door route / planned detour while it still leads to this goal
     b.doorNear = false;
     if (b.pathN > 0 && routed) {
@@ -909,7 +927,11 @@ export class Bots {
           const r = K[i] ? DOOR_REACH : WP_REACH;
           const d2 = dx * dx + dz * dz;
           let next = d2 < r * r;
-          if (!next && i < b.pathN - 1 && d2 < 6.25) {
+          if (!next && K[i]) {
+            // door waypoint: passed only beyond it along the leg into it (a door pair's
+            // next leg runs along the wall, so "past along the next leg" fires on the wrong side)
+            if (i > 0 && d2 < 1.44) next = dx * (P[i * 2] - P[i * 2 - 2]) + dz * (P[i * 2 + 1] - P[i * 2 - 1]) > 0;
+          } else if (!next && i < b.pathN - 1 && d2 < 6.25) {
             const sx = P[i * 2 + 2] - P[i * 2];
             const sz = P[i * 2 + 3] - P[i * 2 + 1];
             next = dx * sx + dz * sz > 0; // past the waypoint along the next leg
@@ -1283,7 +1305,7 @@ export class Bots {
       b.lootZ = p.z;
       b.lootIn = this._shellAt(p.x, p.z, p.y);
       // the way in (or out) through a door takes longer than the straight line
-      b.lootUntil = t + 4 + Math.hypot(p.x - a.pos.x, p.z - a.pos.z) / 3 + (b.lootIn !== b.inB ? 10 : 0);
+      b.lootUntil = t + 4 + Math.hypot(p.x - a.pos.x, p.z - a.pos.z) / 3 + (b.lootIn !== b.inB ? 10 : b.lootIn ? 6 : 0);
       return true;
     }
     return false;
@@ -1535,7 +1557,8 @@ export class Bots {
       return;
     }
     const world = this.world;
-    const oy = a.pos.y + 0.95;
+    // indoors the feeler runs lower: partitions and furniture tops sit under chest height
+    const oy = a.pos.y + (b.inB ? INDOOR_FEELER : OUTDOOR_FEELER);
     const range = Math.min(d, 3.2);
     const side = b.avoidSide;
     let chosen = base;
@@ -1569,65 +1592,192 @@ export class Bots {
   _shellAt(x, z, y) {
     const c = this.world.interiorAt ? this.world.interiorAt(x, z) : null;
     if (!c || !c.shell) return null;
-    return y == null || y < c.shell.ceil - 0.3 ? c : null;
+    const top = c.shell.top ?? c.shell.ceil; // multi-storey: the top storey's ceiling
+    return y == null || y < top - 0.3 ? c : null;
   }
 
   /**
-   * Goal on the other side of a building wall (bot inside and goal elsewhere, or goal inside
-   * a building the bot is not in): writes door waypoints into b.path (approach point outside
-   * the door, then the step inside; reversed to get out). No-op when nothing needs a door.
+   * Goal on the other side of a wall (bot inside and goal elsewhere, goal inside a building the
+   * bot is not in, or another room / storey of the bot's own building): writes waypoints into
+   * b.path — room-graph legs through interior doors and stairs (_roomRoute), the step inside
+   * and the approach point outside an exterior door (reversed to get out). gy = goal height
+   * (picks the goal's storey; null = the bot's own storey in its building, else the ground).
+   * No-op when nothing needs a door, or a straight walk is clear (a broken wall panel).
    */
-  _doorRoute(b, gx, gz, ig = undefined) {
+  _doorRoute(b, gx, gz, ig = undefined, gy = null) {
     const a = b.actor;
     const ib = b.inB;
-    if (ig === undefined) ig = this._shellAt(gx, gz, null);
-    if (ib === ig) return false;
+    if (ig === undefined) ig = this._shellAt(gx, gz, gy);
+    if (!ib && !ig) return false;
     const P = b.path;
     const K = b.pathK;
     let n = 0;
     let fx = a.pos.x;
     let fz = a.pos.z;
-    if (ib) {
-      const d = this._pickDoor(b, ib, fx, fz, gx, gz);
-      if (!d) return false;
-      // already in the doorway: skip the inside step
-      if (Math.hypot(d.x - fx, d.z - fz) > 1.1) {
-        P[0] = d.x - d.nx * DOOR_IN;
-        P[1] = d.z - d.nz * DOOR_IN;
-        K[0] = 1;
-        n = 1;
-      }
-      P[n * 2] = d.x + d.nx * DOOR_OUT;
-      P[n * 2 + 1] = d.z + d.nz * DOOR_OUT;
-      K[n] = 1;
-      n++;
-      fx = P[n * 2 - 2];
-      fz = P[n * 2 - 1];
-    }
-    if (ig) {
-      const d = this._pickDoor(b, ig, fx, fz, gx, gz);
-      if (d) {
+    if (ib && ib === ig) {
+      // same building: rooms / storeys apart, unless a straight walk is open
+      const gyy = gy ?? a.pos.y;
+      n = this._roomRoute(ib, fx, fz, a.pos.y, gx, gz, gyy, P, K, 0);
+      if (!n || this._walkClear(b, gx, gz, ib, gyy)) return false;
+    } else {
+      if (ib) {
+        const d = this._pickDoor(b, ib, fx, fz, gx, gz);
+        if (!d) return false;
+        // already in the doorway: skip the room legs and the inside step
         if (Math.hypot(d.x - fx, d.z - fz) > 1.1) {
-          P[n * 2] = d.x + d.nx * DOOR_OUT;
-          P[n * 2 + 1] = d.z + d.nz * DOOR_OUT;
-          K[n] = 1;
-          n++;
+          const ix = d.x - d.nx * DOOR_IN;
+          const iz = d.z - d.nz * DOOR_IN;
+          n = this._roomRoute(ib, fx, fz, a.pos.y, ix, iz, ib.shell.floor, P, K, 0);
+          n = pushWp(P, K, n, ix, iz, 1);
         }
-        P[n * 2] = d.x - d.nx * DOOR_IN;
-        P[n * 2 + 1] = d.z - d.nz * DOOR_IN;
-        K[n] = 1;
-        n++;
+        n = pushWp(P, K, n, d.x + d.nx * DOOR_OUT, d.z + d.nz * DOOR_OUT, 1);
+        fx = P[n * 2 - 2];
+        fz = P[n * 2 - 1];
       }
+      if (ig) {
+        const d = this._pickDoor(b, ig, fx, fz, gx, gz);
+        if (d) {
+          if (Math.hypot(d.x - fx, d.z - fz) > 1.1) n = pushWp(P, K, n, d.x + d.nx * DOOR_OUT, d.z + d.nz * DOOR_OUT, 1);
+          const ix = d.x - d.nx * DOOR_IN;
+          const iz = d.z - d.nz * DOOR_IN;
+          n = pushWp(P, K, n, ix, iz, 1);
+          n = this._roomRoute(ig, ix, iz, ig.shell.floor, gx, gz, gy ?? ig.shell.floor, P, K, n);
+        }
+      }
+      // a short hop through a broken outer panel beats walking round to a door
+      if (n && this._walkClear(b, gx, gz, ib || ig, gy ?? (ig ? ig.shell.floor : a.pos.y))) return false;
     }
     if (!n) return false;
     b.pathN = n;
     b.pathI = 0;
     b.pathGoalX = gx;
     b.pathGoalZ = gz;
-    b.pathUntil = this.time + 10 + Math.hypot(gx - a.pos.x, gz - a.pos.z) / 3;
+    b.pathUntil = this.time + 10 + Math.hypot(gx - a.pos.x, gz - a.pos.z) / 3 + n * 1.5;
     b.doorRoutes++;
     this.navStats.doorRoutes++;
     return true;
+  }
+
+  /**
+   * Room-graph leg inside building c from (x, z) at height y to (gx, gz) at height gy:
+   * appends interior-door waypoint pairs (INNER_STEP either side of each door's wall line)
+   * and, between storeys, stair waypoints (plan.stairs used as portals: approach, foot,
+   * landing, step off) to P / K from index n. Returns the new count (n when no leg is
+   * needed or the plan has none). Doors are always open, so the route never goes stale when
+   * panels break; a broken partition is only a shortcut (see _walkClear).
+   */
+  _roomRoute(c, x, z, y, gx, gz, gy, P, K, n) {
+    const plan = c.shell && c.shell.plan;
+    if (!plan || !plan.levels || !plan.levels.length) return n;
+    let lv = levelAt(plan, y);
+    const glv = levelAt(plan, gy);
+    let r = roomAt(plan, lv, x, z);
+    const gr = roomAt(plan, glv, gx, gz);
+    const stairs = plan.stairs || [];
+    while (lv !== glv) {
+      const up = glv > lv;
+      const sl = up ? lv : lv - 1;
+      let s = null;
+      for (let i = 0; i < stairs.length; i++) {
+        if (stairs[i].level === sl) {
+          s = stairs[i];
+          break;
+        }
+      }
+      if (!s) break; // no way between these storeys: walk the rooms of this one
+      const enter = up ? s.room0 : s.room1;
+      n = this._levelLeg(plan, lv, r, enter ?? -1, P, K, n);
+      let ux = s.x1 - s.x0;
+      let uz = s.z1 - s.z0;
+      const l = Math.hypot(ux, uz) || 1;
+      ux /= l;
+      uz /= l;
+      if (n > PATH_MAX - 4) return n;
+      if (up) {
+        n = pushWp(P, K, n, s.x0 - ux * STAIR_STEP, s.z0 - uz * STAIR_STEP, 1);
+        n = pushWp(P, K, n, s.x0, s.z0, 1);
+        n = pushWp(P, K, n, s.x1, s.z1, 1);
+        n = pushWp(P, K, n, s.x1 + ux * STAIR_STEP, s.z1 + uz * STAIR_STEP, 1);
+      } else {
+        n = pushWp(P, K, n, s.x1 + ux * STAIR_STEP, s.z1 + uz * STAIR_STEP, 1);
+        n = pushWp(P, K, n, s.x1, s.z1, 1);
+        n = pushWp(P, K, n, s.x0, s.z0, 1);
+        n = pushWp(P, K, n, s.x0 - ux * STAIR_STEP, s.z0 - uz * STAIR_STEP, 1);
+      }
+      lv = up ? lv + 1 : lv - 1;
+      r = (up ? s.room1 : s.room0) ?? roomAt(plan, lv, P[n * 2 - 2], P[n * 2 - 1]);
+    }
+    if (lv === glv) n = this._levelLeg(plan, lv, r, gr, P, K, n);
+    return n;
+  }
+
+  /**
+   * Distance (m) from interior door d's wall line, on side sgn of its normal, for the door's
+   * waypoint: INNER_STEP, or less when that point is in a wall (a sliver of a room behind the
+   * door). Ground storey (blockedAt samples its partitions).
+   */
+  _doorStep(d, sgn) {
+    const w = this.world;
+    for (let k = 0; k < DOOR_STEPS.length; k++) {
+      const o = DOOR_STEPS[k] * sgn;
+      if (!w.blockedAt(d.x + d.nx * o, d.z + d.nz * o, 0.3, true)) return DOOR_STEPS[k];
+    }
+    return DOOR_STEPS[DOOR_STEPS.length - 1];
+  }
+
+  /** Are heights y0 and y1 on the same storey of building c (always true outdoors / one storey)? */
+  _sameStorey(c, y0, y1) {
+    const plan = c && c.shell && c.shell.plan;
+    return !plan || plan.levels.length < 2 || levelAt(plan, y0) === levelAt(plan, y1);
+  }
+
+  /** Interior-door waypoint pairs from room r0 to room r1 on storey lv (appended at n). */
+  _levelLeg(plan, lv, r0, r1, P, K, n) {
+    if (r0 < 0 || r1 < 0 || r0 === r1) return n;
+    const doors = plan.levels[lv] && plan.levels[lv].doors;
+    if (!doors || !roomRoute(plan, r0, r1, _route, lv)) return n;
+    let cur = r0;
+    for (let k = 0; k < _route.length && n < PATH_MAX - 2; k++) {
+      const d = doors[_route[k]];
+      const s = d.roomA === cur ? 1 : -1; // +1: walking along the normal (toward roomB)
+      const o0 = lv === 0 ? this._doorStep(d, -s) : INNER_STEP;
+      const o1 = lv === 0 ? this._doorStep(d, s) : INNER_STEP;
+      n = pushWp(P, K, n, d.x - d.nx * o0 * s, d.z - d.nz * o0 * s, 1);
+      n = pushWp(P, K, n, d.x + d.nx * o1 * s, d.z + d.nz * o1 * s, 1);
+      cur = s > 0 ? d.roomB : d.roomA;
+    }
+    return n;
+  }
+
+  /**
+   * Can the bot walk straight to (gx, gz) (within CLEAR_WALK m)? Samples blockedAt(..., true)
+   * along the line, so partitions and outer panels count only while they stand: a broken panel
+   * opens the shortcut on the next check. Cached per goal for a moment (b.walkAt). Ground
+   * storey only (blockedAt samples the ground-storey partitions): false when the bot or the
+   * goal (height gy) is on an upper storey of building c.
+   */
+  _walkClear(b, gx, gz, c, gy) {
+    const a = b.actor;
+    const plan = c && c.shell && c.shell.plan;
+    if (plan && (levelAt(plan, a.pos.y) !== 0 || levelAt(plan, gy) !== 0)) return false;
+    const dx = gx - a.pos.x;
+    const dz = gz - a.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d > CLEAR_WALK) return false;
+    const t = this.time;
+    if (t < b.walkAt && Math.abs(gx - b.walkGX) < 1 && Math.abs(gz - b.walkGZ) < 1) return b.walkOk;
+    const w = this.world;
+    let ok = true;
+    const steps = Math.ceil(d / CLEAR_STEP);
+    for (let i = 1; i < steps && ok; i++) {
+      const f = i / steps;
+      if (w.blockedAt(a.pos.x + dx * f, a.pos.z + dz * f, 0.35, true)) ok = false;
+    }
+    b.walkAt = t + 1.5;
+    b.walkGX = gx;
+    b.walkGZ = gz;
+    b.walkOk = ok;
+    return ok;
   }
 
   /** Door of building c with the shortest from -> door -> goal walk (randomised after failed tries). */
@@ -1726,19 +1876,20 @@ export class Bots {
     const K = b.pathK;
     const lx = P[n * 2 - 2];
     const lz = P[n * 2 - 1];
-    if (this._shellAt(lx, lz, null) === ig) return; // already gets inside
+    const fl = ig.shell.floor;
+    if (this._shellAt(lx, lz, null) === ig) {
+      // already gets inside (maybe through interior doors): finish the room legs to the goal
+      b.planN = this._roomRoute(ig, lx, lz, fl, b.planGX, b.planGZ, fl, P, K, n);
+      return;
+    }
     const d = this._pickDoor(b, ig, lx, lz, b.planGX, b.planGZ);
     if (!d) return;
-    n = Math.min(n, PATH_MAX - 2);
-    P[n * 2] = d.x + d.nx * DOOR_OUT;
-    P[n * 2 + 1] = d.z + d.nz * DOOR_OUT;
-    K[n] = 1;
-    n++;
-    P[n * 2] = d.x - d.nx * DOOR_IN;
-    P[n * 2 + 1] = d.z - d.nz * DOOR_IN;
-    K[n] = 1;
-    n++;
-    b.planN = n;
+    n = Math.min(n, PATH_MAX - 16); // room for the door and a few room legs
+    n = pushWp(P, K, n, d.x + d.nx * DOOR_OUT, d.z + d.nz * DOOR_OUT, 1);
+    const ix = d.x - d.nx * DOOR_IN;
+    const iz = d.z - d.nz * DOOR_IN;
+    n = pushWp(P, K, n, ix, iz, 1);
+    b.planN = this._roomRoute(ig, ix, iz, fl, b.planGX, b.planGZ, fl, P, K, n);
   }
 
   /** Random open floor point inside building c (clear of its walls), or false. */
@@ -1787,6 +1938,14 @@ export class Bots {
       if (b.stuck >= 2 && b.state !== 'engage' && b.pathN === 0 && b.lod < 2) {
         // plan a way around on a coarse grid toward the current goal (delivered in a later
         // frame; bots near a human jump the queue). Far bots skip A* and just re-goal below.
+        this.planner.request(b, a.pos.x, a.pos.z, b.navX, b.navZ, b.lod === 0);
+      } else if (b.stuck >= 3 && b.state !== 'engage' && b.pathN > 0 && b.pathK[b.pathI] && b.lod < 2) {
+        // a door / room route that does not get through (a room split by a footprint notch,
+        // a blocked doorway): drop it and let A* (which knows the doors) find a way; hold
+        // door routing off until the plan arrives
+        b.routeFails++;
+        b.pathN = 0;
+        b.routeHold = t + 6;
         this.planner.request(b, a.pos.x, a.pos.z, b.navX, b.navZ, b.lod === 0);
       }
       if (b.stuck >= 5) this._regoal(b);
@@ -2238,6 +2397,11 @@ function newBrain(actor, target, rng) {
     wasInside: false,
     doorNear: false,
     doorRoutes: 0,
+    walkAt: 0, // _walkClear cache: valid until, goal, result
+    walkGX: 0,
+    walkGZ: 0,
+    walkOk: false,
+    routeHold: 0, // no door routing before this (an A* detour for a failed route is pending)
     routeFails: 0,
     indoorLoot: 0,
     coverC: null,
@@ -2379,7 +2543,7 @@ function shuffled(arr, rng) {
 
 const PG = 96; // cells per side
 const PC = 2; // metres per cell
-const PATH_MAX = 24;
+const PATH_MAX = 64; // room-graph routes through big interiors need more than the old 24
 const PLAN_MAX_EXPANSIONS = 6000;
 // neighbour offsets as (dx, dz, cost) triples
 const NB = [1, 0, 1, -1, 0, 1, 0, 1, 1, 0, -1, 1, 1, 1, 1.4142, 1, -1, 1.4142, -1, 1, 1.4142, -1, -1, 1.4142];
@@ -2397,7 +2561,7 @@ class Planner {
     this.world = world;
     this.legacy = legacy; // true: whole footprints block (the old behaviour; benchmarks)
     this.doorOf = new Int32Array(PG * PG); // door index of a forced-open cell, else -1 (valid when seen[i] == stamp)
-    this.doors = null; // flat door list [{ x, z, nx, nz }] (lazy, see _doorIndex)
+    this.doors = null; // flat door list [{ x, z, nx, nz, o, i, al }] (lazy, see _doorIndex)
     this.doorHash = null; // Map: DOOR_HASH cell -> door indices
     this.occ = new Uint8Array(PG * PG); // 1 free, 2 blocked (valid when seen[i] == stamp)
     this.seen = new Uint32Array(PG * PG);
@@ -2511,37 +2675,47 @@ class Planner {
       const rz = z - d.z;
       const across = rx * d.nx + rz * d.nz;
       const along = rz * d.nx - rx * d.nz;
-      if (across > -DOOR_ACROSS && across < DOOR_ACROSS && along > -DOOR_ALONG && along < DOOR_ALONG) return arr[k];
+      if (across > -DOOR_ACROSS && across < DOOR_ACROSS && along > -d.al && along < d.al) return arr[k];
     }
     return -1;
   }
 
-  /** Hash every door of every enterable building into each DOOR_HASH cell its catch box touches. */
+  /**
+   * Hash every door of every enterable building into each DOOR_HASH cell its catch box
+   * touches: exterior doors (o / i = DOOR_OUT / DOOR_IN along the outward normal) and the
+   * ground storey's interior doors (INNER_STEP either side; the catch box is narrowed to the
+   * doorway, al, so it does not open cells deep in the partition). Upper-storey doors are left
+   * out: the grid is 2D and samples ground-storey walls, so they would open ground-floor walls.
+   * Doors never close, so the index stays valid when panels break (cells re-sample blockedAt).
+   */
   _doorIndex() {
     const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
     const D = (this.doors = []);
     const H = (this.doorHash = new Map());
     const list = this.world.buildingInteriors ? this.world.buildingInteriors() : [];
-    const m = Math.hypot(DOOR_ALONG, DOOR_ACROSS);
+    const add = (x, z, nx, nz, o, i, al) => {
+      const id = D.length;
+      D.push({ x, z, nx, nz, o, i, al });
+      const m = Math.hypot(al, DOOR_ACROSS);
+      const i0 = Math.floor((x - m) / DOOR_HASH);
+      const i1 = Math.floor((x + m) / DOOR_HASH);
+      const j0 = Math.floor((z - m) / DOOR_HASH);
+      const j1 = Math.floor((z + m) / DOOR_HASH);
+      for (let a = i0; a <= i1; a++) {
+        for (let b = j0; b <= j1; b++) {
+          const k = shellKey(a, b);
+          let arr = H.get(k);
+          if (!arr) H.set(k, (arr = []));
+          arr.push(id);
+        }
+      }
+    };
     for (let i = 0; i < list.length; i++) {
       const sh = list[i].collider.shell;
       if (!sh) continue;
-      for (const d of sh.doors) {
-        const id = D.length;
-        D.push({ x: d.x, z: d.z, nx: d.nx, nz: d.nz });
-        const i0 = Math.floor((d.x - m) / DOOR_HASH);
-        const i1 = Math.floor((d.x + m) / DOOR_HASH);
-        const j0 = Math.floor((d.z - m) / DOOR_HASH);
-        const j1 = Math.floor((d.z + m) / DOOR_HASH);
-        for (let a = i0; a <= i1; a++) {
-          for (let b = j0; b <= j1; b++) {
-            const k = shellKey(a, b);
-            let arr = H.get(k);
-            if (!arr) H.set(k, (arr = []));
-            arr.push(id);
-          }
-        }
-      }
+      for (const d of sh.doors) add(d.x, d.z, d.nx, d.nz, DOOR_OUT, DOOR_IN, DOOR_ALONG);
+      const L0 = sh.plan && sh.plan.levels && sh.plan.levels[0];
+      for (const d of (L0 && L0.doors) || []) add(d.x, d.z, d.nx, d.nz, INNER_STEP, INNER_STEP, Math.min(DOOR_ALONG, d.w / 2 + 0.5));
     }
     this.indexMs = typeof performance !== 'undefined' ? performance.now() - t0 : 0;
   }
@@ -2647,9 +2821,9 @@ class Planner {
       if (di >= 0) {
         if (di !== lastDoor && w < PATH_MAX - 1) {
           const d = this.doors[di];
-          const side = (px - d.x) * d.nx + (pz - d.z) * d.nz >= 0 ? 1 : -1; // +1: coming from outside
-          const a = side > 0 ? DOOR_OUT : -DOOR_IN;
-          const c = side > 0 ? -DOOR_IN : DOOR_OUT;
+          const side = (px - d.x) * d.nx + (pz - d.z) * d.nz >= 0 ? 1 : -1; // +1: from the normal's side (outside)
+          const a = side > 0 ? d.o : -d.i;
+          const c = side > 0 ? -d.i : d.o;
           out[w * 2] = d.x + d.nx * a;
           out[w * 2 + 1] = d.z + d.nz * a;
           if (kout) kout[w] = 1;
@@ -2684,6 +2858,52 @@ function planPath(world, sx, sz, gx, gz, out, opts = {}) {
   let r = null;
   while (!r) r = p.step(1e9);
   return b.planN;
+}
+
+/** Appends waypoint (x, z) of kind k to P / K at n (dropped past PATH_MAX); returns the count. */
+function pushWp(P, K, n, x, z, k) {
+  if (n >= PATH_MAX) return n;
+  P[n * 2] = x;
+  P[n * 2 + 1] = z;
+  K[n] = k;
+  return n + 1;
+}
+
+/** Storey of interior plan `plan` holding feet height y (the highest floor at or below it). */
+function levelAt(plan, y) {
+  const L = plan.levels;
+  if (y == null || !Number.isFinite(y)) return 0;
+  let k = 0;
+  for (let i = 1; i < L.length; i++) if (L[i].y <= y + LEVEL_SLACK) k = i;
+  return k;
+}
+
+/**
+ * Room (id) of storey lv of `plan` holding world (x, z): the room rect (frame-local a0..b1)
+ * containing it, else the nearest rect; -1 when the storey has no rooms.
+ */
+function roomAt(plan, lv, x, z) {
+  const L = plan.levels[lv];
+  if (!L || !L.rooms.length) return -1;
+  const F = plan.frame;
+  const rx = x - F.ox;
+  const rz = z - F.oz;
+  const la = rx * F.ux + rz * F.uz;
+  const lb = rx * F.vx + rz * F.vz;
+  let best = -1;
+  let bestD = Infinity;
+  for (let i = 0; i < L.rooms.length; i++) {
+    const r = L.rooms[i];
+    const da = la < r.a0 ? r.a0 - la : la > r.a1 ? la - r.a1 : 0;
+    const db = lb < r.b0 ? r.b0 - lb : lb > r.b1 ? lb - r.b1 : 0;
+    const d = da * da + db * db;
+    if (d < bestD) {
+      bestD = d;
+      best = r.id ?? i;
+      if (d === 0) break;
+    }
+  }
+  return best;
 }
 
 function shellKey(i, j) {
