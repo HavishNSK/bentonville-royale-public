@@ -234,6 +234,17 @@ export function partition(tree, P, F, zones) {
       if (!moved) break;
     }
     c = q(c);
+    // Reject cuts against the actual footprint before descending. Bounding-box widths
+    // alone admit narrow wings, and dropping a leaf later can orphan a nested sibling.
+    const rectA = { a0, b0, a1: isA ? c : a1, b1: isA ? b1 : c };
+    const rectB = { a0: isA ? c : a0, b0: isA ? b0 : c, a1, b1 };
+    const areaA = Math.abs(polyArea(clipRect(P, rectA.a0, rectA.b0, rectA.a1, rectA.b1)));
+    const areaB = Math.abs(polyArea(clipRect(P, rectB.a0, rectB.b0, rectB.a1, rectB.b1)));
+    const usable = (rect, area) => area >= MIN_ROOM_AREA && roomPoint(rect, P)[2] >= MIN_SIDE / 2;
+    if (!usable(rectA, areaA) || !usable(rectB, areaB)) {
+      walk(areaA >= areaB ? node.A : node.B, a0, b0, a1, b1, parent);
+      return;
+    }
     const k = cuts.length;
     const cutRec = { axis: node.axis, c, s0, s1, removed: false, leafA: -1, leafB: -1 };
     cuts.push(cutRec);

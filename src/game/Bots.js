@@ -1623,8 +1623,9 @@ export class Bots {
       if (ib) {
         const d = this._pickDoor(b, ib, fx, fz, gx, gz);
         if (!d) return false;
-        // already in the doorway: skip the room legs and the inside step
-        if (Math.hypot(d.x - fx, d.z - fz) > 1.1) {
+        // Only a ground-storey actor can already be in this exterior doorway.
+        const upstairs = ib.shell.plan && levelAt(ib.shell.plan, a.pos.y) > 0;
+        if (upstairs || Math.hypot(d.x - fx, d.z - fz) > 1.1) {
           const ix = d.x - d.nx * DOOR_IN;
           const iz = d.z - d.nz * DOOR_IN;
           n = this._roomRoute(ib, fx, fz, a.pos.y, ix, iz, ib.shell.floor, P, K, 0);
