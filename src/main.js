@@ -101,10 +101,11 @@ const menus = createMenus(uiRoot, {
     menus.showTitle();
   },
   googleTilesAvailable: hasGoogleTilesKey(),
+  // menus.js settings → onSettings; sole boot-path googleTiles wiring; reads settings.performanceMode/googleTiles; user: Chromebook performance mode
   onSettings: (s) => {
     settings = s;
     saveSettings(s);
-    googleTiles.setEnabled(s.googleTiles);
+    googleTiles.setEnabled(!!s.googleTiles && !s.performanceMode);
     if (game) game.applySettings(s);
     else {
       // no Game yet (WebGL failed): still honour the audio sliders, as Game.applySettings does
