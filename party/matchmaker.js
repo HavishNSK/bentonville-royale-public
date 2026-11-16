@@ -12,6 +12,7 @@
 // party. The plan is POSTed back to every party room:
 //   {t:'plan', ticketId, code, hostToken, mode, teams:[{tokens:[...], allowBots}]}
 
+import { Server, getServerByName } from 'partyserver';
 import { MAX_HUMANS, randomCode } from '../src/net/protocol.js';
 import { modeSize, validMode } from './modes.js';
 
@@ -39,13 +40,17 @@ export function packTeams(parties, size) {
   return { teams, hostToken: leader ? leader.token : null };
 }
 
-export default class Matchmaker {
-  constructor(room) {
-    this.room = room;
-    this.mode = validMode(room.id) ? room.id : 'solo';
+export class Matchmaker extends Server {
+  constructor(ctx, env) {
+    super(ctx, env);
     this.tickets = new Map(); // partyId -> ticket (insertion order = queue order)
     this.batchStart = 0;
     this.timer = null;
+  }
+
+  /** One matchmaker room per mode; the room name is the mode. */
+  get mode() {
+    return validMode(this.name) ? this.name : 'solo';
   }
 
   _humans() {
@@ -92,12 +97,10 @@ export default class Matchmaker {
 
     const { teams, hostToken } = packTeams(batch, modeSize(this.mode));
     const code = randomCode();
-    const parties = this.room.context.parties.party;
     for (const t of batch) {
       const plan = { t: 'plan', ticketId: t.ticketId, code, hostToken, mode: this.mode, teams };
-      parties
-        .get(t.partyId)
-        .fetch({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(plan) })
+      getServerByName(this.env.Party, t.partyId)
+        .then((party) => party.fetch(new Request('https://party/' + t.partyId, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(plan) })))
         .catch((err) => console.warn('[matchmaker] plan to', t.partyId, 'failed', err && err.message));
     }
   }

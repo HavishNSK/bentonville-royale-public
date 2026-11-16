@@ -1,4 +1,4 @@
-// BENTONVILLE ROYALE — party server. One PartyKit room per 4-letter party code.
+// BENTONVILLE ROYALE — party server (PartyServer Durable Object). One room per 4-letter party code.
 //
 // The party is server-authoritative: the leader picks the mode and Fill, members
 // ready up, and the leader's PLAY sends a ticket to the matchmaker party
@@ -21,6 +21,7 @@
 //   {t:'notice', text}   {t:'error', text}   {t:'reject', reason} then close
 //   {t:'kicked'} then close (4002)
 
+import { Server, getServerByName } from 'partyserver';
 import { MODE_SIZE, PARTY_MAX, modeSize, validMode, modeFor } from './modes.js';
 
 const POLL_MS = 2000;
@@ -46,9 +47,9 @@ function cleanToken(t) {
     .slice(0, 40);
 }
 
-export default class PartyRoom {
-  constructor(room) {
-    this.room = room;
+export class Party extends Server {
+  constructor(ctx, env) {
+    super(ctx, env);
     this._reset();
   }
 
@@ -80,14 +81,14 @@ export default class PartyRoom {
   }
 
   _sendTo(id, msg) {
-    const c = this.room.getConnection(id);
+    const c = this.getConnection(id);
     if (c) this._send(c, msg);
   }
 
   _broadcast(msg) {
     const s = JSON.stringify(msg);
     for (const m of this.members) {
-      const c = this.room.getConnection(m.id);
+      const c = this.getConnection(m.id);
       if (c) {
         try {
           c.send(s);
@@ -100,7 +101,7 @@ export default class PartyRoom {
 
   _publicState() {
     return {
-      code: this.room.id,
+      code: this.name,
       leaderId: this.leaderId,
       mode: this.mode,
       fill: this.fill,
@@ -128,12 +129,13 @@ export default class PartyRoom {
     }
   }
 
-  _matchmaker() {
-    return this.room.context.parties.matchmaker.get(this.mode);
+  async _matchmaker() {
+    return getServerByName(this.env.Matchmaker, this.mode);
   }
 
   async _mm(body) {
-    const res = await this._matchmaker().fetch({ method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const mm = await this._matchmaker();
+    const res = await mm.fetch(new Request('https://matchmaker/' + this.mode, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
     if (!res.ok) throw new Error('matchmaker ' + res.status);
     return res.json().catch(() => ({}));
   }
@@ -155,7 +157,7 @@ export default class PartyRoom {
     // reconnect: same token takes over its old slot
     const old = this.members.find((m) => m.token === token);
     if (old) {
-      const prev = this.room.getConnection(old.id);
+      const prev = this.getConnection(old.id);
       const wasLeader = this.leaderId === old.id;
       old.id = conn.id;
       old.name = name;
@@ -227,7 +229,7 @@ export default class PartyRoom {
 
   // ---------------------------------------------------------------- messages
 
-  onMessage(message, sender) {
+  onMessage(sender, message) {
     if (typeof message !== 'string') return;
     let msg;
     try {
@@ -294,7 +296,7 @@ export default class PartyRoom {
         if (msg.id === sender.id) return;
         const m = this._member(msg.id);
         if (!m) return;
-        const c = this.room.getConnection(m.id);
+        const c = this.getConnection(m.id);
         this._remove(m.id);
         if (c) {
           this._send(c, { t: 'kicked' });
@@ -342,7 +344,7 @@ export default class PartyRoom {
     this._sync();
     const ticket = {
       t: 'ticket',
-      partyId: this.room.id,
+      partyId: this.name,
       ticketId,
       fill: this.mode === 'solo' ? true : this.fill,
       members: this.members.map((m) => ({ token: m.token, name: m.name, leader: m.id === this.leaderId })),
@@ -369,12 +371,12 @@ export default class PartyRoom {
     this.state = 'idle';
     this.ticketId = null;
     this._stopPoll();
-    this._mm({ t: 'cancel', partyId: this.room.id, ticketId }).catch(() => {});
+    this._mm({ t: 'cancel', partyId: this.name, ticketId }).catch(() => {});
     if (!silent) this._notice(reason ? `Matchmaking cancelled: ${reason}` : 'Matchmaking cancelled.');
   }
 
   async onRequest(req) {
-    if (req.method !== 'POST') return new Response('party ' + this.room.id + ': ' + this.members.length + ' members', { status: 200 });
+    if (req.method !== 'POST') return new Response('party ' + this.name + ': ' + this.members.length + ' members', { status: 200 });
     let msg;
     try {
       msg = await req.json();
