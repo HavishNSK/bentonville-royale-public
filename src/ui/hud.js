@@ -107,6 +107,7 @@ function hudHTML() {
   <div class="br-counts">
     <div class="br-chip br-chip-alive">${icon('people')}<b class="br-ol" data-ref="alive">0</b><span>ALIVE</span></div>
     <div class="br-chip br-chip-elims">${icon('skull')}<b class="br-ol" data-ref="elims">0</b><span>ELIMS</span></div>
+    <div class="br-chip br-chip-teams" data-ref="teamsChip" hidden>${icon('crown')}<b class="br-ol" data-ref="teams">0</b><span>TEAMS</span></div>
   </div>
   <div class="br-storm" data-ref="storm" data-state="waiting">
     <div class="br-storm-ico">${icon('storm')}</div>
@@ -149,10 +150,22 @@ function hudHTML() {
   <div class="br-hitmarker" data-ref="hitmarker"><i></i><i></i><i></i><i></i></div>
   <div class="br-reloadring" data-ref="xreload"><i data-ref="xreloadFill"></i></div>
   <div class="br-prompt" data-ref="prompt"></div>
+  <div class="br-revive" data-ref="revive">
+    <svg class="br-revive-ring" viewBox="0 0 40 40"><circle class="br-revive-bg" cx="20" cy="20" r="16"/><circle class="br-revive-fg" data-ref="reviveFg" cx="20" cy="20" r="16" pathLength="100"/></svg>
+    <span data-ref="reviveText">REVIVING</span>
+  </div>
+</div>
+<div class="br-tags" data-ref="tags"></div>
+<div class="br-downed" data-ref="downed">
+  <div class="br-downed-title br-ol-xl">KNOCKED</div>
+  <div class="br-downed-sub" data-ref="downedSub">A teammate can revive you</div>
+  <div class="br-downed-bar"><i data-ref="downedFill"></i></div>
+  <div class="br-downed-rev" data-ref="downedRev"><i data-ref="downedRevFill"></i><span>BEING REVIVED</span></div>
 </div>
 <div class="br-toasts" data-ref="toasts"></div>
 
 <div class="br-bl">
+  <div class="br-team" data-ref="team"></div>
   <div class="br-emote" data-ref="emote"><kbd class="br-key">B</kbd>EMOTE</div>
   <div class="br-vitals">
     <div class="br-vital br-vital-shield" data-ref="shieldRow">
@@ -497,10 +510,21 @@ export function buildHud(root) {
   // ---- counts ----------------------------------------------------------------------
   let lastAlive = null;
   let lastElims = null;
+  let lastTeams = null;
   function setCounts(counts) {
     const c = counts || {};
     const alive = Math.max(0, int(c.alive));
     const elims = Math.max(0, int(c.eliminations));
+    // team modes: a TEAMS LEFT chip next to ALIVE (null hides it)
+    const teams = c.teams == null ? null : Math.max(0, int(c.teams));
+    if (teams !== lastTeams) {
+      r.teamsChip.hidden = teams == null;
+      if (teams != null) {
+        r.teams.textContent = teams;
+        if (lastTeams != null) pop(r.teams, 1.3, 220);
+      }
+      lastTeams = teams;
+    }
     if (alive !== lastAlive) {
       r.alive.textContent = alive;
       if (lastAlive !== null) pop(r.alive, 1.3, 220);
@@ -786,6 +810,116 @@ export function buildHud(root) {
   setCompass(0);
   setCrosshair({ spread01: 0, hit: false, kind: 'gun' });
 
+  // ---- team modes: teammate panel, name tags, knocked overlay, revive ring ------------------
+  // setTeam({ rows: [{ id, name, color, health, shield, alive, downed, down01, revive01 }] } | null)
+  const teamRows = new Map(); // id -> { el, refs, last }
+  function setTeam(team) {
+    const rows = team && team.rows ? team.rows : [];
+    hud.classList.toggle('has-team', rows.length > 0);
+    const seen = new Set();
+    for (const m of rows) {
+      seen.add(m.id);
+      let row = teamRows.get(m.id);
+      if (!row) {
+        const el = document.createElement('div');
+        el.className = 'br-mate';
+        el.innerHTML =
+          '<i class="br-mate-dot"></i><span class="br-mate-name br-ol"></span>' +
+          '<div class="br-mate-bars"><div class="br-mate-bar br-mate-sh"><i></i></div><div class="br-mate-bar br-mate-hp"><i></i></div></div>';
+        r.team.appendChild(el);
+        row = { el, dot: el.querySelector('.br-mate-dot'), name: el.querySelector('.br-mate-name'), sh: el.querySelector('.br-mate-sh i'), hp: el.querySelector('.br-mate-hp i'), last: {} };
+        teamRows.set(m.id, row);
+      }
+      const L = row.last;
+      if (L.name !== m.name) row.name.textContent = L.name = m.name;
+      if (L.color !== m.color) row.dot.style.background = row.el.style.borderLeftColor = L.color = m.color;
+      const state = !m.alive ? 'out' : m.downed ? 'down' : 'up';
+      if (L.state !== state) row.el.dataset.state = L.state = state;
+      const sh = state === 'up' ? Math.round(clamp01(m.shield / 100) * 100) / 100 : 0;
+      const hp = state === 'up' ? Math.round(clamp01(m.health / 100) * 100) / 100 : state === 'down' ? Math.round(clamp01(m.down01) * 100) / 100 : 0;
+      if (L.sh !== sh) row.sh.style.transform = 'scaleX(' + (L.sh = sh) + ')';
+      if (L.hp !== hp) row.hp.style.transform = 'scaleX(' + (L.hp = hp) + ')';
+      const rev = m.revive01 > 0;
+      if (L.rev !== rev) row.el.classList.toggle('is-reviving', (L.rev = rev));
+    }
+    for (const [id, row] of teamRows) {
+      if (seen.has(id)) continue;
+      row.el.remove();
+      teamRows.delete(id);
+    }
+  }
+
+  // setTags([{ id, x, y, name, color, downed, dist }] | null): screen-space labels over teammates
+  const tagEls = new Map();
+  function setTags(tags) {
+    const list = tags || [];
+    const seen = new Set();
+    for (const t of list) {
+      // the revive prompt names the teammate we're reviving; its tag would sit right on top of it
+      if (rv.on && t.name === rv.name) continue;
+      seen.add(t.id);
+      let tag = tagEls.get(t.id);
+      if (!tag) {
+        const el = document.createElement('div');
+        el.className = 'br-tag br-ol';
+        el.innerHTML = '<b></b><span></span>';
+        r.tags.appendChild(el);
+        tag = { el, name: el.querySelector('b'), dist: el.querySelector('span'), last: {} };
+        tagEls.set(t.id, tag);
+      }
+      const L = tag.last;
+      if (L.name !== t.name) tag.name.textContent = L.name = t.name;
+      if (L.color !== t.color) tag.el.style.color = L.color = t.color;
+      const dl = t.downed ? 'KNOCKED' : t.dist > 15 ? t.dist + 'm' : '';
+      if (L.dl !== dl) tag.dist.textContent = L.dl = dl;
+      if (L.down !== !!t.downed) tag.el.classList.toggle('is-down', (L.down = !!t.downed));
+      tag.el.style.transform = 'translate3d(' + Math.round(t.x) + 'px,' + Math.round(t.y) + 'px,0) translate(-50%,-100%)';
+      if (L.hidden !== false) tag.el.hidden = L.hidden = false;
+    }
+    for (const [id, tag] of tagEls) {
+      if (seen.has(id)) continue;
+      if (tag.last.hidden !== true) tag.el.hidden = tag.last.hidden = true;
+    }
+  }
+
+  // setDowned({ down01, revive01, by } | null): our own knocked overlay
+  const dn = { on: null, down: -1, rev: -1, by: undefined };
+  function setDowned(d) {
+    const on = !!d;
+    if (on !== dn.on) {
+      r.downed.classList.toggle('is-on', on);
+      hud.classList.toggle('is-downed', on);
+      dn.on = on;
+    }
+    if (!on) return;
+    const down = Math.round(clamp01(d.down01) * 200) / 200;
+    if (down !== dn.down) r.downedFill.style.transform = 'scaleX(' + (dn.down = down) + ')';
+    const rev = Math.round(clamp01(d.revive01) * 200) / 200;
+    if (rev !== dn.rev) {
+      r.downedRev.classList.toggle('is-on', rev > 0);
+      r.downedRevFill.style.transform = 'scaleX(' + (dn.rev = rev) + ')';
+    }
+    const by = d.by || null;
+    if (by !== dn.by) {
+      r.downedSub.textContent = by ? by + ' is reviving you' : 'Crawl to cover. A teammate can revive you';
+      dn.by = by;
+    }
+  }
+
+  // setRevive({ pct, name } | null): progress ring while we hold interact over a teammate
+  const rv = { on: null, pct: -1, name: null };
+  function setRevive(v) {
+    const on = !!v;
+    if (on !== rv.on) {
+      r.revive.classList.toggle('is-on', on);
+      rv.on = on;
+    }
+    if (!on) return;
+    const pct = Math.round(clamp01(v.pct) * 100);
+    if (pct !== rv.pct) r.reviveFg.style.strokeDashoffset = String(100 - (rv.pct = pct));
+    if (v.name !== rv.name) r.reviveText.textContent = 'REVIVING ' + String((rv.name = v.name) || '').toUpperCase();
+  }
+
   /** Refreshes the static keycaps from the player's bindings. labelOf(actionId) -> 'Q'. */
   function setKeyLabels(labelOf) {
     const set = (sel, action) => hud.querySelectorAll(sel).forEach((k) => (k.textContent = labelOf(action)));
@@ -826,6 +960,10 @@ export function buildHud(root) {
     setEmoteHint,
     setLocation,
     setVisible,
+    setTeam,
+    setTags,
+    setDowned,
+    setRevive,
     /** Clears transient HUD bits (feed, toasts, prompt, announce) — used when leaving a match. */
     clearTransient() {
       r.feed.textContent = '';
@@ -834,6 +972,9 @@ export function buildHud(root) {
       r.announce.classList.remove('is-on');
       setObjectBar(null);
       showFullMap(false);
+      setRevive(null);
+      setDowned(null);
+      setTags(null);
     },
     destroy() {
       window.removeEventListener('resize', measure);

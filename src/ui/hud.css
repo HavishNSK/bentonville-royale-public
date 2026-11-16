@@ -1792,6 +1792,263 @@
   visibility: hidden;
 }
 
+/* ---- team modes: teams chip, teammate panel, name tags, knocked, revive ---------------- */
+.br-chip-teams b {
+  color: #8fe9a0;
+}
+.br-chip[hidden] {
+  display: none;
+}
+.br-feed-line[data-kind='knock'] {
+  background: rgba(196, 92, 22, 0.9);
+}
+.br-feed-line[data-kind='mate'] {
+  background: rgba(214, 48, 64, 0.92);
+}
+.br-feed-line[data-kind='revive'] {
+  background: rgba(30, 150, 80, 0.92);
+}
+
+.br-team {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 5);
+}
+.br-team:empty {
+  display: none;
+}
+.br-mate {
+  display: grid;
+  grid-template-columns: calc(var(--u) * 12) calc(var(--u) * 92) calc(var(--u) * 110);
+  align-items: center;
+  gap: calc(var(--u) * 7);
+  padding: calc(var(--u) * 4) calc(var(--u) * 9) calc(var(--u) * 4) calc(var(--u) * 7);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-left-width: calc(var(--u) * 5);
+  border-radius: calc(var(--u) * 9);
+  background: var(--br-panel);
+  transition: opacity 0.2s ease-out;
+}
+.br-mate-dot {
+  width: calc(var(--u) * 11);
+  height: calc(var(--u) * 11);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: 50%;
+}
+.br-mate-name {
+  overflow: hidden;
+  font-size: calc(var(--u) * 13);
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.br-mate-bars {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 2);
+}
+.br-mate-bar {
+  position: relative;
+  height: calc(var(--u) * 7);
+  overflow: hidden;
+  border-radius: calc(var(--u) * 3);
+  background: rgba(0, 0, 0, 0.45);
+}
+.br-mate-hp {
+  height: calc(var(--u) * 9);
+}
+.br-mate-bar i {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 0.2s ease-out;
+}
+.br-mate-sh i {
+  background: var(--br-sky);
+}
+.br-mate-hp i {
+  background: var(--br-heart);
+}
+.br-mate[data-state='down'] {
+  background: rgba(120, 18, 32, 0.82);
+}
+.br-mate[data-state='down'] .br-mate-sh {
+  visibility: hidden;
+}
+.br-mate[data-state='down'] .br-mate-hp i {
+  background: #ff8a3d;
+}
+.br-mate[data-state='down'] .br-mate-name::after {
+  content: ' \2022 KNOCKED';
+  color: #ffb08a;
+  font-size: 0.8em;
+}
+.br-mate.is-reviving .br-mate-hp i {
+  background: var(--br-leaf);
+}
+.br-mate[data-state='out'] {
+  opacity: 0.55;
+}
+.br-mate[data-state='out'] .br-mate-name {
+  text-decoration: line-through;
+  color: #b9bfd8;
+}
+
+.br-tags {
+  position: absolute;
+  inset: 0;
+}
+.br-tag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: calc(var(--u) * 13);
+  line-height: 1.05;
+  white-space: nowrap;
+  will-change: transform;
+}
+.br-tag b {
+  font-size: calc(var(--u) * 15);
+}
+.br-tag span {
+  color: #fff;
+  font-size: calc(var(--u) * 10);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+.br-tag::after {
+  content: '';
+  width: 0;
+  height: 0;
+  margin-top: calc(var(--u) * 2);
+  border-left: calc(var(--u) * 6) solid transparent;
+  border-right: calc(var(--u) * 6) solid transparent;
+  border-top: calc(var(--u) * 7) solid currentColor;
+}
+.br-tag.is-down span {
+  color: #ff9a6b;
+}
+.br-tag[hidden] {
+  display: none;
+}
+
+.br-revive {
+  position: absolute;
+  left: 0;
+  top: calc(var(--u) * 58);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 8);
+  padding: calc(var(--u) * 5) calc(var(--u) * 14) calc(var(--u) * 5) calc(var(--u) * 6);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 15);
+  background: var(--br-panel);
+  font-size: calc(var(--u) * 16);
+  font-weight: 900;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity 0.14s ease-out;
+}
+.br-revive.is-on {
+  opacity: 1;
+}
+.br-revive-ring {
+  width: calc(var(--u) * 34);
+  height: calc(var(--u) * 34);
+  transform: rotate(-90deg);
+}
+.br-revive-ring circle {
+  fill: none;
+  stroke-width: 5;
+}
+.br-revive-bg {
+  stroke: rgba(255, 255, 255, 0.18);
+}
+.br-revive-fg {
+  stroke: var(--br-leaf);
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  stroke-linecap: round;
+}
+
+.br-downed {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--u) * 34);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--u) * 6);
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity 0.2s ease-out;
+}
+.br-downed.is-on {
+  opacity: 1;
+}
+.br-downed-title {
+  color: #ff6b5a;
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 40);
+}
+.br-downed-sub {
+  font-size: calc(var(--u) * 15);
+  font-weight: 900;
+}
+.br-downed-bar,
+.br-downed-rev {
+  position: relative;
+  width: calc(var(--u) * 260);
+  height: calc(var(--u) * 14);
+  overflow: hidden;
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: calc(var(--u) * 7);
+  background: rgba(21, 16, 58, 0.78);
+}
+.br-downed-bar i,
+.br-downed-rev i {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  transform: scaleX(1);
+}
+.br-downed-bar i {
+  background: #ff6b3d;
+}
+.br-downed-rev {
+  display: none;
+  height: calc(var(--u) * 18);
+}
+.br-downed-rev.is-on {
+  display: block;
+}
+.br-downed-rev i {
+  background: var(--br-leaf);
+}
+.br-downed-rev span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: calc(var(--u) * 10);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+/* knocked: red edges, no aiming UI */
+.br-hud.is-downed .br-vig-dmg {
+  opacity: 0.55;
+}
+.br-hud.is-downed .br-xhair,
+.br-hud.is-downed .br-bc,
+.br-hud.is-downed .br-br {
+  visibility: hidden;
+}
+
 /* ---- small / narrow viewports --------------------------------------------------------- */
 /* below 540px tall --u bottoms out at 0.75px, so the layout has fewer units to work with */
 @media (max-height: 500px) {

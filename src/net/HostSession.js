@@ -7,7 +7,9 @@
 // (trusted within a speed bound); its actions arrive as reliable messages and
 // are validated and applied here.
 //
-//   const s = new HostSession(room, game, { fill });
+//   const s = new HostSession(room, game, { fill, mode, humanTeams });
+//   (mode 'solo'|'duo'|'trio'|'squad'; humanTeams [{ ids, allowBots }] groups room slot ids,
+//   host = 0, into teams; see src/game/Teams.js packHumans / assignTeams)
 //   game.net = s; game.startMatch(seed)   // Game calls the hooks below
 //
 // Hooks Game calls: prepareMatch(game, lm) -> { botCount, idBase }, matchStarted(game),
@@ -26,9 +28,10 @@ import * as THREE from 'three';
 import { PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, MATCH, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
 import { Character } from '../game/Character.js';
 import {
-  SNAP_HZ, FLAG, EQUIP, SURF, encodeSnapshot, decodeState, seqNewer, rnd,
+  SNAP_HZ, FLAG, XFLAG, EQUIP, SURF, encodeSnapshot, decodeState, seqNewer, rnd,
 } from './protocol.js';
 import { busPosAt, routeWire } from '../game/DropBus.js';
+import { normalizeMode, packHumans, assignTeams, sameTeam, teamAlive } from '../game/Teams.js';
 
 // Bots.js colours its canopies with this palette by spawn index (kept in sync by hand).
 const BOT_CANOPY = [0x4fc3f7, 0xff7a45, 0x9ccc65, 0xba68c8, 0xffd54f, 0xf06292, 0x4db6ac, 0xa1887f];
@@ -115,6 +118,12 @@ export class RemoteActor {
     this.drawPos = new THREE.Vector3();
     this.placement = 0;
     this.lastKillerName = null;
+    this.downed = false;
+    this.downHp = 0;
+    this.knockedBy = null;
+    this.reviver = null;
+    this.reviveT = 0;
+    this.revivingTarget = null;
   }
 
   get airborneDrop() {
@@ -123,12 +132,14 @@ export class RemoteActor {
 }
 
 export class HostSession {
-  constructor(room, game, { fill = true } = {}) {
+  constructor(room, game, { fill = true, mode = 'solo', humanTeams = null } = {}) {
     this.room = room;
     this.game = game;
     this.isHost = true;
     this.isClient = false;
     this.fill = fill;
+    this.mode = normalizeMode(mode);
+    this.humanTeams = humanTeams;
     this.remotes = new Map(); // client id -> RemoteActor
     this.events = [];
     this.seq = 0;
@@ -180,7 +191,13 @@ export class HostSession {
     game.player.name = this.room.name;
     const slots = MATCH.bots + 1;
     const maxId = humans.length ? humans[humans.length - 1].id : 0;
-    return { botCount: this.fill ? Math.max(0, slots - 1 - humans.length) : 0, idBase: maxId + 1 };
+    const mode = normalizeMode(this.mode);
+    if (mode === 'solo') return { botCount: this.fill ? Math.max(0, slots - 1 - humans.length) : 0, idBase: maxId + 1 };
+    // teams: listed parties first, everyone else packed in id order; bots fill the rest
+    const groups = packHumans(mode, [0, ...humans.map((c) => c.id)], this.humanTeams);
+    const plan = assignTeams(mode, groups, { slots, bots: this.fill });
+    for (const a of this.remotes.values()) a.team = plan.humanTeam.get(a.id);
+    return { botCount: plan.botTeams.length, idBase: maxId + 1, botTeams: plan.botTeams, playerTeam: plan.humanTeam.get(0) };
   }
 
   /** After bots and loot exist: tell everyone. */
@@ -194,12 +211,12 @@ export class HostSession {
     this.time = 0;
     this.stats = { t0: 0, snapBytes: 0, snaps: 0, evBytes: 0, invBytes: 0, startBytes: 0 };
     this._invSent.clear();
-    const roster = [{ id: 0, n: game.player.name, k: 'player', c: HUMAN_CANOPY[0], h: 1 }];
-    for (const a of this.remotes.values()) roster.push({ id: a.id, n: a.name, k: 'player', c: HUMAN_CANOPY[a.id % HUMAN_CANOPY.length], h: 1 });
+    const roster = [{ id: 0, n: game.player.name, k: 'player', c: HUMAN_CANOPY[0], h: 1, tm: game.player.team }];
+    for (const a of this.remotes.values()) roster.push({ id: a.id, n: a.name, k: 'player', c: HUMAN_CANOPY[a.id % HUMAN_CANOPY.length], h: 1, tm: a.team });
     const idBase = game.bots.list.length ? game.bots.list[0].id : 0;
     for (const b of game.bots.list) {
       const i = b.id - idBase;
-      roster.push({ id: b.id, n: b.name, k: BOT_KITS[i % BOT_KITS.length], c: BOT_CANOPY[i % BOT_CANOPY.length], h: 0 });
+      roster.push({ id: b.id, n: b.name, k: BOT_KITS[i % BOT_KITS.length], c: BOT_CANOPY[i % BOT_CANOPY.length], h: 0, tm: b.team });
     }
     const s = game.storm;
     const loot = [];
@@ -207,6 +224,7 @@ export class HostSession {
     const msg = {
       t: 'start',
       seed: game.seed,
+      mode: this.mode,
       roster,
       total: game.totalActors,
       zone: game.dropZone ? game.dropZone.key : null,
@@ -343,11 +361,12 @@ export class HostSession {
     }
     for (const a of this.remotes.values()) this._present(a, dt);
 
-    // match end: last one standing (the host's own victory/defeat screens are Game's)
-    if (!this.ended && (g.state === 'play' || g.state === 'over') && g.totalActors > 1 && g.combat.aliveCount <= 1) {
+    // match end: last one (team) standing (the host's own victory/defeat screens are Game's)
+    const over = g.teamMode ? g.totalTeams > 1 && g.combat.aliveTeams <= 1 : g.totalActors > 1 && g.combat.aliveCount <= 1;
+    if (!this.ended && (g.state === 'play' || g.state === 'over') && over) {
       this.ended = true;
       const w = g.combat.actors.find((a) => a.alive);
-      this.events.push({ e: 'end', w: w ? w.id : -1 });
+      this.events.push({ e: 'end', w: w ? w.id : -1, tm: w && w.team != null ? w.team : -1 });
     }
 
     this._snapAcc += dt;
@@ -376,9 +395,10 @@ export class HostSession {
         heading: a.heading || 0,
         pitch: a.pitch || 0,
         equip: equipCode(equipOf(a)),
-        health: a.health,
+        health: a.downed ? a.downHp : a.health,
         shield: a.shield,
         kills: a.kills,
+        xf: (a.downed ? XFLAG.downed : 0) | (a.downed && a.reviver ? XFLAG.revived : 0),
       });
     };
     push(g.player);
@@ -430,6 +450,7 @@ export class HostSession {
     else a.drawPos.lerp(a.pos, k);
     c.root.position.copy(a.drawPos);
     c.root.visible = !a.inBus;
+    c.setDowned(!!a.downed);
     if (!a.alive) {
       c.update(dt, { fwd: 0, side: 0, speed: 0, grounded: true, gliding: false, heading: a.heading, pitch: 0 });
       return;
@@ -465,15 +486,32 @@ export class HostSession {
       sh: info.shieldHit > 0 ? Math.round(info.shieldHit) : 0,
       st: info.storm ? 1 : 0,
       p: p ? [rnd(p.x), rnd(p.y), rnd(p.z)] : 0,
-      hp: Math.round(target.health),
+      hp: Math.round(target.downed ? target.downHp : target.health),
       sp: Math.round(target.shield),
+      dn: target.downed ? 1 : 0,
     });
+  }
+
+  onKnock(victim, by, info) {
+    if (!this.started) return;
+    let how = 'knock';
+    if (info.storm && !by) how = 'storm';
+    else if (info.fall) how = 'fall';
+    else if (info.weapon === 'pickaxe') how = 'pickaxe';
+    else if (info.headshot) how = 'headshot';
+    this.events.push({ e: 'kn', v: victim.id, k: by ? by.id : -1, how });
+  }
+
+  onRevive(victim, by) {
+    if (!this.started) return;
+    this.events.push({ e: 'rv', v: victim.id, by: by ? by.id : -1, hp: Math.round(victim.health) });
   }
 
   onEliminate(victim, killer, info) {
     if (!this.started) return;
     const g = this.game;
-    const placement = g.combat.aliveCount + 1;
+    // team modes: the team's place once its last member is out (0 while teammates live on)
+    const placement = !g.teamMode ? g.combat.aliveCount + 1 : teamAlive(g.combat.actors, victim.team) ? 0 : g.combat.aliveTeams + 1;
     victim.placement = placement;
     if (victim.isRemote) victim.lastKillerName = killer ? killer.name : info.storm ? 'the storm' : null;
     let how = 'elim';
@@ -482,6 +520,8 @@ export class HostSession {
     else if (info.fall) how = 'fall';
     else if (info.weapon === 'pickaxe') how = 'pickaxe';
     else if (info.headshot) how = 'headshot';
+    else if (info.bleed) how = 'bleed';
+    else if (info.wipe) how = 'wipe';
     this.events.push({ e: 'el', v: victim.id, k: killer ? killer.id : -1, how, pl: placement, n: g.combat.aliveCount, kk: killer ? killer.kills : 0 });
   }
 
@@ -578,6 +618,8 @@ export class HostSession {
     if (!a || !this.started) return;
     if (msg.seq > a.ack) a.ack = msg.seq;
     if (!a.alive) return;
+    // knocked: crawling only (QA helpers and fall damage still go through)
+    if (a.downed && msg.k !== 'tp' && msg.k !== 'dbg' && msg.k !== 'fall') return;
     try {
       this._action(a, msg);
     } catch (err) {
@@ -716,6 +758,20 @@ export class HostSession {
         // inventory sync puts the client's optimistic swap back.
         if (a.inBus || a.airborneDrop || a.netReloading) return;
         if (inv.swap(sa, sb) && g.combat && g.combat.cancelBurst) g.combat.cancelBurst(a);
+        return;
+      }
+      case 'rv': {
+        // hold-to-revive start (id) / stop (-1); Combat.tickTeams checks range every frame
+        if (m.id == null || m.id < 0) {
+          g.combat.stopRevive(a);
+          return;
+        }
+        const t = g.combat.actors.find((x) => x.id === m.id);
+        if (!t || !t.alive || !t.downed || !sameTeam(t, a) || a.inBus || a.airborneDrop) return;
+        if (t.reviver && t.reviver !== a) return;
+        if (Math.hypot(t.pos.x - a.pos.x, t.pos.z - a.pos.z) > 4) return;
+        if (a.revivingTarget && a.revivingTarget !== t) g.combat.stopRevive(a);
+        a.revivingTarget = t;
         return;
       }
       case 'fall': {

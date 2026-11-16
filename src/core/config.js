@@ -299,6 +299,20 @@ export const MATCH = {
   ammoBoxes: 270,
 };
 
+// Team modes (Duos / Trios / Squads): knocked ("downed") state and revives. A downed actor
+// crawls at crawlSpeed x run speed, can't shoot / build / loot, and bleeds downHp at `bleed`
+// per second; a teammate holding interact within reviveRange for reviveTime brings it back up
+// with reviveHp health. Solo never knocks (see src/game/Teams.js).
+export const KNOCK = {
+  downHp: 100,
+  bleed: 2.5, // down HP per second (40 s to bleed out)
+  crawlSpeed: 0.35,
+  reviveTime: 10,
+  reviveHp: 30,
+  reviveRange: 2.2,
+  botReviveClear: 40, // m: bots only revive with no enemy this close
+};
+
 // Bot building: buildChance = odds a build roll in a fight succeeds; buildPieces = most
 // pieces in one response (1 wall / 2 wall+ramp / 3+ ramp rush / 5 box: 4 walls + cone);
 // buildCooldown = seconds between responses; buildRate = seconds between pieces in one.

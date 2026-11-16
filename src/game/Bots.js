@@ -36,6 +36,10 @@
 // spot inside, or the way out) gets door waypoints (_doorRoute, every LOD tier); the A*
 // grid treats interiors as open, only the thin walls block, and door cells are forced open.
 // Bots only open / take loot on the same side of a wall; hurt bots heal / retreat indoors.
+// Teams (combat.teamMode): opts.teams[i] is bot i's team (default: its own id). Bots never
+// target or react to teammates; a knocked bot (actor.downed) crawls toward its nearest
+// standing teammate; a bot with a knocked teammate and no enemy within KNOCK.botReviveClear m
+// goes to it and revives it (state 'revive', actor.revivingTarget; Combat.tickTeams times it).
 // Every collaborator except `world` may be null; the matching behaviour is skipped.
 // With an empty `kits` array bots have no Character (headless, used by tests).
 //
@@ -53,8 +57,9 @@ import { Character } from './Character.js';
 import { Inventory } from './Inventory.js';
 import {
   PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, RARITIES, DIFFICULTY, QUALITY,
-  BOT_NAMES, DROP_ZONES, STORM, angleDelta, clamp, weaponStats,
+  BOT_NAMES, DROP_ZONES, STORM, KNOCK, angleDelta, clamp, weaponStats,
 } from '../core/config.js';
+import { sameTeam } from './Teams.js';
 import { busPosAt, jumpTimeFor } from './DropBus.js';
 
 const EYE = PLAYER.eyeHeight;
@@ -184,7 +189,7 @@ export class Bots {
         name: names[i % names.length] + (i >= names.length ? ' ' + (1 + Math.floor(i / names.length)) : ''),
         isPlayer: false,
         isBot: true,
-        team: idBase + i,
+        team: opts.teams && opts.teams[i] != null ? opts.teams[i] : idBase + i,
         pos: new THREE.Vector3(sx, PLAYER.dropHeight + rng() * 30, sz),
         vel: new THREE.Vector3(),
         heading: Math.atan2(t.x - sx, -(t.z - sz)),
@@ -291,6 +296,7 @@ export class Bots {
     const b = victim && victim._bot;
     if (!b || !victim.alive) return;
     const src = info && info.source;
+    if (sameTeam(src, victim)) return;
     b.alertUntil = this.time + 5;
     if (src && src !== victim && src.alive && src.pos) {
       b.threat = src;
@@ -375,6 +381,19 @@ export class Bots {
           a.heading = Math.atan2(b.dropX - a.pos.x, -(b.dropZ - a.pos.z));
           if (a.character) a.character.root.position.copy(a.pos);
         }
+      }
+      // knocked: crawl toward help, nothing else
+      if (a.downed) {
+        this._downedStep(b, dt);
+        this._present(b, dt, viewer, cd2);
+        continue;
+      }
+      if (b.state === 'downed') {
+        // revived: back on our feet, think right away
+        b.state = 'wander';
+        a.botState = 'wander';
+        b.thinkIn = 0;
+        b.lastHp = a.health + a.shield;
       }
       // damage detection without a hook
       const hp = a.health + a.shield;
@@ -514,7 +533,9 @@ export class Bots {
       if (t < b.retreatUntil) fight = false;
       if (!fight && !b.targetVisible) b.target = null;
     }
-    if (fight) state = 'engage';
+    const mate = this._downedMate(b, all);
+    if (mate) state = 'revive';
+    else if (fight) state = 'engage';
     else if (outside) state = 'rotate';
     else if (t < b.retreatUntil && target) state = 'retreat';
     else if (b.healing > 0 || this._wantHeal(b)) state = 'heal';
@@ -525,6 +546,7 @@ export class Bots {
     else state = 'wander';
 
     if (state !== 'heal' && b.healing > 0) this._cancelHeal(b);
+    if (state !== 'revive' && a.revivingTarget && this.combat) this.combat.stopRevive(a);
     if (state !== b.state) {
       b.state = state;
       b.stateTime = 0;
@@ -538,6 +560,29 @@ export class Bots {
     let speed = PLAYER.runSpeed;
     let stop = 0.8;
     switch (state) {
+      case 'revive': {
+        const dx = mate.pos.x - a.pos.x;
+        const dz = mate.pos.z - a.pos.z;
+        const d = Math.hypot(dx, dz);
+        gx = mate.pos.x;
+        gz = mate.pos.z;
+        b.faceX = mate.pos.x;
+        b.faceZ = mate.pos.z;
+        if (d <= KNOCK.reviveRange - 0.5) {
+          speed = 0;
+          if (a.revivingTarget !== mate && this.combat) {
+            if (a.revivingTarget) this.combat.stopRevive(a);
+            a.revivingTarget = mate;
+          }
+        } else {
+          if (a.revivingTarget && this.combat) this.combat.stopRevive(a);
+          speed = d > 12 ? PLAYER.sprintSpeed : PLAYER.runSpeed;
+          stop = 0.9;
+        }
+        b.target = null;
+        b.targetVisible = false;
+        break;
+      }
       case 'engage': {
         this._chooseWeapon(b, dist);
         const lx = b.targetVisible ? target.pos.x : b.lastSeenX;
@@ -765,6 +810,81 @@ export class Bots {
     this._stuckCheck(b);
   }
 
+  /**
+   * Nearest knocked teammate worth reviving (within 90 m, nobody else on it, no enemy within
+   * KNOCK.botReviveClear of us or of it), or null. Team modes only.
+   */
+  _downedMate(b, all) {
+    const a = b.actor;
+    if (!this.combat || !this.combat.teamMode) return null;
+    let best = null;
+    let bd = 90 * 90;
+    for (let i = 0; i < all.length; i++) {
+      const o = all[i];
+      if (!o.alive || !o.downed || !sameTeam(o, a)) continue;
+      if (o.reviver && o.reviver !== a) continue;
+      const d2 = dist2(a.pos, o.pos);
+      if (d2 < bd) {
+        bd = d2;
+        best = o;
+      }
+    }
+    if (!best) return null;
+    const c2 = KNOCK.botReviveClear * KNOCK.botReviveClear;
+    for (let i = 0; i < all.length; i++) {
+      const o = all[i];
+      if (!o.alive || o.downed || o === a || (o.team != null && o.team === a.team) || inAir(o)) continue;
+      if (dist2(a.pos, o.pos) < c2 || dist2(best.pos, o.pos) < c2) return null;
+    }
+    return best;
+  }
+
+  /** Knocked bot: drop everything, crawl toward the nearest standing teammate. */
+  _downedStep(b, dt) {
+    const a = b.actor;
+    if (b.state !== 'downed') {
+      if (b.healing > 0) this._cancelHeal(b);
+      b.state = 'downed';
+      a.botState = 'downed';
+      b.stateTime = 0;
+      b.reloading = 0;
+      b.bqN = b.bqI = 0;
+      b.target = null;
+      b.targetVisible = false;
+      b.pathN = 0;
+      b.rushUntil = 0;
+      b.wantJump = false;
+      b.thinkIn = 0;
+      if (a.revivingTarget && this.combat) this.combat.stopRevive(a);
+    }
+    b.thinkIn -= dt;
+    if (b.thinkIn <= 0) {
+      b.thinkIn = 0.3 + this.rng() * 0.1;
+      let best = null;
+      let bd = Infinity;
+      const all = this._all;
+      for (let i = 0; i < all.length; i++) {
+        const o = all[i];
+        if (!o.alive || o.downed || !sameTeam(o, a) || inAir(o)) continue;
+        const d2 = dist2(a.pos, o.pos);
+        if (d2 < bd) {
+          bd = d2;
+          best = o;
+        }
+      }
+      // being revived (or nobody to crawl to): stay put
+      if (best && !a.reviver) this._steer(b, best.pos.x, best.pos.z, PLAYER.runSpeed * KNOCK.crawlSpeed, 1.6);
+      else this._steer(b, a.pos.x, a.pos.z, 0, 1);
+    }
+    if (b.speed > 0 && (b.mx || b.mz)) {
+      const want = Math.atan2(b.mx, -b.mz);
+      const dh = angleDelta(a.heading, want);
+      const turn = TURN_RATE * 0.5 * dt;
+      a.heading += dh > turn ? turn : dh < -turn ? -turn : dh;
+    }
+    this._move(b, dt);
+  }
+
   _perceive(b, all) {
     const a = b.actor;
     const world = this.world;
@@ -808,7 +928,7 @@ export class Bots {
     }
     for (let i = 0; i < all.length; i++) {
       const o = all[i];
-      if (o === a || !o.alive || o.team === a.team || inAir(o)) continue;
+      if (o === a || !o.alive || (o.team != null && o.team === a.team) || inAir(o)) continue;
       const dx = o.pos.x - ex;
       const dz = o.pos.z - ez;
       const d2 = dx * dx + dz * dz;
@@ -1602,7 +1722,7 @@ export class Bots {
       const dz = tgt.pos.z - a.pos.z;
       want = Math.atan2(dx, -dz);
       pitch = Math.atan2(tgt.pos.y + CHEST - (a.pos.y + EYE), Math.hypot(dx, dz) || 1);
-    } else if (b.state === 'harvest' && b.harvest) {
+    } else if ((b.state === 'harvest' && b.harvest) || (b.state === 'revive' && a.revivingTarget)) {
       want = Math.atan2(b.faceX - a.pos.x, -(b.faceZ - a.pos.z));
     } else if (b.speed > 0 && (b.mx || b.mz)) {
       want = Math.atan2(b.mx, -b.mz);
@@ -1833,6 +1953,7 @@ export class Bots {
     }
     const show = d2 < cd2 && !(b.state === 'dead' && b.deadTime > 6);
     ch.root.visible = show;
+    ch.setDowned(!!a.downed);
     if (!show) {
       b.animAcc = 0;
       return;
@@ -1876,6 +1997,7 @@ export class Bots {
     b.speed = 0;
     a.vel.set(0, 0, 0);
     a.gliding = false;
+    if (a.revivingTarget && this.combat) this.combat.stopRevive(a);
     if (a.character) a.character.die();
     if (this.dropLootOnDeath && this.loot && !a.lootDropped) {
       a.lootDropped = true;

@@ -6,6 +6,7 @@ import { loadSettings, saveSettings } from './ui/settings.js';
 import { sfx } from './audio/Sfx.js';
 import { createGoogleTilesController, hasGoogleTilesKey } from './render/GoogleTiles.js';
 import { inject as injectAnalytics } from '@vercel/analytics';
+import { teamSize, normalizeMode } from './game/Teams.js';
 
 // Vercel Web Analytics: anonymous page views / visitors (no cookies). Only reports from the Vercel deployment.
 try {
@@ -54,7 +55,17 @@ const menus = createMenus(uiRoot, {
   settings,
   onClick: () => sfx.play('ui_click'),
   onHover: () => sfx.play('ui_hover', { volume: 0.4 }),
-  onPlay: () => play(),
+  onPlay: () => partyPlay(),
+  onPartyReady: (on) => party && party.ready(on),
+  onPartyCancel: () => party && party.cancel(),
+  onPartyMode: (mode) => partySetMode(mode),
+  onPartyFill: (on) => partySetFill(on),
+  onPartyKick: (id) => party && party.kick(id),
+  onPartyPromote: (id) => party && party.promote(id),
+  onPartyJoin: (code) => joinParty(code),
+  onPartyLeave: () => joinParty(null),
+  onPartyRetry: () => joinParty(null),
+  onNameChange: (name) => party && party.setName(name),
   onFreeBuild: async () => {
     try {
       closeMultiplayer();
@@ -66,17 +77,23 @@ const menus = createMenus(uiRoot, {
       menus.showTitle();
     }
   },
-  onPlayAgain: () => play(),
+  onPlayAgain: () => playLocal(lastLocal.mode, lastLocal.fill),
   onResume: () => game && game.pause(false),
   onLeave: () => {
     if (game) game.leave();
     closeMultiplayer();
     sfx.playMusic('menu');
+    renderParty();
   },
   onHost: (name) => hostMultiplayer(name),
   onJoin: (code, name) => joinMultiplayer(code, name),
   onLobbyStart: () => startHostedMatch(),
   onLobbyFill: (on) => mp && mp.room && mp.room.setFill(on),
+  onLobbyMode: (mode) => {
+    if (!mp || !mp.room) return;
+    mp.room.setMode(normalizeMode(mode));
+  },
+  onLobbyReady: (on) => mp && mp.conn && mp.conn.setReady(on),
   onLobbyLeave: () => {
     closeMultiplayer();
     menus.showTitle();
@@ -135,12 +152,24 @@ function errText(err, fallback) {
 }
 
 function hostLobby(info, extra = {}) {
-  return { ...info, isHost: true, canStart: true, status: 'Share the code. Start when everyone is in.', ...extra };
+  const waiting = (info.players || []).filter((p) => !p.host && !p.ready).length;
+  const status = waiting ? `Waiting for ${waiting} to ready up.` : 'Share the code. Start when everyone is in.';
+  return { ...info, isHost: true, canStart: !waiting, status, ...extra };
 }
 
 function clientLobby(info, extra = {}) {
   const players = (info.players || []).map((p) => ({ ...p, you: p.id === info.you }));
-  return { ...info, players, isHost: false, canStart: false, status: 'Waiting for the host to start…', ...extra };
+  const me = players.find((p) => p.you);
+  const status = me && me.ready ? 'Ready. Waiting for the host to start…' : 'Ready up when you are set.';
+  return { ...info, players, isHost: false, canStart: false, ready: !!(me && me.ready), status, ...extra };
+}
+
+/** Private match: humans pack into teams in join order (host first). */
+function joinOrderTeams(players, mode) {
+  const size = teamSize(mode);
+  const teams = [];
+  for (let i = 0; i < players.length; i += size) teams.push({ ids: players.slice(i, i + size).map((p) => p.id), allowBots: true });
+  return teams;
 }
 
 /** Preload the map while sitting in a lobby so the match starts fast. */
@@ -150,6 +179,7 @@ function preloadInLobby() {
 
 async function hostMultiplayer(name) {
   closeMultiplayer();
+  if (party && party.me && party.me.ready && !party.isLeader) party.ready(false);
   const me = { role: 'host', room: null, name };
   mp = me;
   menus.showLobby({ isHost: true, code: '', players: [{ id: 0, name, host: true }], max: 16, fill: true, status: 'Opening a room…', canStart: false });
@@ -176,9 +206,16 @@ async function hostMultiplayer(name) {
   }
 }
 
-async function startHostedMatch() {
+/** Private-match START (host): only when every guest is ready. */
+function startHostedMatch() {
   const me = mp;
   if (!me || me.role !== 'host' || !me.room || me.room.closed || me.room.started) return;
+  if (!me.room.allReady()) return;
+  const mode = normalizeMode(me.room.mode);
+  return runHostedMatch(me, { fill: me.room.fill, mode, humanTeams: joinOrderTeams(me.room.players, mode) });
+}
+
+async function runHostedMatch(me, sessionOpts) {
   // Close the room to new joins now, not when the match is live: a guest joining
   // during the load / startMatch would get a welcome but never a start message.
   me.room.started = true;
@@ -186,7 +223,7 @@ async function startHostedMatch() {
     await ensureLoaded();
     if (mp !== me) return;
     const { HostSession } = await import('./net/HostSession.js');
-    game.net = new HostSession(me.room, game, { fill: me.room.fill });
+    game.net = new HostSession(me.room, game, sessionOpts);
     game.startMatch((Math.random() * 1e9) | 0);
   } catch (err) {
     console.error(err);
@@ -203,33 +240,47 @@ async function startHostedMatch() {
     }
     if (game.state !== 'menu') game.leave(); // a half-started match goes back to the menu
     showError('Could not start the match: ' + errText(err, err));
-    if (mp === me && !me.room.closed) {
+    if (me.match) {
+      // matchmade: there is no lobby to go back to
+      closeMultiplayer();
+      menus.showNotice('Could not start the match.');
+      renderParty();
+    } else if (mp === me && !me.room.closed) {
       me.room.started = false; // reopen the lobby to joins
       menus.showLobby(hostLobby(me.room.lobbyInfo()));
     }
   }
 }
 
-async function joinMultiplayer(code, name) {
+/**
+ * Join a game room as a guest. Private match: shows the lobby. Matchmade (`match`
+ * set): stays on the party screen, joins with the party token and retries while
+ * the host is still opening the room.
+ */
+async function joinMultiplayer(code, name, match = null) {
   closeMultiplayer();
-  const me = { role: 'client', conn: null, name };
+  if (!match && party && party.me && party.me.ready && !party.isLeader) party.ready(false);
+  const me = { role: 'client', conn: null, name, match };
   mp = me;
   const shown = String(code || '').toUpperCase();
-  menus.showLobby({ isHost: false, code: shown, players: [], max: 16, fill: true, status: 'Joining…', canStart: false });
+  if (!match) menus.showLobby({ isHost: false, code: shown, players: [], max: 16, fill: true, status: 'Joining…', canStart: false });
   try {
     const [{ joinRoom }, { ClientSession }] = await Promise.all([import('./net/Net.js'), import('./net/ClientSession.js')]);
-    const conn = await joinRoom(code, { name });
+    const conn = await joinRoom(code, match ? { name, token: match.token, retryMs: 10000 } : { name });
     if (mp !== me) return conn.close();
     me.conn = conn;
+    if (match) setMatchStatus('Match found! Waiting for the match to start…');
     conn.onLobby = (info) => {
-      if (mp === me && menus.current === 'lobby') menus.showLobby(clientLobby(info));
+      if (mp === me && !match && menus.current === 'lobby') menus.showLobby(clientLobby(info));
     };
     conn.onClose = (reason) => {
       if (mp !== me) return;
       mp = null;
+      matchStatus = '';
       if (game.state !== 'menu') game.leave();
       sfx.playMusic('menu');
       menus.showNotice(reason);
+      renderParty();
     };
     conn.onStart = async (msg) => {
       if (mp !== me) return;
@@ -248,6 +299,7 @@ async function joinMultiplayer(code, name) {
           return;
         }
         game.net = session;
+        matchStatus = '';
         game.startClientMatch(msg);
       } catch (err) {
         console.error(err);
@@ -265,21 +317,215 @@ async function joinMultiplayer(code, name) {
         menus.showNotice('Could not join the match: ' + errText(err, err));
       }
     };
-    menus.showLobby(clientLobby(conn.lobbyInfo()));
+    if (!match) menus.showLobby(clientLobby(conn.lobbyInfo()));
     preloadInLobby();
   } catch (err) {
     console.error(err);
     if (mp !== me) return;
     mp = null;
+    matchStatus = '';
     menus.showNotice(errText(err, 'Could not join that room.'));
+    renderParty();
   }
 }
 
-async function play() {
+// ---------------------------------------------------------------- party
+// Everyone on the title screen is in a party (src/net/Party.js; a party of one
+// by default). The leader's PLAY goes to the matchmaker; the plan names a game
+// room code and which member hosts it. Without the party server, PLAY starts a
+// local match with bots in the chosen mode.
+let party = null; // PartyConn | null (offline)
+let partyMod = null;
+let partyGen = 0;
+let partyConnecting = false;
+let matchStatus = ''; // "Match found! ..." while handing off to the game room
+const lastLocal = { mode: 'solo', fill: true }; // offline mode / fill, and what the next party starts with
+
+function setMatchStatus(text) {
+  matchStatus = text;
+  renderParty();
+}
+
+function partyView() {
+  if (!party || !party.party) {
+    return {
+      online: false,
+      connecting: partyConnecting,
+      isLeader: true,
+      mode: lastLocal.mode,
+      fill: lastLocal.fill,
+      state: 'idle',
+      members: [{ id: 'me', name: menus.playerName(), ready: true, leader: true, you: true }],
+      match: matchStatus,
+    };
+  }
+  const p = party.party;
+  return {
+    online: true,
+    code: p.code,
+    link: partyMod.inviteLink(p.code),
+    isLeader: party.isLeader,
+    mode: p.mode,
+    fill: p.fill,
+    state: p.state,
+    queuedSince: p.queuedSince,
+    members: p.members.map((m) => ({ ...m, you: m.id === party.you })),
+    match: matchStatus,
+  };
+}
+
+function renderParty() {
+  menus.setParty(partyView());
+}
+
+async function joinParty(code = null) {
+  const gen = ++partyGen;
+  const prev = party;
+  party = null;
+  if (prev) prev.leave();
+  partyConnecting = true;
+  renderParty();
+  try {
+    partyMod = partyMod || (await import('./net/Party.js'));
+    const p = await partyMod.openParty({ name: menus.playerName(), code, mode: lastLocal.mode, fill: lastLocal.fill });
+    if (gen !== partyGen) return p.leave();
+    partyConnecting = false;
+    party = p;
+    p.onState = (st) => {
+      if (party !== p) return;
+      lastLocal.mode = st.mode;
+      lastLocal.fill = st.fill;
+      renderParty();
+    };
+    p.onNotice = (text, isError) => party === p && menus.partyNotice(text, isError);
+    p.onMatch = (plan) => party === p && onMatchFound(plan);
+    p.onClose = (reason) => {
+      if (party !== p) return;
+      party = null;
+      if (reason === 'kicked') {
+        menus.partyNotice(partyMod.PARTY_MSG.kicked, true);
+        joinParty(null);
+      } else {
+        // lost the socket: try the same party again, else start a new one
+        setTimeout(() => party === null && gen === partyGen && joinParty(p.code), 1000);
+      }
+    };
+    renderParty();
+  } catch (err) {
+    if (gen !== partyGen) return;
+    partyConnecting = false;
+    if (code) {
+      menus.partyNotice(errText(err, 'Could not join that party.'), true);
+      return joinParty(null);
+    }
+    console.warn('[party]', errText(err, err));
+    renderParty(); // offline: PLAY runs locally
+  }
+}
+
+function partySetMode(mode) {
+  mode = normalizeMode(mode);
+  if (party) party.setMode(mode);
+  else {
+    lastLocal.mode = mode;
+    if (mode === 'solo') lastLocal.fill = true;
+    renderParty();
+  }
+}
+
+function partySetFill(on) {
+  if (party) party.setFill(on);
+  else {
+    lastLocal.fill = lastLocal.mode === 'solo' ? true : !!on;
+    renderParty();
+  }
+}
+
+/** The big button for the leader: matchmaking online, a local match offline. */
+function partyPlay() {
+  if (matchStatus) return;
+  if (party && party.party) {
+    if (party.isLeader) party.play();
+    return;
+  }
+  playLocal(lastLocal.mode, lastLocal.fill);
+}
+
+function onMatchFound(plan) {
+  // busy in a private lobby or a match: skip this one
+  if (mp || game.state !== 'menu') return;
+  const token = party.token;
+  const name = menus.playerName();
+  if (plan.hostToken === token) hostMatch(plan, name, token);
+  else joinMultiplayer(plan.code, name, { ...plan, token });
+}
+
+async function hostMatch(plan, name, token) {
+  closeMultiplayer();
+  const me = { role: 'host', room: null, name, match: plan };
+  mp = me;
+  const expected = new Set();
+  for (const t of plan.teams) for (const tok of t.tokens) if (tok !== token) expected.add(tok);
+  const total = expected.size + 1;
+  setMatchStatus(`Match found! Setting up the match…`);
+  try {
+    const { hostRoom } = await import('./net/Net.js');
+    const room = await hostRoom({ name, code: plan.code });
+    if (mp !== me) return room.close();
+    me.room = room;
+    room.mode = normalizeMode(plan.mode);
+    preloadInLobby();
+    room.onError = (text) => mp === me && console.warn('[net]', text);
+    // wait for every expected player (or 20 s; late joiners are turned away)
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const check = () => {
+        if (done) return;
+        if (mp !== me) return finish();
+        const have = [...room.clients.values()].filter((c) => expected.has(c.token)).length;
+        setMatchStatus(`Match found! Waiting for players ${have + 1}/${total}`);
+        if (have >= expected.size) finish();
+      };
+      const timer = setTimeout(finish, 20000);
+      room.onLobby(check);
+      check();
+    });
+    if (mp !== me) return;
+    // strangers and duplicate tokens don't belong in this match
+    const slotOf = new Map([[token, 0]]);
+    for (const c of [...room.clients.values()]) {
+      if (!expected.has(c.token) || slotOf.has(c.token)) room.kick(c.id, 'started');
+      else slotOf.set(c.token, c.id);
+    }
+    const humanTeams = plan.teams
+      .map((t) => ({ ids: t.tokens.filter((tok) => slotOf.has(tok)).map((tok) => slotOf.get(tok)), allowBots: !!t.allowBots }))
+      .filter((t) => t.ids.length);
+    matchStatus = '';
+    await runHostedMatch(me, { fill: true, mode: room.mode, humanTeams });
+  } catch (err) {
+    console.error(err);
+    if (mp !== me) return;
+    closeMultiplayer();
+    matchStatus = '';
+    menus.partyNotice('Could not set up the match: ' + errText(err, err), true);
+    renderParty();
+  }
+}
+
+/** Local match with bots (offline, Free Build aside, and PLAY AGAIN after one). */
+async function playLocal(mode = 'solo', fill = true) {
+  lastLocal.mode = normalizeMode(mode);
+  lastLocal.fill = fill;
   try {
     closeMultiplayer();
     await ensureLoaded();
-    game.startMatch();
+    game.startMatch(undefined, { mode: lastLocal.mode, fill: lastLocal.fill });
   } catch (err) {
     console.error(err);
     showError('Could not start the match: ' + (err && err.message ? err.message : err));
@@ -290,9 +536,15 @@ async function play() {
 try {
   game = new Game({ canvas, uiRoot, menus, settings });
   menus.showTitle();
-  // share links look like ?room=ABCD: prefill the join code
+  // share links look like ?room=ABCD: prefill the private-match join code
   const roomParam = new URLSearchParams(location.search).get('room');
   if (roomParam) menus.setJoinCode(roomParam);
+  // party invite links look like ?p=ABCD
+  const invite = (() => {
+    const q = new URLSearchParams(location.search);
+    return (q.get('p') || q.get('invite') || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
+  })();
+  joinParty(invite.length === 4 ? invite : null);
   sfx.playMusic('menu');
   googleTiles.setEnabled(settings.googleTiles);
 } catch (err) {
