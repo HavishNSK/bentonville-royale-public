@@ -70,6 +70,13 @@ const FOV_COS = Math.cos(1.25); // ~72 degrees either side
 const INTERACT = 2.0; // metres to open / take loot
 const LOOT_SCAN = 70; // metres (chests sit ~100 m apart on average)
 const MEMORY = 4; // seconds a lost target is chased
+// box fighting (DIFFICULTY.boxFight): a full 1x1 box, edit peeks through the wall facing the target
+const BOX_MEMORY = 10; // seconds a boxed bot keeps fighting a target it cannot see
+const BOX_RANGE = 38; // metres: fights closer than this may be taken from a box
+const BOX_LEAVE = 60; // metres: a target this far away ends the box fight
+const CELL_HALF = BUILD.cell / 2;
+const WINDOW = 1 << 4; // wall edit: middle tile (chest / eye height)
+const DOOR = (1 << 1) | (1 << 4); // wall edit: bottom + middle of the centre column
 const STUCK_WINDOW = 1.4;
 const PLAN_BUDGET = 350; // A* expansions per frame (~0.3-0.6 ms)
 const CANOPY_COLORS = [0x4fc3f7, 0xff7a45, 0x9ccc65, 0xba68c8, 0xffd54f, 0xf06292, 0x4db6ac, 0xa1887f];
@@ -344,6 +351,183 @@ export class Bots {
     return n;
   }
 
+  // ------------------------------------------------------------- box fighting
+
+  /**
+   * Engage-state hook. Starts a box fight (full 1x1 box around us) when the target is close
+   * and the dice say so, keeps one going, or ends it. True while boxed (the caller holds us in
+   * the middle of the box).
+   */
+  _boxFight(b, target, dist) {
+    const a = b.actor;
+    const t = this.time;
+    const diff = this.diff;
+    const st = this.structures;
+    if (b.box) {
+      const bx = b.box;
+      const gone = !target || !target.alive || t - b.lastSeen > BOX_MEMORY || dist > BOX_LEAVE;
+      const left = Math.hypot(a.pos.x - bx.x, a.pos.z - bx.z) > CELL_HALF + 0.6 || Math.abs(a.pos.y - bx.y) > 2.5;
+      // cracked enemy: edit a door out and push them (box ends, the push logic takes over)
+      const push = target && target.alive && b.targetVisible && target.health + target.shield < 60 && a.health + a.shield > 90 && this.rng() < diff.pushWeak * 0.15;
+      if (gone || left || push || (this._storm && this._storm.isOutside(a.pos.x, a.pos.z))) {
+        this._endBox(b, push ? DOOR : 0);
+        if (push) {
+          b.pushRollAt = t + 2.5;
+          b.pushUntil = t + 2.5;
+        }
+        return false;
+      }
+      return true;
+    }
+    if (!st || !diff.boxFight || !target || !target.alive || dist > BOX_RANGE || !a.grounded) return false;
+    if (t < (b.boxRollAt || 0) || b.bqI < b.bqN) return false;
+    b.boxRollAt = t + 3 + this.rng() * 2;
+    if (this.rng() > diff.boxFight) return false;
+    if (st.count >= BUILD.maxPieces * BUILD_ROOM) return false;
+    const mat = bestMat(a.inventory);
+    let afford = 0;
+    for (const m of MATERIALS) afford += Math.floor(a.inventory.mats[m] / BUILD.cost);
+    if (!mat || afford < 6) return false;
+    const hs = (Math.round(Math.atan2(target.pos.x - a.pos.x, -(target.pos.z - a.pos.z)) / (Math.PI / 2)) * Math.PI) / 2;
+    const cx = (Math.floor(a.pos.x / BUILD.cell) + 0.5) * BUILD.cell;
+    const cz = (Math.floor(a.pos.z / BUILD.cell) + 0.5) * BUILD.cell;
+    b.box = { x: cx, y: a.pos.y, z: cz, since: t, peek: 'closed', peekT: t + 0.6 + this.rng() * 0.4, editKey: null, fixAt: 0, fails: 0, blocked: 0, checked: false };
+    this._startQueue(b, this._queueBox(b, 0, hs), 'box', mat, Math.sin(hs), -Math.cos(hs));
+    b.holdUntil = Infinity;
+    return true;
+  }
+
+  /** The wall piece of our box on side `h` (heading), or null if it is gone. */
+  _boxWall(b, h) {
+    const st = this.structures;
+    _bpos.x = b.box.x;
+    _bpos.y = b.box.y;
+    _bpos.z = b.box.z;
+    const pl = st.plan('wall', _bpos, h, 0, _pl);
+    const w = st.slots.get(pl.key);
+    return w && w.alive ? w : null;
+  }
+
+  /** Every sim frame while boxed: replace broken walls, run the edit-peek loop. */
+  _boxTick(b) {
+    const bx = b.box;
+    const a = b.actor;
+    const st = this.structures;
+    const t = this.time;
+    if (!st || !a.alive || a.downed) {
+      b.box = null;
+      return;
+    }
+    if (b.state !== 'engage' && b.state !== 'heal') {
+      this._endBox(b);
+      return;
+    }
+    if (b.bqI < b.bqN) return; // still going up
+    if (!bx.checked) {
+      // the box went up as far as it could: a spot where walls do not fit is no box
+      bx.checked = true;
+      let walls = 0;
+      for (let q = 0; q < 4; q++) if (this._boxWall(b, (q * Math.PI) / 2)) walls++;
+      if (walls < 3) {
+        this._endBox(b);
+        b.boxRollAt = this.time + 8;
+        return;
+      }
+    }
+    if (bx.peek === 'open' && bx.blocked > 3 && bx.editKey) {
+      // the window does not line up with them: open the full door instead
+      const w = this.structures.slots.get(bx.editKey);
+      if (w && w.alive && w.edit !== DOOR) st.edit(w, DOOR);
+      bx.blocked = 0;
+    }
+    const tx = b.targetVisible && b.target ? b.target.pos.x : b.lastSeenX;
+    const tz = b.targetVisible && b.target ? b.target.pos.z : b.lastSeenZ;
+    const face = (Math.round(Math.atan2(tx - bx.x, -(tz - bx.z)) / (Math.PI / 2)) * Math.PI) / 2;
+
+    // replace a broken wall (the enemy shot one out): the box must stay a box
+    if (t > bx.fixAt) {
+      bx.fixAt = t + 0.25;
+      for (let q = 0; q < 4; q++) {
+        const h = face + (q * Math.PI) / 2;
+        if (this._boxWall(b, h)) continue;
+        const mat = bestMat(a.inventory);
+        if (!mat) break;
+        _bpos.x = bx.x;
+        _bpos.y = bx.y;
+        _bpos.z = bx.z;
+        const pl = st.plan('wall', _bpos, h, 0, _pl);
+        if (!pl.valid && ++bx.fails > 6) {
+          this._endBox(b); // cannot rebuild here: fight in the open
+          b.boxRollAt = t + 8;
+          return;
+        }
+        if (pl.valid && a.inventory.spendMats(mat, BUILD.cost)) {
+          if (st.place({ ...pl }, mat, a)) b.builds++;
+          else a.inventory.mats[mat] += BUILD.cost;
+          if (bx.peek === 'open' && q === 0) bx.peek = 'closed'; // the peek wall was the one replaced
+        }
+        break; // one piece per tick, like a player
+      }
+    }
+
+    // edit peek loop: closed (heal / reload behind it) -> window / door open -> reset
+    if (t < bx.peekT) return;
+    const diff = this.diff;
+    if (bx.peek === 'closed') {
+      // stay closed while healing / reloading (and patch up when hurt); otherwise open the
+      // side facing them
+      if (b.healing <= 0 && a.health + a.shield < 110 && (a.health < 75 ? findConsumable(a.inventory, 'medkit') >= 0 : a.shield < 50 && findConsumable(a.inventory, 'tonic') >= 0)) {
+        this._startHeal(b);
+      }
+      if (b.healing > 0 || b.reloading > 0) {
+        bx.peekT = t + 0.2;
+        return;
+      }
+      const w = this._boxWall(b, face);
+      if (!w) {
+        bx.peekT = t + 0.2;
+        return;
+      }
+      const close = Math.hypot(tx - a.pos.x, tz - a.pos.z) < 9;
+      st.edit(w, close ? DOOR : WINDOW);
+      bx.blocked = 0;
+      bx.peek = 'open';
+      bx.editKey = w.key;
+      bx.peekT = t + diff.peekOpen * (0.7 + this.rng() * 0.6);
+      // pre-aimed at the spot they were last seen: shoot as soon as the edit opens
+      b.reactLeft = Math.min(b.reactLeft, diff.reaction * 0.4);
+      b.trackTime = Math.max(b.trackTime, 2.5);
+      b.burstPaused = false;
+      b.burstLeft = 8;
+      b.errYaw *= 0.5;
+      b.errPitch *= 0.5;
+      b.fireCd = Math.min(b.fireCd, 0.08);
+    } else {
+      // reset the edit (edit course: open, shoot, close)
+      const w = bx.editKey && st.slots.get(bx.editKey);
+      if (w && w.alive && w.edit) st.edit(w, 0);
+      bx.peek = 'closed';
+      bx.editKey = null;
+      bx.peekT = t + diff.peekClosed * (0.7 + this.rng() * 0.8);
+    }
+  }
+
+  /** Leaves the box: closes the peek, or edits a door toward the target to push out. */
+  _endBox(b, mask = 0) {
+    const bx = b.box;
+    if (!bx) return;
+    const st = this.structures;
+    const w = bx.editKey && st && st.slots.get(bx.editKey);
+    if (w && w.alive) st.edit(w, 0);
+    if (mask && st && b.target) {
+      const face = (Math.round(Math.atan2(b.target.pos.x - bx.x, -(b.target.pos.z - bx.z)) / (Math.PI / 2)) * Math.PI) / 2;
+      const d = this._boxWall(b, face);
+      if (d) st.edit(d, mask);
+    }
+    b.box = null;
+    b.holdUntil = 0;
+  }
+
   /** Starts placing queued pieces 0..n-1 (one per diff.buildRate). */
   _startQueue(b, n, mode, mat, dx, dz) {
     const t = this.time;
@@ -616,7 +800,7 @@ export class Bots {
       else fight = dist < 6 && (provoked || !this._hasGun(target.inventory));
       if (outside && storm.distanceOutside(a.pos.x, a.pos.z) > 25 && dist > 15) fight = false;
       // badly hurt with heals in the bag: break off and patch up (cautious bots more often)
-      if (fight && dist > 8 && a.health + a.shield < 45 && t > b.retreatUntil + 6 && this.rng() < 0.35 + b.caution * 0.5 &&
+      if (fight && !b.box && dist > 8 && a.health + a.shield < 45 && t > b.retreatUntil + 6 && this.rng() < 0.35 + b.caution * 0.5 &&
           (findConsumable(inv, 'medkit') >= 0 || findConsumable(inv, 'tonic') >= 0)) {
         b.retreatUntil = t + 3 + this.rng() * 2;
       }
@@ -636,7 +820,7 @@ export class Bots {
     else if (this._pickHarvest(b)) state = 'harvest';
     else state = 'wander';
 
-    if (state !== 'heal' && b.healing > 0) this._cancelHeal(b);
+    if (state !== 'heal' && b.healing > 0 && !b.box) this._cancelHeal(b); // boxed bots heal mid-fight
     if (state !== 'revive' && a.revivingTarget && this.combat) this.combat.stopRevive(a);
     if (state !== b.state) {
       b.state = state;
@@ -711,7 +895,16 @@ export class Bots {
         speed = b.targetVisible && !pushing ? PLAYER.runSpeed : PLAYER.sprintSpeed;
         if (pushing) this._chooseWeapon(b, Math.min(d, 8)); // pull the close-range gun while closing in
         if (!b.targetVisible && d < 1.5) b.target = null; // reached last seen spot
-        this._maybeBuild(b, fx, fz, d);
+        if (this._boxFight(b, target, d)) {
+          // boxed: hold the middle of the box; the edit peeks do the fighting
+          gx = b.box.x;
+          gz = b.box.z;
+          speed = Math.hypot(gx - a.pos.x, gz - a.pos.z) > 0.4 ? PLAYER.walkSpeed : 0;
+          stop = 0.15;
+          break;
+        }
+        // box fighters skip loose walls at box range: they would block their own peeks
+        if (!(this.diff.boxFight && d < BOX_RANGE)) this._maybeBuild(b, fx, fz, d);
         if (t < b.rushUntil) {
           // ramp rush: run straight up the ramps being built toward the target
           gx = a.pos.x + b.bqDirX * 6;
@@ -1045,7 +1238,7 @@ export class Bots {
         return;
       }
       b.targetVisible = false;
-      if (t - b.lastSeen > MEMORY) tgt = b.target = null;
+      if (t - b.lastSeen > (b.box ? BOX_MEMORY : MEMORY)) tgt = b.target = null;
     }
 
     // a known attacker is checked first, in any direction
@@ -1841,6 +2034,7 @@ export class Bots {
     const inv = a.inventory;
 
     if (b.bqI < b.bqN) this._buildStep(b);
+    if (b.box) this._boxTick(b);
     if (b.healing > 0) {
       b.healing -= dt;
       if (b.healing <= 0) this._finishHeal(b);
@@ -1860,9 +2054,9 @@ export class Bots {
     let want = a.heading;
     let pitch = 0;
     const tgt = b.target;
-    if (tgt && b.targetVisible && b.state === 'engage') {
-      const dx = tgt.pos.x - a.pos.x;
-      const dz = tgt.pos.z - a.pos.z;
+    if (tgt && (b.targetVisible || b.box) && b.state === 'engage') {
+      const dx = (b.targetVisible ? tgt.pos.x : b.lastSeenX) - a.pos.x;
+      const dz = (b.targetVisible ? tgt.pos.z : b.lastSeenZ) - a.pos.z;
       want = Math.atan2(dx, -dz);
       pitch = Math.atan2(tgt.pos.y + CHEST - (a.pos.y + EYE), Math.hypot(dx, dz) || 1);
     } else if ((b.state === 'harvest' && b.harvest) || (b.state === 'revive' && a.revivingTarget)) {
@@ -1938,7 +2132,9 @@ export class Bots {
 
     // origin: muzzle when the character is drawn, else the eye
     const ch = a.character;
-    if (ch && ch.root.visible) ch.muzzle(_origin);
+    // peeking through an edit: the shot leaves from the eye (aimed down sights), not the hip
+    if (b.box && b.box.peek === 'open') _origin.set(a.pos.x + Math.sin(a.heading) * 0.3, a.pos.y + EYE, a.pos.z - Math.cos(a.heading) * 0.3);
+    else if (ch && ch.root.visible) ch.muzzle(_origin);
     else _origin.set(a.pos.x + Math.sin(a.heading) * 0.4, a.pos.y + EYE - 0.15, a.pos.z - Math.cos(a.heading) * 0.4);
     // aim at the chest (head now and then), with drift that shrinks while tracking
     const settle = Math.max(0.45, 1 - b.trackTime / 5);
@@ -1951,10 +2147,22 @@ export class Bots {
     const yaw = (b.errYaw + gauss(this.rng) * this.diff.aimError * 0.35) * err;
     const pit = (b.errPitch + gauss(this.rng) * this.diff.aimError * 0.25) * err;
     rotateDir(_dir, yaw, pit);
+    // never shoot our own build point-blank (a wall just placed / a closed peek): hold fire
+    if (b.builds > 0 || b.box) {
+      const own = this.world.raycast(_origin.x, _origin.y, _origin.z, _dir.x, _dir.y, _dir.z, 4.5, null);
+      if (own && own.collider && own.collider.owner === a) {
+        b.ownHolds = (b.ownHolds || 0) + 1;
+        if (b.box && b.box.peek === 'open') b.box.blocked = (b.box.blocked || 0) + 1;
+        b.fireCd = 0.1;
+        return;
+      }
+    }
 
     const moving = Math.hypot(a.vel.x, a.vel.z) > 1 ? 1.35 : 1;
     const base = w.hipSpread ? w.hipSpread * 0.5 : w.spread;
-    const spread = (base + b.bloom) * moving * (a.grounded ? 1 : 1.6);
+    // peeking through an edit: aimed down sights (tight), so the frame is not shot to bits
+    const ads = b.box && b.box.peek === 'open' ? 0.45 : 1;
+    const spread = (base + b.bloom) * moving * (a.grounded ? 1 : 1.6) * ads;
     it.mag--;
     b.bloom = Math.min(w.maxBloom, b.bloom + w.bloom);
     b.burstLeft--;
@@ -2132,6 +2340,7 @@ export class Bots {
 
   _die(b) {
     const a = b.actor;
+    b.box = null;
     b.state = 'dead';
     a.botState = 'dead';
     b.deadTime = 0;

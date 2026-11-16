@@ -893,7 +893,7 @@ export class Game {
   }
 
   _onSiphon(killer, out) {
-    if (this.net && this.net.isHost && this.net.events && this.net.started) this.net.events.push({ e: 'sp', a: killer.id, h: Math.round(out.hp), s: Math.round(out.shield) });
+    if (this.net && this.net.isHost && this.net.events && this.net.started) this.net.events.push({ e: 'sph', a: killer.id, h: Math.round(out.hp), s: Math.round(out.shield) });
     if (killer === this.player) this.showSiphon(out.hp, out.shield);
   }
 
