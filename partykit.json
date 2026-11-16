@@ -1,0 +1,11 @@
+{
+  "$schema": "https://www.partykit.io/schema.json",
+  "name": "bentonville-royale",
+  "main": "party/server.js",
+  "parties": {
+    "party": "party/partyRoom.js",
+    "matchmaker": "party/matchmaker.js",
+    "accounts": "party/accounts.js"
+  },
+  "compatibilityDate": "2024-09-01"
+}
