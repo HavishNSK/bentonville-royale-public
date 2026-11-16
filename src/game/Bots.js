@@ -55,6 +55,7 @@
 // animated; the skeleton updates every frame within 35 m, every 2nd frame to half the
 // draw distance, every 3rd beyond; settled death poses are frozen.
 
+import { stairWalk } from '../world/interiors/stairRouting.js';
 import * as THREE from 'three';
 import { Character } from './Character.js';
 import { Inventory } from './Inventory.js';
@@ -1549,8 +1550,8 @@ export class Bots {
     const ux = dx / d;
     const uz = dz / d;
     const base = Math.atan2(ux, -uz);
-    if (this.time < b.rushUntil) {
-      // running up own ramps: the avoidance rays would see the ramp as a wall
+    if (this.time < b.rushUntil || (b.pathN > 0 && b.pathK[b.pathI] === 2)) {
+      // Authored stair flights and running up own ramps: the avoidance rays would see the ramp as a wall
       b.mx = ux;
       b.mz = uz;
       b.speed = speed;
@@ -1590,7 +1591,7 @@ export class Bots {
    * (b.inB) and its loot (b.lootIn), so 'same building' means the same side of the walls.
    */
   _shellAt(x, z, y) {
-    const c = this.world.interiorAt ? this.world.interiorAt(x, z) : null;
+    const c = this.world.interiorAt ? this.world.interiorAt(x, z, y) : null;
     if (!c || !c.shell) return null;
     const top = c.shell.top ?? c.shell.ceil; // multi-storey: the top storey's ceiling
     return y == null || y < top - 0.3 ? c : null;
@@ -1675,6 +1676,18 @@ export class Bots {
     let r = roomAt(plan, lv, x, z);
     const gr = roomAt(plan, glv, gx, gz);
     const stairs = plan.stairs || [];
+    let cursorX = x, cursorZ = z;
+    const walkTo = (tx, tz) => {
+      for (const [wx, wz] of stairWalk(plan, cursorX, cursorZ, tx, tz)) {
+        n = pushWp(P, K, n, wx, wz, 1);
+        cursorX = wx; cursorZ = wz;
+      }
+    };
+    const levelLeg = (from, to) => {
+      const points = new Float32Array(PATH_MAX * 2), kinds = new Uint8Array(PATH_MAX);
+      const count = this._levelLeg(plan, lv, from, to, points, kinds, 0);
+      for (let i = 0; i < count; i++) walkTo(points[i * 2], points[i * 2 + 1]);
+    };
     while (lv !== glv) {
       const up = glv > lv;
       const sl = up ? lv : lv - 1;
@@ -1687,7 +1700,7 @@ export class Bots {
       }
       if (!s) break; // no way between these storeys: walk the rooms of this one
       const enter = up ? s.room0 : s.room1;
-      n = this._levelLeg(plan, lv, r, enter ?? -1, P, K, n);
+      levelLeg(r, enter ?? -1);
       let ux = s.x1 - s.x0;
       let uz = s.z1 - s.z0;
       const l = Math.hypot(ux, uz) || 1;
@@ -1695,20 +1708,21 @@ export class Bots {
       uz /= l;
       if (n > PATH_MAX - 4) return n;
       if (up) {
-        n = pushWp(P, K, n, s.x0 - ux * STAIR_STEP, s.z0 - uz * STAIR_STEP, 1);
+        walkTo(s.x0 - ux * STAIR_STEP, s.z0 - uz * STAIR_STEP);
         n = pushWp(P, K, n, s.x0, s.z0, 1);
-        n = pushWp(P, K, n, s.x1, s.z1, 1);
+        n = pushWp(P, K, n, s.x1, s.z1, 2);
         n = pushWp(P, K, n, s.x1 + ux * STAIR_STEP, s.z1 + uz * STAIR_STEP, 1);
       } else {
-        n = pushWp(P, K, n, s.x1 + ux * STAIR_STEP, s.z1 + uz * STAIR_STEP, 1);
+        walkTo(s.x1 + ux * STAIR_STEP, s.z1 + uz * STAIR_STEP);
         n = pushWp(P, K, n, s.x1, s.z1, 1);
-        n = pushWp(P, K, n, s.x0, s.z0, 1);
+        n = pushWp(P, K, n, s.x0, s.z0, 2);
         n = pushWp(P, K, n, s.x0 - ux * STAIR_STEP, s.z0 - uz * STAIR_STEP, 1);
       }
+      cursorX = P[n * 2 - 2]; cursorZ = P[n * 2 - 1];
       lv = up ? lv + 1 : lv - 1;
       r = (up ? s.room1 : s.room0) ?? roomAt(plan, lv, P[n * 2 - 2], P[n * 2 - 1]);
     }
-    if (lv === glv) n = this._levelLeg(plan, lv, r, gr, P, K, n);
+    if (lv === glv) { levelLeg(r, gr); walkTo(gx, gz); }
     return n;
   }
 
@@ -2437,7 +2451,7 @@ function newBrain(actor, target, rng) {
     navX: 0,
     navZ: 0,
     path: new Float32Array(PATH_MAX * 2),
-    pathK: new Uint8Array(PATH_MAX), // 1 = door waypoint (tight reach radius)
+    pathK: new Uint8Array(PATH_MAX), // 1 = door/walk waypoint, 2 = authored flight (tight reach, no slope avoidance)
     pathN: 0,
     pathI: 0,
     pathGoalX: 0,

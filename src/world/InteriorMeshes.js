@@ -6,6 +6,9 @@
 // view.hidePanel / showPanel can blank / restore them.
 
 import * as THREE from 'three';
+import { FLOOR_THICKNESS } from './interiors/storeys.js';
+import { addStairGeometry } from './InteriorStairs.js';
+import { addFurnishingGeometry } from './InteriorFurnishings.js';
 import { clipRect, toLocal, toWorld } from './interiors/layout.js';
 
 // [wall, floor] per room kind
@@ -59,14 +62,24 @@ export function addInteriorGeometry(chunk, shell, h, api) {
 
     // ---- room floors (+0.02 over the interior floor)
     for (const r of L.rooms) {
-      const poly = clipRect(P, r.a0, r.b0, r.a1, r.b1);
-      if (poly.length < 6) continue;
-      const pts = [];
-      for (let i = 0; i < poly.length; i += 2) {
-        const [x, z] = toWorld(F, poly[i], poly[i + 1]);
-        pts.push(x, z);
+      let rects = [{a0:r.a0,b0:r.b0,a1:r.a1,b1:r.b1}];
+      for (const hole of L.holes) {
+        const next=[];
+        for(const R of rects) {
+          const a0=Math.max(R.a0,hole.a0),a1=Math.min(R.a1,hole.a1),b0=Math.max(R.b0,hole.b0),b1=Math.min(R.b1,hole.b1);
+          if(a0>=a1||b0>=b1){next.push(R);continue;}
+          next.push({a0:R.a0,b0:R.b0,a1:a0,b1:R.b1},{a0:a1,b0:R.b0,a1:R.a1,b1:R.b1},{a0,b0:R.b0,a1,b1:b0},{a0,b0:b1,a1,b1:R.b1});
+        }
+        rects=next.filter(R=>R.a1-R.a0>.01&&R.b1-R.b0>.01);
       }
-      hcapFlat(chunk, pts, base + 0.05, (ROOM_COLORS[r.kind] || DEFAULT_COLORS)[1], h);
+      for(const R of rects) {
+        const poly=clipRect(P,R.a0,R.b0,R.a1,R.b1);
+        if(poly.length<6)continue;
+        const pts=[];
+        for(let i=0;i<poly.length;i+=2)pts.push(...toWorld(F,poly[i],poly[i+1]));
+        hcapFlat(chunk,pts,base+0.05,(ROOM_COLORS[r.kind]||DEFAULT_COLORS)[1],h);
+        if(L.i>0)hcapFlat(chunk,pts,base-FLOOR_THICKNESS,0xd7d0c3,h,-1);
+      }
     }
 
     // ---- partitions
@@ -118,4 +131,6 @@ export function addInteriorGeometry(chunk, shell, h, api) {
       }
     }
   }
+  addStairGeometry(chunk,shell,h,api);
+  addFurnishingGeometry(chunk,shell,h,api);
 }

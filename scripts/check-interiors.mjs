@@ -398,10 +398,14 @@ const phase2d = await (async () => {
   let indoor = 0;
   let badLoot = 0;
   for (const r of loot.records) {
-    const c = world.interiorAt(r.x, r.z);
+    const c = world.interiorAt(r.x, r.z, r.y);
     if (!c) continue;
     indoor++;
-    if (world.blockedAt(r.x, r.z, 0.25, true) || Math.abs(r.y - c.shell.floor) > 0.6) badLoot++;
+    const L = c.shell.plan.levels.find(L => Math.abs(r.y - L.y) <= 0.6);
+    const pos = { x: r.x, y: L ? L.y : r.y, z: r.z };
+    world.resolveCircle(pos, 0.25, 0.6);
+    const floor = world.groundHeight(r.x, r.z, r.y, 0.1);
+    if (!L || Math.hypot(pos.x - r.x, pos.z - r.z) > 0.02 || Math.abs(floor - L.y) > 0.1) badLoot++;
   }
   if (badLoot) fail(`phase 2D: ${badLoot} indoor loot records in a wall or off the floor`);
   out.loot = { ...ls, ms: undefined, indoorRecords: indoor, records: loot.records.length };

@@ -27,6 +27,7 @@
 // randomInteriorPoint(), interiorAt(), blockedAt(x, z, r, true).
 
 import { planInterior } from './Interiors.js';
+import { inHole, stairHeight, FLOOR_THICKNESS } from './interiors/storeys.js';
 
 const CELL = 32;
 const STEP = 0.62;
@@ -469,6 +470,8 @@ export class World {
       console.warn('[world] interior plan failed for building', c.ref && c.ref.id, err);
     }
     s.plan = plan;
+    s.groundCeil = plan ? plan.levels[0].ceil : s.ceil;
+    if (plan) s.ceil = plan.levels[plan.levels.length - 1].ceil;
     s.panels = plan ? plan.panels : [];
     s.dead = 0; // number of broken panels
     s.edgePanels = [];
@@ -655,15 +658,18 @@ export class World {
   }
 
   /** Does a circle (x, z, r) on the ground storey overlap a solid interior partition of shell c? */
-  _wallsNear(c, x, z, r) {
+  _wallsNear(c, x, z, r, feetY = c.shell.floor) {
     const s = c.shell;
     if (!s.plan) return false;
-    const L = s.plan.levels[0];
+    const levels = s.plan.levels;
+    let li = 0;
+    for (let i = 1; i < levels.length; i++) if (levels[i].y <= feetY + 0.15) li = i;
+    const L = levels[li];
     const W = L.walls;
-    const on = s.wallOn[0];
-    const band = L.y + 0.5;
+    const on = s.wallOn[li];
+    const band = feetY + 0.5;
     for (let k = 0, w = 0; k < W.length; k += 7, w++) {
-      if (!on[w] || W[k + 5] > band) continue;
+      if (!on[w] || W[k + 5] > band || W[k + 6] <= feetY + 0.1) continue;
       const lim = r + W[k + 4];
       if (this._segD2(W, k, x, z) < lim * lim) return true;
     }
@@ -990,7 +996,7 @@ export class World {
     let moved = false;
     for (let pass = 0; pass < 3; pass++) {
       if (pass === 1 && head <= s.doorTop + 0.02) continue;
-      if (pass === 2 && (!s.overHoles || head <= s.ceil + 0.02)) continue;
+      if (pass === 2 && (!s.overHoles || head <= (s.groundCeil ?? s.ceil) + 0.02)) continue;
       const A = pass === 0 ? s.segs : pass === 1 ? s.lintels : s.overHoles;
       for (let k = 0; k < A.length; k += 4) {
         const ax = A[k];
@@ -1029,14 +1035,15 @@ export class World {
    * The hollow building whose interior contains (x, z) (inside the footprint and
    * clear of the wall band), or null. The collider's .shell has floor / ceil / doors.
    */
-  interiorAt(x, z) {
+  interiorAt(x, z, feetY = null) {
     const cell = this.cellAt(x, z);
     if (!cell) return null;
     const polys = cell.polys;
     for (let i = 0; i < polys.length; i++) {
       const c = polys[i];
       if (!c.shell || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
-      if (this._onInteriorFloor(c, x, z, 0)) return c;
+      if (feetY != null && (feetY < c.shell.floor - 0.5 || feetY >= c.shell.ceil)) continue;
+      if (this._onInteriorFloor(c, x, z, 0, feetY ?? c.shell.floor)) return c;
     }
     return null;
   }
@@ -1048,7 +1055,7 @@ export class World {
    * and the player's wall collision, so interiorAt(x, z) === c implies
    * !blockedAt(x, z, 0, true) as far as c's walls go, and the loot / spawn checks agree.
    */
-  _onInteriorFloor(c, x, z, r) {
+  _onInteriorFloor(c, x, z, r, feetY = c.shell.floor) {
     const s = c.shell;
     if (!pointInPoly(c.p, c.n, x, z)) return false;
     const lim = r + s.t * 0.5;
@@ -1056,7 +1063,7 @@ export class World {
     return (
       this._segsDist2(s.segs, x, z) >= lim2 &&
       (!s.lintels.length || this._segsDist2(s.lintels, x, z) >= lim2) &&
-      !(s.plan && this._wallsNear(c, x, z, r))
+      !(s.plan && this._wallsNear(c, x, z, r, feetY))
     );
   }
 
@@ -1426,6 +1433,19 @@ export class World {
           this.surface = 'floor';
         }
       }
+      if (c.shell?.plan && pointInPoly(c.p, c.n, x, z)) {
+        const plan = c.shell.plan;
+        for (const L of plan.levels) {
+          if (L.y > y && L.y <= lim && !inHole(plan, L, x, z)) {
+            y = L.y;
+            this.surface = 'floor';
+          }
+        }
+        for (const s of plan.stairs) {
+          const sy = stairHeight(s, x, z);
+          if (sy > y && sy <= lim) { y = sy; this.surface = 'floor'; }
+        }
+      }
     }
     const decks = cell.decks;
     for (let i = 0; i < decks.length; i++) {
@@ -1476,12 +1496,19 @@ export class World {
       }
       if (s.plan) {
         // interior door lintels (and any partition span that starts above the floor)
-        const L = s.plan.levels[0];
-        const W = L.walls;
-        for (let k = 0; k < W.length; k += 7) {
-          if (W[k + 5] <= L.y + 0.5 || feetY >= W[k + 5]) continue;
-          const ll = W[k + 4] + 0.3;
-          if (this._segD2(W, k, x, z) < ll * ll && W[k + 5] < cy) cy = W[k + 5];
+        for (const L of s.plan.levels) {
+          const underside = L.y - FLOOR_THICKNESS;
+          if (L.i > 0 && underside > lim && !inHole(s.plan, L, x, z) && pointInPoly(c.p, c.n, x, z)) cy = Math.min(cy, underside);
+          const W = L.walls;
+          for (let k = 0, wi = 0; k < W.length; k += 7, wi++) {
+            if (!s.wallOn[L.i][wi] || W[k + 5] <= L.y + 0.5 || feetY >= W[k + 5]) continue;
+            const ll = W[k + 4] + 0.3;
+            if (this._segD2(W, k, x, z) < ll * ll && W[k + 5] < cy) cy = W[k + 5];
+          }
+        }
+        for (const stair of s.plan.stairs) {
+          const underside = stairHeight(stair,x,z) - FLOOR_THICKNESS;
+          if (underside > lim) cy = Math.min(cy, underside);
         }
       }
       if (cy > lim && cy < y) y = cy;
@@ -1957,6 +1984,33 @@ export class World {
                     out.kind = c.kind;
                   }
                 }
+              }
+            }
+          }
+          if (c.shell?.plan) {
+            const plan = c.shell.plan;
+            const surfaceHit = (t, nx, ny, nz) => {
+              if (!(t > 1e-4 && t < best)) return;
+              best = t; found = true;
+              out.nx=nx; out.ny=ny; out.nz=nz; out.collider=c; out.kind=c.kind;
+            };
+            if (Math.abs(dy)>1e-9) for (const L of plan.levels) {
+              if (!L.i) continue;
+              for (const sy of [L.y,L.y-FLOOR_THICKNESS]) {
+                const t=(sy-oy)/dy,x=ox+dx*t,z=oz+dz*t;
+                if (pointInPoly(c.shell.inner,c.n,x,z)&&!inHole(plan,L,x,z)) surfaceHit(t,0,dy<0?1:-1,0);
+              }
+            }
+            for (const stair of plan.stairs) {
+              const ex=stair.x1-stair.x0,ez=stair.z1-stair.z0,len2=ex*ex+ez*ez;
+              const rise=stair.y1-stair.y0,gx=rise*ex/len2,gz=rise*ez/len2;
+              const den=dy-gx*dx-gz*dz;
+              if(Math.abs(den)<1e-9)continue;
+              for(const thickness of [0,FLOOR_THICKNESS]) {
+                const t=(stair.y0-thickness-oy+gx*(ox-stair.x0)+gz*(oz-stair.z0))/den;
+                if(!Number.isFinite(stairHeight(stair,ox+dx*t,oz+dz*t)))continue;
+                const len=Math.hypot(gx,1,gz),side=den<0?1:-1;
+                surfaceHit(t,-gx/len*side,1/len*side,-gz/len*side);
               }
             }
           }

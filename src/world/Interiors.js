@@ -8,7 +8,7 @@
 // this file or interiors/*; local coordinates are quantised to 1/64 m; ties break on index.
 // Bump INTERIOR_VERSION whenever the output can change (it is part of Game.mapId).
 //
-// ============================================================== FROZEN PLAN SHAPE (v1)
+// ============================================================== PLAN SHAPE (v2)
 // plan = {
 //   v          INTERIOR_VERSION
 //   id         building id (bd.id)
@@ -34,14 +34,14 @@
 //     doors      [{ x, z, nx, nz, w, roomA, roomB, open? }]  interior doorways (centre on the wall
 //                line, normal toward roomB, clear width w, open from y to y + doorH; open: true =
 //                a full-height gap where a wall too short for a door was left out)
-//     holes      []  floor openings (stairwells / voids; Phase 2A)
+//     holes      [{ a0, b0, a1, b1 }]  local floor openings for stairs
 //     floorArea  m^2 of walkable floor on this level
 //   }]
-//   stairs     []  (Phase 2A)
-//   furniture  []  (Phase 2B)
-//   colliders  []  (Phase 2B)
+//   stairs     [{ level, x0, z0, x1, z1, y0, y1, w, room0, room1, a0, b0, a1, b1, axis }]
+//   furniture  [{ kind, level, room, a0, b0, a1, b1, y, height, color }] (decorative)
+//   colliders  []  furniture is decorative and does not block movement
 //   lootSpots  [{ x, y, z, level, room }]  one per room (room centre)
-//   signs      []  (Phase 2B)
+//   signs      [{ level, room, text, x, y, z, nx, nz, width, height }]
 //   panels     [panel]  breakable wall panels; panel id = its index (stable per INTERIOR_VERSION)
 //   doorH      interior door clear height (m)
 //   hash       uint32 FNV-1a over the quantised plan
@@ -66,7 +66,10 @@ import { q, inPoly, polyArea, toLocal, toWorld, partition, placeDoors, roomPoint
 import { RECIPES } from './interiors/archetypes.js';
 import { LANDMARK_RECIPES, classify } from './interiors/landmarks.js';
 
-export const INTERIOR_VERSION = 1;
+import { storeyCount, addStoreys, FLOOR_THICKNESS } from './interiors/storeys.js';
+import { furnishInterior } from './interiors/furnishings.js';
+
+export const INTERIOR_VERSION = 2;
 
 const HUB = { corridor: 1, hall: 1, lobby: 1, sales: 1, living: 1, open: 1 };
 
@@ -235,7 +238,9 @@ export function planInterior(bd, shell, ctx = {}) {
   }
   const recipe = classify(bd, pois, shell.area);
   const fn = recipe === 'landmark' ? LANDMARK_RECIPES[id] : RECIPES[recipe] || RECIPES.hall;
+  const count = ctx._single ? 1 : storeyCount(bd, shell);
   const f = {
+    levels: count,
     L: F.L,
     W: F.W,
     area: shell.area,
@@ -248,14 +253,16 @@ export function planInterior(bd, shell, ctx = {}) {
     pois,
     hash: (salt) => hash01(id, salt),
   };
-  const tree = fn(f);
+  const authored = fn(f);
+  const trees = authored?.levels || [authored];
+  const tree = ctx._tree || trees[0];
 
   // ---- level 0 layout
   const lay = partition(tree, Ploc, F, zones);
   placeDoors(lay.rooms, lay.pieces, (k) => q(1.6 + 0.2 * hash01(id, 31 + k)), (r) => !!HUB[r.kind]);
 
   const y = shell.floor;
-  const ceil = shell.ceil;
+  const ceil = count > 1 ? q(Math.min(shell.ceil, shell.floor + (bd.h - 0.2) / count - FLOOR_THICKNESS)) : shell.ceil;
   const doorH = shell.doorH;
   const rooms = lay.rooms.map((r, i) => {
     const [ca, cb] = roomPoint(r, Ploc);
@@ -383,7 +390,7 @@ export function planInterior(bd, shell, ctx = {}) {
     h = fnv(h, pn.maxHp);
   }
 
-  return {
+  const plan = {
     v: INTERIOR_VERSION,
     id,
     recipe,
@@ -398,6 +405,10 @@ export function planInterior(bd, shell, ctx = {}) {
     doorH,
     hash: h >>> 0,
   };
+  if (ctx._single) return plan;
+  const complete = addStoreys(plan, bd, { ...shell, ceil }, count, trees, authored?.stairs, (upperShell, upperTree) =>
+    planInterior(bd, upperShell, { ...ctx, _single: true, _tree: upperTree }));
+  return furnishInterior(complete, shell);
 }
 
 /**

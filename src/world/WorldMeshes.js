@@ -416,7 +416,7 @@ function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris) {
   const n = pts.length;
   const h = b.h;
   const inner = shell.inner;
-  const top = shell.ceilRel; // interior ceiling above the floor
+  const top = shell.groundCeil !== undefined ? shell.groundCeil - shell.floor : shell.ceilRel; // interior ceiling above the floor
   const dh = shell.doorH;
   _c.setHex(INTERIOR_WALL[b.mat] || INTERIOR_WALL.brick);
   const ishade = 0.95 + hash01(b.id, 6) * 0.08;
@@ -478,7 +478,10 @@ function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris) {
       quad(chunk, c0o, c0i, c0I, c0O, -tx, 0, -tz, j0 ? wr : ir, j0 ? wg : ig, j0 ? wb : ib, null, h);
       quad(chunk, c1o, c1i, c1I, c1O, tx, 0, tz, j1 ? wr : ir, j1 ? wg : ig, j1 ? wb : ib, null, h);
       if (pn) chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
-      if (h > top + 0.01) quad(chunk, O(f0, top), O(f1, top), O(f1, h), O(f0, h), nx, 0, nz, wr, wg, wb, wa(len, f0, f1, top, h), h);
+      if (h > top + 0.01) {
+        quad(chunk, O(f0, top), O(f1, top), O(f1, h), O(f0, h), nx, 0, nz, wr, wg, wb, wa(len, f0, f1, top, h), h);
+        quad(chunk, I(f0, top), I(f1, top), I(f1, shell.ceil-shell.floor), I(f0, shell.ceil-shell.floor), -nx, 0, -nz, ir, ig, ib, null, h);
+      }
       // underside of the wall band above a broken panel
       quad(chunk, O(f0, top), O(f1, top), I(f1, top), I(f0, top), 0, -1, 0, ir, ig, ib, null, h);
     };
@@ -497,20 +500,20 @@ function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris) {
     for (const d of doors) {
       // above the opening: outer lintel face, inner face, underside
       quad(chunk, O(d.f0, dh), O(d.f1, dh), O(d.f1, h), O(d.f0, h), nx, 0, nz, wr, wg, wb, wa(len, d.f0, d.f1, dh, h), h);
-      quad(chunk, I(d.f0, dh), I(d.f1, dh), I(d.f1, top), I(d.f0, top), -nx, 0, -nz, ir, ig, ib, null, h);
+      quad(chunk, I(d.f0, dh), I(d.f1, dh), I(d.f1, shell.ceil-shell.floor), I(d.f0, shell.ceil-shell.floor), -nx, 0, -nz, ir, ig, ib, null, h);
       quad(chunk, O(d.f0, dh), O(d.f1, dh), I(d.f1, dh), I(d.f0, dh), 0, -1, 0, ir, ig, ib, null, h);
     }
   }
   // interior floor (just above the ground layers) and ceiling; the inner ring has the
   // footprint's vertex order, so the footprint triangulation is reused
   hcap(chunk, inner, tris, 0.03, 1, FLOOR_COLOR[b.mat] || FLOOR_COLOR.brick, h);
-  hcap(chunk, inner, tris, top, -1, CEILING_COLOR, h);
+  hcap(chunk, inner, tris, shell.ceil-shell.floor, -1, CEILING_COLOR, h);
   // interior partitions + room floors (InteriorMeshes.js)
   if (shell.plan) addInteriorGeometry(chunk, shell, h, { quad, hcapFlat });
 }
 
 /** Horizontal polygon (flat [x, z, ...]) facing up, triangulated here (room floor overlays). */
-function hcapFlat(chunk, pts, y, hex, h) {
+function hcapFlat(chunk, pts, y, hex, h, facing = 1) {
   const n = pts.length / 2;
   if (n < 3) return;
   const contour = [];
@@ -521,7 +524,7 @@ function hcapFlat(chunk, pts, y, hex, h) {
   } catch (err) {
     return;
   }
-  hcap(chunk, pts, tris, y, 1, hex, h);
+  hcap(chunk, pts, tris, y, facing, hex, h);
 }
 
 // ------------------------------------------------------------- instanced sets

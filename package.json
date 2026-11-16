@@ -11,7 +11,11 @@
     "fetch-map": "node scripts/fetch-map-data.mjs && node scripts/compose-map.mjs",
     "compose-map": "node scripts/compose-map.mjs",
     "party:dev": "wrangler dev",
-    "party:deploy": "wrangler deploy"
+    "party:deploy": "wrangler deploy",
+    "test": "node --test tests/*.test.mjs",
+    "test:coverage": "node --test --experimental-test-coverage tests/*.test.mjs",
+    "check:interiors": "node scripts/check-interiors.mjs",
+    "check:stairs": "node scripts/check-stairs.mjs"
   },
   "devDependencies": {
     "geotiff": "^2.1.3",
