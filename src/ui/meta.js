@@ -125,11 +125,12 @@ export function createMeta(menus, account, opts = {}) {
   coins.append(h('i', 'mt-coin', ''), coinsNum);
   const bShop = btn('SHOP', 'mn-chip mt-chip', 'shop');
   const bLocker = btn('LOCKER', 'mn-chip mt-chip', 'locker');
+  const bBoard = btn('RANKS', 'mn-chip mt-chip', 'leaderboard');
   const bFriends = btn('FRIENDS', 'mn-chip mt-chip', 'friends');
   const badge = h('em', 'mt-badge');
   bFriends.appendChild(badge);
   const bAuth = btn('SIGN IN', 'mn-chip mt-chip mt-chip-sun', 'auth');
-  bar.append(who, coins, bShop, bLocker, bFriends, bAuth);
+  bar.append(who, coins, bShop, bLocker, bBoard, bFriends, bAuth);
   titleEl.appendChild(bar);
 
   // ---------------------------------------------------------------- panel shell
@@ -204,7 +205,62 @@ export function createMeta(menus, account, opts = {}) {
     else if (open === 'signout') renderSignOut();
     else if (open === 'shop') renderShop();
     else if (open === 'locker') renderLocker();
+    else if (open === 'leaderboard') renderLeaderboard();
     else if (open === 'friends') renderFriends();
+  }
+
+  let boardCache = null;
+  let boardLoading = false;
+  async function renderLeaderboard() {
+    panelTitle.textContent = 'RANKS';
+    const onlineEl = h('p', 'mt-online br-ol', boardCache ? `${boardCache.online} PLAYERS ONLINE` : 'Loading…');
+    panelBody.appendChild(onlineEl);
+    panelBody.appendChild(h('p', 'mt-hint', 'Signed-in players only. Guests do not appear on the boards.'));
+
+    const paint = (data) => {
+      boardCache = data;
+      onlineEl.textContent = `${data.online} PLAYERS ONLINE`;
+      const wrap = h('div', 'mt-boards');
+      wrap.appendChild(boardColumn('MOST WINS', data.wins || [], 'wins'));
+      wrap.appendChild(boardColumn('MOST ELIMS', data.kills || [], 'kills'));
+      const old = panelBody.querySelector('.mt-boards');
+      if (old) old.replaceWith(wrap);
+      else panelBody.appendChild(wrap);
+    };
+
+    if (boardCache) paint(boardCache);
+    if (boardLoading) return;
+    boardLoading = true;
+    try {
+      const data = await account.leaderboard();
+      if (open === 'leaderboard') paint(data);
+    } catch (err) {
+      if (open === 'leaderboard') say(err.offline ? 'Could not reach the account server.' : err.message, true);
+    } finally {
+      boardLoading = false;
+    }
+  }
+
+  function boardColumn(title, rows, key) {
+    const col = h('div', 'mt-board');
+    col.appendChild(h('div', 'mn-party-label mt-sub', title));
+    if (!rows.length) {
+      col.appendChild(h('p', 'mt-hint', 'No ranked players yet. Sign in and play matches.'));
+      return col;
+    }
+    const list = h('ol', 'mt-board-list');
+    rows.forEach((row, i) => {
+      const li = h('li', 'mt-board-row');
+      li.append(
+        h('span', 'mt-board-rank', String(i + 1)),
+        h('span', 'mt-board-name', row.name),
+        h('span', 'mt-board-stat', String(row[key] | 0))
+      );
+      if (account.signedIn && account.profile.name === row.name) li.classList.add('is-you');
+      list.appendChild(li);
+    });
+    col.appendChild(list);
+    return col;
   }
 
   function renderSignOut() {

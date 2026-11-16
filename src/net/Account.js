@@ -8,6 +8,7 @@
 //   await acct.buy(id) / acct.equip({ skin, emotes })
 //   await acct.reward({ kills, placement, players, won })   -> coins earned
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
+//   await acct.leaderboard() -> { online, wins:[{name,wins,kills}], kills:[...] }
 //   acct.setStatus('lobby'|'match', partyCode)
 //   acct.on('change', fn(profile)) / on('friends', fn({list, incoming, outgoing})) / on('invite', fn({from, code}))
 //   acct.on('request', fn(from)) / on('online', fn(bool))
@@ -228,6 +229,11 @@ export function createAccount() {
     async invite(name, code) {
       if (!acct.signedIn) throw new Error('Sign in to invite friends.');
       await api('invite', { token, name, code });
+    },
+
+    /** Public wins/kills boards + displayed online count (server pads the number). */
+    async leaderboard() {
+      return api('leaderboard', {});
     },
 
     setStatus(s, party) {

@@ -16,6 +16,7 @@
 //   googleLogin {idToken}                                 -> {token, profile}
 //   cleverLogin {cleverId, internal} / putAuthTicket {ticket, token, exp, internal}  (Worker-only)
 //   redeemAuthTicket {ticket}                             -> {token, profile}
+//   leaderboard {}                                        -> {online, wins:[{name,wins,kills}], kills:[...]}
 //   me {token}  logout {token}
 //   buy {token, item}   equip {token, skin?, emotes?}
 //   reward {token, kills, placement, players, won}       -> {profile, earned}
@@ -36,6 +37,9 @@ const SESSION_DAYS = 30;
 const PBKDF2_ROUNDS = 100000;
 const MAX_FRIENDS = 100;
 const REWARD_GAP_MS = 60 * 1000; // at most one match reward per minute per account
+const LEADERBOARD_TOP = 25;
+// Display pad for "players online" (real signed-in sockets + this). Product request for traction.
+const ONLINE_DISPLAY_PAD = 5;
 
 const enc = new TextEncoder();
 const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -260,6 +264,31 @@ export class Accounts extends Server {
     return json({ token: row.token, profile: profileOf(acc) });
   }
 
+  /** Public boards for signed-in accounts only (guests never appear). */
+  async _leaderboard() {
+    const listed = await this.ctx.storage.list({ prefix: 'user:' });
+    const rows = [];
+    for (const acc of listed.values()) {
+      if (!acc || typeof acc !== 'object' || !acc.name || !acc.stats) continue;
+      const wins = Math.max(0, acc.stats.wins | 0);
+      const kills = Math.max(0, acc.stats.kills | 0);
+      rows.push({ name: String(acc.name).slice(0, 16), wins, kills });
+    }
+    const byWins = rows
+      .slice()
+      .sort((a, b) => b.wins - a.wins || b.kills - a.kills || a.name.localeCompare(b.name))
+      .slice(0, LEADERBOARD_TOP);
+    const byKills = rows
+      .slice()
+      .sort((a, b) => b.kills - a.kills || b.wins - a.wins || a.name.localeCompare(b.name))
+      .slice(0, LEADERBOARD_TOP);
+    return json({
+      online: this.online.size + ONLINE_DISPLAY_PAD,
+      wins: byWins,
+      kills: byKills,
+    });
+  }
+
   // ---------------------------------------------------------------- HTTP API
 
   async onRequest(req) {
@@ -320,6 +349,8 @@ export class Accounts extends Server {
         return this._putAuthTicket(m);
       case 'redeemAuthTicket':
         return this._redeemAuthTicket(m);
+      case 'leaderboard':
+        return this._leaderboard();
     }
 
     // everything else needs a session
