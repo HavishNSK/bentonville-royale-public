@@ -152,44 +152,48 @@ export function planBotTargets(r, world, rng, count) {
     if (!l || !Number.isFinite(l.x) || !Number.isFinite(l.z)) continue;
     const lr = l.r || 40;
     if (lr > 600) continue; // linear features (the greenway) are not a place to land
-    const d = Math.max(0, routeDistance(r, l.x, l.z) - Math.min(lr, 150) * 0.6);
-    // in reach: busy; a little beyond: some; far off the route: the odd loner
-    const w = d <= reach ? 4 : d <= reach * 2.2 ? 1 : 0.3;
-    const size = clamp(lr / 120, 0.5, 2.2); // big POIs hold more people
-    pois.push({ x: l.x, z: l.z, r: clamp(lr * 0.9, 30, 180), w: w * size, n: 0 });
+    pois.push({ x: l.x, z: l.z, r: clamp(lr * 0.9, 30, 180), cap: Math.round(clamp(lr / 25, 3, 9)), n: 0 });
   }
+  // Spread out: every bot takes the best of K candidate spots, scored by how far the nearest
+  // already-chosen spot is (so the lobby fills the whole map instead of piling onto the
+  // route's POIs and wiping itself out in the first minute). A share of the candidates sit
+  // in named places (each holds only a few), the rest anywhere open; spots in glide reach of
+  // the route get a small bonus.
+  const K = 10;
+  const SPACE_CAP = 90; // m: past this a spot counts as "alone" already
   const out = [];
   const tmp = { x: 0, z: 0 };
+  const cand = { x: 0, z: 0 };
+  const W = b.maxX - b.minX;
+  const H = b.maxZ - b.minZ;
   for (let i = 0; i < count; i++) {
-    const u = rng();
-    if (pois.length && u < 0.62) {
-      // weighted pick with diminishing returns, so one POI on the route does not take everyone
-      let total = 0;
-      for (const q of pois) total += q.w / (1 + q.n / 10);
-      let pick = rng() * total;
-      let p = pois[pois.length - 1];
-      for (const q of pois) {
-        pick -= q.w / (1 + q.n / 10);
-        if (pick <= 0) {
-          p = q;
-          break;
-        }
+    let best = null;
+    let bestScore = -1;
+    let bestPoi = null;
+    for (let k = 0; k < K; k++) {
+      let poi = null;
+      if (pois.length && rng() < 0.35) {
+        poi = pois[Math.floor(rng() * pois.length)];
+        if (poi.n >= poi.cap) poi = null;
       }
-      p.n++;
-      world.randomOpenPoint(rng, p.x, p.z, p.r, 1.2, tmp);
-    } else if (u < 0.93) {
-      // open ground along the route, within glide reach of it
-      const t = r.tOpen + rng() * (r.tClose - r.tOpen);
-      const bp = busPosAt(r, t);
-      const side = (rng() * 2 - 1) * reach * 0.9;
-      const x = clamp(bp.x + r.dz * side, b.minX + 25, b.maxX - 25);
-      const z = clamp(bp.z - r.dx * side, b.minZ + 25, b.maxZ - 25);
-      world.randomOpenPoint(rng, x, z, 30, 1.2, tmp);
-    } else {
-      const cx = (b.minX + b.maxX) / 2;
-      const cz = (b.minZ + b.maxZ) / 2;
-      world.randomOpenPoint(rng, cx, cz, Math.max(b.maxX - b.minX, b.maxZ - b.minZ) * 0.5, 1.2, tmp);
+      if (poi) world.randomOpenPoint(rng, poi.x, poi.z, poi.r, 1.2, cand);
+      else world.randomOpenPoint(rng, b.minX + 30 + rng() * (W - 60), b.minZ + 30 + rng() * (H - 60), 40, 1.2, cand);
+      let near = SPACE_CAP;
+      for (const o of out) {
+        const d = Math.hypot(o.x - cand.x, o.z - cand.z);
+        if (d < near) near = d;
+      }
+      const inReach = routeDistance(r, cand.x, cand.z) <= reach ? 1.15 : 1;
+      const score = near * inReach * (poi ? 1.1 : 1);
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x: cand.x, z: cand.z };
+        bestPoi = poi;
+      }
     }
+    if (bestPoi) bestPoi.n++;
+    tmp.x = clamp(best.x, b.minX + 25, b.maxX - 25);
+    tmp.z = clamp(best.z, b.minZ + 25, b.maxZ - 25);
     out.push({ x: tmp.x, z: tmp.z, r: 4 });
   }
   return out;

@@ -676,7 +676,7 @@ export class Loot {
   /** Most spots of `kind` one building may hold. */
   _cap(kind, b) {
     const a = b.area;
-    // small houses 1, mid-size 2, big halls 3-6 (schools / Home Office)
+    // small houses 1, mid-size 2, big halls 3-6 (schools / Community Center)
     if (kind === 'chest') return a < 800 ? 1 : a < 5000 ? 2 : a < 15000 ? 3 : 4 + Math.min(2, Math.floor(a / 30000));
     if (kind === 'ammoBox') return a < 3000 ? 1 : a < 15000 ? 2 : 3;
     return a < 400 ? 1 : a < 2500 ? 2 : 3 + Math.min(3, Math.floor(a / 6000));

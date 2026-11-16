@@ -15,6 +15,10 @@
 //   reward {token, kills, placement, players, won}       -> {profile, earned}
 //   friendAdd {token, name}  friendAccept {token, name}  friendDecline {token, name}  friendRemove {token, name}
 //   invite {token, name, code}                            (delivered over the socket)
+// Suggestion / bug board (no account needed; signed-in posts carry the account name):
+//   feedback {kind: 'idea'|'bug', text, token?, anon?}   -> {item}   (one post per IP per 30 s)
+//   feedbackList {}                                       -> {items: newest first, max 60}
+//   feedbackVote {id, token?, anon}                       -> {item}   (one vote per voter)
 // WebSocket: /parties/accounts/global?token=   presence + live friend updates
 //   client -> server  {t:'status', s:'lobby'|'match', party?:CODE, skin?}
 //   server -> client  {t:'friends', list:[{name, online, status, skin}], incoming:[names], outgoing:[names]}
@@ -126,11 +130,59 @@ export class Accounts extends Server {
       return err('Bad request.');
     }
     try {
+      if (m && typeof m.op === 'string' && m.op.startsWith('feedback')) return await this._feedback(m, req);
       return await this._op(m || {});
     } catch (e) {
       console.error(e);
       return err('Server error.', 500);
     }
+  }
+
+  // ---------------------------------------------------------------- suggestions / bugs board
+
+  async _feedback(m, req) {
+    const voterOf = async () => {
+      const acc = m.token ? await this._session(m.token) : null;
+      if (acc) return { id: 'u:' + acc.name.toLowerCase(), name: acc.name };
+      const anon = String(m.anon || '').replace(/[^a-z0-9]/gi, '').slice(0, 32);
+      return anon.length >= 8 ? { id: 'a:' + anon, name: null } : null;
+    };
+    if (m.op === 'feedbackList') {
+      const rows = await this.ctx.storage.list({ prefix: 'fb:', reverse: true, limit: 60 });
+      const items = [...rows.values()].map(({ voters, ip, ...pub }) => pub); // voters / IPs stay private
+      return json({ items });
+    }
+    if (m.op === 'feedback') {
+      const text = String(m.text || '').replace(/[\u0000-\u0008\u000b-\u001f<>]/g, '').trim().slice(0, 500);
+      if (text.length < 4) return err('Write a few words first.');
+      const kind = m.kind === 'bug' ? 'bug' : 'idea';
+      const ip = (req.headers.get('cf-connecting-ip') || 'local').slice(0, 64);
+      const last = (await this.ctx.storage.get('fbip:' + ip)) || 0;
+      if (Date.now() - last < 30000) return err('Thanks! Give it 30 seconds before posting again.', 429);
+      await this.ctx.storage.put('fbip:' + ip, Date.now());
+      const who = await voterOf();
+      const at = Date.now();
+      const id = String(at).padStart(14, '0') + Math.random().toString(36).slice(2, 6);
+      const item = { id, kind, text, by: who && who.name ? who.name : 'Guest', at, votes: 1, voters: who ? [who.id] : [] };
+      await this.ctx.storage.put('fb:' + id, item);
+      const { voters, ...pub } = item;
+      return json({ item: pub });
+    }
+    if (m.op === 'feedbackVote') {
+      const id = String(m.id || '').replace(/[^a-z0-9]/gi, '').slice(0, 24);
+      const item = await this.ctx.storage.get('fb:' + id);
+      if (!item) return err('That post is gone.', 404);
+      const who = await voterOf();
+      if (!who) return err('Could not count that vote.');
+      if (!item.voters.includes(who.id)) {
+        if (item.voters.length < 5000) item.voters.push(who.id);
+        item.votes = item.voters.length;
+        await this.ctx.storage.put('fb:' + id, item);
+      }
+      const { voters, ...pub } = item;
+      return json({ item: pub });
+    }
+    return err('Unknown request.');
   }
 
   async _op(m) {

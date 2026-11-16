@@ -8,6 +8,7 @@
 //   await acct.reward({ kills, placement, players, won })   -> coins earned
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
 //   acct.setStatus('lobby'|'match', partyCode)
+//   await acct.feedbackList() / feedback(kind, text) / feedbackVote(id)   suggestions + bugs board
 //   acct.on('change', fn(profile)) / on('friends', fn({list, incoming, outgoing})) / on('invite', fn({from, code}))
 //   acct.on('request', fn(from)) / on('online', fn(bool))
 //
@@ -20,6 +21,16 @@ import { DEFAULT_OWNED, DEFAULT_EQUIPPED, PRICES, EMOTE_SLOTS, SKINS, EMOTES } f
 const TOKEN_KEY = 'bentonville-royale.account';
 const GUEST_KEY = 'bentonville-royale.guest';
 const GUEST_COINS = 1500;
+const ANON_KEY = 'bentonville-royale.anon'; // stable id for guests' board posts / votes
+
+function anonId() {
+  let a = load(ANON_KEY);
+  if (!a || a.length < 8) {
+    a = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('');
+    store(ANON_KEY, a);
+  }
+  return a;
+}
 
 function store(key, val) {
   try {
@@ -233,6 +244,17 @@ export function createAccount() {
     async invite(name, code) {
       if (!acct.signedIn) throw new Error('Sign in to invite friends.');
       await api('invite', { token, name, code });
+    },
+
+    /** Suggestions / bug board (works signed in or as a guest). */
+    async feedbackList() {
+      return (await api('feedbackList')).items || [];
+    },
+    async feedback(kind, text) {
+      return (await api('feedback', { kind, text, token: token || undefined, anon: anonId() })).item;
+    },
+    async feedbackVote(id) {
+      return (await api('feedbackVote', { id, token: token || undefined, anon: anonId() })).item;
     },
 
     setStatus(s, party) {
