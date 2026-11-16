@@ -1,4 +1,5 @@
-// BENTONVILLE ROYALE — PartyKit relay. One PartyKit room per 4-letter room code.
+// BENTONVILLE ROYALE — multiplayer relay (PartyServer on Cloudflare Workers; hosted PartyKit
+// shut down on 23 Oct 2026). One Durable Object room per 4-letter room code.
 //
 // This server does no game logic: the host's browser runs the whole match.
 // It only routes frames between the host and its guests and keeps the lobby
@@ -20,7 +21,12 @@
 // To guests:                          {t:'reject', reason} then close; {t:'bye', reason:'host-left'}
 // Reject reasons match Net.js MSG keys: notFound, full, started, version, kicked.
 
+import { Server, routePartykitRequest } from 'partyserver';
 import { MAX_HUMANS } from '../src/net/protocol.js';
+
+// The party lobby and matchmaker run in the same Worker (wrangler.jsonc binds all three).
+export { Party } from './partyRoom.js';
+export { Matchmaker } from './matchmaker.js';
 
 const BROADCAST = 255;
 
@@ -32,9 +38,9 @@ function cleanName(name) {
   return s || 'Player';
 }
 
-export default class RelayServer {
-  constructor(room) {
-    this.room = room;
+export class Main extends Server {
+  constructor(ctx, env) {
+    super(ctx, env);
     this.hostId = null; // connection id of the host
     this.version = null;
     this.started = false;
@@ -52,7 +58,7 @@ export default class RelayServer {
   }
 
   _host() {
-    return this.hostId ? this.room.getConnection(this.hostId) : null;
+    return this.hostId ? this.getConnection(this.hostId) : null;
   }
 
   _toHost(text) {
@@ -83,7 +89,7 @@ export default class RelayServer {
       this.started = false;
       this.guests.clear();
       conn.setState({ role: 'host' });
-      conn.send('@:' + JSON.stringify({ t: 'ready', code: this.room.id, max: MAX_HUMANS }));
+      conn.send('@:' + JSON.stringify({ t: 'ready', code: this.name, max: MAX_HUMANS }));
       return;
     }
 
@@ -97,7 +103,7 @@ export default class RelayServer {
     this._toHost('@:' + JSON.stringify({ t: 'join', id: slot, name, token }));
   }
 
-  onMessage(message, sender) {
+  onMessage(sender, message) {
     const st = sender.state || {};
     if (st.role === 'host') {
       if (typeof message === 'string') {
@@ -181,3 +187,9 @@ export default class RelayServer {
     this.onClose(conn);
   }
 }
+
+export default {
+  async fetch(request, env) {
+    return (await routePartykitRequest(request, env)) || new Response('Not found', { status: 404 });
+  },
+};
