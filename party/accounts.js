@@ -2,14 +2,16 @@
 // in wrangler.jsonc). One Durable Object room ("global") holds every account.
 //
 // Accounts live in the room's durable storage:
-//   user:<lowercase name>  -> { name, salt, hash, coins, owned:[ids], equipped:{skin, emotes:[6]},
+//   user:<lowercase name>  -> { name, salt?, hash?, googleSub?, coins, owned:[ids], equipped:{skin, emotes:[6]},
 //                               friends:[lower], incoming:[lower], outgoing:[lower],
 //                               stats:{matches, wins, kills}, created, lastReward }
+//   google:<sub>           -> lowercase username (Google GIS identity index; never reuse email as id)
 //   sess:<token>           -> { u: lower, exp }
-// Passwords are PBKDF2-SHA256 hashed (100k rounds, random 16-byte salt).
+// Passwords are PBKDF2-SHA256 hashed (100k rounds, random 16-byte salt). Google accounts may omit salt/hash.
 //
 // HTTP:  POST /parties/accounts/global  {op, ...}  -> JSON
 //   register {name, password} / login {name, password}   -> {token, profile}
+//   googleLogin {idToken}                                 -> {token, profile}
 //   me {token}  logout {token}
 //   buy {token, item}   equip {token, skin?, emotes?}
 //   reward {token, kills, placement, players, won}       -> {profile, earned}
@@ -23,6 +25,7 @@
 
 import { Server } from 'partyserver';
 import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS } from '../src/game/Cosmetics.js';
+import { verifyGoogleIdToken } from './googleIdToken.js';
 
 const START_COINS = 1500;
 const SESSION_DAYS = 30;
@@ -114,6 +117,61 @@ export class Accounts extends Server {
     return token;
   }
 
+  /** Pick a free username from a Google display name / email local-part. */
+  async _uniqueGoogleName(claims) {
+    const raw = String(claims.given_name || claims.name || (claims.email && claims.email.split('@')[0]) || 'Player');
+    let base = raw.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 12);
+    if (base.length < 3) base = 'Player';
+    if (!(await this._acc(base.toLowerCase()))) return base.slice(0, 16);
+    for (let i = 0; i < 8; i++) {
+      const cand = (base.slice(0, 12) + randHex(2)).slice(0, 16);
+      if (!(await this._acc(cand.toLowerCase()))) return cand;
+    }
+    return ('Player' + randHex(4)).slice(0, 16);
+  }
+
+  async _googleLogin(m) {
+    const clientId = this.env && this.env.GOOGLE_CLIENT_ID;
+    if (!clientId) return err('Google sign-in is not configured on the server.', 503);
+    let claims;
+    try {
+      claims = await verifyGoogleIdToken(String(m.idToken || ''), clientId);
+    } catch {
+      return err('Google sign-in failed. Try again.', 401);
+    }
+    // Only treat Google as authoritative when email is verified (or absent — still bind on sub).
+    if (claims.email && claims.email_verified !== true) {
+      return err('Verify your Google email, then try again.', 401);
+    }
+    const gKey = 'google:' + claims.sub;
+    const linked = await this.ctx.storage.get(gKey);
+    let acc = linked ? await this._acc(linked) : null;
+    if (!acc) {
+      const name = await this._uniqueGoogleName(claims);
+      acc = {
+        name,
+        salt: null,
+        hash: null,
+        googleSub: claims.sub,
+        coins: START_COINS,
+        owned: DEFAULT_OWNED.slice(),
+        equipped: { skin: DEFAULT_EQUIPPED.skin, emotes: DEFAULT_EQUIPPED.emotes.slice() },
+        friends: [],
+        incoming: [],
+        outgoing: [],
+        stats: { matches: 0, wins: 0, kills: 0 },
+        created: Date.now(),
+        lastReward: 0,
+      };
+      await this._save(acc);
+      await this.ctx.storage.put(gKey, acc.name.toLowerCase());
+    } else if (!acc.googleSub) {
+      acc.googleSub = claims.sub;
+      await this._save(acc);
+    }
+    return json({ token: await this._newSession(acc), profile: profileOf(acc) });
+  }
+
   // ---------------------------------------------------------------- HTTP API
 
   async onRequest(req) {
@@ -162,10 +220,12 @@ export class Accounts extends Server {
       }
       case 'login': {
         const acc = await this._acc(String(m.name || '').trim().toLowerCase());
-        const ok = acc && same(await hashPassword(String(m.password || ''), acc.salt), acc.hash);
+        const ok = acc && acc.salt && acc.hash && same(await hashPassword(String(m.password || ''), acc.salt), acc.hash);
         if (!ok) return err('Wrong username or password.', 401);
         return json({ token: await this._newSession(acc), profile: profileOf(acc) });
       }
+      case 'googleLogin':
+        return this._googleLogin(m);
     }
 
     // everything else needs a session

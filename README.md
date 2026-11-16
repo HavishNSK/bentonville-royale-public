@@ -15,9 +15,10 @@ Implemented systems include:
 - Walls, floors, ramps, and cones using wood, brick, or metal; damage and structural collapse.
 - Scripted bots, difficulty settings, storm phases, victory/defeat screens, minimap, and full map.
 - Cartoon rendering, quality settings, synthesized audio with recorded sample fallbacks, and saved player preferences.
-- Friend lobbies using PeerJS/WebRTC; optional Google Photorealistic 3D Tiles as a visual layer.
+- Friend lobbies via PartyServer/WebSocket rooms; optional Google Photorealistic 3D Tiles as a visual layer.
+- Optional accounts (username/password or Google sign-in) for coins, shop, locker, and friends on the Cloudflare Accounts Durable Object.
 
-There are no accounts, database, paid features, or model-provider integrations. Bots are scripted game logic. Additional terrain, canopy, and ground-imagery files exist but are not loaded by the current game.
+There is no traditional database, paid checkout, or model-provider integration. Bots are scripted game logic. Additional terrain, canopy, and ground-imagery files exist but are not loaded by the current game.
 
 ## Local Setup
 
@@ -45,8 +46,19 @@ Set `VITE_GOOGLE_MAPS_API_KEY` only if using the optional Google view, restart V
 | Variable | Required | Scope | Purpose and configuration |
 | --- | --- | --- | --- |
 | `VITE_GOOGLE_MAPS_API_KEY` | No | Public browser bundle | Optional Google Map Tiles API key, supplied through `.env.local` locally or the build environment on hosting. Restrict to intended referrers and the Map Tiles API. |
+| `VITE_GOOGLE_CLIENT_ID` | No | Public browser bundle | OAuth Web client ID for Continue with Google (GIS). Authorize JS origins for local and production. Must match Worker `GOOGLE_CLIENT_ID`. |
+| `GOOGLE_CLIENT_ID` | No | Cloudflare Worker (`wrangler` vars/secret) | Same OAuth Web client ID; used as JWT `aud` when verifying Google ID tokens. Empty disables Google login on the server. |
 
-Every `VITE_*` value is visible to browser users. Use an intentionally public restricted key, never a private credential. Leave this value unset to disable the Google toggle and its tile requests. The layer is visual; it does not replace game collision geometry. Retain provider attribution.
+Every `VITE_*` value is visible to browser users. Use intentionally public restricted keys, never private credentials. Leave Maps unset to disable the Google tiles toggle. Leave the client ID unset to hide Continue with Google. The tiles layer is visual only; retain provider attribution.
+
+### Optional Google Sign-In
+
+1. Create an OAuth 2.0 Web client ID in Google Cloud Console.
+2. Add authorized JavaScript origins (`http://localhost:5173`, `https://bentonvilleroyale.vercel.app`, and any other play origins).
+3. Set `VITE_GOOGLE_CLIENT_ID` in `.env.local` / Vercel and the same value as Worker `GOOGLE_CLIENT_ID` (`wrangler.jsonc` vars or `npx wrangler secret put GOOGLE_CLIENT_ID`).
+4. Redeploy the Worker (`npm run party:deploy`) and rebuild/redeploy the static site.
+
+The browser receives a Google ID token; the Accounts Durable Object verifies signature, `iss`, `aud`, and `exp` against Google's JWKS, then creates or resumes an account keyed by Google `sub` (not email). Username/password accounts remain available. This is still a prototype identity layer: room codes are not authentication, and there is no dedicated anti-cheat or trusted match authority.
 
 ### Optional Personal Music
 
@@ -181,9 +193,9 @@ For UI changes, verify focus, labels, contrast, non-color status cues, reduced m
 
 Read [AGENTS.md](AGENTS.md) before changes. It defines engineering requirements, not proof of implemented controls.
 
-- Authentication, account authorization, and application-level rate limiting are not implemented. Do not use this prototype for sensitive multi-user data.
-- There is no upload service, model API, database, or application telemetry integration established in the current source. Browser preferences persist locally; friend play exchanges names and gameplay data and contacts signaling/STUN services. WebRTC can expose network information to peers.
-- Optional Google view contacts Google and uses the configured public key. Keep this disabled when unneeded and review provider billing and privacy implications before deployment.
+- Optional accounts use the Cloudflare Accounts Durable Object (password PBKDF2 or Google ID-token verification). Application-level rate limiting is limited; do not store sensitive personal data beyond what the feature needs. Room codes remain joining conveniences, not verified competition identity.
+- There is no upload service, model API, SQL database, or application telemetry integration established in the current source. Browser preferences persist locally; friend play and account presence contact the PartyServer worker. WebRTC paths (if used) can expose network information to peers.
+- Optional Google tiles and Google sign-in contact Google with the configured public client/key values. Keep them disabled when unneeded and review provider billing and privacy implications before enabling.
 - No repository CI workflow or production security-header configuration is present. CSP, framing protection, HTTPS, and other hosting controls require deployment-specific configuration and verification.
 - Deploy the `dist/` output from `npm run build` to a suitable static host. `.vercelignore` exists, but a live Vercel project or deployment is not verified. Preview/production credentials, DNS, and publishing require separately authorized work.
 - Personal music, raw download caches, `.env` files, and private material must remain out of deployment artifacts. The Vite local-music middleware is a development/preview facility, not an application backend in the static build.

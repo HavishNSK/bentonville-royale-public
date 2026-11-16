@@ -21,6 +21,32 @@ import './meta.css';
 import { SKINS, EMOTES, EMOTE_SLOTS, PRICES, featuredToday, skinDef, emoteDef } from '../game/Cosmetics.js';
 import { createShowcase } from './Showcase.js';
 
+// GIS button in renderAuth(); Account.loginWithGoogle; user: "we need google auth so people can sign in with gogle"
+const GOOGLE_CLIENT_ID =
+  typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GOOGLE_CLIENT_ID
+    ? String(import.meta.env.VITE_GOOGLE_CLIENT_ID).trim()
+    : '';
+
+let gisLoad = null;
+function loadGoogleGis() {
+  if (typeof window === 'undefined') return Promise.reject(new Error('no-window'));
+  if (window.google && window.google.accounts && window.google.accounts.id) return Promise.resolve();
+  if (gisLoad) return gisLoad;
+  gisLoad = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true;
+    s.defer = true;
+    s.onload = () => resolve();
+    s.onerror = () => {
+      gisLoad = null;
+      reject(new Error('Google sign-in failed to load.'));
+    };
+    document.head.appendChild(s);
+  });
+  return gisLoad;
+}
+
 function h(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -228,6 +254,46 @@ export function createMeta(menus, account, opts = {}) {
     });
     const guest = h('p', 'mt-hint', 'Playing as a guest keeps your coins and items on this device only.');
     panelBody.append(tabs, form, guest);
+
+    if (GOOGLE_CLIENT_ID) {
+      const divider = h('p', 'mt-hint mt-or', 'or');
+      const googleWrap = h('div', 'mt-google');
+      googleWrap.setAttribute('aria-label', 'Continue with Google');
+      panelBody.append(divider, googleWrap);
+      loadGoogleGis()
+        .then(() => {
+          if (open !== 'auth' || !window.google?.accounts?.id) return;
+          window.google.accounts.id.initialize({
+            client_id: GOOGLE_CLIENT_ID,
+            callback: async (resp) => {
+              if (!resp || !resp.credential) {
+                say('Google sign-in was cancelled.', true);
+                return;
+              }
+              say('Signing in with Google…');
+              try {
+                await account.loginWithGoogle(resp.credential);
+                closePanel();
+              } catch (err) {
+                say(err.offline ? 'Could not reach the account server. You can keep playing as a guest.' : err.message, true);
+              }
+            },
+            auto_select: false,
+            cancel_on_tap_outside: true,
+          });
+          googleWrap.replaceChildren();
+          window.google.accounts.id.renderButton(googleWrap, {
+            theme: 'filled_black',
+            size: 'large',
+            text: 'continue_with',
+            shape: 'pill',
+            width: 280,
+          });
+        })
+        .catch(() => {
+          say('Google sign-in is unavailable right now. Use username and password, or play as a guest.', true);
+        });
+    }
   }
 
   function itemCard(id, { owned, equipped, onClick, action }) {

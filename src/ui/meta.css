@@ -204,6 +204,18 @@
   font-weight: 700;
   opacity: 0.85;
 }
+/* meta.js .mt-or / .mt-google (Continue with Google); styles only; user: google auth */
+.mt-or {
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.55;
+}
+.mt-google {
+  display: flex;
+  justify-content: center;
+  min-height: calc(var(--u) * 44);
+}
 .mt-sub {
   margin-top: calc(var(--u) * 6);
 }
