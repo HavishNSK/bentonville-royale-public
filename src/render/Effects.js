@@ -15,6 +15,7 @@
  *   fx.impact(position, normal, surface)          // 'wood' | 'brick' | 'metal' | 'dirt' | 'body' | 'shield'
  *   fx.harvestHit(position, material, isWeakPoint) // 'wood' | 'brick' | 'metal'
  *   fx.debris(position, material, { count = 14, size = 0.35, spread = 2 })
+ *   fx.wallBreak({ ax, az, bx, bz }, y0, y1, material) // a broken building wall panel
  *   fx.buildPlace(position, size, material)       // position = box centre, size = box extents (Vector3)
  *   const beam = fx.lootBeam(position, rarity)    // 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' (or 0..4)
  *         beam.setPosition(v); beam.setVisible(b); beam.remove();
@@ -58,6 +59,7 @@
  */
 import * as THREE from 'three';
 import { toonGradient } from './Toon.js';
+import { MATERIAL_COLOR } from '../core/config.js';
 
 const TAU = Math.PI * 2;
 
@@ -130,6 +132,10 @@ const MATERIALS = {
   metal: { chips: [lin(0xaab6c2), lin(0x7d8a98), lin(0xdfe6ec)], dust: lin(0xcdd3da), tint: lin(0xbfe6ff), rest: 0.45 },
   dirt: { chips: [lin(0x8a6a45), lin(0x6f5436), lin(0xa98a5e)], dust: lin(0xbba27a), tint: lin(0xe0c9a0), rest: 0.15 },
 };
+
+// building wall panels break into chunks of the build-material colour
+const WALL_CHIPS = {};
+for (const k of Object.keys(MATERIAL_COLOR)) WALL_CHIPS[k] = lin(MATERIAL_COLOR[k]);
 
 const RARITY_NAMES = { common: 0, uncommon: 1, rare: 2, epic: 3, legendary: 4 };
 const RARITY_COLORS = [lin(0x9aa3ad), lin(0x4ec04a), lin(0x3b9cff), lin(0xb05cff), lin(0xffb52e)];
@@ -1415,6 +1421,40 @@ export class Effects {
         const sp = 4 + rnd() * 6;
         colMix(P.hot, P.sparkDeep, rnd() * 0.8);
         this._sp(x, y, z, _dx * sp, Math.abs(_dy) * sp, _dz * sp, 0.2 + rnd() * 0.2, 0.05, 0.02, STREAK, 0.85, 1, 13, 2.4, 0.55);
+      }
+    }
+  }
+
+  /**
+   * A building wall panel breaking: chunks in the material colour (MATERIAL_COLOR) spread over
+   * the panel face from centre-line (ax, az) -> (bx, bz) between heights y0 and y1, plus dust.
+   */
+  wallBreak(ends, y0, y1, material) {
+    const M = MATERIALS[material] || MATERIALS.wood;
+    const chip = WALL_CHIPS[material] || WALL_CHIPS.wood;
+    const metal = material === 'metal', wood = material === 'wood' || !MATERIALS[material];
+    const ax = ends.ax, az = ends.az;
+    const ex = ends.bx - ax, ez = ends.bz - az;
+    const h = Math.max(0.5, y1 - y0);
+    const n = this._n(26);
+    for (let i = 0; i < n; i++) {
+      const u = rnd(), v = rnd();
+      randDir();
+      const sp = 1.6 + rnd() * 2.6;
+      const s = 0.22 + rnd() * 0.38;
+      if (rnd() < 0.7) colJ(chip, 0.14);
+      else colJ(M.chips[(rnd() * 3) | 0], 0.1);
+      const sx = wood ? s * 1.5 : metal ? s * 1.1 : s * 0.95;
+      const sy = wood ? s * 0.32 : metal ? s * 0.12 : s * 0.58;
+      const sz = wood ? s * 0.5 : metal ? s * 0.75 : s * 0.62;
+      this._chunk(ax + ex * u, y0 + h * v, az + ez * u, _dx * sp, Math.abs(_dy) * sp * 0.6 + 0.8 + rnd() * 1.6, _dz * sp, (1.4 + rnd() * 0.9) * this._qLife, sx, sy, sz, 0, 14, M.rest);
+    }
+    if (this._smoke) {
+      const k = this._n(5);
+      for (let i = 0; i < k; i++) {
+        const u = rnd();
+        colJ(M.dust, 0.05);
+        this._puff(ax + ex * u, y0 + 0.4 + rnd() * h * 0.5, az + ez * u, (rnd() - 0.5) * 1.2, 0.4 + rnd() * 0.5, (rnd() - 0.5) * 1.2, 0.8, 2.2 + rnd() * 0.8, 0.8 + rnd() * 0.3, 0.5);
       }
     }
   }
