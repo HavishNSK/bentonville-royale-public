@@ -211,6 +211,16 @@ for (const c of shells.slice(0, 40)) {
     world.resolveCircle(body, R, 1.8);
   }
   if (!pointInPoly(c.p, c.n, body.x, body.z)) fail(`building ${c.ref.id}: could not walk in through broken outer panel ${pn.id}`);
+  // a body whose head is above the ceiling (feet on a ramp) is stopped by the wall band over the hole
+  const hi = s.ceil - 1.0;
+  const body3 = { x: px + onx * 1.5, y: hi, z: pz + onz * 1.5 };
+  for (let i = 0; i < 60; i++) {
+    body3.x -= onx * 0.1;
+    body3.z -= onz * 0.1;
+    body3.y = hi;
+    world.resolveCircle(body3, R, 1.8);
+  }
+  if (pointInPoly(c.p, c.n, body3.x, body3.z)) fail(`building ${c.ref.id}: head passed through the wall band above broken outer panel ${pn.id}`);
   world.restorePanel(c, pn.id);
   const body2 = { x: px + onx * 1.5, y: s.floor, z: pz + onz * 1.5 };
   for (let i = 0; i < 60; i++) {

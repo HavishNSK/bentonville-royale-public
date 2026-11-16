@@ -493,8 +493,19 @@ export class World {
     const n = c.n;
     const R = s.t / 2;
     const segs = [];
+    const over = []; // broken panels: the wall band above them still blocks a head above the ceiling
     for (const pn of s.panels) {
-      if (pn.kind !== 'outer' || !pn.alive) continue;
+      if (pn.kind !== 'outer') continue;
+      if (!pn.alive) {
+        const i = pn.e;
+        const k = (i + 1) % n;
+        const ax = mid[i * 2];
+        const az = mid[i * 2 + 1];
+        const ex = mid[k * 2] - ax;
+        const ez = mid[k * 2 + 1] - az;
+        over.push(ax + ex * pn.f0, az + ez * pn.f0, ax + ex * pn.f1, az + ez * pn.f1);
+        continue;
+      }
       const i = pn.e;
       const k = (i + 1) % n;
       const ax = mid[i * 2];
@@ -515,6 +526,7 @@ export class World {
       segs.push(ax + (bx - ax) * f0, az + (bz - az) * f0, ax + (bx - ax) * f1, az + (bz - az) * f1);
     }
     s.segs = new Float32Array(segs);
+    s.overHoles = new Float32Array(over);
   }
 
   /** The hollow-building collider with map id `id` (or c itself when given a collider). */
@@ -976,9 +988,10 @@ export class World {
     const lim = r + s.t * 0.5;
     const lim2 = lim * lim;
     let moved = false;
-    for (let pass = 0; pass < 2; pass++) {
-      if (pass === 1 && head <= s.doorTop + 0.02) break;
-      const A = pass === 0 ? s.segs : s.lintels;
+    for (let pass = 0; pass < 3; pass++) {
+      if (pass === 1 && head <= s.doorTop + 0.02) continue;
+      if (pass === 2 && (!s.overHoles || head <= s.ceil + 0.02)) continue;
+      const A = pass === 0 ? s.segs : pass === 1 ? s.lintels : s.overHoles;
       for (let k = 0; k < A.length; k += 4) {
         const ax = A[k];
         const az = A[k + 1];

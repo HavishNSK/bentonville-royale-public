@@ -435,13 +435,15 @@ export class Game {
   get mapId() {
     const meta = this.mapData && this.mapData.meta;
     if (!meta) return null;
-    // '+i<n>': building interiors are generated on every client, so their version is part of the map
-    if (meta.generated) return String(meta.generated) + '+i' + INTERIOR_VERSION;
+    // '+i<version>.<hash>': building interiors are generated on every client, so their version
+    // and plan hash are part of the map (catches stale builds and any nondeterministic layout)
+    const iv = '+i' + INTERIOR_VERSION + (this.world && this.world.interiorHash ? '.' + this.world.interiorHash : '');
+    if (meta.generated) return String(meta.generated) + iv;
     if (!meta.composition) return null;
     const str = JSON.stringify(meta.composition);
     let h = 0x811c9dc5;
     for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
-    return 'c' + (h >>> 0).toString(16) + '+i' + INTERIOR_VERSION;
+    return 'c' + (h >>> 0).toString(16) + iv;
   }
 
   /** Puts the local player aboard the Drop Bus flying `route`. */
