@@ -6,12 +6,16 @@
 //                               friends:[lower], incoming:[lower], outgoing:[lower],
 //                               stats:{matches, wins, kills}, created, lastReward }
 //   google:<sub>           -> lowercase username (Google GIS identity index; never reuse email as id)
+//   clever:<id>            -> lowercase username (Clever user id index)
+//   ticket:<id>            -> { token, exp } short-lived OAuth return ticket
 //   sess:<token>           -> { u: lower, exp }
-// Passwords are PBKDF2-SHA256 hashed (100k rounds, random 16-byte salt). Google accounts may omit salt/hash.
+// Passwords are PBKDF2-SHA256 hashed (100k rounds, random 16-byte salt). OAuth accounts may omit salt/hash.
 //
 // HTTP:  POST /parties/accounts/global  {op, ...}  -> JSON
 //   register {name, password} / login {name, password}   -> {token, profile}
 //   googleLogin {idToken}                                 -> {token, profile}
+//   cleverLogin {cleverId, internal} / putAuthTicket {ticket, token, exp, internal}  (Worker-only)
+//   redeemAuthTicket {ticket}                             -> {token, profile}
 //   me {token}  logout {token}
 //   buy {token, item}   equip {token, skin?, emotes?}
 //   reward {token, kills, placement, players, won}       -> {profile, earned}
@@ -190,6 +194,72 @@ export class Accounts extends Server {
     return json({ token: await this._newSession(acc), profile: profileOf(acc) });
   }
 
+  _workerOnly(m) {
+    const secret = this.env && this.env.CLEVER_CLIENT_SECRET;
+    return !!(secret && m && m.internal === secret);
+  }
+
+  async _cleverLogin(m) {
+    // Worker-only: Clever user id is trusted only after OAuth code exchange in party/cleverAuth.js.
+    if (!this._workerOnly(m)) return err('Forbidden.', 403);
+    const cleverId = String(m.cleverId || '').trim();
+    if (!/^[A-Za-z0-9_-]{6,64}$/.test(cleverId)) return err('Invalid Clever user.', 400);
+    const cKey = 'clever:' + cleverId;
+    const linked = await this.ctx.storage.get(cKey);
+    let acc = linked ? await this._acc(linked) : null;
+    if (linked && !acc) await this.ctx.storage.delete(cKey);
+    if (!acc) {
+      const name = await this._uniqueGoogleName({ given_name: m.nameHint || 'Clever', name: m.nameHint || 'Player' });
+      if (!validName(name)) return err('Could not create a username from your Clever account.', 500);
+      acc = {
+        name,
+        salt: null,
+        hash: null,
+        cleverId,
+        coins: START_COINS,
+        owned: DEFAULT_OWNED.slice(),
+        equipped: { skin: DEFAULT_EQUIPPED.skin, emotes: DEFAULT_EQUIPPED.emotes.slice() },
+        friends: [],
+        incoming: [],
+        outgoing: [],
+        stats: { matches: 0, wins: 0, kills: 0 },
+        created: Date.now(),
+        lastReward: 0,
+      };
+      await this._save(acc);
+      await this.ctx.storage.put(cKey, acc.name.toLowerCase());
+    } else if (acc.cleverId && acc.cleverId !== cleverId) {
+      return err('Clever sign-in failed.', 401);
+    } else if (!acc.cleverId) {
+      await this.ctx.storage.delete(cKey);
+      return err('Clever sign-in failed.', 401);
+    }
+    return json({ token: await this._newSession(acc), profile: profileOf(acc) });
+  }
+
+  async _putAuthTicket(m) {
+    if (!this._workerOnly(m)) return err('Forbidden.', 403);
+    const ticket = String(m.ticket || '');
+    const token = String(m.token || '');
+    const exp = Number(m.exp) || 0;
+    if (!/^[a-f0-9]{24,48}$/.test(ticket) || !/^[a-f0-9]{48}$/.test(token) || exp < Date.now()) {
+      return err('Bad ticket.', 400);
+    }
+    await this.ctx.storage.put('ticket:' + ticket, { token, exp });
+    return json({ ok: true });
+  }
+
+  async _redeemAuthTicket(m) {
+    const ticket = String(m.ticket || '');
+    if (!/^[a-f0-9]{24,48}$/.test(ticket)) return err('Signed out. Please sign in again.', 401);
+    const row = await this.ctx.storage.get('ticket:' + ticket);
+    await this.ctx.storage.delete('ticket:' + ticket);
+    if (!row || row.exp < Date.now() || !row.token) return err('Sign-in expired. Try Clever again.', 401);
+    const acc = await this._session(row.token);
+    if (!acc) return err('Signed out. Please sign in again.', 401);
+    return json({ token: row.token, profile: profileOf(acc) });
+  }
+
   // ---------------------------------------------------------------- HTTP API
 
   async onRequest(req) {
@@ -244,6 +314,12 @@ export class Accounts extends Server {
       }
       case 'googleLogin':
         return this._googleLogin(m);
+      case 'cleverLogin':
+        return this._cleverLogin(m);
+      case 'putAuthTicket':
+        return this._putAuthTicket(m);
+      case 'redeemAuthTicket':
+        return this._redeemAuthTicket(m);
     }
 
     // everything else needs a session

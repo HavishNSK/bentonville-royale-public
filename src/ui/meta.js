@@ -20,12 +20,23 @@
 import './meta.css';
 import { SKINS, EMOTES, EMOTE_SLOTS, PRICES, featuredToday, skinDef, emoteDef } from '../game/Cosmetics.js';
 import { createShowcase } from './Showcase.js';
+import { partyHost, isLocal } from '../net/Net.js';
 
-// GIS button in renderAuth(); Account.loginWithGoogle; user: "we need google auth so people can sign in with gogle"
+// GIS / Clever buttons in renderAuth(); Account.loginWithGoogle / Clever OAuth redirect.
 const GOOGLE_CLIENT_ID =
   typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GOOGLE_CLIENT_ID
     ? String(import.meta.env.VITE_GOOGLE_CLIENT_ID).trim()
     : '';
+const CLEVER_ENABLED =
+  typeof import.meta !== 'undefined' &&
+  import.meta.env &&
+  (import.meta.env.VITE_CLEVER_AUTH === '1' || !!String(import.meta.env.VITE_CLEVER_CLIENT_ID || '').trim());
+
+function cleverStartUrl() {
+  const host = partyHost();
+  const scheme = isLocal(host) ? 'http' : 'https';
+  return `${scheme}://${host}/auth/clever?return=${encodeURIComponent(location.origin)}`;
+}
 
 let gisLoad = null;
 function loadGoogleGis() {
@@ -255,7 +266,20 @@ export function createMeta(menus, account, opts = {}) {
     const guest = h('p', 'mt-hint', 'Playing as a guest keeps your coins and items on this device only.');
     panelBody.append(tabs, form, guest);
 
-    if (GOOGLE_CLIENT_ID) {
+    // Clever first: Bentonville Google Workspace blocks unverified 3rd-party apps (admin_policy_enforced).
+    if (CLEVER_ENABLED) {
+      const divider = h('p', 'mt-hint mt-or', 'or');
+      const cleverBtn = btn('LOG IN WITH CLEVER', 'mn-btn mn-btn-hero mt-clever');
+      cleverBtn.type = 'button';
+      cleverBtn.addEventListener('click', () => {
+        click();
+        window.location.assign(cleverStartUrl());
+      });
+      const cleverHint = h('p', 'mt-hint', 'Best on school Chromebooks — uses Clever instead of Google.');
+      panelBody.append(divider, cleverBtn, cleverHint);
+    }
+
+    if (GOOGLE_CLIENT_ID && !CLEVER_ENABLED) {
       const divider = h('p', 'mt-hint mt-or', 'or');
       const googleWrap = h('div', 'mt-google');
       googleWrap.setAttribute('aria-label', 'Continue with Google');

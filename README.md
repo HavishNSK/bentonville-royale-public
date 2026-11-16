@@ -48,6 +48,9 @@ Set `VITE_GOOGLE_MAPS_API_KEY` only if using the optional Google view, restart V
 | `VITE_GOOGLE_MAPS_API_KEY` | No | Public browser bundle | Optional Google Map Tiles API key, supplied through `.env.local` locally or the build environment on hosting. Restrict to intended referrers and the Map Tiles API. |
 | `VITE_GOOGLE_CLIENT_ID` | No | Public browser bundle | OAuth Web client ID for Continue with Google (GIS). Authorize JS origins for local and production. Must match Worker `GOOGLE_CLIENT_ID`. |
 | `GOOGLE_CLIENT_ID` | No | Cloudflare Worker (`wrangler` vars/secret) | Same OAuth Web client ID; used as JWT `aud` when verifying Google ID tokens. Empty disables Google login on the server. |
+| `VITE_CLEVER_AUTH` / `VITE_CLEVER_CLIENT_ID` | No | Public browser bundle | Set `VITE_CLEVER_AUTH=1` (or set the Clever client id) to show **Log in with Clever**. |
+| `CLEVER_CLIENT_ID` | No | Cloudflare Worker vars | Clever application client ID (public). |
+| `CLEVER_CLIENT_SECRET` | No | Cloudflare Worker **secret** | Clever application secret. Required for token exchange. Never put in `VITE_*` or git. |
 
 Every `VITE_*` value is visible to browser users. Use intentionally public restricted keys, never private credentials. Leave Maps unset to disable the Google tiles toggle. Leave the client ID unset to hide Continue with Google. The tiles layer is visual only; retain provider attribution.
 
@@ -59,6 +62,21 @@ Every `VITE_*` value is visible to browser users. Use intentionally public restr
 4. Redeploy the Worker (`npm run party:deploy`) and rebuild/redeploy the static site.
 
 The browser receives a Google ID token; the Accounts Durable Object verifies signature, `iss`, `aud`, and `exp` against Google's JWKS, then creates or resumes an account keyed by Google `sub` (not email). Username/password accounts remain available. This is still a prototype identity layer: room codes are not authentication, and there is no dedicated anti-cheat or trusted match authority.
+
+### Optional Clever Sign-In (school SSO)
+
+Bentonville Google Workspace blocks unverified apps with `Error 400: admin_policy_enforced`, so school Chromebooks should use Clever instead. Clever uses OAuth authorization-code on the Cloudflare Worker (client secret never reaches the browser).
+
+1. Create an app in the [Clever developer dashboard](https://apps.clever.com/).
+2. Set the redirect URI to exactly:
+   `https://bentonville-royale.bentonville-royale.workers.dev/auth/clever/callback`
+3. Ask Bentonville Schools IT / Clever district admins to **share/approve** the app for the district (required for student/staff login).
+4. Put `CLEVER_CLIENT_ID` in `wrangler.jsonc` vars and store the secret with:
+   `npx wrangler secret put CLEVER_CLIENT_SECRET`
+5. Set `VITE_CLEVER_AUTH=1` in `.env.local` and Vercel (gitignored locally; never commit `CLEVER_CLIENT_SECRET`).
+6. Redeploy the Worker and rebuild/redeploy the static site.
+
+Flow: **Log in with Clever** → Clever → Worker callback → one-time `?br_auth=` ticket → game redeems a session. Accounts are keyed by Clever user id (`clever:<id>`), not email. Username/password still works without Clever.
 
 ### Optional Personal Music
 

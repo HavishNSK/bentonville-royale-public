@@ -3,7 +3,8 @@
 //   const acct = createAccount();
 //   await acct.init();                      // resumes a saved session, else a local guest profile
 //   acct.signedIn, acct.profile = { name, coins, owned, equipped:{skin, emotes}, friends, incoming, outgoing, stats }
-//   await acct.register(name, pw) / acct.login(name, pw) / acct.loginWithGoogle(idToken) / acct.logout()
+//   await acct.register(name, pw) / acct.login(name, pw) / acct.loginWithGoogle(idToken)
+//   await acct.redeemAuthTicket(ticket) / acct.logout()
 //   await acct.buy(id) / acct.equip({ skin, emotes })
 //   await acct.reward({ kills, placement, players, won })   -> coins earned
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
@@ -153,6 +154,15 @@ export function createAccount() {
     /** Google Identity Services ID token (credential). Server verifies JWT + JWKS. */
     async loginWithGoogle(idToken) {
       const r = await api('googleLogin', { idToken });
+      setToken(r.token);
+      setProfile(r.profile);
+      connect();
+      return r.profile;
+    },
+
+    /** One-time ticket from Clever OAuth callback (?br_auth=). */
+    async redeemAuthTicket(ticket) {
+      const r = await api('redeemAuthTicket', { ticket });
       setToken(r.token);
       setProfile(r.profile);
       connect();

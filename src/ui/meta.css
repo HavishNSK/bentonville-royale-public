@@ -216,6 +216,9 @@
   justify-content: center;
   min-height: calc(var(--u) * 44);
 }
+.mt-clever {
+  width: 100%;
+}
 .mt-sub {
   margin-top: calc(var(--u) * 6);
 }
