@@ -108,4 +108,15 @@ export default async function (page, h) {
   if (result.errors.length) throw new Error('game reported runtime errors');
   await h.sleep(500);
   await h.shot('furnished-landmark');
+  await page.evaluate(() => {
+    const g = window.__game.raw;
+    const c = g.world.buildingInteriors().map(b => b.collider).find(c => c.shell.plan.stairs.length);
+    const s = c.shell.plan.stairs[0];
+    const len = Math.hypot(s.x1 - s.x0, s.z1 - s.z0);
+    g.player.pos.set(s.x0 - (s.x1 - s.x0) / len * 0.7, s.y0, s.z0 - (s.z1 - s.z0) / len * 0.7);
+    window.__game.debug.aimAt(s.x1, s.y1 + 0.2, s.z1);
+  });
+  await h.sleep(500);
+  await h.shot('stairs');
 }
+
