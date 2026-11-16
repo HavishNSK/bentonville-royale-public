@@ -1,4 +1,5 @@
-// BENTONVILLE ROYALE — account server. One PartyKit room ("global") holds every account.
+// BENTONVILLE ROYALE — account server (PartyServer on Cloudflare Workers, bound as `Accounts`
+// in wrangler.jsonc). One Durable Object room ("global") holds every account.
 //
 // Accounts live in the room's durable storage:
 //   user:<lowercase name>  -> { name, salt, hash, coins, owned:[ids], equipped:{skin, emotes:[6]},
@@ -20,6 +21,7 @@
 //                     {t:'invite', from, code}  {t:'request', from}  {t:'profile', profile}
 // The shop catalog's prices are mirrored here (PRICES) so a client cannot buy for free.
 
+import { Server } from 'partyserver';
 import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS } from '../src/game/Cosmetics.js';
 
 const START_COINS = 1500;
@@ -82,9 +84,9 @@ function profileOf(acc) {
   };
 }
 
-export default class AccountServer {
-  constructor(room) {
-    this.room = room;
+export class Accounts extends Server {
+  constructor(ctx, env) {
+    super(ctx, env);
     this.online = new Map(); // lower name -> Set(connection id)
     this.status = new Map(); // lower name -> { s, party, skin }
   }
@@ -92,23 +94,23 @@ export default class AccountServer {
   // ---------------------------------------------------------------- storage
 
   async _acc(lower) {
-    return lower ? (await this.room.storage.get('user:' + lower)) || null : null;
+    return lower ? (await this.ctx.storage.get('user:' + lower)) || null : null;
   }
 
   async _save(acc) {
-    await this.room.storage.put('user:' + acc.name.toLowerCase(), acc);
+    await this.ctx.storage.put('user:' + acc.name.toLowerCase(), acc);
   }
 
   async _session(token) {
     if (typeof token !== 'string' || !/^[a-f0-9]{48}$/.test(token)) return null;
-    const s = await this.room.storage.get('sess:' + token);
+    const s = await this.ctx.storage.get('sess:' + token);
     if (!s || s.exp < Date.now()) return null;
     return this._acc(s.u);
   }
 
   async _newSession(acc) {
     const token = randHex(24);
-    await this.room.storage.put('sess:' + token, { u: acc.name.toLowerCase(), exp: Date.now() + SESSION_DAYS * 864e5 });
+    await this.ctx.storage.put('sess:' + token, { u: acc.name.toLowerCase(), exp: Date.now() + SESSION_DAYS * 864e5 });
     return token;
   }
 
@@ -175,7 +177,7 @@ export default class AccountServer {
       case 'me':
         return json({ profile: profileOf(acc) });
       case 'logout':
-        await this.room.storage.delete('sess:' + m.token);
+        await this.ctx.storage.delete('sess:' + m.token);
         return json({ ok: true });
       case 'buy': {
         const id = String(m.item || '');
@@ -318,7 +320,7 @@ export default class AccountServer {
     if (!wasOnline) this._sendFriendsOf(lower);
   }
 
-  async onMessage(raw, conn) {
+  async onMessage(conn, raw) {
     const u = conn.state && conn.state.u;
     if (!u || typeof raw !== 'string' || raw.length > 512) return;
     let m;
@@ -357,7 +359,7 @@ export default class AccountServer {
     if (!set) return;
     const s = JSON.stringify(msg);
     for (const id of set) {
-      const c = this.room.getConnection(id);
+      const c = this.getConnection(id);
       if (c) c.send(s);
     }
   }

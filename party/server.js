@@ -27,6 +27,7 @@ import { MAX_HUMANS } from '../src/net/protocol.js';
 // The party lobby and matchmaker run in the same Worker (wrangler.jsonc binds all three).
 export { Party } from './partyRoom.js';
 export { Matchmaker } from './matchmaker.js';
+export { Accounts } from './accounts.js';
 
 const BROADCAST = 255;
 
