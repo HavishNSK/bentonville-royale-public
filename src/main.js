@@ -343,6 +343,45 @@ let partyGen = 0;
 let partyConnecting = false;
 let matchStatus = ''; // "Match found! ..." while handing off to the game room
 const lastLocal = { mode: 'solo', fill: true }; // offline mode / fill, and what the next party starts with
+// Who's online (src/net/Presence.js): every title screen reports its name and what it is doing,
+// so players can see each other and queue in the same mode at the same time.
+let presence = null;
+let presenceInMatch = false;
+
+function partyMode() {
+  return party && party.party ? party.party.mode : lastLocal.mode;
+}
+
+function presenceStatus() {
+  if (presenceInMatch) return 'match';
+  return party && party.party && party.party.state === 'queued' ? 'queued' : 'lobby';
+}
+
+function syncPresence() {
+  if (presence) presence.set({ name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
+}
+
+/** Players searching in our mode right now, not counting our own party. */
+function othersSearching() {
+  const snap = presence && presence.snap;
+  if (!snap) return 0;
+  const n = snap.searching[partyMode()] || 0;
+  const mine = presenceStatus() === 'queued' ? (party && party.party ? party.party.members.length : 1) : 0;
+  return Math.max(0, n - mine);
+}
+
+async function startPresence() {
+  try {
+    const [{ partyToken }, { openPresence }] = await Promise.all([import('./net/Party.js'), import('./net/Presence.js')]);
+    presence = openPresence({ token: partyToken(), name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
+    presence.onUpdate = (snap) => {
+      if (meta) meta.setOnline(snap);
+      renderParty();
+    };
+  } catch (err) {
+    console.warn('[presence]', errText(err, err));
+  }
+}
 
 function setMatchStatus(text) {
   matchStatus = text;
@@ -360,6 +399,7 @@ function partyView() {
       state: 'idle',
       members: [{ id: 'me', name: menus.playerName(), ready: true, leader: true, you: true }],
       match: matchStatus,
+      searching: 0,
     };
   }
   const p = party.party;
@@ -374,10 +414,12 @@ function partyView() {
     queuedSince: p.queuedSince,
     members: p.members.map((m) => ({ ...m, you: m.id === party.you })),
     match: matchStatus,
+    searching: othersSearching(),
   };
 }
 
 function renderParty() {
+  syncPresence();
   menus.setParty(partyView());
   if (meta) meta.refresh();
   // friends see which party we are in (and that we are back in the lobby)
@@ -597,6 +639,9 @@ try {
   if (import.meta.env && import.meta.env.DEV) window.__party = () => (party && party.party ? JSON.parse(JSON.stringify(party.party)) : null);
   menus.onScreen = (s) => {
     meta.setActive(s === 'title');
+    if (s === 'title') presenceInMatch = false;
+    else if (s === null) presenceInMatch = true;
+    syncPresence();
     const code = party && party.party ? party.party.code : null;
     if (s === 'title') account.setStatus('lobby', code);
     else if (s === null) account.setStatus('match', code); // the HUD took over: in a match
@@ -622,6 +667,7 @@ try {
   const rejoin = savedPartyCode();
   if (invite.length === 4) joinParty(invite);
   else joinParty(/^[A-Z]{4}$/.test(rejoin) ? rejoin : null, true);
+  startPresence();
   sfx.playMusic('menu');
   googleTiles.setEnabled(settings.googleTiles);
 } catch (err) {

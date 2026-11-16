@@ -11,13 +11,15 @@
       { "name": "Main", "class_name": "Main" },
       { "name": "Party", "class_name": "Party" },
       { "name": "Matchmaker", "class_name": "Matchmaker" },
-      { "name": "Accounts", "class_name": "Accounts" }
+      { "name": "Accounts", "class_name": "Accounts" },
+      { "name": "Presence", "class_name": "Presence" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Main"] },
     { "tag": "v2", "new_sqlite_classes": ["Party", "Matchmaker"] },
-    { "tag": "v3", "new_sqlite_classes": ["Accounts"] }
+    { "tag": "v3", "new_sqlite_classes": ["Accounts"] },
+    { "tag": "v4", "new_sqlite_classes": ["Presence"] }
   ],
   "dev": { "port": 1999 }
 }

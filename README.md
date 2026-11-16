@@ -139,6 +139,8 @@ Optional Google key + enabled setting -> Google tiles -> visual layer
 
 Friend matches use a public PeerJS signaling broker and Google STUN servers. No TURN relay is configured, so NAT/firewall conditions may prevent connections. The host runs the simulation, while guests transmit input and movement state. This is a prototype trust model: there is no dedicated trusted server, verified identity, anti-cheat guarantee, or comprehensive packet-validation guarantee. Room codes are joining conveniences, not account authentication. Host departure ends the hosted session; there is no host-migration mechanism.
 
+The online list and matchmaking run on the Cloudflare Worker in `party/` (`npm run party:dev` locally, `npm run party:deploy` to publish). Every title screen connects to one `Presence` Durable Object (`party/presence.js`, client `src/net/Presence.js`). It reports a display name and a status (in the lobby, searching in a mode, or in a match), and receives the counts plus up to 60 names. Tab tokens are never sent to other clients, and names and statuses are self-reported, unverified display data. The **ONLINE** button on the title screen lists these players, and the party status line shows how many others are searching in your mode. When party leaders press PLAY in the same mode, the matchmaker (`party/matchmaker.js`) batches everyone who queued within 8 seconds, up to 8 humans, into one match, and bots fill the remaining spots.
+
 Settings are stored under `bentonville-royale.settings.v1`, and the player name under `bentonville-royale.playerName`. Remove those keys in browser storage to reset them. Match state is in memory; there is no persistent match database.
 
 ## Map and Asset Maintenance

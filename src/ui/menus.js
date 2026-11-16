@@ -16,7 +16,8 @@
 //                                   mode, ready (guest's own), status, canStart, error }
 //   menus.setParty(view)    title party panel: { online, connecting, code, link, isLeader, mode, fill,
 //                                   state: idle|queued|matched, queuedSince (performance.now ms),
-//                                   members:[{id,name,ready,leader,you}], match (hand-off status text) }
+//                                   members:[{id,name,ready,leader,you}], match (hand-off status text),
+//                                   searching (others queued in this mode, from the online list) }
 //   menus.partyNotice(text, isError)
 //   menus.showNotice(text)  title screen with a message (host left, room full, ...)
 //   menus.playerName()      saved name (localStorage)
@@ -613,10 +614,12 @@ export function createMenus(root, opts = {}) {
     if (v.match) return v.match;
     if (!v.online) return v.connecting ? 'Connecting to the party server…' : 'Party server offline. PLAY starts a match with bots.';
     if (v.state === 'matched') return 'Match found!';
-    if (v.state === 'queued') return `Finding match… ${fmt((performance.now() - (v.queuedSince || performance.now())) / 1000)}`;
+    const others = v.searching > 0 ? `${v.searching} other${v.searching === 1 ? '' : 's'} searching` : '';
+    if (v.state === 'queued') return `Finding match… ${fmt((performance.now() - (v.queuedSince || performance.now())) / 1000)}` + (others ? ` · ${others}` : '');
     const waiting = v.members.filter((m) => !m.leader && !m.ready).length;
     if (v.isLeader) {
       if (waiting) return `Waiting for ${waiting} to ready up`;
+      if (others) return `${others} in this mode. Press PLAY to join them.`;
       return v.members.length > 1 ? 'Everyone is ready. Press PLAY.' : 'Invite friends, or press PLAY to find a match.';
     }
     const me = v.members.find((m) => m.you);
