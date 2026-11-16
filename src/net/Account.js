@@ -16,7 +16,7 @@
 // require a signed-in account. Guest localStorage no longer stores a coin balance.
 
 import { partyHost, isLocal } from './Net.js';
-import { DEFAULT_OWNED, DEFAULT_EQUIPPED, PRICES, EMOTE_SLOTS, SKINS, EMOTES } from '../game/Cosmetics.js';
+import { DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, SKINS, EMOTES } from '../game/Cosmetics.js';
 
 const TOKEN_KEY = 'bentonville-royale.account';
 const GUEST_KEY = 'bentonville-royale.guest';
