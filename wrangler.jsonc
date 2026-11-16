@@ -10,12 +10,14 @@
     "bindings": [
       { "name": "Main", "class_name": "Main" },
       { "name": "Party", "class_name": "Party" },
-      { "name": "Matchmaker", "class_name": "Matchmaker" }
+      { "name": "Matchmaker", "class_name": "Matchmaker" },
+      { "name": "Accounts", "class_name": "Accounts" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["Main"] },
-    { "tag": "v2", "new_sqlite_classes": ["Party", "Matchmaker"] }
+    { "tag": "v2", "new_sqlite_classes": ["Party", "Matchmaker"] },
+    { "tag": "v3", "new_sqlite_classes": ["Accounts"] }
   ],
   "dev": { "port": 1999 }
 }

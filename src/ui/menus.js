@@ -145,6 +145,14 @@ export function createMenus(root, opts = {}) {
     }
   };
   T.name.value = savedName() || 'Player' + Math.floor(100 + Math.random() * 900);
+  // keep the generated name too: a refresh must not turn you into someone else in your party
+  if (!savedName()) {
+    try {
+      localStorage.setItem(NAME_KEY, T.name.value);
+    } catch {
+      /* private mode */
+    }
+  }
   T.name.addEventListener('change', () => {
     try {
       localStorage.setItem(NAME_KEY, T.name.value.trim().slice(0, 16));
@@ -632,7 +640,7 @@ export function createMenus(root, opts = {}) {
         btn.classList.toggle('is-ready', !!m.ready);
         btn.classList.toggle('is-you', !!m.you);
         btn.classList.toggle('is-leader', !!m.leader);
-        btn.innerHTML = `${m.leader ? `<span class="mn-slot-crown" title="Party leader">${icon('crown')}</span>` : ''}<b class="mn-slot-name">${esc(m.name)}</b><span class="mn-slot-state">${m.ready ? '<i aria-hidden="true">&#10003;</i>READY' : 'NOT READY'}</span>${m.you ? '<em>YOU</em>' : ''}`;
+        btn.innerHTML = `${m.leader ? `<span class="mn-slot-crown" title="Party leader">${icon('crown')}</span>` : ''}<b class="mn-slot-name">${esc(m.name)}</b><span class="mn-slot-state">${m.away ? 'RECONNECTING…' : m.ready ? '<i aria-hidden="true">&#10003;</i>READY' : 'NOT READY'}</span>${m.you ? '<em>YOU</em>' : ''}`;
         const canManage = v.online && v.isLeader && !m.you;
         btn.disabled = !canManage;
         btn.setAttribute('aria-label', `${m.name}${m.leader ? ', leader' : ''}, ${m.ready ? 'ready' : 'not ready'}${canManage ? '. Kick or make leader' : ''}`);

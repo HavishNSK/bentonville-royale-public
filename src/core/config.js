@@ -327,10 +327,16 @@ export const KNOCK = {
 // at whoever just shot them; boxHeal = odds of boxing up before healing after a fight;
 // pushWeak = odds of pushing a target whose shield is cracked / that is healing;
 // thirdParty = odds of moving in on gunfire they hear; rotateEarly = extra slack on rotations.
+// boxFight = odds a close fight is taken from a full 1x1 box with edit peeks (window / door
+// edited into the wall facing the enemy, shoot, reset the edit); peekOpen / peekClosed =
+// seconds the edit stays open / closed.
 export const DIFFICULTY = {
   easy: { aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.15, buildPieces: 1, buildCooldown: 10, buildRate: 0.6, sight: 80, damageScale: 0.6, wallOnHit: 0, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0 },
   normal: { aimError: 0.05, reaction: 0.55, burst: 0.7, buildChance: 0.4, buildPieces: 3, buildCooldown: 5, buildRate: 0.3, sight: 100, damageScale: 0.8, wallOnHit: 0.4, boxHeal: 0.35, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.3 },
-  hard: { aimError: 0.028, reaction: 0.3, burst: 0.85, buildChance: 0.8, buildPieces: 8, buildCooldown: 2, buildRate: 0.12, sight: 125, damageScale: 1, wallOnHit: 0.9, boxHeal: 0.9, pushWeak: 0.9, thirdParty: 0.6, rotateEarly: 0.8 },
+  hard: {
+    aimError: 0.017, reaction: 0.18, burst: 0.92, buildChance: 0.9, buildPieces: 8, buildCooldown: 1.2, buildRate: 0.07, sight: 150, damageScale: 1,
+    wallOnHit: 1, boxHeal: 1, pushWeak: 0.95, thirdParty: 0.7, rotateEarly: 0.8, boxFight: 0.9, peekOpen: 0.9, peekClosed: 0.55,
+  },
 };
 
 // outline / bloom: post passes (render/Post.js); both off = plain render (cheapest).

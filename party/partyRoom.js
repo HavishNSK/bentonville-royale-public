@@ -26,6 +26,9 @@ import { MODE_SIZE, PARTY_MAX, modeSize, validMode, modeFor } from './modes.js';
 
 const POLL_MS = 2000;
 const MATCHED_MS = 4000;
+// A dropped connection (page refresh, network blip) keeps its party slot this long, so the
+// player comes back into the same party instead of vanishing from everyone's lobby.
+const AWAY_MS = 20000;
 
 function cleanName(name) {
   const s = String(name || '')
@@ -107,7 +110,7 @@ export class Party extends Server {
       fill: this.fill,
       state: this.state,
       queuedFor: this.state === 'queued' ? Date.now() - this.queuedAt : 0,
-      members: this.members.map((m) => ({ id: m.id, name: m.name, skin: m.skin || null, ready: m.id === this.leaderId || m.ready, leader: m.id === this.leaderId })),
+      members: this.members.map((m) => ({ id: m.id, name: m.name, skin: m.skin || null, ready: m.id === this.leaderId || m.ready, leader: m.id === this.leaderId, away: !!m.away })),
     };
   }
 
@@ -162,6 +165,8 @@ export class Party extends Server {
       old.id = conn.id;
       old.name = name;
       old.skin = skin;
+      old.away = false;
+      clearTimeout(old.awayTimer);
       old.ready = false;
       if (wasLeader) this.leaderId = conn.id;
       if (prev && prev !== conn) {
@@ -200,18 +205,27 @@ export class Party extends Server {
     this._sync();
   }
 
+  /** Socket gone without a 'leave': hold the slot for AWAY_MS (a refresh reconnects into it). */
   onClose(conn) {
-    this._remove(conn.id);
+    const m = this._member(conn.id);
+    if (!m) return;
+    m.away = true;
+    clearTimeout(m.awayTimer);
+    m.awayTimer = setTimeout(() => {
+      if (m.away && m.id === conn.id) this._remove(conn.id);
+    }, AWAY_MS);
+    this._sync();
   }
 
   onError(conn) {
-    this._remove(conn.id);
+    this.onClose(conn);
   }
 
   _remove(id) {
     const i = this.members.findIndex((m) => m.id === id);
     if (i < 0) return;
     const [gone] = this.members.splice(i, 1);
+    clearTimeout(gone.awayTimer);
     if (!this.members.length) {
       if (this.state === 'queued') this._cancel('', true);
       this._reset();

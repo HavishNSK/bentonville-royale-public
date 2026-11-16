@@ -368,7 +368,7 @@ export class ClientSession {
         return this._elim(e);
       case 'kn':
         return this._knock(e);
-      case 'sp':
+      case 'sph':
         if (e.a === this.id && g.showSiphon) g.showSiphon(e.h, e.s);
         return;
       case 'pg': {
