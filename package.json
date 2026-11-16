@@ -10,18 +10,19 @@
     "preview": "vite preview",
     "fetch-map": "node scripts/fetch-map-data.mjs && node scripts/compose-map.mjs",
     "compose-map": "node scripts/compose-map.mjs",
-    "party:dev": "partykit dev",
-    "party:deploy": "partykit deploy"
+    "party:dev": "wrangler dev",
+    "party:deploy": "wrangler deploy"
   },
   "devDependencies": {
     "geotiff": "^2.1.3",
-    "partykit": "^0.0.115",
     "sharp": "^0.33.5",
-    "vite": "^8.3.8"
+    "vite": "^8.3.8",
+    "wrangler": "^4.163.0"
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
     "3d-tiles-renderer": "0.5.3",
+    "partyserver": "^0.5.10",
     "three": "^0.187.0"
   }
 }
