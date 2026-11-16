@@ -67,6 +67,8 @@ export const AMMO = {
 //             only rarities the gun can drop at. Read stats with weaponStats(id, rarity);
 //             the flat top-level damage/reload equal the lowest rarity's (legacy readers).
 //   lootWeight relative chance among weapon drops.
+//   ballistic { speed m/s, gravity m/s² } = the shot is a projectile with travel time and
+//             bullet drop (Combat.tickProjectiles) instead of an instant hitscan ray.
 //   scope     true = aiming goes first-person through a scope overlay (scoped snipers);
 //             without it aiming is the usual over-the-shoulder zoom (e.g. Hunting Rifle).
 // spread values are half-angles in radians. `bloom` is added per shot and
@@ -114,6 +116,7 @@ export const WEAPONS = {
     headMult: 2.5, rate: 0.33, auto: false, mag: 1,
     spread: 0.0008, bloom: 0, maxBloom: 0, pellets: 1, range: 600, falloffStart: 600, falloffEnd: 600, minFalloff: 1,
     hipSpread: 0.03, zoom: 0.3, scope: true, twoHanded: true, botRange: 130, tracer: 0xd8f4ff, lootWeight: 5,
+    ballistic: { speed: 420, gravity: 8 }, // ~0.23 m drop at 100 m, ~0.9 m at 200 m
     rarities: {
       rare: { damage: 105, reload: 3.0 },
       epic: { damage: 110, reload: 2.85 },
@@ -183,7 +186,8 @@ export const WEAPONS = {
     id: 'hunting_rifle', name: 'Hunting Rifle', kind: 'sniper', icon: 'hunting_rifle', model: 'sniper', sound: 'shot_sniper', ammo: 'heavy',
     headMult: 2.5, rate: 0.8, auto: false, mag: 1,
     spread: 0.0015, bloom: 0, maxBloom: 0, pellets: 1, range: 450, falloffStart: 450, falloffEnd: 450, minFalloff: 1,
-    hipSpread: 0.02, zoom: 0.55, twoHanded: true, botRange: 110, tracer: 0xd8f4ff, lootWeight: 5,
+    hipSpread: 0.02, zoom: 0.55, twoHanded: true, botRange: 110, tracer: 0xd8f4ff, lootWeight: 2.5,
+    ballistic: { speed: 340, gravity: 8 }, // ~0.35 m drop at 100 m, ~1.4 m at 200 m
     rarities: {
       uncommon: { damage: 86, reload: 1.9 },
       rare: { damage: 90, reload: 1.8 },
@@ -331,10 +335,10 @@ export const KNOCK = {
 // edited into the wall facing the enemy, shoot, reset the edit); peekOpen / peekClosed =
 // seconds the edit stays open / closed.
 export const DIFFICULTY = {
-  easy: { aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.15, buildPieces: 1, buildCooldown: 10, buildRate: 0.6, sight: 80, damageScale: 0.6, wallOnHit: 0, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0 },
-  normal: { aimError: 0.05, reaction: 0.55, burst: 0.7, buildChance: 0.4, buildPieces: 3, buildCooldown: 5, buildRate: 0.3, sight: 100, damageScale: 0.8, wallOnHit: 0.4, boxHeal: 0.35, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.3 },
+  easy: { lead: 0.5, aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.15, buildPieces: 1, buildCooldown: 10, buildRate: 0.6, sight: 80, damageScale: 0.6, wallOnHit: 0, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0 },
+  normal: { lead: 0.8, aimError: 0.05, reaction: 0.55, burst: 0.7, buildChance: 0.4, buildPieces: 3, buildCooldown: 5, buildRate: 0.3, sight: 100, damageScale: 0.8, wallOnHit: 0.4, boxHeal: 0.35, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.3 },
   hard: {
-    aimError: 0.017, reaction: 0.18, burst: 0.92, buildChance: 0.9, buildPieces: 8, buildCooldown: 1.2, buildRate: 0.07, sight: 150, damageScale: 1,
+    lead: 1, aimError: 0.017, reaction: 0.18, burst: 0.92, buildChance: 0.9, buildPieces: 8, buildCooldown: 1.2, buildRate: 0.07, sight: 150, damageScale: 1,
     wallOnHit: 1, boxHeal: 1, pushWeak: 0.95, thirdParty: 0.7, rotateEarly: 0.8, boxFight: 0.9, peekOpen: 0.9, peekClosed: 0.55,
   },
 };

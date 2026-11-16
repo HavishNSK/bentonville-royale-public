@@ -1006,6 +1006,8 @@ export class Game {
       if (!client && !this.freeBuild) this._stormDamage(dt);
       if (!client && this.teamMode) this.combat.tickTeams(dt);
     }
+    // sniper rounds in flight (host / solo: damage; client: effects only)
+    if (this.state === 'play' || this.state === 'over') this.combat.tickProjectiles(dt);
 
     if (!client) {
       try {
@@ -1313,6 +1315,7 @@ export class Game {
     if (typeof document !== 'undefined') createFpsMeter(document.body).setVisible(!!this.settings.showFps); // shared with the settings screen
     if (this.input) this.input.setBindings(this.settings.bindings);
     if (this.hud && this.hud.setKeyLabels && this.input) this.hud.setKeyLabels((a) => this.input.label(a));
+    if (this.hud && this.hud.setCrosshairStyle) this.hud.setCrosshairStyle(this.settings);
     if (this.invPanel && this.input) this.invPanel.setKeyLabels((a) => this.input.label(a));
     const qKey = graphicsQuality(this.settings);
     this._applyPixelRatio();
