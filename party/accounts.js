@@ -121,18 +121,29 @@ export class Accounts extends Server {
   async _uniqueGoogleName(claims) {
     const raw = String(claims.given_name || claims.name || (claims.email && claims.email.split('@')[0]) || 'Player');
     let base = raw.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 12);
-    if (base.length < 3) base = 'Player';
-    if (!(await this._acc(base.toLowerCase()))) return base.slice(0, 16);
+    if (!validName(base)) base = 'Player';
+    if (!(await this._acc(base.toLowerCase()))) return base;
     for (let i = 0; i < 8; i++) {
       const cand = (base.slice(0, 12) + randHex(2)).slice(0, 16);
-      if (!(await this._acc(cand.toLowerCase()))) return cand;
+      if (validName(cand) && !(await this._acc(cand.toLowerCase()))) return cand;
     }
-    return ('Player' + randHex(4)).slice(0, 16);
+    const fallback = ('Player' + randHex(4)).slice(0, 16);
+    return validName(fallback) ? fallback : 'Player' + randHex(3).slice(0, 3);
+  }
+
+  _googleRateOk() {
+    const now = Date.now();
+    if (!this._googleHits) this._googleHits = [];
+    this._googleHits = this._googleHits.filter((t) => now - t < 60_000);
+    if (this._googleHits.length >= 30) return false;
+    this._googleHits.push(now);
+    return true;
   }
 
   async _googleLogin(m) {
     const clientId = this.env && this.env.GOOGLE_CLIENT_ID;
     if (!clientId) return err('Google sign-in is not configured on the server.', 503);
+    if (!this._googleRateOk()) return err('Too many Google sign-in attempts. Wait a minute.', 429);
     let claims;
     try {
       claims = await verifyGoogleIdToken(String(m.idToken || ''), clientId);
@@ -146,8 +157,12 @@ export class Accounts extends Server {
     const gKey = 'google:' + claims.sub;
     const linked = await this.ctx.storage.get(gKey);
     let acc = linked ? await this._acc(linked) : null;
+    if (linked && !acc) {
+      await this.ctx.storage.delete(gKey);
+    }
     if (!acc) {
       const name = await this._uniqueGoogleName(claims);
+      if (!validName(name)) return err('Could not create a username from your Google account.', 500);
       acc = {
         name,
         salt: null,
@@ -165,9 +180,12 @@ export class Accounts extends Server {
       };
       await this._save(acc);
       await this.ctx.storage.put(gKey, acc.name.toLowerCase());
+    } else if (acc.googleSub && acc.googleSub !== claims.sub) {
+      return err('Google sign-in failed. Try again.', 401);
     } else if (!acc.googleSub) {
-      acc.googleSub = claims.sub;
-      await this._save(acc);
+      // Index pointed at a password account without googleSub — refuse auto-link (takeover risk).
+      await this.ctx.storage.delete(gKey);
+      return err('Google sign-in failed. Try again.', 401);
     }
     return json({ token: await this._newSession(acc), profile: profileOf(acc) });
   }

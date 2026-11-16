@@ -59,22 +59,26 @@ export async function verifyGoogleIdToken(idToken, clientId) {
   }
 
   if (header.alg !== 'RS256' || typeof header.kid !== 'string') throw new Error('bad-alg');
-  if (!ISSUERS.has(payload.iss)) throw new Error('bad-iss');
-  const aud = payload.aud;
-  const audOk = aud === clientId || (Array.isArray(aud) && aud.includes(clientId));
-  if (!audOk) throw new Error('bad-aud');
-  if (typeof payload.exp !== 'number' || payload.exp * 1000 < Date.now()) throw new Error('expired');
-  if (typeof payload.sub !== 'string' || !payload.sub || payload.sub.length > 255) throw new Error('bad-sub');
 
+  // Verify signature before trusting claims (limits junk-token JWKS/CPU work after kid lookup).
   const keys = await loadJwks();
   const jwk = keys.find((k) => k.kid === header.kid && k.kty === 'RSA');
   if (!jwk) throw new Error('no-key');
-
   const key = await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
   const data = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
   const sig = b64urlToBytes(parts[2]);
   const ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, sig, data);
   if (!ok) throw new Error('bad-sig');
+
+  if (!ISSUERS.has(payload.iss)) throw new Error('bad-iss');
+  const aud = payload.aud;
+  const audOk = aud === clientId || (Array.isArray(aud) && aud.length === 1 && aud[0] === clientId);
+  if (!audOk) throw new Error('bad-aud');
+  if (payload.azp != null && payload.azp !== clientId) throw new Error('bad-azp');
+  if (typeof payload.exp !== 'number' || payload.exp * 1000 < Date.now()) throw new Error('expired');
+  if (typeof payload.iat === 'number' && payload.iat * 1000 > Date.now() + 60_000) throw new Error('bad-iat');
+  if (typeof payload.iat === 'number' && Date.now() - payload.iat * 1000 > 3600_000) throw new Error('stale');
+  if (typeof payload.sub !== 'string' || !payload.sub || payload.sub.length > 255) throw new Error('bad-sub');
 
   return {
     sub: payload.sub,
