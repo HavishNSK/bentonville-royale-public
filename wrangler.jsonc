@@ -22,7 +22,7 @@
   // Read by wrangler/Workers as env.GOOGLE_CLIENT_ID (public OAuth Web client ID, not a secret).
   // Empty disables googleLogin. Same value as VITE_GOOGLE_CLIENT_ID. User: google auth.
   "vars": {
-    "GOOGLE_CLIENT_ID": ""
+    "GOOGLE_CLIENT_ID": "938917087479-mktkhe12uc4hmr95cn14uqekohr3tfrl.apps.googleusercontent.com"
   },
   "dev": { "port": 1999 }
 }
