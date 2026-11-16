@@ -106,7 +106,7 @@ function hudHTML() {
 <div class="br-tl">
   <div class="br-counts">
     <div class="br-chip br-chip-alive">${icon('people')}<b class="br-ol" data-ref="alive">0</b><span>ALIVE</span></div>
-    <div class="br-chip br-chip-elims">${icon('skull')}<b class="br-ol" data-ref="elims">0</b><span>ELIMS</span></div>
+    <div class="br-chip br-chip-elims">${icon('skull')}<b class="br-ol" data-ref="elims">0</b><span>ELIMS</span><em class="br-chip-team" data-ref="teamElimsChip" hidden title="Your team's eliminations">TEAM <b class="br-ol" data-ref="teamElims">0</b></em></div>
     <div class="br-chip br-chip-teams" data-ref="teamsChip" hidden>${icon('crown')}<b class="br-ol" data-ref="teams">0</b><span>TEAMS</span></div>
   </div>
   <div class="br-storm" data-ref="storm" data-state="waiting">
@@ -209,9 +209,19 @@ function hudHTML() {
 
 <div class="br-fullmap" data-ref="fullmap">
   <div class="br-fullmap-frame">
-    <div class="br-fullmap-title br-ol">${icon('map')}BENTONVILLE, ARKANSAS</div>
-    <canvas class="br-fullmap-canvas" data-ref="fullmapCanvas" width="1024" height="1024"></canvas>
-    <div class="br-fullmap-hint"><kbd class="br-key">M</kbd>CLOSE MAP<span>Map data &copy; OpenStreetMap contributors</span></div>
+    <canvas class="br-fullmap-canvas" data-ref="fullmapCanvas" width="1400" height="1400"></canvas>
+    <aside class="br-fullmap-side">
+      <div class="br-fullmap-title br-ol">${icon('map')}BENTONVILLE</div>
+      <div class="br-fullmap-sub">ARKANSAS</div>
+      <div class="br-mapstats" data-ref="mapStats"></div>
+      <ul class="br-fullmap-keys">
+        <li><kbd class="br-key">LMB</kbd>Place marker</li>
+        <li><kbd class="br-key">RMB</kbd>Remove marker</li>
+        <li><kbd class="br-key" data-ref="pingKey">MMB</kbd>Ping in the world</li>
+        <li><kbd class="br-key" data-ref="mapKey">M</kbd>Close map</li>
+      </ul>
+      <div class="br-fullmap-credit">Map data &copy; OpenStreetMap contributors</div>
+    </aside>
   </div>
 </div>`;
 }
@@ -511,8 +521,19 @@ export function buildHud(root) {
   let lastAlive = null;
   let lastElims = null;
   let lastTeams = null;
+  let lastTeamElims = null;
   function setCounts(counts) {
     const c = counts || {};
+    // team modes: the whole team's eliminations next to yours (null hides it)
+    const te = c.teamEliminations == null ? null : Math.max(0, int(c.teamEliminations));
+    if (te !== lastTeamElims) {
+      r.teamElimsChip.hidden = te == null;
+      if (te != null) {
+        r.teamElims.textContent = te;
+        if (lastTeamElims != null) pop(r.teamElims, 1.5, 300);
+      }
+      lastTeamElims = te;
+    }
     const alive = Math.max(0, int(c.alive));
     const elims = Math.max(0, int(c.eliminations));
     // team modes: a TEAMS LEFT chip next to ALIVE (null hides it)
@@ -768,12 +789,69 @@ export function buildHud(root) {
   function setFullMapAspect(aspect) {
     const a = Number.isFinite(aspect) && aspect > 0 ? Math.min(4, Math.max(0.25, aspect)) : 1;
     const c = r.fullmapCanvas;
-    const w = a >= 1 ? Math.round(1024 * a) : 1024;
-    const h = a >= 1 ? 1024 : Math.round(1024 / a);
+    const w = a >= 1 ? Math.round(1400 * a) : 1400;
+    const h = a >= 1 ? 1400 : Math.round(1400 / a);
     if (c.width !== w) c.width = w;
     if (c.height !== h) c.height = h;
     c.style.setProperty('--br-map-aspect', String(w / h));
   }
+  /**
+   * Full-map side panel: eliminations / assists / damage for you and each teammate.
+   * rows: [{ name, color, kills, assists, damage, you, state: 'alive'|'down'|'out' }]
+   */
+  let lastStatsKey = '';
+  function setMapStats(rows) {
+    const list = rows || [];
+    const key = JSON.stringify(list);
+    if (key === lastStatsKey) return;
+    lastStatsKey = key;
+    const box = r.mapStats;
+    box.replaceChildren();
+    const head = document.createElement('div');
+    head.className = 'br-mapstats-row br-mapstats-head';
+    for (const t of [list.length > 1 ? 'TEAM' : 'YOU', 'ELIMS', 'AST', 'DMG']) {
+      const c = document.createElement('span');
+      c.textContent = t;
+      head.appendChild(c);
+    }
+    box.appendChild(head);
+    let tk = 0;
+    let ta = 0;
+    let td = 0;
+    for (const row of list) {
+      const el = document.createElement('div');
+      el.className = 'br-mapstats-row';
+      el.dataset.state = row.state || 'alive';
+      if (row.you) el.classList.add('is-you');
+      const name = document.createElement('span');
+      name.className = 'br-mapstats-name';
+      const dot = document.createElement('i');
+      dot.style.background = row.color || '#fff';
+      name.append(dot, document.createTextNode(row.you && !/^you$/i.test(row.name) ? row.name + ' (you)' : row.name));
+      const k = document.createElement('b');
+      k.textContent = String(row.kills | 0);
+      const a = document.createElement('b');
+      a.textContent = String(row.assists | 0);
+      const d = document.createElement('b');
+      d.textContent = String(Math.round(row.damage || 0));
+      el.append(name, k, a, d);
+      box.appendChild(el);
+      tk += row.kills | 0;
+      ta += row.assists | 0;
+      td += Math.round(row.damage || 0);
+    }
+    if (list.length > 1) {
+      const el = document.createElement('div');
+      el.className = 'br-mapstats-row br-mapstats-total';
+      for (const t of ['TOTAL', tk, ta, td]) {
+        const c = document.createElement(typeof t === 'number' ? 'b' : 'span');
+        c.textContent = String(t);
+        el.appendChild(c);
+      }
+      box.appendChild(el);
+    }
+  }
+
   let emoteOn = false;
   function setEmoteHint(on) {
     const v = !!on;
@@ -926,7 +1004,8 @@ export function buildHud(root) {
     for (const [piece, action] of [['wall', 'buildWall'], ['floor', 'buildFloor'], ['ramp', 'buildRamp'], ['cone', 'buildCone']]) set(`.br-piece[data-piece="${piece}"] .br-key`, action);
     for (let i = 0; i < 5; i++) set(`.br-slot[data-slot="${i}"] .br-slot-key`, 'slot' + (i + 1));
     set('.br-slot-pick .br-slot-key', 'pickaxe');
-    set('.br-minimap-key .br-key, .br-fullmap-hint .br-key', 'map');
+    set('.br-minimap-key .br-key, .br-fullmap-keys [data-ref=mapKey]', 'map');
+    set('.br-fullmap-keys [data-ref=pingKey]', 'ping');
     set('.br-emote .br-key', 'emote');
     set('.br-mats-key .br-key', 'cycleMaterial');
   }
@@ -956,6 +1035,7 @@ export function buildHud(root) {
     getMinimapCanvas: () => r.minimap,
     getFullMapCanvas: () => r.fullmapCanvas,
     setFullMapAspect,
+    setMapStats,
     showFullMap,
     setEmoteHint,
     setLocation,

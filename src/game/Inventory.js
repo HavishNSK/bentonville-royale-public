@@ -257,6 +257,47 @@ export class Inventory {
     return t;
   }
 
+  /**
+   * Takes something out to drop on the ground (inventory screen drag-out).
+   * what = { s: slot 0..4 } | { ammo: kind } | { mat: material }, plus an optional n: how
+   * many to split off a stack (ammo, materials, a consumable stack; default all).
+   * Returns the Item or null.
+   */
+  takeOut(what) {
+    if (!what) return null;
+    const want = (have) => (Number.isInteger(what.n) && what.n > 0 ? Math.min(have, what.n) : have);
+    if (Number.isInteger(what.s) && what.s >= 0 && what.s < SLOT_COUNT) {
+      const it = this.slots[what.s];
+      if (!it) return null;
+      if (it.type === 'consumable' && it.count > 1) {
+        const n = want(it.count);
+        if (n < it.count) {
+          it.count -= n;
+          this.version++;
+          return { ...it, count: n };
+        }
+      }
+      this.slots[what.s] = null;
+      this.version++;
+      return it;
+    }
+    if (what.ammo && AMMO_KINDS.includes(what.ammo)) {
+      const n = want(this.ammo[what.ammo] | 0);
+      if (n <= 0) return null;
+      this.ammo[what.ammo] -= n;
+      this.version++;
+      return { type: 'ammo', ammo: what.ammo, count: n };
+    }
+    if (what.mat && MATERIALS.includes(what.mat)) {
+      const n = want(this.mats[what.mat] | 0);
+      if (n <= 0) return null;
+      this.mats[what.mat] -= n;
+      this.version++;
+      return { type: 'material', mat: what.mat, count: n };
+    }
+    return null;
+  }
+
   /** Spends n of a material if there is enough. */
   spendMats(mat, n) {
     if (!(mat in this.mats) || this.mats[mat] < n) return false;

@@ -1,0 +1,508 @@
+/* BENTONVILLE ROYALE — title meta screens (src/ui/meta.js): account bar, 3D line-up,
+ * shop / locker / friends panel, invite toasts. Tokens from hud.css, pieces from menus.css. */
+
+/* ---- title grid: logo + side | line-up | party ----------------------------- */
+.mn-title {
+  grid-template-columns: minmax(0, calc(var(--u) * 400)) minmax(0, calc(var(--u) * 420)) minmax(0, calc(var(--u) * 560));
+  grid-template-areas: 'logo show party' 'side show party';
+  column-gap: calc(var(--u) * 28);
+  padding-top: calc(var(--u) * 70);
+}
+.mn-title .mn-logo-main {
+  font-size: calc(var(--u) * 88);
+}
+
+/* ---- 3D line-up ------------------------------------------------------------- */
+.mn-showcase {
+  grid-area: show;
+  position: relative;
+  align-self: stretch;
+  min-height: calc(var(--u) * 460);
+  display: flex;
+  flex-direction: column;
+}
+.mn-showcase.is-off {
+  display: none;
+}
+.mn-showcase-canvas {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  touch-action: pan-y;
+  cursor: grab;
+}
+.mn-showcase-canvas:active {
+  cursor: grabbing;
+}
+.mn-showcase-names {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--u) * 64);
+  height: 0;
+  pointer-events: none;
+}
+.mn-showcase-names span {
+  position: absolute;
+  left: calc(50% + var(--x) * 17%);
+  transform: translateX(-50%);
+  padding: calc(var(--u) * 3) calc(var(--u) * 10);
+  border-radius: 999px;
+  background: var(--br-panel);
+  font-size: calc(var(--u) * 12);
+  white-space: nowrap;
+}
+.mn-showcase-names span.is-you {
+  background: var(--br-sun);
+  color: var(--br-ink);
+}
+.mt-emotebar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: calc(var(--u) * 6);
+  padding-top: calc(var(--u) * 6);
+}
+.mt-emotebar .mn-chip.is-on {
+  background: var(--br-sun);
+  color: var(--br-ink);
+}
+
+/* ---- account bar -------------------------------------------------------------- */
+.mt-bar {
+  position: absolute;
+  top: calc(var(--u) * 14);
+  right: 16px;
+  left: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: calc(var(--u) * 8);
+  z-index: 3;
+}
+.mt-who {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.05;
+  margin-right: calc(var(--u) * 4);
+}
+.mt-who b {
+  font-size: calc(var(--u) * 20);
+  color: var(--br-cream);
+}
+.mt-who small {
+  font-size: calc(var(--u) * 11);
+  opacity: 0.8;
+}
+.mt-coins {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--u) * 6);
+  padding: calc(var(--u) * 4) calc(var(--u) * 12) calc(var(--u) * 4) calc(var(--u) * 6);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: 999px;
+  background: var(--br-panel);
+}
+.mt-coins b {
+  font-size: calc(var(--u) * 18);
+  color: var(--br-sun);
+}
+.mt-coin {
+  display: inline-block;
+  width: calc(var(--u) * 18);
+  height: calc(var(--u) * 18);
+  border-radius: 50%;
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  background: radial-gradient(circle at 35% 30%, var(--br-sun-hi), var(--br-sun) 55%, #d98a00);
+  flex: none;
+}
+.mt-chip {
+  position: relative;
+}
+.mn-chip.mt-chip-sun {
+  background: var(--br-sun);
+  color: var(--br-ink);
+}
+.mt-badge {
+  position: absolute;
+  top: calc(var(--u) * -7);
+  right: calc(var(--u) * -7);
+  min-width: calc(var(--u) * 18);
+  height: calc(var(--u) * 18);
+  padding: 0 calc(var(--u) * 4);
+  border-radius: 999px;
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  background: var(--br-coral);
+  color: #fff;
+  font-style: normal;
+  font-size: calc(var(--u) * 11);
+  line-height: calc(var(--u) * 14);
+  text-align: center;
+}
+.mt-badge[hidden] {
+  display: none;
+}
+
+/* ---- side panel ---------------------------------------------------------------- */
+.mt-panel {
+  position: absolute;
+  top: calc(var(--u) * 64);
+  right: 16px;
+  bottom: calc(var(--u) * 16);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 8);
+  width: min(calc(var(--u) * 580), calc(100% - 32px));
+  padding: calc(var(--u) * 18) calc(var(--u) * 20);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 20);
+  background: rgba(21, 16, 58, 0.9);
+  box-shadow: 0 calc(var(--u) * 8) 0 var(--br-ink);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.mt-panel[hidden] {
+  display: none;
+}
+.mn-title.has-meta > .mn-party {
+  visibility: hidden;
+}
+.mt-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--u) * 10);
+}
+.mt-panel-head .mn-h {
+  margin: 0;
+  font-size: calc(var(--u) * 32);
+}
+.mt-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 10);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: calc(var(--u) * 4) calc(var(--u) * 4) calc(var(--u) * 10);
+  margin: 0 calc(var(--u) * -4);
+}
+.mt-msg {
+  margin: 0;
+  min-height: calc(var(--u) * 18);
+  font-size: calc(var(--u) * 13);
+  color: var(--br-leaf);
+}
+.mt-msg.is-error {
+  color: #ff9a8c;
+}
+.mt-hint {
+  margin: 0;
+  font-size: calc(var(--u) * 12.5);
+  font-weight: 700;
+  opacity: 0.85;
+}
+.mt-sub {
+  margin-top: calc(var(--u) * 6);
+}
+.mt-form,
+.mt-add {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 10);
+}
+.mt-add {
+  flex-direction: row;
+}
+.mt-add .mn-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.mt-add .mn-btn {
+  width: auto;
+  flex: none;
+}
+
+/* ---- shop / locker cards ------------------------------------------------------- */
+.mt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--u) * 122), 1fr));
+  gap: calc(var(--u) * 10);
+}
+.mt-item {
+  --rar: var(--br-common);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: calc(var(--u) * 3);
+  padding: calc(var(--u) * 8);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: calc(var(--u) * 14);
+  background: linear-gradient(180deg, var(--rar) 0 58%, var(--br-cream) 58%);
+  color: var(--br-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 calc(var(--u) * 4) 0 var(--br-ink);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.mt-item:hover,
+.mt-item:focus-visible {
+  transform: translateY(calc(var(--u) * -2));
+  box-shadow: 0 calc(var(--u) * 6) 0 var(--br-ink);
+  outline: none;
+}
+.mt-item:focus-visible {
+  outline: calc(var(--u) * 3) solid var(--br-sun-hi);
+  outline-offset: calc(var(--u) * 2);
+}
+.mt-item.is-equipped {
+  outline: calc(var(--u) * 3) solid var(--br-sun);
+  outline-offset: calc(var(--u) * 2);
+}
+.mt-item-art {
+  position: relative;
+  height: calc(var(--u) * 70);
+  border-radius: calc(var(--u) * 10);
+  background: rgba(21, 16, 58, 0.18);
+  overflow: hidden;
+}
+/* outfit: a little silhouette in the outfit colour */
+.mt-item-art.is-skin::before,
+.mt-item-art.is-skin::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  background: var(--skin);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+}
+.mt-item-art.is-skin::before {
+  top: calc(var(--u) * 8);
+  width: calc(var(--u) * 26);
+  height: calc(var(--u) * 26);
+  margin-left: calc(var(--u) * -13);
+  border-radius: 50%;
+}
+.mt-item-art.is-skin::after {
+  top: calc(var(--u) * 36);
+  width: calc(var(--u) * 42);
+  height: calc(var(--u) * 40);
+  margin-left: calc(var(--u) * -21);
+  border-radius: calc(var(--u) * 14) calc(var(--u) * 14) 0 0;
+}
+/* emote: a star burst */
+.mt-item-art.is-emote::before {
+  content: '★';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: calc(var(--u) * 40);
+  color: var(--br-cream);
+  text-shadow: 0 calc(var(--u) * 3) 0 var(--br-ink);
+}
+.mt-item-name {
+  font-family: var(--br-display);
+  font-weight: 400;
+  font-size: calc(var(--u) * 15);
+  line-height: 1.05;
+}
+.mt-item-kind {
+  font-size: calc(var(--u) * 10);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.7;
+}
+.mt-item-foot {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--u) * 5);
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 15);
+}
+.mt-item.is-owned .mt-item-foot {
+  font-family: var(--br-body);
+  font-weight: 900;
+  font-size: calc(var(--u) * 11);
+  letter-spacing: 0.08em;
+  color: #2c7a3c;
+}
+.mt-buy {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--u) * 10);
+  padding: calc(var(--u) * 10) calc(var(--u) * 12);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: calc(var(--u) * 14);
+  background: var(--br-ink-2);
+}
+.mt-buy b {
+  flex: 1 1 auto;
+  font-size: calc(var(--u) * 20);
+}
+.mt-buy .mt-buy-go {
+  width: auto;
+  min-height: calc(var(--u) * 48);
+  font-size: calc(var(--u) * 20);
+}
+
+/* ---- locker emote slots --------------------------------------------------------- */
+.mt-slots {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: calc(var(--u) * 8);
+}
+.mt-slot {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 8);
+  min-height: calc(var(--u) * 44);
+  padding: 0 calc(var(--u) * 10);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: calc(var(--u) * 12);
+  background: var(--br-cream);
+  color: var(--br-ink);
+  font: inherit;
+  font-size: calc(var(--u) * 13);
+  cursor: pointer;
+  text-align: left;
+}
+.mt-slot.is-sel {
+  background: var(--br-sun);
+}
+.mt-slot:focus-visible {
+  outline: calc(var(--u) * 3) solid var(--br-sun-hi);
+  outline-offset: calc(var(--u) * 2);
+}
+
+/* ---- friends -------------------------------------------------------------------- */
+.mt-friend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 8);
+  padding: calc(var(--u) * 8) calc(var(--u) * 10);
+  border-radius: calc(var(--u) * 12);
+  background: rgba(255, 246, 220, 0.08);
+}
+.mt-friend > b {
+  flex: 1 1 auto;
+}
+.mt-friend-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.mt-friend-info small,
+.mt-friend > small {
+  font-size: calc(var(--u) * 11);
+  opacity: 0.75;
+}
+.mt-dot {
+  width: calc(var(--u) * 11);
+  height: calc(var(--u) * 11);
+  border-radius: 50%;
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  background: #6b6890;
+  flex: none;
+}
+.mt-friend.is-online .mt-dot {
+  background: var(--br-leaf);
+}
+.mt-x {
+  min-width: 0;
+}
+
+/* ---- toasts ---------------------------------------------------------------------- */
+.mt-toasts {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--u) * 24);
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 8);
+  width: min(calc(var(--u) * 520), calc(100% - 32px));
+  pointer-events: none;
+}
+.mt-toast {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 8);
+  padding: calc(var(--u) * 10) calc(var(--u) * 14);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 14);
+  background: var(--br-cream);
+  color: var(--br-ink);
+  box-shadow: 0 calc(var(--u) * 5) 0 var(--br-ink);
+  pointer-events: auto;
+  animation: mt-in 0.25s var(--br-spring);
+}
+.mt-toast > span {
+  flex: 1 1 auto;
+}
+@keyframes mt-in {
+  from {
+    transform: translateY(calc(var(--u) * 20));
+    opacity: 0;
+  }
+}
+
+/* ---- narrow / tall screens: stack, line-up after the logo ---------------------- */
+@media (max-aspect-ratio: 1/1), (max-width: 760px) {
+  .mn-title {
+    padding-top: calc(var(--u) * 110);
+  }
+  .mn-showcase {
+    order: 1;
+    width: 100%;
+    min-height: 0;
+    height: 42vh;
+    flex: none;
+  }
+  .mn-title > .mn-logo {
+    order: 0;
+  }
+  .mn-title > .mn-party {
+    order: 2;
+  }
+  .mn-title-side {
+    order: 3;
+  }
+  .mt-bar {
+    justify-content: center;
+  }
+  .mt-panel {
+    top: calc(var(--u) * 100);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mt-item,
+  .mt-toast {
+    transition: none;
+    animation: none;
+  }
+}
+
+/* a panel is open: the line-up takes the left side (logo and buttons step aside) so the
+   outfit being tried on stays in view */
+@media (min-aspect-ratio: 1/1) and (min-width: 761px) {
+  .mn-title.has-meta > .mn-logo,
+  .mn-title.has-meta > .mn-title-side {
+    visibility: hidden;
+  }
+  .mn-title.has-meta > .mn-showcase {
+    grid-column: 1 / 3;
+    grid-row: 1 / 3;
+    margin-right: calc(var(--u) * 240);
+  }
+}

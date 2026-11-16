@@ -20,6 +20,8 @@ export const ACTIONS = Object.freeze([
   { id: 'aim', label: 'Aim down sights', group: 'Combat', def: 'Mouse2' },
   { id: 'reload', label: 'Reload', group: 'Combat', def: 'KeyR' },
   { id: 'interact', label: 'Interact / loot', group: 'Combat', def: 'KeyE' },
+  { id: 'carry', label: 'Carry / drop knocked teammate', group: 'Combat', def: 'KeyH' },
+  { id: 'ping', label: 'Ping / mark a spot for your team', group: 'Combat', def: 'Mouse1' },
   { id: 'inventory', label: 'Inventory', group: 'Inventory', def: 'Tab' },
   { id: 'pickaxe', label: 'Pickaxe', group: 'Inventory', def: 'KeyF' },
   { id: 'slot1', label: 'Slot 1', group: 'Inventory', def: 'Digit1' },

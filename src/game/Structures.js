@@ -32,6 +32,9 @@
 //   wedge   true for ramps / cones: World treats them as solid from y0 up to
 //           surf() for side collision (walk up the low end, blocked by the
 //           high sides / back)
+//   slab    ramps only: a thin plank instead of a solid wedge (World walks you up it
+//           from the low end, lets you walk UNDER it where it is above your head);
+//           rise = [dx, dz] uphill direction
 //
 // Vertical grid: one global lattice (y = 3k, k may be negative) so neighbouring pieces
 // line up. A piece planned from the terrain snaps to the ground level of its own cell
@@ -455,7 +458,9 @@ function shapeFor(kind, x, y, z, rot, edit = 0, doors = null) {
     return {
       ...base,
       y1: y0 + LEVEL,
-      wedge: true, // World.resolveCircle: solid from y0 up to the surface
+      wedge: true,
+      slab: true, // World: a thin plank you can walk under, not a solid wedge
+      rise: [dx, dz],
       surf: (px, pz) => h(px, pz),
       tris: tris([
         x0, h(x0, z0), z0, x1, h(x1, z0), z0, x1, h(x1, z1), z1,
@@ -599,8 +604,9 @@ function slotKey(kind, x, y, z, rot) {
     // edge id by its midpoint on the half-cell lattice
     return `w${Math.round(x * 2 / CELL)},${Math.round(z * 2 / CELL)},${k},${alongX ? 'x' : 'z'}`;
   }
-  // floor, ramp and cone share one slot per cell and level: only one of them per spot
-  return `c${Math.floor(x / CELL)},${Math.floor(z / CELL)},${k}`;
+  // a floor, a ramp and a cone each get their own slot per cell and level, so they can share
+  // a cell (a ramp inside a floored box, a cone roof over a ramp)
+  return `${kind === 'floor' ? 'f' : kind === 'ramp' ? 'r' : 'c'}${Math.floor(x / CELL)},${Math.floor(z / CELL)},${k}`;
 }
 
 // =================================================================== Structures
@@ -776,17 +782,26 @@ export class Structures {
       }
       x = (ti + 0.5) * CELL;
       z = (tj + 0.5) * CELL;
+      const ahead = ti !== ci || tj !== cj;
       if (kind === 'ramp') {
         rot = (Math.round(heading / (Math.PI / 2)) * Math.PI) / 2;
-        if (pitch < -0.6 && !own) dk = -1;
+        // looking down at the next cell: a ramp down into it. Not when a wall kept the ramp in
+        // our own cell (boxed in): one level down there is under our own feet / the ground.
+        if (pitch < -0.6 && !own && ahead) dk = -1;
       } else if (kind === 'floor') {
         if (pitch > 0.45) dk = 1;
       } else if (own || pitch > 0.2) {
         dk = 1; // cone as a roof
       }
     }
-    const k = (onGround ? this._groundLevel(x, z) : kFeet) + dk;
+    let k = (onGround ? this._groundLevel(x, z) : kFeet) + dk;
     rot = ((rot % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    // standing on a ramp in a box and ramping again: that spot is taken by the ramp we are on,
+    // so the new one goes up a level (keeps climbing, like a ramp rush in a box)
+    if (kind === 'ramp' && dk >= 0) {
+      const here = this.slots.get(slotKey('ramp', x, k * LEVEL, z, rot));
+      if (here && here.alive && pos.y > k * LEVEL + 0.4) k += 1;
+    }
 
     out.kind = kind;
     out.x = x;

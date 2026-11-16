@@ -83,7 +83,8 @@ const SIM_STEP_MAX = 0.05; // longest physics sub-step for time-sliced bots (no 
 const ANIM_FULL = 35; // metres: animate every frame inside this
 const DEAD_ANIM = 3; // seconds a death animation plays before the pose is frozen
 // building
-const BUILD_Q = 6; // most queued pieces in one build response
+const BUILD_Q = 10; // most queued pieces in one build response
+const HEAR = 160; // metres: gunfire this close can draw a bot in (third party)
 const BUILD_ROOM = 0.85; // bots stop starting builds past this share of BUILD.maxPieces
 // enterable buildings (World collider.shell): door waypoints, see _doorRoute
 const DOOR_OUT = 1.6; // metres in front of a door's outer face: the approach point
@@ -302,7 +303,96 @@ export class Bots {
       b.threat = src;
       b.thinkIn = Math.min(b.thinkIn, 0.05);
       if (!src.isBot) b.lodAt = 0; // a human is on it: back to full rate next frame
+      this._wallOnHit(b, src);
     }
+  }
+
+  /**
+   * Shot at: throw a wall between us and the shooter right away (a box when low), the
+   * first thing a good player does. Skipped mid-build, mid-air, knocked or without mats.
+   */
+  _wallOnHit(b, src) {
+    const st = this.structures;
+    const a = b.actor;
+    const t = this.time;
+    const diff = this.diff;
+    if (!st || !diff.wallOnHit || a.downed || !a.grounded || b.bqI < b.bqN || t < (b.hitWallAt || 0)) return;
+    if (st.count >= BUILD.maxPieces * BUILD_ROOM) return;
+    b.hitWallAt = t + 1.2 + this.rng() * 1.5;
+    if (this.rng() > diff.wallOnHit) return;
+    const mat = bestMat(a.inventory);
+    if (!mat) return;
+    const fx = src.pos.x - a.pos.x;
+    const fz = src.pos.z - a.pos.z;
+    const hs = (Math.round(Math.atan2(fx, -fz) / (Math.PI / 2)) * Math.PI) / 2;
+    const low = a.health + a.shield < 60;
+    const n = low && diff.buildPieces >= 5 && this.rng() < diff.boxHeal ? this._queueBox(b, 0, hs) : queueStep(b, 0, 'wall', a.pos.x, a.pos.y, a.pos.z, Math.atan2(fx, -fz), 0);
+    this._startQueue(b, n, n > 1 ? 'box' : 'wall', mat, Math.sin(hs), -Math.cos(hs));
+  }
+
+  /** 1x1 box around the bot's own cell from piece n: front wall, sides, back, then a cone roof. */
+  _queueBox(b, n, hs) {
+    const a = b.actor;
+    const cx = (Math.floor(a.pos.x / BUILD.cell) + 0.5) * BUILD.cell;
+    const cz = (Math.floor(a.pos.z / BUILD.cell) + 0.5) * BUILD.cell;
+    const py = a.pos.y;
+    n = queueStep(b, n, 'wall', cx, py, cz, hs, 0);
+    n = queueStep(b, n, 'wall', cx, py, cz, hs + Math.PI / 2, 0);
+    n = queueStep(b, n, 'wall', cx, py, cz, hs - Math.PI / 2, 0);
+    n = queueStep(b, n, 'wall', cx, py, cz, hs + Math.PI, 0);
+    n = queueStep(b, n, 'cone', cx, py, cz, hs, 1);
+    return n;
+  }
+
+  /** Starts placing queued pieces 0..n-1 (one per diff.buildRate). */
+  _startQueue(b, n, mode, mat, dx, dz) {
+    const t = this.time;
+    b.bqN = n;
+    b.bqI = 0;
+    b.bqNext = t;
+    b.bqMat = mat;
+    b.bqMode = mode;
+    b.bqDirX = dx;
+    b.bqDirZ = dz;
+    b.buildCooldown = Infinity; // set for real when the queue finishes
+    if (mode === 'box') {
+      b.holdUntil = t + n * this.diff.buildRate + 2.5;
+      b.boxedAt = t;
+    }
+    this._buildStep(b);
+  }
+
+  /**
+   * Third party: gunfire from an enemy within HEAR m that we are not already in, while we
+   * are healthy and armed. Returns that shooter (sticky for a few seconds) or null.
+   */
+  _hearFight(b, all) {
+    const a = b.actor;
+    const t = this.time;
+    if (!this.diff.thirdParty) return null;
+    if (b.hunt && b.hunt.alive && t < b.huntUntil) return b.hunt;
+    b.hunt = null;
+    if (t < (b.hearAt || 0)) return null;
+    b.hearAt = t + 1.5 + this.rng();
+    if (a.health + a.shield < 110 || !this._hasGun(a.inventory)) return null;
+    const now = performance.now() / 1000;
+    let best = null;
+    let bd = HEAR * HEAR;
+    for (let i = 0; i < all.length; i++) {
+      const o = all[i];
+      if (o === a || !o.alive || o.downed || sameTeam(o, a) || inAir(o) || !(now - (o.shotAt || -99) < 3)) continue;
+      const d2 = dist2(a.pos, o.pos);
+      if (d2 < bd && d2 > 15 * 15) {
+        bd = d2;
+        best = o;
+      }
+    }
+    if (best && this.rng() < this.diff.thirdParty * (0.5 + b.aggression * 0.5)) {
+      b.hunt = best;
+      b.huntUntil = t + 12;
+      return best;
+    }
+    return null;
   }
 
   // ----------------------------------------------------------------- update
@@ -541,6 +631,7 @@ export class Bots {
     else if (b.healing > 0 || this._wantHeal(b)) state = 'heal';
     else if (this._needRotate(b, storm)) state = 'rotate';
     else if (b.harvest && b.harvest.alive && t < b.harvestUntil && !target) state = 'harvest';
+    else if (!target && this._hearFight(b, all)) state = 'hunt';
     else if (this._pickLoot(b)) state = 'loot';
     else if (this._pickHarvest(b)) state = 'harvest';
     else state = 'wander';
@@ -605,11 +696,20 @@ export class Bots {
         if (!b.targetVisible) fw = 1;
         else if (d > pref * 1.35) fw = 1;
         else if (d < pref * 0.55) fw = -0.8;
+        // cracked shield / healing / reloading: push them (decided once per target window)
+        const weak = b.targetVisible && target && (target.health + target.shield < 75 || (target._bot && (target._bot.healing > 0 || target._bot.reloading > 0)));
+        if (weak && t > (b.pushRollAt || 0)) {
+          b.pushRollAt = t + 2.5;
+          b.pushUntil = this.rng() < this.diff.pushWeak * (0.6 + b.aggression * 0.4) ? t + 2.5 : 0;
+        }
+        const pushing = weak && t < (b.pushUntil || 0) && a.health + a.shield > 60;
+        if (pushing && d > 3.5) fw = 1;
         const s = b.targetVisible ? b.strafe : 0;
         gx = a.pos.x + (fx * fw - fz * s) * 6;
         gz = a.pos.z + (fz * fw + fx * s) * 6;
         stop = 0.2;
-        speed = b.targetVisible ? PLAYER.runSpeed : PLAYER.sprintSpeed;
+        speed = b.targetVisible && !pushing ? PLAYER.runSpeed : PLAYER.sprintSpeed;
+        if (pushing) this._chooseWeapon(b, Math.min(d, 8)); // pull the close-range gun while closing in
         if (!b.targetVisible && d < 1.5) b.target = null; // reached last seen spot
         this._maybeBuild(b, fx, fz, d);
         if (t < b.rushUntil) {
@@ -661,7 +761,38 @@ export class Bots {
         stop = 3;
         break;
       }
+      case 'hunt': {
+        // third party: close in on the fight we hear, slowing to a walk for the last stretch
+        const h = b.hunt;
+        const d = Math.hypot(h.pos.x - a.pos.x, h.pos.z - a.pos.z);
+        gx = h.pos.x;
+        gz = h.pos.z;
+        speed = d > 60 ? PLAYER.sprintSpeed : PLAYER.runSpeed;
+        stop = 6;
+        b.faceX = h.pos.x;
+        b.faceZ = h.pos.z;
+        if (d < 30) {
+          // close enough to see it: treat them as our target (perception takes over)
+          b.threat = h;
+          b.alertUntil = t + 4;
+        }
+        break;
+      }
       case 'heal': {
+        // just out of a fight: box up first, then heal inside it
+        if (b.healing <= 0 && !b.inB && b.bqI >= b.bqN && this.diff.boxHeal && t - (b.boxedAt || -99) > 15 && (t - b.hurtAt < 10 || t < b.alertUntil) && this.structures && a.grounded) {
+          const mat = bestMat(inv);
+          let afford = 0;
+          for (const m of MATERIALS) afford += Math.floor(inv.mats[m] / BUILD.cost);
+          if (mat && afford >= 5 && this.rng() < this.diff.boxHeal) {
+            const hs = (Math.round(a.heading / (Math.PI / 2)) * Math.PI) / 2;
+            this._startQueue(b, this._queueBox(b, 0, hs), 'box', mat, Math.sin(hs), -Math.cos(hs));
+          } else b.boxedAt = t; // no box this time; do not re-roll every think
+        }
+        if (b.bqMode === 'box' && t < b.holdUntil && b.bqI < b.bqN) {
+          speed = 0; // stand still while the walls go up
+          break;
+        }
         // patch up indoors when a building is close (give up after a few seconds)
         if (b.healing <= 0 && b.stateTime === 0 && !b.inB) this._pickCover(b, NaN, NaN);
         if (b.healing <= 0 && b.coverC && !b.inB && b.stateTime < 9 && !b.target) {
@@ -856,6 +987,12 @@ export class Bots {
       b.wantJump = false;
       b.thinkIn = 0;
       if (a.revivingTarget && this.combat) this.combat.stopRevive(a);
+    }
+    if (a.carriedBy) {
+      // riding on a teammate's shoulder (Combat.tickCarry places us)
+      b.speed = 0;
+      b.mx = b.mz = 0;
+      return;
     }
     b.thinkIn -= dt;
     if (b.thinkIn <= 0) {
@@ -1094,7 +1231,7 @@ export class Bots {
       const far = Math.hypot(a.pos.x - storm.nextCx, a.pos.z - storm.nextCz) - storm.nextR * 0.7;
       if (far <= 0) return false;
       // leave in time to reach the phase-1 circle by sprinting, with slack for fights/detours
-      if (far / PLAYER.sprintSpeed * 1.35 + 15 + b.caution * 20 > left) return true;
+      if (far / PLAYER.sprintSpeed * (1.35 + (this.diff.rotateEarly || 0) * 0.5) + 15 + b.caution * 20 > left) return true;
       const edge = storm.r - Math.hypot(a.pos.x - storm.cx, a.pos.z - storm.cz);
       return storm.mode !== 'waiting' && edge < (b.state === 'rotate' ? 220 : 120);
     }
@@ -1104,7 +1241,7 @@ export class Bots {
     if (inside > 0) return false;
     if (storm.mode !== 'waiting') return true;
     const travel = -inside / PLAYER.runSpeed;
-    return storm.secondsLeft < travel * 1.6 + 12 + b.caution * 25;
+    return storm.secondsLeft < travel * (1.6 + (this.diff.rotateEarly || 0)) + 12 + b.caution * 25;
   }
 
   _pickLoot(b) {
@@ -1294,19 +1431,25 @@ export class Bots {
     if (maxN >= 5 && hurt && d < 40) {
       // 1x1 box around the bot's own cell: front wall first, then sides, back, roof
       mode = 'box';
-      const cx = (Math.floor(px / BUILD.cell) + 0.5) * BUILD.cell;
-      const cz = (Math.floor(pz / BUILD.cell) + 0.5) * BUILD.cell;
-      n = queueStep(b, n, 'wall', cx, py, cz, hs, 0);
-      n = queueStep(b, n, 'wall', cx, py, cz, hs + Math.PI / 2, 0);
-      n = queueStep(b, n, 'wall', cx, py, cz, hs - Math.PI / 2, 0);
-      n = queueStep(b, n, 'wall', cx, py, cz, hs + Math.PI, 0);
-      n = queueStep(b, n, 'cone', cx, py, cz, hs, 1);
+      n = this._queueBox(b, n, hs);
     } else if (maxN >= 3 && (high || (d > 18 && this.rng() < 0.45))) {
       // ramp rush: a chain of rising ramps toward the target, run up while it is built
       mode = 'rush';
       const ramps = Math.min(maxN, high ? 2 + Math.ceil((tgt.pos.y - py) / BUILD.level) : 3);
+      // with pieces to spare, each ramp gets a wall in front (ramp-wall: climb behind cover)
+      const covered = maxN >= ramps * 2;
       for (let i = 0; i < ramps && n < maxN; i++) {
-        n = queueStep(b, n, 'ramp', px + dx * BUILD.cell * i, py + BUILD.level * i, pz + dz * BUILD.cell * i, hs, 0);
+        const rx = px + dx * BUILD.cell * i;
+        const ry = py + BUILD.level * i;
+        const rz = pz + dz * BUILD.cell * i;
+        if (covered) {
+          _bpos.x = rx;
+          _bpos.y = ry;
+          _bpos.z = rz;
+          const pl = st.plan('ramp', _bpos, hs, 0, _pl);
+          n = queueStep(b, n, 'wall', pl.x, pl.y, pl.z, hs, 0);
+        }
+        n = queueStep(b, n, 'ramp', rx, ry, rz, hs, 0);
       }
     } else if (maxN >= 2 && (d > 25 || this.rng() < (maxN >= 3 ? 0.75 : 0.4))) {
       // wall + ramp: the wall goes on the far edge of the ramp's cell, so it covers the climb

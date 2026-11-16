@@ -963,7 +963,7 @@ export class Loot {
     const r2 = radius * radius;
     for (const r of this.records) {
       if (r.kind === 'item') {
-        if (r.spill || !r.item || r.item.type !== 'ammo') continue;
+        if (r.spill || !r.item || (r.item.type !== 'ammo' && r.item.type !== 'material')) continue;
       } else if (r.kind !== 'ammoBox' || r.opened) continue;
       if (Math.abs(r.y - pos.y) > LOOT.verticalReach) continue;
       if ((r.x - pos.x) ** 2 + (r.z - pos.z) ** 2 <= r2) out.push(r.info);

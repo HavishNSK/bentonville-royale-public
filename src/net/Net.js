@@ -62,7 +62,7 @@ export function partyHost() {
   return (spec || 'localhost:1999').replace(/^\w+:\/\//, '').replace(/\/+$/, '');
 }
 
-function isLocal(host) {
+export function isLocal(host) {
   const h = host.split(':')[0];
   return h === 'localhost' || h === '0.0.0.0' || /^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || h.endsWith('.local');
 }
