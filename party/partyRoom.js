@@ -12,11 +12,11 @@
 //   by token and game guests join the game room with it.
 //
 // Client -> server (JSON):
-//   anyone:       {t:'ready', on} {t:'name', name} {t:'leave'}
+//   anyone:       {t:'ready', on} {t:'name', name} {t:'skin', skin} {t:'leave'}
 //   leader only:  {t:'setMode', mode} {t:'setFill', on} {t:'kick', id} {t:'promote', id}
 //                 {t:'play'} {t:'cancel'}
 // Server -> client:
-//   {t:'state', you, party:{code, leaderId, mode, fill, state, queuedFor, members:[{id,name,ready,leader}]}}
+//   {t:'state', you, party:{code, leaderId, mode, fill, state, queuedFor, members:[{id,name,ready,leader,skin}]}}
 //   {t:'match', code, hostToken, teams:[{tokens, allowBots}], mode}
 //   {t:'notice', text}   {t:'error', text}   {t:'reject', reason} then close
 //   {t:'kicked'} then close (4002)
@@ -32,6 +32,12 @@ function cleanName(name) {
     .trim()
     .slice(0, 16);
   return s || 'Player';
+}
+
+/** Outfit id shown in the lobby line-up (Cosmetics.SKINS key; unchecked, cosmetic only). */
+function cleanSkin(s) {
+  const v = String(s || '').replace(/[^a-z0-9_]/g, '').slice(0, 40);
+  return v.startsWith('skin_') ? v : null;
 }
 
 function cleanToken(t) {
@@ -100,7 +106,7 @@ export default class PartyRoom {
       fill: this.fill,
       state: this.state,
       queuedFor: this.state === 'queued' ? Date.now() - this.queuedAt : 0,
-      members: this.members.map((m) => ({ id: m.id, name: m.name, ready: m.id === this.leaderId || m.ready, leader: m.id === this.leaderId })),
+      members: this.members.map((m) => ({ id: m.id, name: m.name, skin: m.skin || null, ready: m.id === this.leaderId || m.ready, leader: m.id === this.leaderId })),
     };
   }
 
@@ -142,6 +148,7 @@ export default class PartyRoom {
   onConnect(conn, ctx) {
     const url = new URL(ctx.request.url);
     const name = cleanName(url.searchParams.get('name'));
+    const skin = cleanSkin(url.searchParams.get('skin'));
     const token = cleanToken(url.searchParams.get('token')) || 'anon-' + conn.id;
     const create = url.searchParams.get('create') === '1';
 
@@ -152,6 +159,7 @@ export default class PartyRoom {
       const wasLeader = this.leaderId === old.id;
       old.id = conn.id;
       old.name = name;
+      old.skin = skin;
       old.ready = false;
       if (wasLeader) this.leaderId = conn.id;
       if (prev && prev !== conn) {
@@ -179,7 +187,7 @@ export default class PartyRoom {
       this.fill = url.searchParams.get('fill') !== '0';
       this.leaderId = conn.id;
     }
-    this.members.push({ id: conn.id, name, token, ready: false, seq: this.seq++ });
+    this.members.push({ id: conn.id, name, token, skin, ready: false, seq: this.seq++ });
     conn.setState({ token });
     // a party bigger than its mode moves up (solo + a friend -> duos)
     const fit = modeFor(this.members.length, this.mode);
@@ -245,6 +253,11 @@ export default class PartyRoom {
       }
       case 'name': {
         me.name = cleanName(msg.name);
+        this._sync();
+        return;
+      }
+      case 'skin': {
+        me.skin = cleanSkin(msg.skin);
         this._sync();
         return;
       }

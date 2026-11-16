@@ -230,7 +230,7 @@ export function createMenus(root, opts = {}) {
          ${range('fov', 'Field of view', 55, 100, 1)}
          <div class="mn-row"><span>Graphics quality</span>${seg('quality', QUALITY_OPTIONS)}</div>
          <div class="mn-row"><span>Bot difficulty</span>${seg('difficulty', DIFFICULTY_OPTIONS)}</div>
-         ${toggle('autoPickupAmmo', 'Auto-pickup ammo', 'Walk over ammo to take it without pressing interact.')}
+         ${toggle('autoPickupAmmo', 'Auto-pickup ammo & mats', 'Walk over ammo and materials to take them without pressing interact.')}
          ${toggle('showFps', 'Show FPS')}
          <label class="mn-row mn-row-gtiles"><span>Real-world 3D view (Google)<small class="mn-hint" data-ref="gtilesHint"></small></span><input type="checkbox" class="mn-toggle" data-name="googleTiles"></label>
        </div>
@@ -319,6 +319,7 @@ export function createMenus(root, opts = {}) {
   const screens = [title, settingsEl, lobby, loading, pause, result];
   let settingsFrom = 'title';
   let current = null;
+  let screenHook = null;
 
   function show(screen, withBg) {
     if (screen !== settingsEl) cancelCapture();
@@ -326,6 +327,7 @@ export function createMenus(root, opts = {}) {
     bg.classList.toggle('is-on', !!withBg);
     wrap.classList.toggle('is-active', !!screen);
     current = screen;
+    if (screenHook) screenHook(screen === title ? 'title' : screen ? 'other' : null); // meta: 3D line-up on / off
   }
 
   // ---------------------------------------------------------------- settings wiring
@@ -734,6 +736,10 @@ export function createMenus(root, opts = {}) {
 
   const api = {
     el: wrap,
+    /** fn('title' | 'other' | null) whenever the shown screen changes. */
+    set onScreen(fn) {
+      screenHook = fn;
+    },
     get current() {
       return current === lobby ? 'lobby' : current === title ? 'title' : current === settingsEl ? 'settings' : current === loading ? 'loading' : current === pause ? 'pause' : current === result ? 'result' : null;
     },
@@ -768,6 +774,19 @@ export function createMenus(root, opts = {}) {
       renderParty();
     },
     playerName: () => T.name.value.trim().slice(0, 16) || 'Player',
+    /** Signed in: play under the account name (field locked); null unlocks it again. */
+    setAccountName(name) {
+      if (name) {
+        T.name.value = String(name).slice(0, 16);
+        T.name.readOnly = true;
+        T.name.title = 'Your account name';
+      } else {
+        T.name.readOnly = false;
+        T.name.title = '';
+        T.name.value = savedName() || T.name.value;
+      }
+      if (partyView && !partyView.online) renderParty();
+    },
     setJoinCode(code) {
       T.code.value = String(code || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
       if (T.code.value) {

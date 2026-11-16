@@ -187,7 +187,10 @@
 }
 .br-counts {
   display: flex;
+  flex-wrap: wrap;
   gap: calc(var(--u) * 8);
+  /* keeps clear of the compass: a third chip (TEAMS) wraps onto a second row */
+  max-width: calc(var(--u) * 340);
 }
 .br-chip {
   display: flex;
@@ -1656,62 +1659,166 @@
 }
 .br-fullmap-frame {
   display: flex;
-  flex-direction: column;
-  /* hug the map canvas: a tall map must not leave an empty strip beside it */
-  width: min-content;
-  gap: calc(var(--u) * 8);
-  padding: calc(var(--u) * 10) calc(var(--u) * 12);
+  align-items: stretch;
+  gap: calc(var(--u) * 14);
+  max-width: calc(100vw - 24px);
+  padding: calc(var(--u) * 10);
   border: calc(var(--u) * 4) solid var(--br-ink);
-  border-radius: calc(var(--u) * 24);
-  background: var(--br-cream);
+  border-radius: calc(var(--u) * 22);
+  background: var(--br-ink-2);
   box-shadow: 0 calc(var(--u) * 8) 0 rgba(13, 9, 40, 0.6);
-  transform: scale(0.93);
+  transform: scale(0.96);
   transition: transform 0.24s var(--br-spring);
 }
 .br-fullmap.is-on .br-fullmap-frame {
   transform: scale(1);
 }
-.br-fullmap-title {
-  display: flex;
-  align-items: center;
-  gap: calc(var(--u) * 8);
-  height: calc(var(--u) * 28);
-  font-family: var(--br-display);
-  font-weight: 400;
-  font-size: calc(var(--u) * 22);
-  letter-spacing: 0.04em;
-}
-.br-fullmap-title .br-ico {
-  width: calc(var(--u) * 28);
-}
 .br-fullmap-canvas {
-  /* --br-map-aspect = map width / height, set by hud.setFullMapAspect() from meta.bounds */
+  /* --br-map-aspect = map width / height, set by hud.setFullMapAspect() from meta.bounds.
+     As big as the screen allows next to the side panel. */
   display: block;
-  width: min(100vw - var(--u) * 64, (100vh - var(--u) * 132) * var(--br-map-aspect, 1));
+  flex: none;
+  width: min(100vw - var(--u) * 330 - 40px, (100vh - var(--u) * 36 - 16px) * var(--br-map-aspect, 1));
   height: auto;
   aspect-ratio: var(--br-map-aspect, 1);
   border: calc(var(--u) * 3) solid var(--br-ink);
   border-radius: calc(var(--u) * 14);
   background: #24345c;
 }
-.br-fullmap-hint {
+.br-fullmap-side {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: calc(var(--u) * 10);
+  width: calc(var(--u) * 290);
+  min-width: 0;
+  color: var(--br-cream);
+}
+.br-fullmap-title {
+  display: flex;
   align-items: center;
-  gap: calc(var(--u) * 4) calc(var(--u) * 7);
-  min-height: calc(var(--u) * 26);
-  white-space: nowrap;
-  color: var(--br-ink);
+  gap: calc(var(--u) * 8);
+  font-family: var(--br-display);
+  font-weight: 400;
+  font-size: calc(var(--u) * 30);
+  letter-spacing: 0.03em;
+  color: var(--br-sun);
+  line-height: 1;
+}
+.br-fullmap-title .br-ico {
+  width: calc(var(--u) * 30);
+  flex: none;
+}
+.br-fullmap-sub {
+  margin-top: calc(var(--u) * -6);
   font-size: calc(var(--u) * 12);
   font-weight: 900;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.24em;
+  opacity: 0.75;
 }
-.br-fullmap-hint span {
-  margin-left: auto;
-  padding-left: calc(var(--u) * 10);
+.br-mapstats {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 4);
+  padding: calc(var(--u) * 8);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: calc(var(--u) * 14);
+  background: rgba(13, 9, 40, 0.55);
+}
+.br-mapstats-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) calc(var(--u) * 42) calc(var(--u) * 34) calc(var(--u) * 46);
+  align-items: center;
+  gap: calc(var(--u) * 4);
+  padding: calc(var(--u) * 5) calc(var(--u) * 6);
+  border-radius: calc(var(--u) * 8);
+  font-size: calc(var(--u) * 13);
+  font-weight: 800;
+}
+.br-mapstats-row b {
+  font-family: var(--br-display);
+  font-weight: 400;
+  font-size: calc(var(--u) * 17);
+  text-align: right;
+}
+.br-mapstats-head {
+  font-size: calc(var(--u) * 10);
+  letter-spacing: 0.12em;
+  opacity: 0.7;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.br-mapstats-head span:not(:first-child) {
+  text-align: right;
+}
+.br-mapstats-row.is-you {
+  background: rgba(255, 194, 31, 0.16);
+}
+.br-mapstats-row[data-state='out'] {
+  opacity: 0.5;
+}
+.br-mapstats-row[data-state='down'] .br-mapstats-name {
+  color: #ff9a8c;
+}
+.br-mapstats-name {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 6);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.br-mapstats-name i {
+  flex: none;
+  width: calc(var(--u) * 10);
+  height: calc(var(--u) * 10);
+  border-radius: 50%;
+  border: calc(var(--u) * 2) solid var(--br-ink);
+}
+.br-mapstats-total {
+  border-top: calc(var(--u) * 2) solid rgba(255, 246, 220, 0.2);
+  border-radius: 0;
+  color: var(--br-sun);
+}
+.br-fullmap-keys {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: calc(var(--u) * 12.5);
+  font-weight: 800;
+}
+.br-fullmap-keys li {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 8);
+}
+.br-fullmap-keys .br-key {
+  min-width: calc(var(--u) * 38);
+  text-align: center;
+}
+.br-fullmap-credit {
+  margin-top: auto;
+  font-size: calc(var(--u) * 10.5);
   font-weight: 700;
-  letter-spacing: 0;
-  opacity: 0.8;
+  opacity: 0.6;
+}
+@media (max-aspect-ratio: 1/1) {
+  .br-fullmap-frame {
+    flex-direction: column;
+  }
+  .br-fullmap-canvas {
+    width: min(100vw - var(--u) * 48 - 24px, (100vh - var(--u) * 260) * var(--br-map-aspect, 1));
+  }
+  .br-fullmap-side {
+    width: auto;
+  }
+  .br-fullmap-keys {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
 }
 /* ---- sniper scope: black mask with a round lens, first-person view behind it ---------- */
 .br-scope {
@@ -2098,4 +2205,32 @@
   .br-hud.is-outside .br-vig-storm {
     opacity: 0.85;
   }
+}
+
+/* team eliminations, tucked into the ELIMS chip (team modes) */
+.br-chip-team {
+  display: inline-flex;
+  align-items: baseline;
+  gap: calc(var(--u) * 4);
+  margin-left: calc(var(--u) * 4);
+  padding-left: calc(var(--u) * 8);
+  border-left: calc(var(--u) * 2) solid rgba(255, 246, 220, 0.25);
+  font-style: normal;
+  font-size: calc(var(--u) * 10);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  opacity: 0.9;
+}
+.br-chip-team[hidden] {
+  display: none;
+}
+.br-chip .br-chip-team b {
+  min-width: 0;
+  font-size: calc(var(--u) * 18);
+  letter-spacing: 0;
+  color: var(--br-sky-hi);
+}
+/* world pings sit under the open full map */
+.has-fullmap .br-pings {
+  visibility: hidden;
 }

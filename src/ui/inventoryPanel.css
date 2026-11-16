@@ -360,3 +360,97 @@
     transition: none !important;
   }
 }
+
+/* drag out of the frame = drop on the ground */
+.br-inv-res.is-draggable {
+  cursor: grab;
+  touch-action: none;
+}
+.br-inv-res.is-draggable.is-zero {
+  cursor: default;
+}
+.br-inv-res.is-lifted {
+  opacity: 0.35;
+}
+.br-inv-ghost.is-res {
+  width: calc(var(--u) * 56);
+  height: calc(var(--u) * 56);
+  background: #fff;
+}
+.br-inv.is-dropping .br-inv-ghost {
+  outline: calc(var(--u) * 3) dashed #ff5a4e;
+  outline-offset: calc(var(--u) * 4);
+}
+.br-inv.is-dropping .br-inv-ghost::after {
+  content: 'DROP';
+  position: absolute;
+  bottom: calc(var(--u) * -26);
+  font-weight: 900;
+  font-size: calc(var(--u) * 13);
+  letter-spacing: 0.1em;
+  color: #fff;
+  text-shadow: 0 calc(var(--u) * 2) 0 var(--br-ink);
+}
+
+/* split popover: right-click a stack to drop part of it */
+.br-inv-frame {
+  position: relative;
+}
+.br-inv-split {
+  position: absolute;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: calc(var(--u) * 8);
+  width: calc(var(--u) * 250);
+  padding: calc(var(--u) * 10) calc(var(--u) * 12);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 14);
+  background: #fff;
+  box-shadow: 0 calc(var(--u) * 6) 0 rgba(13, 9, 40, 0.5);
+  transform: translate(-50%, calc(-100% - var(--u) * 8));
+}
+.br-inv-split[hidden] {
+  display: none;
+}
+.br-inv-split-title {
+  grid-column: 1 / -1;
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 16);
+}
+.br-inv-split-range {
+  width: 100%;
+  accent-color: var(--br-sun);
+}
+.br-inv-split-num {
+  min-width: calc(var(--u) * 40);
+  text-align: right;
+  font-family: var(--br-display);
+  font-weight: 400;
+  font-size: calc(var(--u) * 20);
+}
+.br-inv-split-row {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: calc(var(--u) * 6);
+}
+.br-inv-split-btn {
+  flex: 1 1 auto;
+  min-height: calc(var(--u) * 32);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: calc(var(--u) * 10);
+  background: var(--br-cream);
+  color: var(--br-ink);
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 14);
+  cursor: pointer;
+}
+.br-inv-split-btn.is-go {
+  flex-grow: 2;
+  background: var(--br-sun);
+}
+.br-inv-split-btn:focus-visible {
+  outline: calc(var(--u) * 3) solid var(--br-sky);
+  outline-offset: calc(var(--u) * 2);
+}

@@ -15,8 +15,9 @@
 import * as THREE from 'three';
 import { WEAPONS, PLAYER, QUALITY, TAU, weaponStats } from '../core/config.js';
 import { Character } from '../game/Character.js';
+import { SKINS, EMOTES } from '../game/Cosmetics.js';
 import { itemLabel } from '../game/Player.js';
-import { impactSound } from '../game/Combat.js';
+import { impactSound, placeOnShoulder } from '../game/Combat.js';
 import {
   STATE_HZ, INTERP_DELAY, FLAG, XFLAG, EQUIP, SURF, decodeSnapshot, encodeState, seqNewer, rnd,
 } from './protocol.js';
@@ -94,7 +95,7 @@ export class Puppet {
       if (eq !== this.equip) c.setEquipped(eq, WEAPONS[eq] ? WEAPONS[eq].twoHanded !== false : true);
       if (r.flags & FLAG.reloading && !(was & FLAG.reloading) && WEAPONS[eq]) c.reload(weaponStats(eq).reload); // rarity is not replicated; lowest-rarity time
       const em = !!(r.flags & FLAG.emote);
-      if (em !== !!(was & FLAG.emote)) c.emote(em);
+      if (em !== !!(was & FLAG.emote)) c.emote(em, this.emoteId);
     }
     this.equip = eq;
     if (this.alive && !(r.flags & FLAG.alive)) this.kill();
@@ -182,16 +183,19 @@ export class ClientSession {
         continue;
       }
       const kit = kits[info.k] || kits.player;
-      const ch = kit ? new Character(kit, { weapons: game.weaponScenes, canopyColor: info.c }) : null;
+      const ch = info.sk && SKINS[info.sk] && game.makeSkinCharacter ? game.makeSkinCharacter(info.sk, info.c) : kit ? new Character(kit, { weapons: game.weaponScenes, canopyColor: info.c }) : null;
       if (ch) {
         ch.root.visible = false;
         game.scene.add(ch.root);
       }
       const pup = new Puppet(info, ch);
+      if (info.sk) pup.skin = info.sk;
       this.puppets.set(info.id, pup);
       game.combat.register(pup);
     }
     this.aliveCount = start.roster.length;
+    // tell the host (and through it everyone) which outfit we wear
+    if (game.skin && SKINS[game.skin]) this.action({ k: 'sk', id: game.skin });
     // Follow-up rounds of a burst gun are scheduled by Combat; forward each one like a trigger pull.
     game.combat.onBurstShot = (s, it, o, dirs, res) => {
       if (s === game.player) this.sendFire(s, it, o, dirs, res);
@@ -364,6 +368,60 @@ export class ClientSession {
         return this._elim(e);
       case 'kn':
         return this._knock(e);
+      case 'sp':
+        if (e.a === this.id && g.showSiphon) g.showSiphon(e.h, e.s);
+        return;
+      case 'pg': {
+        if (e.a === this.id) return;
+        const a = this.actorById(e.a);
+        if (a && g.netPing) g.netPing(a, e);
+        return;
+      }
+      case 'as':
+        if (e.a === this.id && g.showAssist) {
+          const v = this.actorById(e.v);
+          g.showAssist(v ? v.name : '');
+        }
+        return;
+      case 'ts':
+        // kills / assists / damage dealt (team breakdown on the full map)
+        for (const [id, k, as, d] of e.s || []) {
+          const a = this.actorById(id);
+          if (!a) continue;
+          a.kills = k;
+          a.assists = as;
+          a.damageDealt = d;
+        }
+        return;
+      case 'sk': {
+        if (e.a === this.id || !SKINS[e.id]) return;
+        const pup = this.puppets.get(e.a);
+        if (pup && g.reskinActor) g.reskinActor(pup, e.id);
+        return;
+      }
+      case 'em': {
+        if (e.a === this.id) return;
+        const pup = this.puppets.get(e.a);
+        if (!pup) return;
+        pup.emoteId = EMOTES[e.id] ? e.id : null;
+        if (pup.character && pup.character.mode === 'emote') pup.character.emote(true, pup.emoteId);
+        return;
+      }
+      case 'cy': {
+        // a teammate picked someone up (v) or put them down (-1)
+        const c = this.actorById(e.c);
+        if (!c) return;
+        const was = c.carrying;
+        if (was && was.carriedBy === c) was.carriedBy = null;
+        c.carrying = null;
+        const v = e.v >= 0 ? this.actorById(e.v) : null;
+        if (v) {
+          c.carrying = v;
+          v.carriedBy = c;
+          if (v === g.player) g.hud.toast(`${c.name} picked you up`, 'pickup');
+        }
+        return;
+      }
       case 'rv': {
         const v = this.actorById(e.v);
         const by = e.by >= 0 ? this.actorById(e.by) : null;
@@ -665,6 +723,8 @@ export class ClientSession {
         pup.heading = lerpAngle(r0.heading, rb.heading, k);
       }
       pup.pitch = r0.pitch + (rb.pitch - r0.pitch) * k;
+      // the teammate we carry rides on our (unlagged) shoulder
+      if (pup.carriedBy === g.player && pup.alive && pup.downed) placeOnShoulder(pup, g.player);
       pup.present(dt, viewer, cd2);
     }
   }

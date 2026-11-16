@@ -7,6 +7,8 @@ import { sfx } from './audio/Sfx.js';
 import { createGoogleTilesController, hasGoogleTilesKey } from './render/GoogleTiles.js';
 import { inject as injectAnalytics } from '@vercel/analytics';
 import { teamSize, normalizeMode } from './game/Teams.js';
+import { createAccount } from './net/Account.js';
+import { createMeta } from './ui/meta.js';
 
 // Vercel Web Analytics: anonymous page views / visitors (no cookies). Only reports from the Vercel deployment.
 try {
@@ -376,7 +378,16 @@ function partyView() {
 
 function renderParty() {
   menus.setParty(partyView());
+  if (meta) meta.refresh();
+  // friends see which party we are in (and that we are back in the lobby)
+  if (account && (!game || game.state === 'menu')) account.setStatus('lobby', party && party.party ? party.party.code : null);
 }
+
+// ---------------------------------------------------------------- account, shop, locker, friends
+// Signed in: profile on the account server (party/accounts.js). Otherwise a guest profile in
+// localStorage. Equipped outfit / emotes go to the Game and to the party line-up.
+const account = createAccount();
+let meta = null;
 
 async function joinParty(code = null) {
   const gen = ++partyGen;
@@ -387,7 +398,7 @@ async function joinParty(code = null) {
   renderParty();
   try {
     partyMod = partyMod || (await import('./net/Party.js'));
-    const p = await partyMod.openParty({ name: menus.playerName(), code, mode: lastLocal.mode, fill: lastLocal.fill });
+    const p = await partyMod.openParty({ name: menus.playerName(), code, mode: lastLocal.mode, fill: lastLocal.fill, skin: account.profile.equipped.skin });
     if (gen !== partyGen) return p.leave();
     partyConnecting = false;
     party = p;
@@ -535,6 +546,42 @@ async function playLocal(mode = 'solo', fill = true) {
 
 try {
   game = new Game({ canvas, uiRoot, menus, settings });
+  game.setCosmetics({ skin: account.profile.equipped.skin, emotes: account.profile.equipped.emotes });
+  meta = createMeta(menus, account, {
+    onClick: () => sfx.play('ui_click'),
+    partyCode: () => (party && party.party ? party.party.code : null),
+    partyMembers: () => (party && party.party ? party.party.members.map((m) => ({ name: m.name, skin: m.skin, you: m.id === party.you })) : []),
+    onJoinParty: (code) => {
+      if (game.state !== 'menu') return;
+      joinParty(code);
+    },
+    onCosmetics: (c) => {
+      game.setCosmetics(c);
+      if (party && party.setSkin) party.setSkin(c.skin);
+    },
+    onName: (name) => {
+      menus.setAccountName(name);
+      if (party) party.setName(name);
+    },
+  });
+  account.on('change', (p) => {
+    if (p.guest) menus.setAccountName(null);
+  });
+  menus.onScreen = (s) => {
+    meta.setActive(s === 'title');
+    const code = party && party.party ? party.party.code : null;
+    if (s === 'title') account.setStatus('lobby', code);
+    else if (s === null) account.setStatus('match', code); // the HUD took over: in a match
+  };
+  account.init().then((p) => {
+    if (!p.guest) menus.setAccountName(p.name);
+  });
+  // coins for every finished match
+  game.onMatchEnd = async (r) => {
+    const players = r.mode && r.mode !== 'solo' ? r.teams : r.total;
+    const earned = await account.reward({ kills: r.kills | 0, placement: r.placement | 0, players: players | 0, won: !!r.victory });
+    if (earned > 0 && meta) meta.matchReward(earned);
+  };
   menus.showTitle();
   // share links look like ?room=ABCD: prefill the private-match join code
   const roomParam = new URLSearchParams(location.search).get('room');

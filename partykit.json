@@ -4,7 +4,8 @@
   "main": "party/server.js",
   "parties": {
     "party": "party/partyRoom.js",
-    "matchmaker": "party/matchmaker.js"
+    "matchmaker": "party/matchmaker.js",
+    "accounts": "party/accounts.js"
   },
   "compatibilityDate": "2024-09-01"
 }
