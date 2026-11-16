@@ -119,4 +119,3 @@ export default async function (page, h) {
   await h.sleep(500);
   await h.shot('stairs');
 }
-
