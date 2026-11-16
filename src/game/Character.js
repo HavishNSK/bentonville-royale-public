@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { damp, clamp, WEAPONS } from '../core/config.js';
 import { toToon } from '../render/Toon.js';
+import { emoteClips, emoteDef } from './Cosmetics.js';
 
 // Characters and their weapons are cel-shaded; colours get a small saturation lift.
 const TOON_CHAR = { saturate: 1.2 };
@@ -51,7 +52,27 @@ export class CharacterKit {
       const c = byName.get(FULL_CLIP[k]);
       if (c) this.full[k] = c;
     }
+    // every emote clip (Cosmetics.EMOTES), keyed 'e:<clip>'
+    for (const name of emoteClips()) {
+      const c = byName.get(name);
+      if (c) this.full['e:' + name] = c;
+    }
   }
+}
+
+// tinted outfits: one toon material per (shared source material, tint)
+const _tinted = new WeakMap();
+function tinted(mat, tint) {
+  if (Array.isArray(mat)) return mat.map((m) => tinted(m, tint));
+  let byTint = _tinted.get(mat);
+  if (!byTint) _tinted.set(mat, (byTint = new Map()));
+  let m = byTint.get(tint);
+  if (!m) {
+    m = mat.clone();
+    m.color.multiply(new THREE.Color(tint));
+    byTint.set(tint, m);
+  }
+  return m;
 }
 
 const _v = new THREE.Vector3();
@@ -60,8 +81,9 @@ const _q = new THREE.Quaternion();
 export class Character {
   /**
    * @param {CharacterKit} kit
-   * @param {{ weapons: Object<string, THREE.Object3D>, canopyColor?: number }} opts
+   * @param {{ weapons: Object<string, THREE.Object3D>, canopyColor?: number, tint?: number }} opts
    *        weapons: source scenes keyed by weapon id (+ 'pickaxe'); cloned here.
+   *        tint: outfit colour multiplied into the body texture (Cosmetics.SKINS).
    */
   constructor(kit, opts = {}) {
     this.kit = kit;
@@ -76,6 +98,7 @@ export class Character {
       if (o.isMesh) {
         o.castShadow = true;
         o.material = toToon(o.material, TOON_CHAR); // cached per source: all clones share it
+        if (opts.tint != null) o.material = tinted(o.material, opts.tint);
         o.frustumCulled = false; // skinned bounds are unreliable; the Group is culled by distance instead
         if (kit.hide.has(o.name)) o.visible = false;
       }
@@ -253,26 +276,68 @@ export class Character {
     this.downRing.visible = false;
   }
 
-  emote(on) {
+  /**
+   * Starts (on) or stops an emote. id: a Cosmetics.EMOTES id (default: the cheer). A new id
+   * while already emoting switches to it.
+   */
+  emote(on, id = null) {
     if (this.mode === 'dead') return;
-    const a = this.fullActions.emote;
-    if (!a) return;
-    if (on && this.mode !== 'emote') {
-      this.mode = 'emote';
-      a.reset();
-      a.setLoop(THREE.LoopRepeat, Infinity);
-      a.setEffectiveWeight(1);
-      a.play();
-    } else if (!on && this.mode === 'emote') {
+    if (!on) {
+      if (this.mode !== 'emote') return;
       this.mode = 'alive';
-      a.setEffectiveWeight(0);
-      a.stop();
+      for (const a of [this._emA, this._emHold]) {
+        if (!a) continue;
+        a.setEffectiveWeight(0);
+        a.stop();
+      }
+      this._emA = this._emHold = null;
+      for (const k in this.guns) this.guns[k].visible = !this.downed && k === this.gunKey;
+      if (this.pickaxe) this.pickaxe.visible = !this.downed && this.equipped === 'pickaxe';
+      return;
     }
+    const def = emoteDef(id);
+    const a = (def && this.fullActions['e:' + def.clip]) || this.fullActions.emote;
+    if (!a) return;
+    if (this.mode === 'emote' && this._emA === a) return;
+    if (this.mode === 'emote') this.emote(false);
+    this.mode = 'emote';
+    this.emoteId = id;
+    const hold = def && def.hold ? this.fullActions['e:' + def.hold] : null;
+    a.reset();
+    if (hold) {
+      a.setLoop(THREE.LoopOnce, 1);
+      a.clampWhenFinished = true;
+    } else a.setLoop(THREE.LoopRepeat, Infinity);
+    a.setEffectiveWeight(1);
+    a.play();
+    this._emA = a;
+    this._emHold = hold;
+    this._emHoldOn = false;
+    // hands free while dancing
+    for (const k in this.guns) this.guns[k].visible = false;
+    if (this.pickaxe) this.pickaxe.visible = false;
+  }
+
+  /** Two-part emotes (sit down -> sitting): switch to the loop once the intro has played. */
+  _emoteTick() {
+    if (this.mode !== 'emote' || !this._emHold || this._emHoldOn) return;
+    const a = this._emA;
+    if (a.time < a.getClip().duration - 0.02) return;
+    this._emHoldOn = true;
+    a.setEffectiveWeight(0);
+    a.stop();
+    const h = this._emHold;
+    h.reset();
+    h.setLoop(THREE.LoopRepeat, Infinity);
+    h.setEffectiveWeight(1);
+    h.play();
+    this._emA = h;
   }
 
   /** Back to a fresh, standing state (match restart). */
   reset() {
     this.mode = 'alive';
+    this._emA = this._emHold = null;
     for (const k in this.fullActions) {
       this.fullActions[k].stop();
       this.fullActions[k].setEffectiveWeight(0);
@@ -297,6 +362,7 @@ export class Character {
    *        fwd/side: movement relative to facing, -1..1 (side > 0 = moving to the character's right)
    */
   update(dt, s) {
+    this._emoteTick();
     this.heading = s.heading;
     this.pitch = s.pitch || 0;
     this.root.rotation.y = Math.PI - s.heading;

@@ -308,6 +308,13 @@ export const MATCH = {
 // crawls at crawlSpeed x run speed, can't shoot / build / loot, and bleeds downHp at `bleed`
 // per second; a teammate holding interact within reviveRange for reviveTime brings it back up
 // with reviveHp health. Solo never knocks (see src/game/Teams.js).
+// Siphon: every elimination heals the killer by this much, health first (up to max), the
+// rest as shield. 60 HP + 50 -> 100 HP and 10 shield.
+export const SIPHON = 50;
+
+// Assists: damage you dealt to someone who was then eliminated by another player.
+export const ASSIST_DAMAGE = 50;
+
 export const KNOCK = {
   downHp: 100,
   bleed: 2.5, // down HP per second (40 s to bleed out)
@@ -321,10 +328,14 @@ export const KNOCK = {
 // Bot building: buildChance = odds a build roll in a fight succeeds; buildPieces = most
 // pieces in one response (1 wall / 2 wall+ramp / 3+ ramp rush / 5 box: 4 walls + cone);
 // buildCooldown = seconds between responses; buildRate = seconds between pieces in one.
+// Game sense (competitive habits): wallOnHit = odds of throwing a wall (or a box when low)
+// at whoever just shot them; boxHeal = odds of boxing up before healing after a fight;
+// pushWeak = odds of pushing a target whose shield is cracked / that is healing;
+// thirdParty = odds of moving in on gunfire they hear; rotateEarly = extra slack on rotations.
 export const DIFFICULTY = {
-  easy: { aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.15, buildPieces: 1, buildCooldown: 10, buildRate: 0.6, sight: 80, damageScale: 0.6 },
-  normal: { aimError: 0.05, reaction: 0.55, burst: 0.7, buildChance: 0.4, buildPieces: 2, buildCooldown: 6, buildRate: 0.35, sight: 100, damageScale: 0.8 },
-  hard: { aimError: 0.028, reaction: 0.3, burst: 0.85, buildChance: 0.75, buildPieces: 5, buildCooldown: 2.5, buildRate: 0.15, sight: 125, damageScale: 1 },
+  easy: { aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.15, buildPieces: 1, buildCooldown: 10, buildRate: 0.6, sight: 80, damageScale: 0.6, wallOnHit: 0, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0 },
+  normal: { aimError: 0.05, reaction: 0.55, burst: 0.7, buildChance: 0.4, buildPieces: 3, buildCooldown: 5, buildRate: 0.3, sight: 100, damageScale: 0.8, wallOnHit: 0.4, boxHeal: 0.35, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.3 },
+  hard: { aimError: 0.028, reaction: 0.3, burst: 0.85, buildChance: 0.8, buildPieces: 8, buildCooldown: 2, buildRate: 0.12, sight: 125, damageScale: 1, wallOnHit: 0.9, boxHeal: 0.9, pushWeak: 0.9, thirdParty: 0.6, rotateEarly: 0.8 },
 };
 
 // outline / bloom: post passes (render/Post.js); both off = plain render (cheapest).

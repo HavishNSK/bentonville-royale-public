@@ -32,6 +32,10 @@ const CELL = 32;
 const STEP = 0.62;
 // A wedge piece (ramp / cone) appearing around an actor lifts it at most this far.
 const WEDGE_LIFT = 3.2;
+// Ramps are thin planks (piece.slab): this thick under their walkable surface.
+const SLAB = 0.3;
+// A slab piece younger than this (s) still lifts an actor it was built around onto it.
+const SLAB_LIFT_AGE = 0.6;
 const WALL_HALF = 0.14;
 // Pieces whose base is below this count as 'at ground level' for blockedAt / randomOpenPoint.
 const PIECE_GROUND_BAND = 2.5;
@@ -1427,6 +1431,7 @@ export class World {
       // height) lifts them onto its surface even past the step height
       const around =
         d.wedge && feetY >= d.y0 - 0.3 && sy - feetY <= WEDGE_LIFT &&
+        (!d.slab || (d.age || 0) < SLAB_LIFT_AGE) && // walking under an old ramp never lifts you onto it
         x > d.minX + 0.01 && x < d.maxX - 0.01 && z > d.minZ + 0.01 && z < d.maxZ - 0.01;
       if (sy > y && (sy <= lim || around)) {
         y = sy;
@@ -1474,7 +1479,8 @@ export class World {
       if (!d.surf || x < d.minX || x > d.maxX || z < d.minZ || z > d.maxZ) continue;
       // under a ramp / cone (feet below its base): it is solid from its base up, so the base
       // is the ceiling — jumping up into one bonks instead of phasing in and popping on top
-      const sy = d.wedge && feetY < d.y0 - 0.3 ? d.y0 : d.surf(x, z);
+      // a ramp is a plank: its underside is the ceiling (you can stand under its high end)
+      const sy = d.slab ? d.surf(x, z) - SLAB : d.wedge && feetY < d.y0 - 0.3 ? d.y0 : d.surf(x, z);
       if (sy > lim && sy < y) y = sy;
     }
     return y;
@@ -1593,12 +1599,28 @@ export class World {
               const qz = z < c.minZ ? c.minZ : z > c.maxZ ? c.maxZ : z;
               const sy = c.surf(qx, qz);
               if (feet >= sy - step) continue;
+              // a ramp plank high enough above the head: walk right under it
+              if (c.slab && head <= sy - SLAB) continue;
               const ddx = x - qx;
               const ddz = z - qz;
               const d2 = ddx * ddx + ddz * ddz;
               let nx;
               let nz;
               let push;
+              if (d2 <= 1e-10 && c.slab && c.rise && (c.age || 0) >= SLAB_LIFT_AGE) {
+                // under the ramp, walking toward its low end: the plank meets the head. Back
+                // off uphill (where it is higher) until the head clears it.
+                const slope = (c.y1 - c.y0) / Math.max(1e-3, c.maxX - c.minX);
+                push = Math.min(0.6, (head - (sy - SLAB)) / Math.max(0.2, slope));
+                nx = c.rise[0];
+                nz = c.rise[1];
+                pos.x += nx * push;
+                pos.z += nz * push;
+                this.pushX += nx;
+                this.pushZ += nz;
+                moved = touched = true;
+                continue;
+              }
               if (d2 > 1e-10) {
                 if (d2 >= r * r) continue;
                 const d = Math.sqrt(d2);

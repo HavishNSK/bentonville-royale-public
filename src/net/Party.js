@@ -4,7 +4,7 @@
 // Uses the same relay host as Net.js (?party= / VITE_PARTYKIT_HOST / localhost:1999).
 // Party invite links use ?p=CODE (?party= is already the relay host override).
 //
-//   const p = await openParty({ name, code?, mode?, fill? })  // code: join that party; none: make one
+//   const p = await openParty({ name, code?, mode?, fill?, skin? })  // code: join that party; none: make one
 //   p.code, p.token, p.you, p.party = { code, leaderId, mode, fill, state, queuedFor, members:[{id,name,ready,leader}] }
 //   p.isLeader, p.me
 //   p.onState(party), p.onMatch({ code, hostToken, teams:[{tokens, allowBots}], mode }), p.onNotice(text, isError)
@@ -63,16 +63,16 @@ export function inviteFromUrl() {
   }
 }
 
-export function openParty({ name, code = null, mode = 'solo', fill = true }) {
+export function openParty({ name, code = null, mode = 'solo', fill = true, skin = '' }) {
   const token = partyToken();
   if (code) {
     const c = normalizeCode(code);
     if (!validCode(c)) return Promise.reject(new Error(PARTY_MSG.badCode));
-    return connectOnce(c, { name: cleanName(name), token }, false);
+    return connectOnce(c, { name: cleanName(name), token, skin: skin || '' }, false);
   }
   let tries = 0;
   const attempt = () =>
-    connectOnce(randomCode(), { name: cleanName(name), token, create: '1', mode, fill: fill ? '1' : '0' }, true).catch((err) => {
+    connectOnce(randomCode(), { name: cleanName(name), token, skin: skin || '', create: '1', mode, fill: fill ? '1' : '0' }, true).catch((err) => {
       if (err.reason === 'taken' && tries++ < 5) return attempt();
       throw err;
     });
@@ -181,6 +181,10 @@ class PartyConn {
   ready(on) {
     return this._send({ t: 'ready', on: !!on });
   }
+  setSkin(skin) {
+    return this._send({ t: 'skin', skin: String(skin || '') });
+  }
+
   setName(name) {
     return this._send({ t: 'name', name: cleanName(name) });
   }

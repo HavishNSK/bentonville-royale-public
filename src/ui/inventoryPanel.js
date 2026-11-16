@@ -8,7 +8,9 @@
 //   panel.setKeyLabels((action) => 'TAB');
 //   panel.hovered()                           // slot index under the cursor, or -1
 //
-// Five big cards mirror the hotbar. Drag a card onto another one to swap them
+// Five big cards mirror the hotbar. Drag a card onto another one to swap them, or
+// drag a card / an ammo or material row out of the panel to drop it on the ground;
+// right-click an ammo / material row (or a stack of heals) to split off how many to drop
 // (pointer events, so mouse / pen / touch all work); a plain click equips that
 // slot. Ammo reserves and building materials are listed underneath. The panel
 // never mutates the inventory itself: Game.swapSlots() decides (and syncs it
@@ -33,7 +35,8 @@ function h(tag, cls, text) {
 
 /**
  * @param {HTMLElement} hudEl the .br-hud root (the panel mounts inside it)
- * @param {{ onSwap?: (a:number, b:number, expect?: Array) => void, onSelect?: (i:number) => void }} [opts]
+ * @param {{ onSwap?: (a:number, b:number, expect?: Array) => void, onSelect?: (i:number) => void,
+ *           onDrop?: (what: {s?:number, ammo?:string, mat?:string}, expect?: object|null) => void }} [opts]
  *   onSwap's `expect` is [item at a, item at b] as shown when the drag started (raw slot
  *   objects); the caller refuses the swap if the inventory changed under the drag.
  */
@@ -101,7 +104,7 @@ export function createInventoryPanel(hudEl, opts = {}) {
   lower.append(ammoBox, matBox);
 
   const hint = h('div', 'br-inv-hint');
-  const hintText = h('span', null, 'DRAG TO REORDER · CLICK TO EQUIP · ');
+  const hintText = h('span', null, 'DRAG TO REORDER · DRAG OUT TO DROP · RIGHT-CLICK TO SPLIT · ');
   const closeKey = h('kbd', 'br-key', 'TAB');
   const closeText = h('span', null, 'CLOSE');
   hint.append(hintText, closeKey, closeText);
@@ -131,16 +134,33 @@ export function createInventoryPanel(hudEl, opts = {}) {
   function placeGhost(x, y) {
     if (drag && drag.ghost) drag.ghost.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px) translate(-50%, -50%) rotate(-4deg)`;
   }
+  // outside the frame = drop on the ground
+  const outside = (x, y) => {
+    const r = frame.getBoundingClientRect();
+    return x < r.left || x > r.right || y < r.top || y > r.bottom;
+  };
+  function setOut(on) {
+    if (!drag || drag.out === on) return;
+    drag.out = on;
+    root.classList.toggle('is-dropping', on);
+  }
   function endDrag(commit) {
     if (!drag) return;
     const d = drag;
     drag = null;
     if (d.ghost) d.ghost.remove();
-    cards[d.from].el.classList.remove('is-lifted');
+    if (d.res) d.res.el.classList.remove('is-lifted');
+    else cards[d.from].el.classList.remove('is-lifted');
     if (d.target >= 0) cards[d.target].el.classList.remove('is-target');
-    root.classList.remove('is-dragging');
+    root.classList.remove('is-dragging', 'is-dropping');
     if (!commit) return;
-    if (d.moved) {
+    if (d.res) {
+      if (d.moved && d.out && opts.onDrop) opts.onDrop(d.res.what, null);
+      return;
+    }
+    if (d.moved && d.out) {
+      if (opts.onDrop) opts.onDrop({ s: d.from }, d.items[d.from]);
+    } else if (d.moved) {
       if (d.target >= 0 && d.target !== d.from && opts.onSwap) opts.onSwap(d.from, d.target, [d.items[d.from], d.items[d.target]]);
     } else if (opts.onSelect) opts.onSelect(d.from);
   }
@@ -153,7 +173,7 @@ export function createInventoryPanel(hudEl, opts = {}) {
     c.el.addEventListener('pointerdown', (e) => {
       if (!open || drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
       e.preventDefault();
-      drag = { from: i, id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, ghost: null, target: -1, items: shown.slice() };
+      drag = { from: i, id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, ghost: null, target: -1, out: false, items: shown.slice() };
       try {
         c.el.setPointerCapture(e.pointerId);
       } catch (err) {
@@ -176,18 +196,149 @@ export function createInventoryPanel(hudEl, opts = {}) {
       }
       placeGhost(e.clientX, e.clientY);
       setTarget(cardAt(e.clientX, e.clientY));
+      setOut(outside(e.clientX, e.clientY));
     });
     c.el.addEventListener('pointerup', (e) => {
       if (!drag || drag.from !== i || e.pointerId !== drag.id) return;
-      if (drag.moved) setTarget(cardAt(e.clientX, e.clientY));
+      if (drag.moved) {
+        setTarget(cardAt(e.clientX, e.clientY));
+        setOut(outside(e.clientX, e.clientY));
+      }
       endDrag(true);
     });
     c.el.addEventListener('pointercancel', () => endDrag(false));
     c.el.addEventListener('lostpointercapture', () => {
-      if (drag && drag.from === i && drag.moved) endDrag(false);
+      if (drag && drag.from === i && !drag.res && drag.moved) endDrag(false);
     });
   });
   root.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // ---- split popover: drop part of a stack -----------------------------------------
+  const pop = h('div', 'br-inv-split');
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', 'Drop how many');
+  pop.hidden = true;
+  const popTitle = h('div', 'br-inv-split-title');
+  const popRange = h('input', 'br-inv-split-range');
+  popRange.type = 'range';
+  popRange.min = '1';
+  popRange.setAttribute('aria-label', 'Amount to drop');
+  const popNum = h('b', 'br-inv-split-num', '1');
+  const popRow = h('div', 'br-inv-split-row');
+  const mkBtn = (label, cls) => {
+    const b = h('button', 'br-inv-split-btn ' + (cls || ''), label);
+    b.type = 'button';
+    return b;
+  };
+  const bHalf = mkBtn('½');
+  const bAll = mkBtn('ALL');
+  const bDrop = mkBtn('DROP', 'is-go');
+  const bCancel = mkBtn('✕');
+  bCancel.setAttribute('aria-label', 'Cancel');
+  popRow.append(bHalf, bAll, bDrop, bCancel);
+  pop.append(popTitle, popRange, popNum, popRow);
+  frame.appendChild(pop);
+  let split = null; // { what, max, expect }
+  function openSplit(what, max, label, anchor, expect = null) {
+    if (!open || max < 1 || !opts.onDrop) return;
+    split = { what, max, expect };
+    popTitle.textContent = 'Drop ' + label;
+    popRange.max = String(max);
+    popRange.value = String(Math.max(1, Math.round(max / 2)));
+    popNum.textContent = popRange.value;
+    pop.hidden = false;
+    const fr = frame.getBoundingClientRect();
+    const ar = anchor.getBoundingClientRect();
+    pop.style.left = Math.round(ar.left - fr.left + ar.width / 2) + 'px';
+    pop.style.top = Math.round(ar.top - fr.top) + 'px';
+    popRange.focus();
+  }
+  function closeSplit() {
+    split = null;
+    pop.hidden = true;
+  }
+  popRange.addEventListener('input', () => (popNum.textContent = popRange.value));
+  bHalf.addEventListener('click', () => {
+    if (!split) return;
+    popRange.value = String(Math.max(1, Math.floor(split.max / 2)));
+    popNum.textContent = popRange.value;
+  });
+  bAll.addEventListener('click', () => {
+    if (!split) return;
+    popRange.value = String(split.max);
+    popNum.textContent = popRange.value;
+  });
+  bCancel.addEventListener('click', closeSplit);
+  bDrop.addEventListener('click', () => {
+    if (!split) return;
+    const n = Math.max(1, Math.min(split.max, popRange.value | 0));
+    opts.onDrop({ ...split.what, n }, split.expect);
+    closeSplit();
+  });
+  pop.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      closeSplit();
+    } else if (e.key === 'Enter') bDrop.click();
+  });
+  for (const k of AMMO_KINDS) {
+    ammoEls[k].el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openSplit({ ammo: k }, ammoEls[k].v | 0, AMMO[k].name, ammoEls[k].el);
+    });
+  }
+  for (const m of MATERIALS) {
+    matEls[m].el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openSplit({ mat: m }, matEls[m].v | 0, MAT_NAME[m] || m, matEls[m].el);
+    });
+  }
+  cards.forEach((c, i) => {
+    c.el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const it = shown[i];
+      if (it && it.type === 'consumable' && it.count > 1) openSplit({ s: i }, it.count, c.name.textContent, c.el, it);
+    });
+  });
+
+  // ammo / material rows: drag out of the panel to drop the whole stack
+  function bindRes(entry, what) {
+    const el = entry.el;
+    el.classList.add('is-draggable');
+    el.addEventListener('pointerdown', (e) => {
+      if (!open || drag || (e.pointerType === 'mouse' && e.button !== 0) || !entry.v) return;
+      e.preventDefault();
+      drag = { from: -1, res: { el, what }, id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, ghost: null, target: -1, out: false };
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch (err) {
+        /* synthetic events have no active pointer */
+      }
+    });
+    el.addEventListener('pointermove', (e) => {
+      if (!drag || !drag.res || drag.res.el !== el || e.pointerId !== drag.id) return;
+      if (!drag.moved) {
+        if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < DRAG_PX) return;
+        drag.moved = true;
+        const g = h('div', 'br-inv-ghost is-res');
+        g.innerHTML = el.querySelector('.br-inv-res-ico').innerHTML; // our own SVG markup
+        root.appendChild(g);
+        drag.ghost = g;
+        el.classList.add('is-lifted');
+        root.classList.add('is-dragging');
+      }
+      placeGhost(e.clientX, e.clientY);
+      setOut(outside(e.clientX, e.clientY));
+    });
+    el.addEventListener('pointerup', (e) => {
+      if (!drag || !drag.res || drag.res.el !== el || e.pointerId !== drag.id) return;
+      if (drag.moved) setOut(outside(e.clientX, e.clientY));
+      endDrag(true);
+    });
+    el.addEventListener('pointercancel', () => endDrag(false));
+  }
+  for (const k of AMMO_KINDS) bindRes(ammoEls[k], { ammo: k });
+  for (const m of MATERIALS) bindRes(matEls[m], { mat: m });
 
   // ---- per-frame state -----------------------------------------------------------
   /**
@@ -262,6 +413,7 @@ export function createInventoryPanel(hudEl, opts = {}) {
     open = v;
     if (!v) {
       endDrag(false);
+      closeSplit();
       hover = -1;
     }
     root.classList.toggle('is-on', v);

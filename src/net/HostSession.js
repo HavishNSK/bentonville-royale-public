@@ -27,6 +27,7 @@
 import * as THREE from 'three';
 import { PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, MATCH, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
 import { Character } from '../game/Character.js';
+import { SKINS, EMOTES } from '../game/Cosmetics.js';
 import {
   SNAP_HZ, FLAG, XFLAG, EQUIP, SURF, encodeSnapshot, decodeState, seqNewer, rnd,
 } from './protocol.js';
@@ -211,8 +212,8 @@ export class HostSession {
     this.time = 0;
     this.stats = { t0: 0, snapBytes: 0, snaps: 0, evBytes: 0, invBytes: 0, startBytes: 0 };
     this._invSent.clear();
-    const roster = [{ id: 0, n: game.player.name, k: 'player', c: HUMAN_CANOPY[0], h: 1, tm: game.player.team }];
-    for (const a of this.remotes.values()) roster.push({ id: a.id, n: a.name, k: 'player', c: HUMAN_CANOPY[a.id % HUMAN_CANOPY.length], h: 1, tm: a.team });
+    const roster = [{ id: 0, n: game.player.name, k: 'player', c: HUMAN_CANOPY[0], h: 1, tm: game.player.team, sk: game.skin }];
+    for (const a of this.remotes.values()) roster.push({ id: a.id, n: a.name, k: 'player', c: HUMAN_CANOPY[a.id % HUMAN_CANOPY.length], h: 1, tm: a.team, sk: a.skin || null });
     const idBase = game.bots.list.length ? game.bots.list[0].id : 0;
     for (const b of game.bots.list) {
       const i = b.id - idBase;
@@ -460,7 +461,7 @@ export class HostSession {
     const sh = Math.sin(a.heading);
     const ch = Math.cos(a.heading);
     c.setEquipped(a.equipId, WEAPONS[a.equipId] ? WEAPONS[a.equipId].twoHanded !== false : true);
-    c.emote(!!a.netEmote);
+    c.emote(!!a.netEmote, a.netEmoteId);
     c.update(dt, {
       fwd: hs > 0.1 ? (v.x * sh - v.z * ch) / hs : 0,
       side: hs > 0.1 ? (v.x * ch + v.z * sh) / hs : 0,
@@ -500,6 +501,16 @@ export class HostSession {
     else if (info.weapon === 'pickaxe') how = 'pickaxe';
     else if (info.headshot) how = 'headshot';
     this.events.push({ e: 'kn', v: victim.id, k: by ? by.id : -1, how });
+  }
+
+  onCarry(carrier, victim, dropped) {
+    if (!this.started) return;
+    this.events.push({ e: 'cy', c: carrier.id, v: victim ? victim.id : -1 });
+    // a remote human put down: their client must land where the host placed them
+    if (dropped && dropped.isRemote && dropped.alive) {
+      dropped.lastCorrect = this.time;
+      this.room.sendTo(dropped.id, { t: 'cor', x: dropped.pos.x, y: dropped.pos.y, z: dropped.pos.z });
+    }
   }
 
   onRevive(victim, by) {
@@ -581,6 +592,8 @@ export class HostSession {
     const route = this.game.busRoute;
     if (s.mode === 'bus' && route) {
       busPosAt(route, Math.min(this.time, route.tClose), a.pos); // riding: wherever the bus is
+    } else if (a.carriedBy) {
+      // on a teammate's shoulder: the host owns where they are (Combat.tickCarry)
     } else if (inBounds && (fromBus || a.allowJump || dist <= cap || was === 'bus')) {
       a.pos.set(s.x, s.y, s.z);
       a.allowJump = false;
@@ -758,6 +771,52 @@ export class HostSession {
         // inventory sync puts the client's optimistic swap back.
         if (a.inBus || a.airborneDrop || a.netReloading) return;
         if (inv.swap(sa, sb) && g.combat && g.combat.cancelBurst) g.combat.cancelBurst(a);
+        return;
+      }
+      case 'pg': {
+        // a map marker / ping: relayed to everyone (each client shows its own team's)
+        const t = m.t === 'm' ? 'm' : 'p';
+        const num = (v) => (Number.isFinite(+v) ? Math.round(+v * 10) / 10 : 0);
+        const out = { t, clear: m.clear ? 1 : 0, x: num(m.x), y: num(m.y), z: num(m.z), kind: ['loc', 'enemy', 'item'].includes(m.kind) ? m.kind : 'loc', label: String(m.label || '').replace(/[\u0000-\u001f<>]/g, '').slice(0, 40), tg: Number.isInteger(m.tg) ? m.tg : -1 };
+        if (g.netPing) g.netPing(a, out);
+        this.events.push({ e: 'pg', a: a.id, ...out });
+        return;
+      }
+      case 'sk': {
+        // the guest's outfit (sent once at match start)
+        const id = typeof m.id === 'string' ? m.id : '';
+        if (!SKINS[id] || a.skin === id) return;
+        g.reskinActor(a, id);
+        this.events.push({ e: 'sk', a: a.id, id });
+        return;
+      }
+      case 'em': {
+        // emote start (id) — the state flag says when it stops
+        const id = typeof m.id === 'string' && EMOTES[m.id] ? m.id : null;
+        a.netEmoteId = id;
+        if (a.character && a.character.mode === 'emote') a.character.emote(true, id);
+        this.events.push({ e: 'em', a: a.id, id });
+        return;
+      }
+      case 'cy': {
+        // carry a knocked teammate (id) / put them down (-1)
+        if (m.id == null || m.id < 0) {
+          if (a.carrying) g.combat.stopCarry(a);
+          return;
+        }
+        const t = g.combat.actors.find((x) => x.id === m.id);
+        if (t) g.combat.startCarry(a, t);
+        return;
+      }
+      case 'dp': {
+        // inventory screen: drag a slot / ammo / material stack out to drop it on the ground
+        if (a.inBus || a.airborneDrop || a.netReloading) return;
+        const what = Number.isInteger(m.s) ? { s: m.s } : typeof m.ammo === 'string' ? { ammo: m.ammo } : typeof m.mat === 'string' ? { mat: m.mat } : null;
+        if (what && Number.isInteger(m.n) && m.n > 0) what.n = m.n;
+        const item = inv.takeOut(what);
+        if (!item) return;
+        if (g.combat && g.combat.cancelBurst) g.combat.cancelBurst(a);
+        if (g.loot) g.loot.drop(item, a.pos.clone());
         return;
       }
       case 'rv': {

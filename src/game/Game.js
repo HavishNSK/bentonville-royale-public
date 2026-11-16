@@ -34,9 +34,12 @@ import { Post } from '../render/Post.js';
 import { sfx } from '../audio/Sfx.js';
 import { buildHud } from '../ui/hud.js';
 import { createInventoryPanel } from '../ui/inventoryPanel.js';
+import { createEmoteWheel } from '../ui/emoteWheel.js';
 import { Minimap } from '../ui/Minimap.js';
 import { CharacterKit, Character } from './Character.js';
-import { Combat } from './Combat.js';
+import { skinDef, emoteDef, DEFAULT_EQUIPPED } from './Cosmetics.js';
+import { Combat, rayActor } from './Combat.js';
+import { Pings } from './Pings.js';
 import { Player, placeOrbitCamera, itemLabel } from './Player.js';
 import * as StormMod from './Storm.js';
 import * as LootMod from './Loot.js';
@@ -106,6 +109,8 @@ export class Game {
     this.uiRoot = uiRoot;
     this.menus = menus;
     this.settings = { ...settings };
+    this.skin = DEFAULT_EQUIPPED.skin; // Cosmetics: outfit + emote wheel (setCosmetics)
+    this.emotes = DEFAULT_EQUIPPED.emotes.slice();
     this.state = 'menu'; // 'menu' | 'loading' | 'drop' | 'play' | 'over'
     this.paused = false;
     this.loaded = false;
@@ -190,11 +195,34 @@ export class Game {
     const mb = mapData && mapData.meta && mapData.meta.bounds;
     if (mb && this.hud.setFullMapAspect) this.hud.setFullMapAspect((mb.maxX - mb.minX) / (mb.maxZ - mb.minZ));
     this.minimap = new Minimap({ mapData, miniCanvas: this.hud.getMinimapCanvas(), fullCanvas: this.hud.getFullMapCanvas() });
+    this.pings = new Pings(this.hud.el);
+    // full map: left click places your marker, right click removes it
+    const fc = this.hud.getFullMapCanvas();
+    fc.addEventListener('contextmenu', (e) => e.preventDefault());
+    fc.addEventListener('pointerdown', (e) => {
+      if (!this.fullMapOpen || (this.state !== 'play' && this.state !== 'drop')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.button === 2) return this.placeMarker(null);
+      if (e.button !== 0) return;
+      const w = this.minimap.fullClientToWorld(e.clientX, e.clientY);
+      if (!w || !w.inBounds) return;
+      const mk = this.pings.markerOf(this.player.id);
+      // clicking your own marker again removes it
+      if (mk && this.minimap.worldToFullCanvas) {
+        const a = this.minimap.worldToFullCanvas(mk.x, mk.z);
+        const b = this.minimap.worldToFullCanvas(w.x, w.z);
+        if (Math.hypot(a.px - b.px, a.py - b.py) < 18) return this.placeMarker(null);
+      }
+      this.placeMarker({ x: w.x, z: w.z });
+    });
     this.invPanel = createInventoryPanel(this.hud.el, {
       onSwap: (a, b, expect) => this.swapSlots(a, b, expect),
       onSelect: (i) => this._selectSlot(i),
+      onDrop: (what, expect) => this.dropFromInventory(what, expect),
     });
     this.invPanel.setKeyLabels((a) => this.input.label(a));
+    this.emoteWheel = createEmoteWheel(this.hud.el);
 
     const Structures = StructMod.Structures;
     this.structures = Structures ? new Structures({ scene: this.scene, world: this.world, fx: this.fx, sfx }) : null;
@@ -203,6 +231,12 @@ export class Game {
     this.combat.onEliminate = (v, k, info) => this._onEliminate(v, k, info);
     this.combat.onKnock = (v, k, info) => this._onKnock(v, k, info);
     this.combat.onRevive = (v, by) => this._onRevive(v, by);
+    this.combat.onCarry = (c, v, dropped) => this._onCarry(c, v, dropped);
+    this.combat.onSiphon = (k, out) => this._onSiphon(k, out);
+    this.combat.onAssist = (a, v) => this._onAssist(a, v);
+    this._statDirty = new Set();
+    this._statT = 0;
+    this.combat.onStats = (a) => this._statDirty.add(a);
 
     const lootModels = {};
     for (const k of [...LOOT_MODELS, ...WEAPON_MODELS]) lootModels[k] = models[k];
@@ -224,6 +258,7 @@ export class Game {
     const playerChar = this.kits.player ? new Character(this.kits.player, { weapons: weaponScenes, canopyColor: 0xffc21f }) : null;
     if (playerChar) this.scene.add(playerChar.root);
     this.player = new Player({ id: 0, name: 'You', character: playerChar, inventory: new Inventory() });
+    this.player._skinKey = 'player|null';
 
     const BotsCls = BotsMod.Bots;
     const botKits = ['bot_a', 'bot_b', 'bot_c'].map((k) => this.kits[k]).filter(Boolean);
@@ -243,8 +278,67 @@ export class Game {
 
   // ---------------------------------------------------------------- match lifecycle
 
+  /**
+   * Outfit (Cosmetics.SKINS id) for the local player and the emotes on their wheel. Applied
+   * now when loaded (the character is rebuilt with that model / tint), else at load.
+   */
+  setCosmetics({ skin, emotes } = {}) {
+    if (skin) this.skin = skin;
+    if (emotes) this.emotes = emotes.slice();
+    if (this.loaded && this.player) this._applySkin();
+  }
+
+  /** A new Character wearing outfit `skinId` (null when kits are missing). */
+  makeSkinCharacter(skinId, canopyColor) {
+    const def = skinDef(skinId);
+    const kit = this.kits && (this.kits[def.model] || this.kits.player);
+    return kit ? new Character(kit, { weapons: this.weaponScenes, canopyColor, tint: def.tint ?? undefined }) : null;
+  }
+
+  /** Swaps a remote human's / puppet's character for outfit `skinId` (keeps visibility, pose state resets). */
+  reskinActor(a, skinId) {
+    if (!a || !skinId || a.skin === skinId) return;
+    a.skin = skinId;
+    const old = a.character;
+    const ch = this.makeSkinCharacter(skinId, old && old.canopy ? old.canopy.material.color.getHex() : 0xff7a45);
+    if (!ch) return;
+    if (old) {
+      ch.root.visible = old.root.visible;
+      ch.root.position.copy(old.root.position);
+      this.scene.remove(old.root);
+      if (old.dispose) old.dispose();
+      if (old.mode === 'dead') ch.die();
+    }
+    this.scene.add(ch.root);
+    a.character = ch;
+    if ('equip' in a) a.equip = null; // puppet: re-attach its weapon on the next snapshot
+  }
+
+  /** (Re)builds the player's Character for this.skin when it changed. */
+  _applySkin() {
+    const def = skinDef(this.skin);
+    const kit = this.kits && (this.kits[def.model] || this.kits.player);
+    const p = this.player;
+    if (!kit || !p) return;
+    const key = def.model + '|' + def.tint;
+    if (p.character && p._skinKey === key) return;
+    const old = p.character;
+    const ch = new Character(kit, { weapons: this.weaponScenes, canopyColor: 0xffc21f, tint: def.tint ?? undefined });
+    if (old) {
+      ch.root.visible = old.root.visible;
+      ch.root.position.copy(old.root.position);
+      this.scene.remove(old.root);
+      if (old.dispose) old.dispose();
+    }
+    this.scene.add(ch.root);
+    p.character = ch;
+    p._skinKey = key;
+    p.lastEquipped = null; // re-attach the held weapon model
+  }
+
   startMatch(seed = (Math.random() * 1e9) | 0, opts = {}) {
     if (!this.loaded) throw new Error('load() first');
+    this._applySkin();
     // free build is a solo sandbox; a multiplayer host never gets it
     const freeBuild = !!opts.freeBuild && !(this.net && this.net.isHost);
     this.freeBuild = freeBuild;
@@ -269,6 +363,7 @@ export class Game {
     if (this.structures) this.structures.clear();
     this.fx.clear();
     this.hud.clearTransient();
+    if (this.pings) this.pings.reset();
 
     // storm, centred toward a random POI (the opening storm is dormant and covers the map;
     // nobody picks a drop spot any more, the Drop Bus decides where people can land)
@@ -368,6 +463,7 @@ export class Game {
   _enterBusPhase() {
     this.state = 'drop';
     this.fullMapOpen = false;
+    if (!this.inventoryOpen && this.input) this.input.trap = false;
     this.hud.setVisible(true);
     this.hud.showFullMap(false);
     this._setFullMapInteractive(false);
@@ -440,6 +536,7 @@ export class Game {
    */
   startClientMatch(start) {
     if (!this.loaded) throw new Error('load() first');
+    this._applySkin();
     const net = this.net;
     this.seed = start.seed;
     this.rng = makeRng(start.seed);
@@ -461,6 +558,7 @@ export class Game {
     if (this.structures) this.structures.clear();
     this.fx.clear();
     this.hud.clearTransient();
+    if (this.pings) this.pings.reset();
     this.bots.clear();
 
     const zone = DROP_ZONES.find((z) => z.key === start.zone) || DROP_ZONES[0];
@@ -583,7 +681,7 @@ export class Game {
     this._winPending = true;
     this._endTimer = WIN_SCREEN_DELAY;
     this.hud.announce('#1 IN BENTONVILLE', this.teamMode ? 'Last team standing!' : 'Last one standing!', 3000);
-    if (this.player.character && this.player.alive && !this.player.downed) this.player.character.emote(true);
+    if (this.player.character && this.player.alive && !this.player.downed) this.player.character.emote(true, (this.emotes || []).find(Boolean));
   }
 
   /**
@@ -607,6 +705,7 @@ export class Game {
     if (p.character) p.character.root.visible = true;
     this.state = 'play';
     this.fullMapOpen = false;
+    if (!this.inventoryOpen && this.input) this.input.trap = false;
     this.hud.showFullMap(false);
     this._setFullMapInteractive(false);
     this.menus.showDropBanner(false);
@@ -642,6 +741,8 @@ export class Game {
       this.combat.authoritative = true;
     }
     this.closeInventory(false);
+    if (this.emoteWheel) this.emoteWheel.hide();
+    if (this.player) this.player._wheel = null;
     this.state = 'menu';
     this.paused = false;
     this.input.unlock();
@@ -650,6 +751,8 @@ export class Game {
     if (this.hud) {
       this.hud.setVisible(false);
       this.hud.clearTransient();
+      if (this.pings) this.pings.reset();
+    if (this.pings) this.pings.reset();
       this._setFullMapInteractive(false);
     }
     this.menus.showTitle();
@@ -683,6 +786,13 @@ export class Game {
     this.hud.setRevive(null);
     this.hud.setDowned(null);
     this.menus.showResult(this.result);
+    if (this.onMatchEnd) {
+      try {
+        this.onMatchEnd(this.result);
+      } catch (err) {
+        console.error(err);
+      }
+    }
   }
 
   // ---------------------------------------------------------------- events
@@ -762,6 +872,51 @@ export class Game {
     if (victim === p) sfx.play('hurt', { volume: 0.9 }); // the knocked overlay says the rest
   }
 
+  _onAssist(a, victim) {
+    if (this.net && this.net.isHost && this.net.events && this.net.started) this.net.events.push({ e: 'as', a: a.id, v: victim.id });
+    if (a === this.player) this.showAssist(victim.name);
+  }
+
+  showAssist(name) {
+    this.hud.toast(`ASSIST  ${name || ''}`.trim(), 'kill');
+    sfx.play('hitmarker', { volume: 0.5 });
+  }
+
+  /** Host: kills / assists / damage of everyone that changed, to the clients (twice a second). */
+  _syncStats(dt) {
+    const net = this.net;
+    this._statT -= dt;
+    if (!this._statDirty.size || this._statT > 0) return;
+    this._statT = 0.5;
+    if (net && net.isHost && net.started && net.events) {
+      const s = [];
+      for (const a of this._statDirty) s.push([a.id, a.kills | 0, a.assists | 0, Math.round(a.damageDealt || 0)]);
+      net.events.push({ e: 'ts', s });
+    }
+    this._statDirty.clear();
+  }
+
+  _onSiphon(killer, out) {
+    if (this.net && this.net.isHost && this.net.events && this.net.started) this.net.events.push({ e: 'sp', a: killer.id, h: Math.round(out.hp), s: Math.round(out.shield) });
+    if (killer === this.player) this.showSiphon(out.hp, out.shield);
+  }
+
+  /** "+40 HP  +10 SHIELD" after an elimination (siphon). */
+  showSiphon(hp, shield) {
+    const parts = [];
+    if (hp > 0) parts.push(`+${Math.round(hp)} HP`);
+    if (shield > 0) parts.push(`+${Math.round(shield)} SHIELD`);
+    if (!parts.length) return;
+    this.hud.toast('SIPHON  ' + parts.join('  '), 'pickup');
+    sfx.play('heal', { volume: 0.5 });
+  }
+
+  _onCarry(carrier, victim, dropped) {
+    if (this.net && this.net.isHost && this.net.onCarry) this.net.onCarry(carrier, victim, dropped);
+    const p = this.player;
+    if (victim && victim === p) this.hud.toast(`${carrier.name} picked you up`, 'pickup');
+  }
+
   _onRevive(victim, by) {
     const p = this.player;
     if (this.net && this.net.isHost && this.net.onRevive) this.net.onRevive(victim, by);
@@ -796,11 +951,13 @@ export class Game {
 
     input.inMatch = this.state === 'play' && !this.paused;
     this._inventoryInput(input);
-    if (input.hit('Escape') && !input.locked && (this.state === 'play' || this.state === 'drop')) this.pause(!this.paused);
-    if (input.actionHit('map') && (this.state === 'play' || this.state === 'drop') && !this.paused) {
-      this.fullMapOpen = !this.fullMapOpen;
-      if (this.fullMapOpen) this.closeInventory();
+    if (this.fullMapOpen && input.hit('Escape')) {
+      input.consume('Escape'); // Escape closes the map, not the game
+      this.toggleFullMap(false);
     }
+    if (input.hit('Escape') && !input.locked && (this.state === 'play' || this.state === 'drop')) this.pause(!this.paused);
+    if (input.actionHit('map') && (this.state === 'play' || this.state === 'drop') && !this.paused) this.toggleFullMap(!this.fullMapOpen);
+    if (input.actionHit('ping') && this.state === 'play' && !this.paused && !this.inventoryOpen && !this.fullMapOpen) this.pingAim();
 
     // a multiplayer match keeps running under the pause menu
     const live = (!this.paused || !!this.net) && (this.state === 'drop' || this.state === 'play' || this.state === 'over');
@@ -867,6 +1024,8 @@ export class Game {
         this._error('net.update', err);
       }
     }
+    if (!client && this.teamMode) this.combat.tickCarry(); // carried teammates ride on shoulders
+    if (!client) this._syncStats(dt);
     if (this.structures) this.structures.update(dt);
     if (this.loot) this.loot.update(dt, this.camera.position);
 
@@ -888,7 +1047,7 @@ export class Game {
           this._winPending = true;
           this._endTimer = WIN_SCREEN_DELAY;
           this.hud.announce('#1 IN BENTONVILLE', this.teamMode ? 'Last team standing!' : 'Last one standing!', 3000);
-          if (p.character && p.alive && !p.downed) p.character.emote(true);
+          if (p.character && p.alive && !p.downed) p.character.emote(true, (this.emotes || []).find(Boolean));
         }
         this._endTimer -= dt;
         if (this._endTimer <= 0) {
@@ -990,7 +1149,12 @@ export class Game {
     hud.el.classList.toggle('is-onbus', this.state === 'drop'); // no aiming UI while riding the Drop Bus
     hud.el.classList.toggle('is-scoped', this.state === 'play' && p.alive && p.scopeView); // sniper scope overlay
     const netAlive = this.net && this.net.aliveCount;
-    hud.setCounts({ alive: netAlive != null ? netAlive : this.combat.aliveCount, eliminations: p.kills, teams: this.teamMode ? this.combat.aliveTeams : null });
+    let teamElims = null;
+    if (this.teamMode) {
+      teamElims = p.kills | 0;
+      for (const m of this.mates || []) teamElims += m.kills | 0;
+    }
+    hud.setCounts({ alive: netAlive != null ? netAlive : this.combat.aliveCount, eliminations: p.kills, teams: this.teamMode ? this.combat.aliveTeams : null, teamEliminations: teamElims });
     if (this.teamMode) this._updateTeamHud(dt);
     hud.setCompass(((p.heading * 180) / Math.PI + 360) % 360);
     const s = this.storm;
@@ -1030,9 +1194,46 @@ export class Game {
     // minimap
     const fullOpen = (this.state === 'drop' || this.state === 'play') && !!this.fullMapOpen;
     if (this.state === 'play' || this.state === 'drop') hud.showFullMap(fullOpen);
-    let blips = this.loot ? this.loot.blips() : [];
+    // markers / pings on screen, and the team breakdown beside the full map
+    if (this.pings) {
+      const cam = this.camera;
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      this.pings.update(
+        dt,
+        (v) => {
+          _v2.set(v.x, v.y, v.z).project(cam);
+          if (_v2.z > 1) return null;
+          return { x: (_v2.x * 0.5 + 0.5) * W, y: (-_v2.y * 0.5 + 0.5) * H };
+        },
+        { x: p.pos.x, z: p.pos.z, heading: p.heading },
+        W,
+        H
+      );
+    }
+    if (fullOpen && hud.setMapStats) {
+      const rows = [p, ...(this.teamMode ? this.mates || [] : [])].map((a) => ({
+        name: a === p ? p.name || 'You' : a.name,
+        you: a === p,
+        color: TEAM_CSS[this._slotOf(a)],
+        kills: a.kills | 0,
+        assists: a.assists | 0,
+        damage: a.damageDealt || 0,
+        state: !a.alive ? 'out' : a.downed ? 'down' : 'alive',
+      }));
+      hud.setMapStats(rows);
+    }
+    // no loot clutter: only chests you could hear (close by), then teammates, markers, pings
+    const blips = this._blips || (this._blips = []);
+    blips.length = 0;
+    if (this.loot) {
+      for (const b of this.loot.blips()) {
+        if (b.kind !== 'chest') continue;
+        if ((b.x - p.pos.x) ** 2 + (b.z - p.pos.z) ** 2 < 55 * 55) blips.push(b);
+      }
+    }
+    if (this.pings) this.pings.blips(blips);
     if (this.teamMode && this.mates && this.mates.length && this.state === 'play') {
-      blips = blips.slice();
       for (const m of this.mates) {
         if (!m.alive || m.inBus) continue;
         blips.push({ x: m.pos.x, z: m.pos.z, kind: m.downed ? 'mateDown' : 'mate' + Math.min(3, m.teamSlot || 0) });
@@ -1148,7 +1349,8 @@ export class Game {
     if (locked) {
       this._wasLocked = true;
       if (this.inventoryOpen) this.closeInventory(false); // something re-grabbed the pointer
-    } else if (this._wasLocked && (this.state === 'play' || this.state === 'drop') && !this.paused && !this.inventoryOpen) this.pause(true);
+      if (this.fullMapOpen) this.toggleFullMap(false);
+    } else if (this._wasLocked && (this.state === 'play' || this.state === 'drop') && !this.paused && !this.inventoryOpen && !this.fullMapOpen) this.pause(true);
   }
 
   // ---------------------------------------------------------------- inventory screen
@@ -1163,6 +1365,7 @@ export class Game {
     if (this.inventoryOpen || !this._canOpenInventory() || !this.invPanel) return false;
     this.inventoryOpen = true; // set before unlock(): _onLockChange must not pause
     this.fullMapOpen = false;
+    this._setFullMapInteractive(false);
     this.input.trap = true;
     this.input.releaseMouse();
     this.input.unlock();
@@ -1243,6 +1446,39 @@ export class Game {
     return true;
   }
 
+  /**
+   * Dragging a card / ammo row / material row out of the inventory screen drops it in
+   * front of the player. Solo / host drop it straight onto the ground; a client removes it
+   * locally and asks the host ('dp'), which drops it and syncs the inventory back.
+   */
+  dropFromInventory(what, expect) {
+    const p = this.player;
+    if (!p || !p.alive || this.state !== 'play' || p.inBus || p.airborneDrop) return false;
+    if (p.reloadT > 0 || p.useT > 0) return false;
+    if (what && Number.isInteger(what.s) && expect !== undefined && expect !== null && p.inventory.slots[what.s] !== expect) {
+      this._updateInventoryPanel();
+      return false;
+    }
+    const item = p.inventory.takeOut(what);
+    if (!item) return false;
+    if (this.combat) this.combat.cancelBurst(p);
+    // walk-over pickup must not grab it straight back: off near here until the player walks away
+    p.dropZone = { x: p.pos.x, z: p.pos.z };
+    if (this.net && this.net.isClient) {
+      if (this.net.action) this.net.action({ k: 'dp', ...what }, true);
+    } else if (this.loot) {
+      const at = p.pos.clone();
+      const d = p.aimDir;
+      const len = Math.hypot(d.x, d.z) || 1;
+      at.x += (d.x / len) * 1.2;
+      at.z += (d.z / len) * 1.2;
+      this.loot.drop(item, at);
+    }
+    sfx.play('ui_click');
+    this._updateInventoryPanel();
+    return true;
+  }
+
   /** Clicking a card equips that slot (like pressing its slot key). */
   _selectSlot(i) {
     const p = this.player;
@@ -1264,6 +1500,121 @@ export class Game {
       mats: inv.mats,
       lockedReason: p.reloadT > 0 ? 'Reloading: can\'t reorder' : p.useT > 0 ? 'Healing: can\'t reorder' : null,
     });
+  }
+
+  /** Opens / closes the full map. Open, the pointer is free so you can click to place markers. */
+  toggleFullMap(on) {
+    on = !!on;
+    if (on === !!this.fullMapOpen) return;
+    this.fullMapOpen = on;
+    if (on) {
+      this.closeInventory(false);
+      this.input.trap = true; // held mouse buttons drop: no firing while the map is up
+      this.input.releaseMouse();
+      this.input.unlock();
+      this._setFullMapInteractive(true);
+    } else {
+      this.input.trap = false;
+      this._setFullMapInteractive(false);
+      if ((this.state === 'play' || this.state === 'drop') && !this.paused) this.input.lock();
+    }
+  }
+
+  /** Your team colour slot (0..3). */
+  _slotOf(a) {
+    return Math.min(3, (a && a.teamSlot) || 0);
+  }
+
+  /** Places (at {x, z}) or removes (null) your map marker, and tells your team. */
+  placeMarker(at) {
+    const p = this.player;
+    if (at) {
+      const y = this.world.groundHeight(at.x, at.z, 1e4);
+      this.pings.set({ owner: p.id, slot: this._slotOf(p), type: 'm', kind: 'loc', x: at.x, y, z: at.z, label: 'Marker' });
+      sfx.play('ui_click');
+    } else this.pings.clear(p.id, 'm');
+    this._sendPing(at ? { t: 'm', x: at.x, y: this.world.groundHeight(at.x, at.z, 1e4), z: at.z, kind: 'loc' } : { t: 'm', clear: 1 });
+  }
+
+  /** Ping whatever the crosshair is on: an enemy, a piece of loot, or a spot. */
+  pingAim() {
+    const p = this.player;
+    if (!p.alive || !p.aimDir) return;
+    const o = p.aimOrigin;
+    const d = p.aimDir;
+    const RANGE = 400;
+    const hit = this.world.raycast(o.x, o.y, o.z, d.x, d.y, d.z, RANGE, null);
+    let tWorld = hit ? hit.t : RANGE;
+    let enemy = null;
+    for (const a of this.combat.actors) {
+      if (a === p || !a.alive || a.inBus || sameTeam(a, p)) continue;
+      const t = rayActor(o.x, o.y, o.z, d.x, d.y, d.z, a, tWorld + 0.5);
+      if (t < tWorld + 0.5) {
+        tWorld = t;
+        enemy = a;
+      }
+    }
+    if (!enemy && !hit) return; // the sky
+    const x = enemy ? enemy.pos.x : o.x + d.x * tWorld;
+    const y = enemy ? enemy.pos.y : o.y + d.y * tWorld;
+    const z = enemy ? enemy.pos.z : o.z + d.z * tWorld;
+    let kind = enemy ? 'enemy' : 'loc';
+    let label = enemy ? 'Enemy' : this._placeName(x, z);
+    if (!enemy && this.loot) {
+      // loot within 2.5 m of the spot: ping the item itself
+      let best = null;
+      let bd = 2.5 * 2.5;
+      for (const r of this.loot.records) {
+        if (r.kind === 'item' ? false : r.opened) continue;
+        const dd = (r.x - x) ** 2 + (r.z - z) ** 2;
+        if (dd < bd && Math.abs(r.y - y) < 2.5) {
+          bd = dd;
+          best = r;
+        }
+      }
+      if (best) {
+        kind = 'item';
+        label = best.kind === 'chest' ? 'Chest' : best.kind === 'ammoBox' ? 'Ammo Box' : itemLabel(best.item);
+      }
+    }
+    this.pings.set({ owner: p.id, slot: this._slotOf(p), type: 'p', kind, x, y, z, label, target: enemy });
+    sfx.play('ui_click', { volume: 0.8 });
+    this._sendPing({ t: 'p', kind, x, y, z, label, tg: enemy ? enemy.id : -1 });
+  }
+
+  /** "Bentonville Square" for a spot near a named place, else "Here". */
+  _placeName(x, z) {
+    let best = null;
+    let bd = Infinity;
+    for (const k in this.world.landmarks || {}) {
+      const l = this.world.landmarks[k];
+      const d = Math.hypot(l.x - x, l.z - z);
+      if (d < bd) {
+        bd = d;
+        best = l;
+      }
+    }
+    return best && bd < 160 && best.n ? best.n : 'Here';
+  }
+
+  /** Multiplayer: markers / pings go to the host, which relays them to everyone (teammates show them). */
+  _sendPing(m) {
+    const net = this.net;
+    if (!net) return;
+    const r = (v) => Math.round(v * 10) / 10;
+    const msg = { k: 'pg', t: m.t, clear: m.clear ? 1 : 0, x: r(m.x || 0), y: r(m.y || 0), z: r(m.z || 0), kind: m.kind || 'loc', label: String(m.label || '').slice(0, 40), tg: m.tg ?? -1 };
+    if (net.isClient) net.action(msg);
+    else if (net.isHost && net.started && net.events) net.events.push({ e: 'pg', a: this.player.id, ...msg, k: undefined });
+  }
+
+  /** A teammate's marker / ping arrived (from the net). */
+  netPing(owner, m) {
+    if (!owner || owner === this.player || !sameTeam(owner, this.player)) return;
+    const t = m.t === 'm' ? 'm' : 'p';
+    if (m.clear) return this.pings.clear(owner.id, t);
+    const target = m.tg >= 0 && this.net && this.net.actorById ? this.net.actorById(m.tg) : m.tg >= 0 ? this.combat.actors.find((a) => a.id === m.tg) : null;
+    this.pings.set({ owner: owner.id, slot: this._slotOf(owner), type: t, kind: ['loc', 'enemy', 'item'].includes(m.kind) ? m.kind : 'loc', x: +m.x, y: +m.y, z: +m.z, label: (t === 'p' ? owner.name + ': ' : '') + String(m.label || (t === 'm' ? owner.name : '')), target });
+    if (t === 'p') sfx.play('ui_click', { volume: 0.6 });
   }
 
   _setFullMapInteractive(on) {
@@ -1552,6 +1903,10 @@ export class Game {
     window.__game = {
       get state() {
         return game.state;
+      },
+      /** Dev builds only: the Game itself (QA scripts probe mantling, carrying, emotes). */
+      get raw() {
+        return import.meta.env && import.meta.env.DEV ? game : null;
       },
       get role() {
         return game.net ? (game.net.isHost ? 'host' : 'client') : 'solo';

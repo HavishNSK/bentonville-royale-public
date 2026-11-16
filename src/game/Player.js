@@ -19,6 +19,7 @@ import * as THREE from 'three';
 import { rampDragQuarter, validEdit } from './Structures.js';
 import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, KNOCK, clamp, damp, TAU, weaponStats } from '../core/config.js';
 import { sameTeam } from './Teams.js';
+import { placeOnShoulder } from './Combat.js';
 
 const PIECE_ACTIONS = { buildWall: 'wall', buildFloor: 'floor', buildRamp: 'ramp', buildCone: 'cone' };
 export const FREEFALL_SPEED = 38;
@@ -31,6 +32,9 @@ const _right = new THREE.Vector3();
 const _pivot = new THREE.Vector3();
 const _cam = new THREE.Vector3();
 const _v = new THREE.Vector3();
+const _mv = new THREE.Vector3();
+// mantle: climbable ledge height above the feet (m); lower ones are steps, higher ones walls
+const MANTLE = { min: 0.7, max: 2.3 };
 
 /** The client session when this player is a multiplayer client, else null. */
 const clientNet = (g) => (g && g.net && g.net.isClient ? g.net : null);
@@ -143,6 +147,14 @@ export class Player {
     this.revivingTarget = null;
     this.reviveLocalT = 0;
     this._wasDown = false;
+    this.mantle = null;
+    this.assists = 0;
+    this.damageDealt = 0;
+    this.dmgFrom = null;
+    this._wheel = null;
+    this.carrying = null;
+    this.carriedBy = null;
+    this.dropZone = null;
     if (this.inventory) this.inventory.reset();
     if (this.character) this.character.reset();
   }
@@ -175,11 +187,17 @@ export class Player {
       return;
     }
 
+    // ---- emote wheel (held open by the emote key; the mouse picks instead of looking)
+    const wheelOpen = !!this._wheel;
+    if (wheelOpen) this._emoteWheel(dt, input, g);
+
     // ---- look
     const sens = (g.settings.sensitivity || 1) * 0.0022 * (this.ads ? (g.settings.adsSensitivity ?? 0.6) : 1) * (this.scopeView ? 0.5 : 1);
-    this.heading = (this.heading + input.dx * sens) % TAU;
-    if (this.heading < 0) this.heading += TAU;
-    this.pitch = clamp(this.pitch - input.dy * sens * (g.settings.invertY ? -1 : 1), CAMERA.minPitch, CAMERA.maxPitch);
+    if (!wheelOpen) {
+      this.heading = (this.heading + input.dx * sens) % TAU;
+      if (this.heading < 0) this.heading += TAU;
+      this.pitch = clamp(this.pitch - input.dy * sens * (g.settings.invertY ? -1 : 1), CAMERA.minPitch, CAMERA.maxPitch);
+    }
 
     // ---- knocked: drop whatever was in hand (build / edit / reload / heal / emote)
     const down = !!this.downed;
@@ -191,13 +209,14 @@ export class Player {
       if (this.revivingTarget) this._stopRevive(g);
       if (this.emoting && this.character) this.character.emote(false);
       this.emoting = false;
+      this.mantle = null;
       if (g.structures) g.structures.setGhost(null);
     }
     this._wasDown = down;
 
     // ---- loadout keys (ignored while dropping or knocked)
     const inv = this.inventory;
-    if (!this.airborneDrop && !down) this._handleLoadoutKeys(input, g);
+    if (!this.airborneDrop && !down && !this.carrying) this._handleLoadoutKeys(input, g);
 
     // ---- movement wish
     let mf = 0;
@@ -218,7 +237,7 @@ export class Player {
 
     this.crouching = this.mode === 'ground' && !down && (input.action('crouch') || input.action('crouchAlt'));
     this.sprinting = this.mode === 'ground' && !down && input.action('sprint') && mf > 0 && !this.ads && !this.crouching && this.useT <= 0;
-    this.ads = this.mode === 'ground' && !down && input.action('aim') && !this.buildPiece && !this.editing && !!this._gun();
+    this.ads = this.mode === 'ground' && !down && !this.carrying && input.action('aim') && !this.buildPiece && !this.editing && !!this._gun();
     // scoped guns: a short raise-to-eye, then the view snaps into the scope; lowering is instant
     const scoping = this.ads && !!WEAPONS[this._gun().id].scope;
     this.scopeT = scoping ? Math.min(1, this.scopeT + dt / 0.16) : 0;
@@ -230,6 +249,8 @@ export class Player {
     if (this.crouching) speed = PLAYER.walkSpeed * 0.65;
     if (down) speed = PLAYER.runSpeed * KNOCK.crawlSpeed;
     if (this.revivingTarget) speed = 0; // kneeling over a teammate (a move key lets go, see _reviveInput)
+    if (this.carrying) speed *= 0.8; // a teammate on the shoulder slows you down
+    if (down && this.carriedBy) speed = 0; // riding on a teammate's shoulder
 
     const p = this.pos;
     const v = this.vel;
@@ -268,6 +289,29 @@ export class Player {
       v.y -= PLAYER.gravity * dt;
     }
 
+    // ---- mantle: jumping (or falling) forward into a chest-to-head-high ledge climbs onto it
+    if (!this.mantle && this.mode === 'ground' && !down && !this.carrying && !this.revivingTarget && mf > 0.3 && (input.action('jump') || !this.grounded)) {
+      this.mantle = this._findLedge(world, sh, ch);
+      if (this.mantle) g.sfx.play('jump', { volume: 0.35 });
+    }
+
+    if (this.mantle) {
+      // scripted climb: rise to the ledge first, then step over onto it
+      const m = this.mantle;
+      m.t = Math.min(1, m.t + dt / m.dur);
+      const ku = Math.min(1, m.t / 0.6);
+      const kf = Math.max(0, (m.t - 0.3) / 0.7);
+      p.y = m.y0 + (m.y1 - m.y0) * (1 - (1 - ku) * (1 - ku));
+      p.x = m.x0 + (m.x1 - m.x0) * kf * kf * (3 - 2 * kf);
+      p.z = m.z0 + (m.z1 - m.z0) * kf * kf * (3 - 2 * kf);
+      v.set(0, 0, 0);
+      this.grounded = false;
+      if (m.t >= 1) {
+        this.mantle = null;
+        p.y = world.groundHeight(p.x, p.z, p.y + 0.1);
+        this.grounded = true;
+      }
+    } else {
     // ---- integrate
     p.x += v.x * dt;
     p.z += v.z * dt;
@@ -294,7 +338,12 @@ export class Player {
     } else {
       this.grounded = false;
     }
+    }
     this.surface = world.surface;
+    if (down && this.carriedBy && this.carriedBy.alive) {
+      placeOnShoulder(this, this.carriedBy);
+      this.grounded = true;
+    }
 
     // ---- actions
     if (down) {
@@ -348,6 +397,34 @@ export class Player {
     void inv;
   }
 
+  /**
+   * A ledge straight ahead that we can climb: blocked at foot height, a walkable top between
+   * MANTLE.min and MANTLE.max above our feet (a little less while already in the air), and
+   * head room on top. Returns a mantle plan or null.
+   */
+  _findLedge(world, sh, ch) {
+    const p = this.pos;
+    const fx = sh;
+    const fz = -ch;
+    const reach = this.radius + 0.45;
+    const ax = p.x + fx * reach;
+    const az = p.z + fz * reach;
+    const top = world.groundHeight(ax, az, p.y, MANTLE.max);
+    const rise = top - p.y;
+    if (!(rise > MANTLE.min && rise <= MANTLE.max)) return null;
+    if (world.groundHeight(ax, az, p.y) >= top - 0.05) return null; // just a step: walking handles it
+    // stand-on spot a bit further in, with room for a whole body above it
+    const lx = p.x + fx * (reach + 0.35);
+    const lz = p.z + fz * (reach + 0.35);
+    const land = world.groundHeight(lx, lz, top + 0.05);
+    if (Math.abs(land - top) > 0.4) return null;
+    if (world.ceilingAbove(lx, lz, land) - land < this.height * 0.9) return null;
+    _mv.set(lx, land + 0.02, lz);
+    world.resolveCircle(_mv, this.radius, this.height);
+    if (Math.hypot(_mv.x - lx, _mv.z - lz) > 0.25) return null; // a wall above the ledge
+    return { t: 0, dur: 0.22 + rise * 0.12, x0: p.x, y0: p.y, z0: p.z, x1: _mv.x, y1: land + 0.05, z1: _mv.z };
+  }
+
   _land(vy, g) {
     if (this.mode === 'freefall' || this.mode === 'glide') {
       this.mode = 'ground';
@@ -399,10 +476,61 @@ export class Player {
       }
     }
     if (input.actionHit('cycleMaterial')) this.cycleMaterial();
-    if (input.actionHit('emote') && this.character && this.grounded) {
-      this.emoting = !this.emoting;
-      this.character.emote(this.emoting);
+    if (input.actionHit('emote') && this.character && this.grounded && !this._wheel) {
+      this._wheel = { t: 0, x: 0, y: 0, sel: -1, done: false };
+      if (g.emoteWheel) g.emoteWheel.show(g.emotes || []);
     }
+  }
+
+  /** While the emote key is held: flick the mouse (or press 1-6) to pick; release plays it. */
+  _emoteWheel(dt, input, g) {
+    const w = this._wheel;
+    const n = 6;
+    w.t += dt;
+    w.x += input.dx;
+    w.y += input.dy;
+    const r = Math.hypot(w.x, w.y);
+    if (r > 30) {
+      const ang = Math.atan2(w.x, -w.y);
+      w.sel = (((Math.round(ang / (TAU / n)) % n) + n) % n) | 0;
+      if (r > 140) {
+        w.x *= 140 / r;
+        w.y *= 140 / r;
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      if (input.actionHit('slot' + (i + 1))) {
+        input.consume(input.bindings['slot' + (i + 1)]); // picking an emote, not a weapon
+        w.sel = i;
+        w.done = true;
+      }
+    }
+    if (g.emoteWheel) g.emoteWheel.select(w.sel);
+    if (input.action('emote') && !w.done && this.alive && !this.downed && !this.carrying) return;
+    this._wheel = null;
+    if (g.emoteWheel) g.emoteWheel.hide();
+    if (!this.alive || this.downed || this.carrying || !this.grounded) return;
+    const list = g.emotes || [];
+    let id = w.sel >= 0 ? list[w.sel] : null;
+    if (w.sel < 0 && w.t < 0.3) id = this.emoting ? null : list.find(Boolean) || 'emote_cheer'; // quick tap
+    if (w.sel < 0 && w.t < 0.3 && this.emoting) return this.stopEmote(g);
+    if (id) this.startEmote(id, g);
+  }
+
+  /** Plays emote `id` (a Cosmetics.EMOTES id) and tells the other players. */
+  startEmote(id, g) {
+    if (!this.character) return;
+    this.emoting = true;
+    this.emoteId = id;
+    this.character.emote(true, id);
+    const net = g.net;
+    if (net && net.isClient) net.action({ k: 'em', id });
+    else if (net && net.isHost && net.started && net.events) net.events.push({ e: 'em', a: this.id, id });
+  }
+
+  stopEmote() {
+    this.emoting = false;
+    if (this.character) this.character.emote(false);
   }
 
   setBuildPiece(kind) {
@@ -465,6 +593,23 @@ export class Player {
       if (this.useT <= 0) this._finishUse(g);
     }
 
+    // ---- carrying a knocked teammate: hands are full; the carry key puts them down
+    if (this.carrying) {
+      if (g.structures) g.structures.setGhost(null);
+      this.placement = null;
+      this._endEdit(g);
+      this.buildPiece = null;
+      const t = this.carrying;
+      if (!t.alive || !t.downed) {
+        this.carrying = null;
+      } else {
+        g.hud.prompt('[' + (input.label ? input.label('carry') : 'H') + '] Put down ' + t.name);
+        if (input.actionHit('carry')) this._carry(g, null);
+        this.triggerHeld = lmb;
+        return;
+      }
+    }
+
     // ---- interact (revive a knocked teammate first)
     const rv = this._reviveInput(input, g, dt);
     if (rv === 2) {
@@ -520,7 +665,11 @@ export class Player {
     const now = g.time || 0;
     const sent = this._autoSent || (this._autoSent = new Map());
     const recs = loot.autoPickups(this.pos, undefined, this._autoBuf || (this._autoBuf = []));
+    const dz = this.dropZone;
+    if (dz && (this.pos.x - dz.x) ** 2 + (this.pos.z - dz.z) ** 2 > 5 * 5) this.dropZone = null;
     for (const rec of recs) {
+      if (this.dropZone && (rec.position.x - dz.x) ** 2 + (rec.position.z - dz.z) ** 2 < 4 * 4) continue; // just dropped it
+
       if (rec.kind === 'item' && !this.inventory.canTake(rec.item)) continue;
       if (net) {
         const last = sent.get(rec.id);
@@ -538,7 +687,7 @@ export class Player {
     let best = null;
     let bd = KNOCK.reviveRange * KNOCK.reviveRange;
     for (const a of g.combat.actors) {
-      if (!a.alive || !a.downed || !sameTeam(a, this)) continue;
+      if (!a.alive || !a.downed || !sameTeam(a, this) || a.carriedBy) continue;
       if (a.reviver && a.reviver !== this) continue; // someone else is on it
       const dx = a.pos.x - this.pos.x;
       const dz = a.pos.z - this.pos.z;
@@ -589,10 +738,28 @@ export class Player {
     }
     if (hud.setRevive) hud.setRevive(null);
     if (cand) {
-      hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] Hold to revive ' + cand.name);
+      hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] Hold to revive  ·  [' + (input.label ? input.label('carry') : 'H') + '] Carry ' + cand.name);
+      if (input.actionHit('carry')) this._carry(g, cand);
       return 1;
     }
     return 0;
+  }
+
+  /** Picks up a knocked teammate (target) or puts down the one we hold (null). */
+  _carry(g, target) {
+    const net = clientNet(g);
+    if (net) {
+      net.action({ k: 'cy', id: target ? target.id : -1 });
+      return;
+    }
+    if (!g.combat) return;
+    if (target) {
+      this._cancelReload();
+      this._cancelUse();
+      if (this.emoting && this.character) this.character.emote(false);
+      this.emoting = false;
+      g.combat.startCarry(this, target);
+    } else g.combat.stopCarry(this);
   }
 
   _stopRevive(g) {

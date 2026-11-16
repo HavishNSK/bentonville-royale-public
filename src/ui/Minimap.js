@@ -60,14 +60,15 @@ const BATCH_VERTS = 2600;
 const SLICE_MS = 5;
 const DEFAULT_FONT = '"Nunito", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 
-// ---- palette (this game's own: soft sage land, warm buildings, cream roads, violet storm)
+// ---- palette: a bold battle-royale overview — saturated grass, dark woods, bright water,
+// pale roofs that pop off the green, clean light roads, violet storm
 const C = {
-  outside: '#1b2530',
-  land: '#dce9c8',
+  outside: '#16324f',
+  land: '#86c35a',
   border: '#0e151c',
-  water: '#84c4ea',
-  waterEdge: '#5fa6d2',
-  tree: 'rgba(84, 150, 82, 0.55)',
+  water: '#3fb4f0',
+  waterEdge: '#1f86c4',
+  tree: 'rgba(38, 104, 46, 0.6)',
   ink: '#1d2a36',
   halo: 'rgba(255, 255, 255, 0.94)',
   stormFill: 'rgba(116, 52, 214, 0.36)',
@@ -83,12 +84,12 @@ const C = {
 };
 // areas, drawn in this order (water last so ponds inside parks/woods stay visible)
 const AREA_KINDS = ['grass', 'park', 'garden', 'wood', 'pitch', 'parking', 'water', 'busloop'];
-const AREA_FILL = ['#cde4ae', '#bfdd9e', '#b6dcaa', '#9fcb8e', '#a9d9b6', '#e4e2d4', C.water, '#e4e2d4'];
-const AREA_EDGE = [null, null, null, null, '#7dbd90', '#c9c6b4', C.waterEdge];
+const AREA_FILL = ['#8fca5e', '#7dbd4f', '#94cf66', '#4f9a3f', '#6cc172', '#c7c2b2', C.water, '#c7c2b2'];
+const AREA_EDGE = [null, null, null, '#3d7f31', '#4f9d57', '#a19c8a', C.waterEdge];
 // buildings: wood, brick, metal, then the same three for landmark buildings
 const MATS = { wood: 0, brick: 1, metal: 2 };
-const BLD_FILL = ['#ebd3aa', '#e3b59f', '#d6d3ca', '#f6b45c', '#f6b45c', '#f6b45c'];
-const BLD_EDGE = ['#b2925f', '#b07a63', '#96938a', '#9c5a1c', '#9c5a1c', '#9c5a1c'];
+const BLD_FILL = ['#f1e6cf', '#eccfbf', '#e4e7ec', '#ffe08a', '#ffe08a', '#ffe08a'];
+const BLD_EDGE = ['#6f5d43', '#7a5446', '#5b6470', '#8a6418', '#8a6418', '#8a6418'];
 // roads by rank: 0 trail/footway, 1 pedestrian, 2 service, 3 minor, 4 mid, 5 major
 const ROAD_RANK = {
   footway: 0, path: 0, cycleway: 0, track: 0, steps: 0,
@@ -99,17 +100,20 @@ const ROAD_RANK = {
   motorway: 5, trunk: 5, primary: 5, motorway_link: 5, trunk_link: 5, primary_link: 5,
 };
 const ROAD_STYLE = [
-  { fill: '#a98257', casing: null, minPx: 1.3, minOv: 0.75, alphaOv: 0.5 },
-  { fill: '#f1e7d6', casing: '#bdb19c', minPx: 2, minOv: 0.9, alphaOv: 1 },
-  { fill: '#f6f4ea', casing: '#bbb7a6', minPx: 1.6, minOv: 0.8, alphaOv: 0.85 },
-  { fill: '#fffdf6', casing: '#aeaa98', minPx: 2.4, minOv: 1.5, alphaOv: 1 },
-  { fill: '#fff3c9', casing: '#b39b5c', minPx: 3, minOv: 2.3, alphaOv: 1 },
-  { fill: '#ffdf8a', casing: '#a9802f', minPx: 3.6, minOv: 3.1, alphaOv: 1 },
+  { fill: '#c9a46a', casing: null, minPx: 1.3, minOv: 0.75, alphaOv: 0.55 },
+  { fill: '#ece6d6', casing: '#6f7a5c', minPx: 2, minOv: 0.9, alphaOv: 1 },
+  { fill: '#e8e6dc', casing: '#6f7a5c', minPx: 1.6, minOv: 0.9, alphaOv: 0.9 },
+  { fill: '#f7f5ee', casing: '#59654a', minPx: 2.6, minOv: 1.7, alphaOv: 1 },
+  { fill: '#fbf8ef', casing: '#4d573f', minPx: 3.2, minOv: 2.6, alphaOv: 1 },
+  { fill: '#fff6d8', casing: '#4a4535', minPx: 3.8, minOv: 3.4, alphaOv: 1 },
 ];
-const BLIP_KINDS = ['chest', 'loot', 'enemy', 'drop', 'mate0', 'mate1', 'mate2', 'mate3', 'mateDown'];
+const BLIP_KINDS = ['chest', 'loot', 'enemy', 'drop', 'mate0', 'mate1', 'mate2', 'mate3', 'mateDown', 'pin0', 'pin1', 'pin2', 'pin3', 'ping0', 'ping1', 'ping2', 'ping3', 'pingEnemy'];
 const MATE_COLORS = ['#ffc21f', '#5ec8ff', '#7dff6b', '#ff5d8f']; // = Teams.js TEAM_COLORS
 /** Blips that stay pinned to the minimap edge at any distance. */
-const isPinnedBlip = (kind) => kind === 'enemy' || kind === 'drop' || kind.startsWith('mate');
+const isPinnedBlip = (kind) => kind === 'enemy' || kind === 'drop' || kind.startsWith('mate') || kind.startsWith('pin');
+// full-map grid: lettered columns, numbered rows (call-outs like "C4")
+const GRID_N = 10;
+const LABEL_FONT = '"Lilita One", "Arial Rounded MT Bold", "Trebuchet MS", system-ui, sans-serif';
 const DASH_GUIDE = [7, 6];
 const DASH_NONE = [];
 
@@ -528,6 +532,44 @@ function makeBlipSprites(k) {
     g.fill();
     g.stroke();
   });
+  // teammates' map markers (pins in their slot colour) and pings (a diamond; red for enemies)
+  const pin = (col) =>
+    makeSprite(20 * k, 27 * k, 10 * k, 25 * k, (g) => {
+      g.fillStyle = col;
+      g.strokeStyle = edge;
+      g.lineWidth = 2.2 * k;
+      g.beginPath();
+      g.moveTo(10 * k, 25 * k);
+      g.bezierCurveTo(3 * k, 17 * k, 2.5 * k, 13.5 * k, 2.5 * k, 10 * k);
+      g.arc(10 * k, 10 * k, 7.5 * k, Math.PI, 0);
+      g.bezierCurveTo(17.5 * k, 13.5 * k, 17 * k, 17 * k, 10 * k, 25 * k);
+      g.closePath();
+      g.fill();
+      g.stroke();
+      g.fillStyle = '#ffffff';
+      g.beginPath();
+      g.arc(10 * k, 10 * k, 2.8 * k, 0, TAU);
+      g.fill();
+    });
+  const ping = (col) =>
+    makeSprite(18 * k, 18 * k, 9 * k, 9 * k, (g) => {
+      g.fillStyle = col;
+      g.strokeStyle = edge;
+      g.lineWidth = 2 * k;
+      g.beginPath();
+      g.moveTo(9 * k, 1.5 * k);
+      g.lineTo(16.5 * k, 9 * k);
+      g.lineTo(9 * k, 16.5 * k);
+      g.lineTo(1.5 * k, 9 * k);
+      g.closePath();
+      g.fill();
+      g.stroke();
+    });
+  MATE_COLORS.forEach((col, i) => {
+    out['pin' + i] = pin(col);
+    out['ping' + i] = ping(col);
+  });
+  out.pingEnemy = ping('#ff3b3b');
   // waypoint pin, anchored at its tip
   out.marker = makeSprite(20 * k, 27 * k, 10 * k, 25 * k, (g) => {
     g.fillStyle = C.marker;
@@ -562,7 +604,7 @@ function makeTextSprite(lines, font, sizePx, lineH, haloW) {
     g.font = font;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    for (let i = 0; i < lines.length; i++) haloText(g, lines[i], cw / 2, pad + lineH * (i + 0.5), C.ink, C.halo, haloW);
+    for (let i = 0; i < lines.length; i++) haloText(g, lines[i], cw / 2, pad + lineH * (i + 0.5), '#ffffff', '#13202c', haloW);
   });
 }
 
@@ -596,6 +638,18 @@ export class Minimap {
     this._miniInterval = 1000 / clamp(miniHz || 24, 1, 240) - 2;
     this._fullInterval = 1000 / clamp(fullHz || 12, 1, 240) - 2;
     this._font = fontFamily || DEFAULT_FONT;
+    // labels use the display font: redraw them once it has loaded
+    if (hasDoc && document.fonts && document.fonts.load) {
+      document.fonts
+        .load(`24px ${LABEL_FONT}`)
+        .then(() => {
+          if (this._disposed) return;
+          this._buildMiniSprites();
+          if (this.ready) this._buildOverlay();
+          this.invalidate();
+        })
+        .catch(() => {});
+    }
     this._blipRange = blipRange > 0 ? blipRange : this._radius * 3;
     this._disposed = false;
 
@@ -859,9 +913,9 @@ export class Minimap {
   _buildMiniSprites() {
     if (!this._mini) return;
     const k = this._mk;
-    const size = Math.round(11 * k);
-    const font = `800 ${size}px ${this._font}`;
-    for (const l of this._landmarks) l.sprite = makeTextSprite(wrapWords(l.n, 18), font, size, Math.round(size * 1.12), 3 * k);
+    const size = Math.round(12 * k);
+    const font = `400 ${size}px ${LABEL_FONT}`;
+    for (const l of this._landmarks) l.sprite = makeTextSprite(wrapWords(l.n.toUpperCase(), 18), font, size, Math.round(size * 1.08), 3.6 * k);
     // "N" badge for the heading-up variant
     const d = Math.round(18 * k);
     this._northSprite = makeSprite(d, d, d / 2, d / 2, (g) => {
@@ -1091,73 +1145,82 @@ export class Minimap {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
-    // ---- landmark labels with simple collision avoidance
-    const size = Math.round(15 * k);
-    const lineH = Math.round(size * 1.14);
-    ctx.font = `800 ${size}px ${this._font}`;
+    // ---- call-out grid: A-J across, 1-10 down, faint lines over the map
+    const b = this._bounds;
+    const gx0 = b.minX * this._fs + this._fox;
+    const gy0 = b.minZ * this._fs + this._foz;
+    const gw = (b.maxX - b.minX) * this._fs;
+    const gh = (b.maxZ - b.minZ) * this._fs;
+    ctx.strokeStyle = 'rgba(16, 28, 20, 0.28)';
+    ctx.lineWidth = 1.4 * k;
+    ctx.beginPath();
+    for (let i = 1; i < GRID_N; i++) {
+      const x = Math.round(gx0 + (gw * i) / GRID_N) + 0.5;
+      const y = Math.round(gy0 + (gh * i) / GRID_N) + 0.5;
+      ctx.moveTo(x, gy0);
+      ctx.lineTo(x, gy0 + gh);
+      ctx.moveTo(gx0, y);
+      ctx.lineTo(gx0 + gw, y);
+    }
+    ctx.stroke();
+    ctx.font = `400 ${Math.round(17 * k)}px ${LABEL_FONT}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    for (let i = 0; i < GRID_N; i++) {
+      const cx = gx0 + (gw * (i + 0.5)) / GRID_N;
+      const cy = gy0 + (gh * (i + 0.5)) / GRID_N;
+      haloText(ctx, String.fromCharCode(65 + i), cx, gy0 + 14 * k, '#ffffff', 'rgba(14, 21, 28, 0.85)', 4.5 * k);
+      haloText(ctx, String(i + 1), gx0 + 14 * k, cy, '#ffffff', 'rgba(14, 21, 28, 0.85)', 4.5 * k);
+    }
+
+    // ---- POI names: big, bold, upper-case, white with a heavy dark outline. The named
+    // drop zones are large; minor landmarks smaller. Simple collision avoidance.
+    const isPoi = (key) => DROP_ZONES.some((z) => z.key === key);
     const taken = []; // [x0, y0, x1, y1]
     const hits = (x0, y0, x1, y1) => {
       for (const r of taken) if (x0 < r[2] && x1 > r[0] && y0 < r[3] && y1 > r[1]) return true;
       return false;
     };
-    const dotR = 4 * k;
-    const pts = this._landmarks.map((l) => ({ l, x: l.x * this._fs + this._fox, y: l.z * this._fs + this._foz }));
-    for (const p of pts) taken.push([p.x - dotR - 1, p.y - dotR - 1, p.x + dotR + 1, p.y + dotR + 1]);
-    const dirs = [[1, 0], [-1, 0], [0, -1], [0, 1], [1, -1], [-1, -1], [1, 1], [-1, 1]];
-    const placed = [];
+    const pts = this._landmarks.map((l) => ({ l, x: l.x * this._fs + this._fox, y: l.z * this._fs + this._foz, poi: isPoi(l.key) }));
+    const dirs = [[0, 0], [0, -1], [0, 1], [1, 0], [-1, 0], [1, -1], [-1, -1], [1, 1], [-1, 1]];
     for (const p of pts) {
-      const lines = wrapWords(p.l.n, 20);
+      const size = Math.round((p.poi ? 24 : 15) * k);
+      const lineH = Math.round(size * 1.02);
+      ctx.font = `400 ${size}px ${LABEL_FONT}`;
+      const lines = wrapWords(p.l.n.toUpperCase(), p.poi ? 16 : 18);
       let tw = 0;
       for (const ln of lines) tw = Math.max(tw, ctx.measureText(ln).width);
-      tw += 6 * k;
-      const th = lineH * lines.length + 2 * k;
+      tw += 8 * k;
+      const th = lineH * lines.length + 4 * k;
       let best = null;
-      for (let ring = 0; ring < 5 && !best; ring++) {
-        const gap = (7 + ring * 16) * k;
+      for (let ring = 0; ring < 4 && !best; ring++) {
+        const gap = ring * 14 * k;
         for (const d of dirs) {
+          if (ring === 0 && (d[0] || d[1])) continue;
+          if (ring > 0 && !d[0] && !d[1]) continue;
           const cx = p.x + d[0] * (gap + tw / 2);
           const cy = p.y + d[1] * (gap + th / 2);
           const x0 = cx - tw / 2;
           const y0 = cy - th / 2;
-          if (x0 < 4 * k || y0 < 4 * k || x0 + tw > W - 4 * k || y0 + th > H - 4 * k) continue;
+          if (x0 < 30 * k || y0 < 28 * k || x0 + tw > W - 6 * k || y0 + th > H - 34 * k) continue;
           if (hits(x0, y0, x0 + tw, y0 + th)) continue;
-          best = { cx, cy, x0, y0, ring };
+          best = { cx, cy, x0, y0 };
           break;
         }
       }
       if (!best) continue;
       taken.push([best.x0, best.y0, best.x0 + tw, best.y0 + th]);
-      placed.push({ p, lines, tw, th, best });
-    }
-    // leader lines under dots and text
-    for (const q of placed) {
-      if (q.best.ring === 0) continue;
-      const ex = clamp(q.p.x, q.best.x0, q.best.x0 + q.tw);
-      const ey = clamp(q.p.y, q.best.y0, q.best.y0 + q.th);
-      ctx.beginPath();
-      ctx.moveTo(q.p.x, q.p.y);
-      ctx.lineTo(ex, ey);
-      ctx.strokeStyle = C.halo;
-      ctx.lineWidth = 3.2 * k;
-      ctx.stroke();
-      ctx.strokeStyle = C.ink;
-      ctx.lineWidth = 1.2 * k;
-      ctx.stroke();
-    }
-    for (const p of pts) {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, dotR, 0, TAU);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
-      ctx.strokeStyle = C.ink;
-      ctx.lineWidth = 2 * k;
-      ctx.stroke();
-    }
-    for (const q of placed) {
-      const top = q.best.cy - (lineH * q.lines.length) / 2;
-      for (let i = 0; i < q.lines.length; i++) haloText(ctx, q.lines[i], q.best.cx, top + lineH * (i + 0.5), C.ink, C.halo, 4 * k);
+      const top = best.cy - (lineH * lines.length) / 2;
+      const fill = p.poi ? '#ffffff' : '#fff6dc';
+      for (let i = 0; i < lines.length; i++) {
+        const y = top + lineH * (i + 0.5);
+        // drop shadow, outline, fill
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = (p.poi ? 7 : 5) * k;
+        ctx.strokeStyle = 'rgba(14, 21, 28, 0.55)';
+        ctx.strokeText(lines[i], best.cx, y + 2.5 * k);
+        haloText(ctx, lines[i], best.cx, y, fill, '#13202c', (p.poi ? 6.5 : 4.5) * k);
+      }
     }
 
     // ---- scale bar (bottom-left)

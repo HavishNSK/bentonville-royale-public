@@ -44,7 +44,7 @@
 //   takes one round from item.mag and stops if the shooter dies, reloads or swaps.
 
 import * as THREE from 'three';
-import { WEAPONS, PICKAXE, PLAYER, KNOCK, lerp, weaponStats } from '../core/config.js';
+import { WEAPONS, PICKAXE, PLAYER, KNOCK, SIPHON, ASSIST_DAMAGE, lerp, weaponStats } from '../core/config.js';
 import { sameTeam, teamStanding, aliveTeamCount } from './Teams.js';
 
 const _dir = new THREE.Vector3();
@@ -115,6 +115,10 @@ export class Combat {
     this.onColliderDestroyed = null;
     this.onKnock = null;
     this.onRevive = null;
+    this.onCarry = null;
+    this.onSiphon = null;
+    this.onAssist = null; // (assister, victim) when someone helped with an elimination
+    this.onStats = null; // (actor) when kills / assists / damage changed (net sync) // (killer, { hp, shield }) after an elimination heals the killer // (carrier, victim | null) when someone picks up / puts down a teammate
     this.teamMode = false;
     this._burstEpoch = 0;
     this.authoritative = true;
@@ -198,6 +202,7 @@ export class Combat {
    */
   fireWeapon(shooter, weaponItem, origin, dir, spread = 0, opts = null) {
     const auth = this.authoritative;
+    if (shooter) shooter.shotAt = performance.now() / 1000; // gunfire is heard (bots third-party it)
     const dirs = opts && opts.dirs;
     const claims = opts && opts.claims;
     const w = weaponStats(weaponItem && WEAPONS[weaponItem.id] ? weaponItem.id : 'pistol', weaponItem && weaponItem.rarity);
@@ -442,6 +447,7 @@ export class Combat {
       const dealt = Math.min(target.downHp, amount);
       target.downHp = Math.max(0, target.downHp - amount);
       target.lastHitTime = performance.now();
+      this._creditDamage(src, target, dealt);
       if (this.onDamage) this.onDamage(target, dealt, { ...info, shieldHit: 0, downed: true });
       if (target.downHp <= 0 && target.alive) this._eliminate(target, { ...info, source: src || target.knockedBy || null, finished: true });
       return dealt;
@@ -458,8 +464,10 @@ export class Combat {
         if (this.sfx) this.sfx.play('shield_break', { x: target.pos.x, y: target.pos.y + 1, z: target.pos.z });
       }
     }
+    const hpBefore = target.health;
     target.health = Math.max(0, target.health - left);
     target.lastHitTime = performance.now();
+    this._creditDamage(src, target, shieldHit + (hpBefore - target.health));
     target.lastAttacker = info.source || target.lastAttacker || null;
     const dealt = shieldHit + Math.min(left, amount);
     if (this.onDamage) this.onDamage(target, dealt, { ...info, shieldHit });
@@ -468,6 +476,15 @@ export class Combat {
       else this._eliminate(target, info);
     }
     return dealt;
+  }
+
+  /** Damage stats: `src` dealt `n` real damage to another player (not themself / a teammate). */
+  _creditDamage(src, target, n) {
+    if (!src || src === target || !(n > 0) || sameTeam(src, target)) return;
+    src.damageDealt = (src.damageDealt || 0) + n;
+    if (!target.dmgFrom) target.dmgFrom = new Map();
+    target.dmgFrom.set(src, (target.dmgFrom.get(src) || 0) + n);
+    if (this.onStats) this.onStats(src);
   }
 
   /** Team mode, not leaving, and someone else on the team is still on their feet. */
@@ -485,6 +502,7 @@ export class Combat {
     victim.reviveT = 0;
     victim.reviver = null;
     if (victim.revivingTarget) this.stopRevive(victim);
+    if (victim.carrying) this.stopCarry(victim);
     if (this.sfx) this.sfx.play('shield_break', { x: victim.pos.x, y: victim.pos.y + 1, z: victim.pos.z, volume: 0.8 });
     if (this.onKnock) this.onKnock(victim, by, info);
   }
@@ -498,8 +516,29 @@ export class Combat {
     victim.downHp = 0;
     if (victim.reviver) this.stopRevive(victim.reviver);
     if (victim.revivingTarget) this.stopRevive(victim);
-    const killer = info.source && info.source !== victim ? info.source : null;
-    if (killer) killer.kills = (killer.kills || 0) + 1;
+    if (victim.carrying) this.stopCarry(victim);
+    if (victim.carriedBy) this.stopCarry(victim.carriedBy);
+    // the elimination goes to whoever KNOCKED them, not whoever finished them off
+    let killer = info.source && info.source !== victim ? info.source : null;
+    const knocker = wasDowned && victim.knockedBy && victim.knockedBy !== victim ? victim.knockedBy : null;
+    if (knocker && !sameTeam(knocker, victim)) killer = knocker;
+    if (killer && sameTeam(killer, victim)) killer = null;
+    if (killer) {
+      killer.kills = (killer.kills || 0) + 1;
+      if (this.onStats) this.onStats(killer);
+    }
+    info = { ...info, finisher: info.source && info.source !== killer && info.source !== victim ? info.source : null };
+    // assists: everyone else who did ASSIST_DAMAGE+ to them
+    if (victim.dmgFrom) {
+      for (const [a, d] of victim.dmgFrom) {
+        if (a === killer || a === victim || !a || d < ASSIST_DAMAGE || sameTeam(a, victim)) continue;
+        a.assists = (a.assists || 0) + 1;
+        if (this.onAssist) this.onAssist(a, victim);
+        if (this.onStats) this.onStats(a);
+      }
+      victim.dmgFrom = null;
+    }
+    if (killer && this.authoritative !== false) this.siphon(killer);
     if (victim.character) {
       if (victim.character.setDowned) victim.character.setDowned(false);
       victim.character.die();
@@ -515,6 +554,24 @@ export class Combat {
     }
   }
 
+  /**
+   * Siphon: +SIPHON for an elimination, health first (to max), the remainder as shield.
+   * Returns { hp, shield } actually gained (0s for a knocked / dead killer or a full one).
+   */
+  siphon(killer, amount = SIPHON) {
+    const out = { hp: 0, shield: 0 };
+    if (!killer || !killer.alive || killer.downed || !(amount > 0)) return out;
+    const maxH = PLAYER.maxHealth;
+    const maxS = PLAYER.maxShield;
+    out.hp = Math.max(0, Math.min(amount, maxH - (killer.health || 0)));
+    out.shield = Math.max(0, Math.min(amount - out.hp, maxS - (killer.shield || 0)));
+    killer.health = (killer.health || 0) + out.hp;
+    killer.shield = (killer.shield || 0) + out.shield;
+    if ((out.hp || out.shield) && this.fx && this.fx.aura) this.fx.aura(killer.pos, out.shield > 0 ? 'shield' : 'heal', 1);
+    if (this.onSiphon && (out.hp || out.shield)) this.onSiphon(killer, out);
+    return out;
+  }
+
   /** `reviver` stops reviving (moved away, hurt, let go, or done). */
   stopRevive(reviver) {
     const t = reviver && reviver.revivingTarget;
@@ -528,6 +585,7 @@ export class Combat {
   /** Brings a downed actor back up. */
   revive(target, by = null) {
     if (!target || !target.alive || !target.downed) return false;
+    if (target.carriedBy) this.stopCarry(target.carriedBy);
     target.downed = false;
     target.downHp = 0;
     target.health = KNOCK.reviveHp;
@@ -542,6 +600,64 @@ export class Combat {
     return true;
   }
 
+  // ---------------------------------------------------------------- carrying
+
+  /** Can `carrier` pick up `target` right now (range, team, nobody else holding them)? */
+  canCarry(carrier, target) {
+    if (!this.teamMode || !carrier || !target || carrier === target) return false;
+    if (!carrier.alive || carrier.downed || carrier.carrying || carrier.inBus || carrier.airborneDrop) return false;
+    if (!target.alive || !target.downed || target.carriedBy || !sameTeam(carrier, target)) return false;
+    const dx = target.pos.x - carrier.pos.x;
+    const dz = target.pos.z - carrier.pos.z;
+    return dx * dx + dz * dz <= (KNOCK.reviveRange + 0.6) ** 2 && Math.abs(target.pos.y - carrier.pos.y) < 2.5;
+  }
+
+  /** Authoritative: `carrier` throws a knocked teammate over their shoulder. */
+  startCarry(carrier, target) {
+    if (!this.canCarry(carrier, target)) return false;
+    if (carrier.revivingTarget) this.stopRevive(carrier);
+    if (target.reviver) this.stopRevive(target.reviver);
+    carrier.carrying = target;
+    target.carriedBy = carrier;
+    if (this.sfx) this.sfx.play('pickup', { x: carrier.pos.x, y: carrier.pos.y + 1, z: carrier.pos.z, volume: 0.6 });
+    if (this.onCarry) this.onCarry(carrier, target);
+    return true;
+  }
+
+  /** Authoritative: `carrier` puts down whoever they hold, just in front of them. */
+  stopCarry(carrier) {
+    const t = carrier && carrier.carrying;
+    if (!carrier) return;
+    carrier.carrying = null;
+    if (!t) return;
+    if (t.carriedBy === carrier) t.carriedBy = null;
+    if (t.alive) {
+      const h = carrier.heading || 0;
+      t.pos.set(carrier.pos.x + Math.sin(h) * 0.9, carrier.pos.y, carrier.pos.z - Math.cos(h) * 0.9);
+      if (this.world && this.world.resolveCircle) this.world.resolveCircle(t.pos, 0.35, 1);
+      if (this.world && this.world.groundHeight) t.pos.y = this.world.groundHeight(t.pos.x, t.pos.z, carrier.pos.y + 0.5);
+      if (t.vel) t.vel.set(0, 0, 0);
+    }
+    if (this.onCarry) this.onCarry(carrier, null, t);
+  }
+
+  /**
+   * Authoritative, once per frame after everyone has moved: carried actors ride on their
+   * carrier's shoulder; a carrier who goes down / dies (or a target that got up) lets go.
+   */
+  tickCarry() {
+    if (!this.teamMode) return;
+    for (const a of this.actors) {
+      const t = a.carrying;
+      if (!t) continue;
+      if (!a.alive || a.downed || !t.alive || !t.downed || t.carriedBy !== a) {
+        this.stopCarry(a);
+        continue;
+      }
+      placeOnShoulder(t, a);
+    }
+  }
+
   /** Authoritative team upkeep: revive progress, then bleed-out. */
   tickTeams(dt) {
     if (!this.teamMode || !(dt > 0)) return;
@@ -551,7 +667,7 @@ export class Combat {
       if (!t) continue;
       const dx = t.pos.x - a.pos.x;
       const dz = t.pos.z - a.pos.z;
-      const ok = a.alive && !a.downed && t.alive && t.downed && sameTeam(a, t) && dx * dx + dz * dz <= range2 && Math.abs(t.pos.y - a.pos.y) < 2.5 && (!t.reviver || t.reviver === a);
+      const ok = a.alive && !a.downed && !a.carrying && t.alive && t.downed && !t.carriedBy && sameTeam(a, t) && dx * dx + dz * dz <= range2 && Math.abs(t.pos.y - a.pos.y) < 2.5 && (!t.reviver || t.reviver === a);
       if (!ok) {
         if (t.reviver === a) this.stopRevive(a);
         else a.revivingTarget = null;
@@ -572,6 +688,14 @@ export class Combat {
       if (a.downHp <= 0) this._eliminate(a, { source: a.knockedBy || null, bleed: true, weapon: 'bleed' });
     }
   }
+}
+
+/** Puts a carried actor on its carrier's shoulder (also used by clients for their own view). */
+export function placeOnShoulder(t, carrier) {
+  const h = carrier.heading || 0;
+  t.pos.set(carrier.pos.x - Math.sin(h) * 0.15, carrier.pos.y + 1.05, carrier.pos.z + Math.cos(h) * 0.15);
+  if (t.vel) t.vel.set(0, 0, 0);
+  t.heading = h + Math.PI / 2;
 }
 
 /** Effects surface name -> Sfx bullet_impact surface. */
