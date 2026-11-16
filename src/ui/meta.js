@@ -695,7 +695,7 @@ export function createMeta(menus, account, opts = {}) {
     const p = account.profile;
     whoName.textContent = p.guest ? 'GUEST' : p.name;
     whoSub.textContent = p.guest ? 'Sign in for coins & skins' : `${p.stats.wins} wins · ${p.stats.kills} elims`;
-    coinsNum.textContent = p.guest ? '—' : p.coins.toLocaleString();
+    coinsNum.textContent = p.coins.toLocaleString();
     bAuth.querySelector('span').textContent = account.signedIn ? 'SIGN OUT' : 'SIGN IN';
     bAuth.classList.toggle('mt-chip-sun', !account.signedIn);
     const n = account.friends.incoming.length;
