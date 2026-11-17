@@ -9,6 +9,7 @@ import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { damp, clamp, WEAPONS } from '../core/config.js';
 import { toToon } from '../render/Toon.js';
 import { emoteClips, emoteDef, pickaxeDef, backblingDef, swingClips } from './Cosmetics.js';
+import { grenadeModel } from './Grenades.js';
 
 // Characters and their weapons are cel-shaded; colours get a small saturation lift.
 const TOON_CHAR = { saturate: 1.2 };
@@ -226,6 +227,14 @@ export class Character {
         this.guns[id] = holder;
       }
     }
+    // a grenade held in the right hand while its slot is selected
+    const gm = grenadeModel();
+    this.grenade = new THREE.Mesh(gm.geometry, gm.material);
+    this.grenade.castShadow = true;
+    this.grenade.scale.setScalar(1.5);
+    this.grenade.position.set(0, 0.1, 0);
+    this.grenade.visible = false;
+    (this.bones.handslotr || this.gunPivot).add(this.grenade);
     this.equipped = 'pickaxe';
     this.gunKey = 'pickaxe';
     this.twoHanded = true;
@@ -280,6 +289,7 @@ export class Character {
     this.gunKey = WEAPONS[id] && this.guns[WEAPONS[id].model] ? WEAPONS[id].model : id;
     for (const k in this.guns) this.guns[k].visible = k === this.gunKey;
     if (this.pickaxe) this.pickaxe.visible = id === 'pickaxe';
+    this.grenade.visible = id === 'grenade';
   }
 
   _oneShot(key, speed = 1) {
@@ -358,6 +368,7 @@ export class Character {
     }
     for (const k in this.guns) this.guns[k].visible = false;
     if (this.pickaxe) this.pickaxe.visible = false;
+    this.grenade.visible = false;
     this.canopy.visible = false;
     this.downed = false;
     this.downRing.visible = false;

@@ -26,6 +26,9 @@
  *   fx.aura(target, kind, duration)               // kind 'heal' | 'shield'; target = Object3D or Vector3 (feet)
  *   fx.shieldPop(position)
  *   fx.elimination(position, color)               // position = feet of the eliminated character
+ *   fx.explosion(position, { radius = 5 })        // grenade blast; the ground ring spreads to `radius`
+ *   fx.grenadeBlink(position)                     // one blink of a live grenade's fuse light
+ *   fx.rocketTrail(position)                      // exhaust of a flying rocket, once per trail step
  *   fx.ring(position, { color = 0xffffff, radius = 3, duration = 0.5 })
  *   fx.dustPuff(position, { scale = 1 })
  *   fx.setQuality(quality)
@@ -125,6 +128,8 @@ const P = {
   gold: lin(0xffc23d),
   goldLight: lin(0xffe9a0),
   crit: lin(0x9ff0ff),
+  soot: lin(0x6b6560),
+  alert: lin(0xff4a3a),
 };
 
 const MATERIALS = {
@@ -1772,6 +1777,67 @@ export class Effects {
       else { _r = cr; _g = cg; _b = cb; }
       this._chunk(x + _dx * 0.25, y + 0.5 + rnd() * 1.1, z + _dz * 0.25, _dx * sp, Math.abs(_dy) * sp * 0.7 + 2.2, _dz * sp, (1.3 + rnd() * 0.7) * this._qLife, s * 1.5, s * 0.1, s, 0.5, 6.5, 0.22);
     }
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // Grenades
+  // -------------------------------------------------------------------------------------------
+  /** Grenade blast: fireball, shockwave ring, sparks, smoke, dirt. `opts.radius` = blast radius (m). */
+  explosion(position, opts) {
+    const R = opts && opts.radius > 0 ? opts.radius : 5;
+    const s = R / 5;
+    const x = position.x, gy = position.y, y = position.y + 0.3, z = position.z;
+    col(P.hot);
+    this._sp(x, y, z, 0, 0, 0, 0.12, 1.6 * s, 5.5 * s, FLASH, 0.9, 1, 0, 0.1, 0);
+    col(P.flash);
+    this._sp(x, y, z, 0, 0, 0, 0.3, 1.2 * s, 4.6 * s, GLOW, 0.9, 0.9, 0, 0.1, 0);
+    col(P.flashDeep);
+    this._sp(x, y + 0.3 * s, z, 0, 1.5, 0, 0.45, 1.0 * s, 3.6 * s, GLOW, 0.8, 0.8, 0, 0.1, 0);
+    // the shockwave ring marks the damage radius
+    this._decal(x, gy, z, 0.45, R * 0.15, R, D_RING, 0, 1);
+    this._decal(x, gy, z, 0.35, R * 0.3, R * 0.6, D_FLASH, 0, 0.9);
+    const n = this._n(10);
+    for (let i = 0; i < n; i++) {
+      randDir();
+      const sp = 3 + rnd() * 5;
+      colMix(P.flash, P.flashDeep, rnd());
+      this._sp(x + _dx * 0.4, y + Math.abs(_dy) * 0.4, z + _dz * 0.4, _dx * sp, Math.abs(_dy) * sp + 1, _dz * sp, 0.25 + rnd() * 0.2, 0.7 * s, 1.5 * s, GLOW, 0.8, 0.85, 0, 2.5, 0);
+    }
+    const m = this._n(22);
+    for (let i = 0; i < m; i++) {
+      randDir();
+      const sp = 9 + rnd() * 14;
+      colMix(P.hot, P.sparkDeep, rnd());
+      this._sp(x, y, z, _dx * sp, Math.abs(_dy) * sp * 0.9 + 2, _dz * sp, 0.35 + rnd() * 0.35, 0.07, 0.02, STREAK, 0.85, 1, 12, 1.6, 0.55);
+    }
+    if (this._smoke) {
+      const k = this._n(9);
+      for (let i = 0; i < k; i++) {
+        randDir();
+        colJ(P.soot, 0.08);
+        const o = this._puff(x + _dx * R * 0.15, y + Math.abs(_dy) * R * 0.12, z + _dz * R * 0.15, _dx * 2.2, 1 + rnd() * 1.6, _dz * 2.2, 0.9 * s, (2.2 + rnd() * 1.1) * s, 1.1 + rnd() * 0.6, 0.55);
+        this._later(o, 0.06 + rnd() * 0.1);
+      }
+    }
+    this.debris(position, 'dirt', { count: 12, size: 0.22, spread: R * 0.6 });
+    this._light(x, y + 0.6, z, 90);
+  }
+
+  /** One step of a flying rocket's exhaust: flame at the tail and a smoke puff left behind. */
+  rocketTrail(position) {
+    const x = position.x, y = position.y, z = position.z;
+    col(P.flash);
+    this._sp(x, y, z, 0, 0, 0, 0.09, 0.5, 0.2, GLOW, 0.9, 0.95, 0, 0.1, 0);
+    if (this._smoke) {
+      colJ(P.soot, 0.1);
+      this._puff(x, y, z, (rnd() - 0.5) * 0.5, 0.3 + rnd() * 0.3, (rnd() - 0.5) * 0.5, 0.22, 0.75 + rnd() * 0.3, 0.7 + rnd() * 0.3, 0.38);
+    }
+  }
+
+  /** One blink of a live grenade's fuse light. */
+  grenadeBlink(position) {
+    col(P.alert);
+    this._sp(position.x, position.y + 0.05, position.z, 0, 0, 0, 0.12, 0.3, 0.7, GLOW, 0.9, 0.9, 0, 0.1, 0);
   }
 
   // -------------------------------------------------------------------------------------------

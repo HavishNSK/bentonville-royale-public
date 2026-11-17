@@ -25,8 +25,9 @@
 // - per-client inventory when it changes (with the last action seq it reflects)
 
 import * as THREE from 'three';
-import { PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, MATCH, REBOOT, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
+import { PLAYER, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, MATCH, REBOOT, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
 import { Character } from '../game/Character.js';
+import { heldSlot } from '../game/Game.js';
 import { SKINS, EMOTES, PICKAXES, BACKBLINGS } from '../game/Cosmetics.js';
 import {
   SNAP_HZ, FLAG, XFLAG, EQUIP, SURF, encodeSnapshot, decodeState, seqNewer, rnd,
@@ -78,6 +79,7 @@ export function debugItem(what, rarity = 'rare') {
   if (typeof what !== 'string') return what;
   if (WEAPONS[what]) return { type: 'weapon', id: what, rarity, mag: WEAPONS[what].mag };
   if (what === 'medkit' || what === 'tonic') return { type: 'consumable', id: what, count: 3 };
+  if (what === 'grenade') return { type: 'consumable', id: 'grenade', count: 6 };
   if (MATERIALS.includes(what)) return { type: 'material', mat: what, count: 300 };
   return null;
 }
@@ -149,6 +151,7 @@ export class HostSession {
     this._snapAcc = 0;
     this._invAcc = 0;
     this._invSent = new Map();
+    this._specSent = new Map(); // remote id -> last spectated inventory sent
     this.ended = false;
     this.started = false;
     this.stats = { t0: 0, snapBytes: 0, snaps: 0, evBytes: 0, invBytes: 0, startBytes: 0 };
@@ -214,6 +217,7 @@ export class HostSession {
     this.time = 0;
     this.stats = { t0: 0, snapBytes: 0, snaps: 0, evBytes: 0, invBytes: 0, startBytes: 0 };
     this._invSent.clear();
+    this._specSent.clear();
     const roster = [{ id: 0, n: game.player.name, k: 'player', c: HUMAN_CANOPY[0], h: 1, tm: game.player.team, sk: game.skin, px: game.pickaxe, bb: game.backbling }];
     for (const a of this.remotes.values()) roster.push({ id: a.id, n: a.name, k: 'player', c: HUMAN_CANOPY[a.id % HUMAN_CANOPY.length], h: 1, tm: a.team, sk: a.skin || null, px: a.pickaxeCos || null, bb: a.backbling || null });
     const idBase = game.bots.list.length ? game.bots.list[0].id : 0;
@@ -259,6 +263,8 @@ export class HostSession {
     keep(game.combat, 'onPanelDamage');
     keep(game.combat, 'onPanelBreak');
     keep(game.combat, 'swingPickaxe');
+    keep(game.grenades, 'onThrow');
+    keep(game.grenades, 'onExplode');
     for (const k of ['_add', 'take', 'open']) keep(game.loot, k);
     for (const k of ['place', 'damage', '_destroy', 'edit', 'setDoor']) keep(game.structures, k);
     const ev = (e) => this.started && !this._spawning && this.events.push(e);
@@ -309,6 +315,13 @@ export class HostSession {
       if (shooter) ev({ e: 'sw', a: shooter.id });
       return swing(shooter, origin, dir);
     };
+
+    // grenades: clients replay the flight from the throw and wait for the blast
+    if (game.grenades) {
+      game.grenades.onThrow = (gr) =>
+        ev({ e: 'gr', id: gr.id, a: gr.owner ? gr.owner.id : -1, p: [rnd(gr.pos.x), rnd(gr.pos.y), rnd(gr.pos.z)], v: [rnd(gr.vel.x), rnd(gr.vel.y), rnd(gr.vel.z)], r: gr.rocket ? 1 : 0 });
+      game.grenades.onExplode = (gr) => ev({ e: 'gx', id: gr.id, p: [rnd(gr.pos.x), rnd(gr.pos.y), rnd(gr.pos.z)], r: gr.rocket ? 1 : 0 });
+    }
 
     const loot = game.loot;
     if (loot) {
@@ -412,7 +425,10 @@ export class HostSession {
     this._invAcc += dt;
     if (this._invAcc >= 0.1) {
       this._invAcc = 0;
-      for (const a of this.remotes.values()) this._syncInventory(a);
+      for (const a of this.remotes.values()) {
+        this._syncInventory(a);
+        if (!a.alive && a.specId >= 0) this._syncSpectated(a);
+      }
     }
   }
 
@@ -473,6 +489,19 @@ export class HostSession {
     this.events = [];
     if (this._wdPending) this._wdPending.clear();
     this.stats.evBytes += this.room.broadcast(msg);
+  }
+
+  /** Spectating: the hotbar, ammo and materials of the player `a` watches. */
+  _syncSpectated(a) {
+    const t = this.game.combat.actors.find((x) => x.id === a.specId);
+    const inv = t && t.inventory;
+    if (!inv || !inv.slots) return;
+    const sel = t === this.game.player ? (t.buildPiece ? -1 : inv.selected) : heldSlot(t, inv);
+    const body = { id: t.id, s: inv.slots, ammo: inv.ammo, mats: inv.mats, sel };
+    const key = JSON.stringify(body);
+    if (this._specSent.get(a.id) === key) return;
+    this._specSent.set(a.id, key);
+    this.stats.invBytes += this.room.sendTo(a.id, { t: 'sinv', ...body });
   }
 
   _syncInventory(a) {
@@ -571,6 +600,7 @@ export class HostSession {
     if (info.left) how = 'left';
     else if (info.storm && !killer) how = 'storm';
     else if (info.fall) how = 'fall';
+    else if (info.explosive) how = 'grenade';
     else if (info.weapon === 'pickaxe') how = 'pickaxe';
     else if (info.headshot) how = 'headshot';
     else if (info.bleed) how = 'bleed';
@@ -666,6 +696,15 @@ export class HostSession {
   _onMessage(c, msg) {
     if (msg.t === 'leave') {
       this.room.kick(c.id);
+      return;
+    }
+    if (msg.t === 'spec') {
+      // an eliminated client says who it is watching
+      const r = this.remotes.get(c.id);
+      if (r) {
+        r.specId = Number.isInteger(msg.id) ? msg.id : -1;
+        this._specSent.delete(r.id);
+      }
       return;
     }
     if (msg.t !== 'a') return;
@@ -821,7 +860,7 @@ export class HostSession {
       }
       case 'use': {
         const it = inv.slots[m.s];
-        if (!it || it.type !== 'consumable') return;
+        if (!it || it.type !== 'consumable' || CONSUMABLES[it.id].throwable) return;
         const keep = inv.selected;
         inv.selected = m.s;
         const used = inv.useConsumable();
@@ -832,6 +871,26 @@ export class HostSession {
         a.shield = Math.min(PLAYER.maxShield, a.shield + def.shield);
         if (g.fx) g.fx.aura(a.pos, def.shield > 0 ? 'shield' : 'heal', 1.2);
         this.events.push({ e: 'au', a: a.id, kind: def.shield > 0 ? 'shield' : 'heal' });
+        return;
+      }
+      case 'gr': {
+        // throw one grenade from slot m.s
+        if (a.inBus || a.airborneDrop || !g.grenades) return;
+        const it = inv.slots[m.s];
+        if (!it || it.type !== 'consumable' || !CONSUMABLES[it.id].throwable) return;
+        if (this.time - (a.lastThrow || -9) < GRENADE.cooldown * 0.6) return;
+        if (!Array.isArray(m.o) || !Array.isArray(m.d)) return;
+        _o.set(+m.o[0], +m.o[1], +m.o[2]);
+        _d.set(+m.d[0], +m.d[1], +m.d[2]);
+        if (!Number.isFinite(_o.x + _o.y + _o.z + _d.x + _d.y + _d.z) || _d.lengthSq() < 1e-6 || _o.distanceTo(a.pos) > 4) return;
+        const keep = inv.selected;
+        inv.selected = m.s;
+        const used = inv.useConsumable();
+        inv.selected = keep;
+        if (!used) return;
+        a.lastThrow = this.time;
+        if (a.character) a.character.swing();
+        g.grenades.throw(a, _o, _d.normalize());
         return;
       }
       case 'mv': {
@@ -921,7 +980,7 @@ export class HostSession {
         return;
       case 'dbg':
         if (!DEV) return;
-        if (m.give === 'ammo') for (const k of ['light', 'medium', 'shells', 'heavy']) inv.add({ type: 'ammo', ammo: k, count: 120 });
+        if (m.give === 'ammo') for (const k of Object.keys(inv.ammo)) inv.add({ type: 'ammo', ammo: k, count: 120 });
         else {
           const item = debugItem(m.give, m.rarity);
           if (item) inv.add(item);

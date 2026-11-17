@@ -21,7 +21,7 @@
 // storm, bots, storm damage and the win check are left to the host.
 
 import * as THREE from 'three';
-import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, STORM, MATERIALS, KNOCK, REBOOT, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
+import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
 import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
 import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
@@ -41,6 +41,7 @@ import { skinDef, emoteDef, pickaxeDef, DEFAULT_EQUIPPED, PICKAXES, BACKBLINGS }
 import { Combat, rayActor } from './Combat.js';
 import { Pings } from './Pings.js';
 import { Reboot } from './Reboot.js';
+import { Grenades, launcherModel } from './Grenades.js';
 import { Player, placeOrbitCamera, itemLabel } from './Player.js';
 import * as StormMod from './Storm.js';
 import * as LootMod from './Loot.js';
@@ -247,8 +248,12 @@ export class Game {
     this._statT = 0;
     this.combat.onStats = (a) => this._statDirty.add(a);
 
+    this.grenades = new Grenades({ scene: this.scene, world: this.world, combat: this.combat, structures: this.structures, fx: this.fx, sfx });
+    this.combat.launchProjectile = (shooter, w, muzzle, origin, dir) => this.grenades.fireRocket(shooter, muzzle, origin, dir, w.damage);
+    models.rocket_launcher = { scene: launcherModel() }; // no .glb: built in code
+
     const lootModels = {};
-    for (const k of [...LOOT_MODELS, ...WEAPON_MODELS]) lootModels[k] = models[k];
+    for (const k of [...LOOT_MODELS, ...WEAPON_MODELS, 'rocket_launcher']) lootModels[k] = models[k];
     this.loot = LootMod.Loot ? new LootMod.Loot({ scene: this.scene, world: this.world, models: lootModels, fx: this.fx, sfx }) : null;
 
     const StormCls = StormMod.Storm || StaticStorm;
@@ -262,7 +267,7 @@ export class Game {
     }
     registerKits(this.kits);
     const weaponScenes = {};
-    for (const n of WEAPON_MODELS) if (models[n]) weaponScenes[n] = models[n].scene;
+    for (const n of [...WEAPON_MODELS, 'rocket_launcher']) if (models[n]) weaponScenes[n] = models[n].scene;
     this.weaponScenes = weaponScenes;
     const Inventory = InvMod.Inventory;
     const playerChar = this.kits.player ? new Character(this.kits.player, { weapons: weaponScenes, canopyColor: 0xffc21f }) : null;
@@ -403,6 +408,7 @@ export class Game {
     this.combat.restoreWorld();
     this.combat.clear();
     this.combat.authoritative = true;
+    this.grenades.clear();
     if (this.structures) this.structures.clear();
     this.fx.clear();
     this.hud.clearTransient();
@@ -604,6 +610,7 @@ export class Game {
     this.combat.restoreWorld();
     this.combat.clear();
     this.combat.authoritative = false;
+    this.grenades.clear();
     this.freeBuild = false;
     this.hud.setStormVisible(true);
     if (this.structures) this.structures.clear();
@@ -774,6 +781,24 @@ export class Game {
       return;
     }
     this._setSpectating(pool[0] || null);
+  }
+
+  /**
+   * Inventory of the player we watch, with `selected` on the slot they hold. Solo / host
+   * read it straight off the actor; a client gets a copy from the host (net.specInventory).
+   */
+  _specInv(f) {
+    if (this.net && this.net.isClient) return this.net.specInventory ? this.net.specInventory(f) : null;
+    const inv = f.inventory;
+    if (!inv || !inv.hotbar) return null;
+    this._specSel = heldSlot(f, inv);
+    return inv;
+  }
+
+  /** The actor the HUD and world follow: who we watch once we are out, else us. */
+  _focusActor() {
+    const p = this.player;
+    return !p.alive && this.spectating && this.spectating.alive ? this.spectating : p;
   }
 
   /** Drop Bus clock: the host's match clock on a client (once snapshots arrive), else local. */
@@ -1016,8 +1041,9 @@ export class Game {
     } else if (info.fall) text = `${victim.name} fell too far`;
     else if (info.bleed) text = killer ? `${victim.name} bled out (${killer.name})` : `${victim.name} bled out`;
     else if (info.wipe) text = killer ? `${killer.name} wiped ${victim.name}` : `${victim.name} was eliminated`;
+    else if (info.explosive && !killer) text = `${victim.name} blew themselves up`;
     else if (killer) {
-      const how = info.weapon === 'pickaxe' ? 'bonked' : info.headshot ? 'headshot' : 'eliminated';
+      const how = info.weapon === 'pickaxe' ? 'bonked' : info.explosive ? 'blew up' : info.headshot ? 'headshot' : 'eliminated';
       text = `${killer.name} ${how} ${victim.name}`;
     } else text = `${victim.name} was eliminated`;
     if (killer === p) kind = 'kill';
@@ -1265,7 +1291,7 @@ export class Game {
 
     if (!client) {
       try {
-        this.bots.update(dt, { player: p, storm: this.storm, time: this.time, busTime: this.busT });
+        this.bots.update(dt, { player: p, storm: this.storm, time: this.time, busTime: this.busT, viewer: this._focusActor().pos });
       } catch (err) {
         this._error('bots.update', err);
       }
@@ -1280,6 +1306,7 @@ export class Game {
     if (!client && this.teamMode) this.combat.tickCarry(); // carried teammates ride on shoulders
     if (!client) this._syncStats(dt);
     if (this.structures) this.structures.update(dt);
+    this.grenades.update(dt);
     if (this.loot) this.loot.update(dt, this.camera.position);
     if (this.reboot && (this.state === 'play' || this.state === 'over')) this.reboot.update(dt, this.combat.actors);
 
@@ -1370,6 +1397,11 @@ export class Game {
         placeOrbitCamera(cam, this.world, _v, this._specH, -0.35, 7, 0);
       } else p.updateCamera(cam, dt, this.world, this.settings.fov || CAMERA.fov);
     }
+    // grenade aim arc, from the fresh aim ray
+    if (this.grenades) {
+      const aim = this.state === 'play' && p.alive && p.throwAim && !this.paused && !this.inventoryOpen;
+      this.grenades.preview(aim ? p.throwOrigin(_v) : null, p.aimDir);
+    }
 
     // the Drop Bus keeps flying its route after everyone has jumped
     if (this.dropBus) this.dropBus.update(this.busRoute, this.busT, dt, inMatch && !this.freeBuild && !!this.busRoute);
@@ -1382,7 +1414,7 @@ export class Game {
     }
 
     const s = this.storm;
-    const focus = inMatch ? (this.spectating && this.spectating.alive ? this.spectating.pos : p.pos) : cam.position;
+    const focus = inMatch ? this._focusActor().pos : cam.position;
     const stormOn = inMatch && this.state !== 'drop';
     const intensity = stormOn ? s.intensityAt(focus.x, focus.z) : 0;
     // no wall while the opening storm is dormant (harmless, up to STORM.openMaxRadius wide) or in free build
@@ -1406,17 +1438,28 @@ export class Game {
     const hud = this.hud;
     const p = this.player;
     const inv = p.inventory;
-    const watching =
-      this.state === 'play' && !p.alive && this.spectating && this.spectating.alive ? this.spectating : null;
-    const vitals = watching || p;
-    hud.setHealth(vitals.health || 0, PLAYER.maxHealth);
-    hud.setShield(vitals.shield || 0, PLAYER.maxShield);
-    hud.setMaterials(inv.mats, p.buildMat);
-    hud.setHotbar(inv.hotbar(), p.buildPiece ? -1 : inv.selected);
+    const f = this._focusActor();
+    const watching = f !== p && this.state === 'play' ? f : null;
+    hud.setHealth(f.health || 0, PLAYER.maxHealth);
+    hud.setShield(f.shield || 0, PLAYER.maxShield);
+    const winv = watching ? this._specInv(f) : null;
+    hud.el.classList.toggle('is-spec-noinv', !!watching && !winv);
+    if (winv) {
+      const sel = this.net && this.net.isClient ? winv.selected : this._specSel;
+      hud.setMaterials(winv.mats, f.buildMat || 'wood');
+      hud.setHotbar(winv.hotbar(), sel);
+      const keep = winv.selected;
+      winv.selected = sel;
+      hud.setWeapon(winv.weaponHud(0));
+      winv.selected = keep;
+    } else {
+      hud.setMaterials(inv.mats, p.buildMat);
+      hud.setHotbar(inv.hotbar(), p.buildPiece ? -1 : inv.selected);
+    }
     if (this.inventoryOpen) this._updateInventoryPanel();
     hud.setBuildMode(watching ? null : p.buildPiece);
     const rl = p.reloadT > 0 ? 1 - p.reloadT / p.reloadTotal : 0;
-    hud.setWeapon(watching || p.buildPiece ? null : inv.weaponHud ? inv.weaponHud(rl) : null);
+    if (!winv) hud.setWeapon(p.buildPiece ? null : inv.weaponHud ? inv.weaponHud(rl) : null);
     const cur = inv.current();
     const curW = cur && cur.type === 'weapon' ? WEAPONS[cur.id] : null;
     const kind = p.buildPiece ? 'build' : curW ? (curW.kind === 'shotgun' ? 'shotgun' : 'gun') : 'pickaxe';
@@ -1454,7 +1497,7 @@ export class Game {
     if (!this.freeBuild) {
       // also during the drop: the storm is frozen at phase 1's full wait there, and without
       // this the panel kept its initial 0:00
-      const hs = s.hudState(p.pos.x, p.pos.z);
+      const hs = s.hudState(f.pos.x, f.pos.z);
       if (this.state === 'drop') hs.outside = false; // no storm vignette over the drop map
       hud.setStorm(hs);
     }
@@ -1467,7 +1510,7 @@ export class Game {
       let bd = Infinity;
       for (const k in this.world.landmarks) {
         const l = this.world.landmarks[k];
-        const d = Math.hypot(l.x - p.pos.x, l.z - p.pos.z);
+        const d = Math.hypot(l.x - f.pos.x, l.z - f.pos.z);
         if (d < Math.max(60, l.r * 1.2) && d < bd) {
           bd = d;
           best = l;
@@ -1538,7 +1581,7 @@ export class Game {
       }
     }
     this.minimap.update({
-      player: { x: p.pos.x, z: p.pos.z, heading: p.heading },
+      player: { x: f.pos.x, z: f.pos.z, heading: watching ? watching.heading || 0 : p.heading },
       // dormant opening storm / free build: no next ring or guide line (nextR < 0 hides them)
       storm: s.dormant || this.freeBuild ? { cx: s.cx, cz: s.cz, r: s.r, nextCx: s.cx, nextCz: s.cz, nextR: -1 } : this.state === 'drop' ? { cx: s.cx, cz: s.cz, r: s.r, nextCx: s.nextCx, nextCz: s.nextCz, nextR: s.nextR } : s,
       fullOpen,
@@ -1959,7 +2002,7 @@ export class Game {
         if (game.net && game.net.isClient) game.net.debugTeleport(p.pos);
         return { x: p.pos.x, y: p.pos.y, z: p.pos.z };
       },
-      /** give('rifle'|'smg'|..|'medkit'|'tonic'|'wood'|'ammo'|item object, rarity?) */
+      /** give('rifle'|'smg'|..|'medkit'|'tonic'|'grenade'|'wood'|'ammo'|item object, rarity?) */
       give(what, rarity = 'rare') {
         const p = game.player;
         if (game.net && game.net.isClient) {
@@ -1971,9 +2014,10 @@ export class Game {
         if (typeof what === 'string') {
           if (WEAPONS[what]) item = { type: 'weapon', id: what, rarity, mag: WEAPONS[what].mag };
           else if (what === 'medkit' || what === 'tonic') item = { type: 'consumable', id: what, count: 3 };
+          else if (what === 'grenade') item = { type: 'consumable', id: 'grenade', count: 6 };
           else if (what === 'wood' || what === 'brick' || what === 'metal') item = { type: 'material', mat: what, count: 300 };
           else if (what === 'ammo') {
-            for (const a of ['light', 'medium', 'shells', 'heavy']) p.inventory.add({ type: 'ammo', ammo: a, count: 120 });
+            for (const a of Object.keys(AMMO)) p.inventory.add({ type: 'ammo', ammo: a, count: 120 });
             return true;
           }
         }
@@ -2001,6 +2045,14 @@ export class Game {
         game.player.cooldown = 0;
         const r = game.player.fire(game);
         return r ? r.map((h) => ({ hit: h.hitActor ? h.hitActor.name : null, headshot: h.headshot, point: [h.point.x, h.point.y, h.point.z] })) : false;
+      },
+      /** Throw a held grenade now (select its slot first). */
+      throwGrenade() {
+        game.player.cooldown = 0;
+        return game.player.throwGrenade(game);
+      },
+      grenades() {
+        return game.grenades.list.map((g) => ({ id: g.id, x: g.pos.x, y: g.pos.y, z: g.pos.z, fuse: g.fuse, resting: g.resting }));
       },
       swing() {
         game.player.cooldown = 0;
@@ -2289,6 +2341,16 @@ function reviveFields(a, x, y, z, heading) {
 function rebootLoadout() {
   const L = REBOOT.loadout;
   return { items: L.items.map((it) => ({ ...it })), ammo: { ...L.ammo }, mats: { ...L.mats }, selected: L.selected };
+}
+
+/** Hotbar slot an actor is holding (-1 = pickaxe): bots select a slot, remote humans report what they hold. */
+export function heldSlot(a, inv) {
+  const eq = a.equipId || null;
+  if (!eq) return a.buildPiece ? -1 : inv.selected;
+  if (eq === 'pickaxe') return -1;
+  const cur = inv.slots[inv.selected];
+  if (cur && (cur.id === eq || (eq === 'none' && cur.type === 'consumable'))) return inv.selected;
+  return inv.slots.findIndex((s) => s && (s.id === eq || (eq === 'none' && s.type === 'consumable')));
 }
 
 const NO_INPUT = {

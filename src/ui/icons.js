@@ -96,6 +96,15 @@ const SQUARE = {
     `<path d="M17 14V10C17 7.500 18.500 6 21 6H27C29.500 6 31 7.500 31 10V14" fill="none" ${S}/>` +
     `<rect x="4.500" y="13" width="39" height="29" rx="6" fill="#fff" ${S}/>` +
     `<path d="M24 19.500v16M16 27.500h16" fill="none" stroke="#ff4f6d" stroke-width="6.500" stroke-linecap="round"/>`,
+  grenade:
+    `<path d="M30 8.500L41 16.500" fill="none" stroke="${INK}" stroke-width="8" stroke-linecap="round"/>` +
+    `<path d="M30 8.500L41 16.500" fill="none" stroke="#c5cfe2" stroke-width="3.500" stroke-linecap="round"/>` +
+    `<circle cx="13" cy="9" r="4.500" fill="none" stroke="${INK}" stroke-width="6"/>` +
+    `<circle cx="13" cy="9" r="4.500" fill="none" stroke="${GOLD}" stroke-width="2.500"/>` +
+    `<rect x="17" y="5" width="14" height="9" rx="2.500" fill="#8f9db8" ${S}/>` +
+    `<ellipse cx="24" cy="29" rx="14.500" ry="16" fill="#5d8a45" ${S}/>` +
+    `<path d="M10 26h28M11.500 34h25M19 14.500v29M29 14.500v29" fill="none" stroke="${INK}" stroke-width="2" opacity=".45"/>` +
+    `<path d="M15 21.500q2.500-4 6-5" fill="none" stroke="#b9e08f" stroke-width="2.500" stroke-linecap="round"/>`,
 
   // ---- menu / misc -------------------------------------------------------
   play: `<path d="M14 7.500L41 24L14 40.500Z" fill="#fff" ${S}/>`,
@@ -192,6 +201,19 @@ const WIDE = {
       `<polygon points="27,26 35,26 32.500,38.500 24.500,37.500" fill="${GUN_DARK}"/>` +
       `<path d="M23 15H7V32h5V20h11Z" fill="${GUN_DARK}"/>` +
       `<path d="M40 18.500h14" stroke="${GUN_DARK}" stroke-width="2.500" stroke-linecap="round" fill="none"/>`
+  ),
+  rocket_launcher: sil(
+    `<rect x="18" y="14" width="56" height="12" rx="3"/>` +
+      `<polygon points="18,12 6,9 6,31 18,28"/>` +
+      `<polygon points="74,13 84,13 94,20 84,27 74,27"/>` +
+      `<polygon points="40,26 48,26 46.500,39 38.500,39"/>` +
+      `<rect x="52" y="6" width="12" height="8" rx="2"/>`,
+    '#6f8f55',
+    `<polygon points="74,13 84,13 94,20 84,27 74,27" fill="#ff5a4d"/>` +
+      `<polygon points="18,12 6,9 6,31 18,28" fill="${GUN_DARK}"/>` +
+      `<polygon points="40,26 48,26 46.500,39 38.500,39" fill="${GUN_DARK}"/>` +
+      `<rect x="52" y="6" width="12" height="8" rx="2" fill="${GUN_DARK}"/>` +
+      `<rect x="30" y="14" width="5" height="12" fill="${GOLD}"/><rect x="60" y="14" width="5" height="12" fill="${GOLD}"/>`
   ),
   sniper: sil(
     `<rect x="48" y="19.500" width="42" height="4" rx="1"/>` +

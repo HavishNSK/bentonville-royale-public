@@ -487,6 +487,40 @@ def('building_collapse', { vol: 0.95, ref: 14, max: 190, roll: 1.6, vary: 0.06, 
   }
 });
 
+// --- Grenades --------------------------------------------------------------
+
+def('explosion', { vol: 1, ref: 16, max: 240, roll: 1.5, vary: 0.05, pri: 2 }, (v) => {
+  v.noise({ dur: 0.05, g: 0.9, a: 0.001, flt: { type: 'highpass', f: 1800 } });
+  v.noise({ dur: 0.7, g: 1.0, a: 0.001, flt: { type: 'lowpass', f: 5200, f2: 240, ft: 0.4, q: 0.5 } });
+  v.tone({ f: 110, f2: 28, ft: 0.35, dur: 0.7, g: 1.0, a: 0.001 });
+  v.tone({ type: 'triangle', f: 210, f2: 48, ft: 0.14, dur: 0.25, g: 0.5, a: 0.001 });
+  v.noise({ type: 'brown', at: 0.05, dur: 1.5, g: 0.7, env: [[0.04, 1], [0.5, 0.5], [1.5, 0]], flt: { type: 'lowpass', f: 420, f2: 90 } });
+  for (let i = 0; i < 5; i++) tick(v, rnd(0.15, 0.9), rnd(700, 2600), rnd(0.04, 0.1), rnd(0.08, 0.2));
+});
+
+def('rocket_launch', { vol: 0.9, ref: 12, max: 180, roll: 1.5, vary: 0.05, pri: 1.5 }, (v) => {
+  v.noise({ dur: 0.08, g: 0.8, a: 0.001, flt: { type: 'highpass', f: 1200 } });
+  v.tone({ f: 160, f2: 45, ft: 0.2, dur: 0.3, g: 0.8, a: 0.001 });
+  v.noise({ dur: 0.9, g: 0.7, env: [[0.03, 1], [0.25, 0.6], [0.9, 0]], flt: { type: 'bandpass', f: 900, fenv: [[0.15, 2600], [0.9, 500]], q: 0.8 } });
+  v.noise({ type: 'brown', at: 0.02, dur: 0.6, g: 0.5, env: [[0.05, 1], [0.6, 0]], flt: { type: 'lowpass', f: 500, f2: 120 } });
+});
+
+def('grenade_bounce', { vol: 0.5, ref: 4, max: 40, vary: 0.1 }, (v) => {
+  tick(v, 0, 1900, 0.035, 0.6, 'bandpass', 3);
+  thump(v, 0, 320, 170, 0.05, 0.4);
+});
+
+def('grenade_beep', { vol: 0.4, ref: 4, max: 35, vary: 0 }, (v) => {
+  v.tone({ type: 'square', f: 1900, dur: 0.05, g: 0.25, a: 0.002, flt: { type: 'lowpass', f: 4000 } });
+});
+
+def('grenade_throw', { vol: 0.5, ref: 3, max: 20, vary: 0.1 }, (v) => {
+  v.noise({
+    dur: 0.24, g: 0.5, env: [[0.09, 1], [0.24, 0]],
+    flt: { type: 'bandpass', f: 400, fenv: [[0.1, 1800], [0.24, 600]], q: 1.2 },
+  });
+});
+
 def('swing', { sample: smp('swing', 2), sgain: 0.66, vol: 0.5, ref: 3, max: 20, vary: 0.1 }, (v) => {
   v.noise({
     dur: 0.2, g: 0.5, env: [[0.07, 1], [0.2, 0]],

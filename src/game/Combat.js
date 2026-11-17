@@ -139,6 +139,7 @@ export class Combat {
     this.onEliminate = null;
     this.onHarvest = null;
     this.onFire = null;
+    this.launchProjectile = null; // (shooter, stats, muzzle, origin, dir): rocket launchers (set by Game)
     this.onBurstShot = null;
     this.onColliderDestroyed = null;
     this.onKnock = null;
@@ -291,6 +292,14 @@ export class Combat {
     else _from.copy(origin);
     if (this.fx) this.fx.muzzleFlash(_from, dir, { scale: w.kind === 'shotgun' ? 1.4 : 1 });
     if (this.sfx) this.sfx.play(w.sound, { x: _from.x, y: _from.y, z: _from.z, volume: w.soundVolume });
+
+    // launchers fire a projectile; the blast does the damage (game/Grenades.js)
+    if (w.projectile) {
+      _dir.copy(dirs ? dirs[0] : dir).normalize();
+      this.lastDirs = [_dir.clone()];
+      if (auth && this.launchProjectile) this.launchProjectile(shooter, w, _from, origin, _dir);
+      return out;
+    }
 
     const actorDamage = new Map();
     const pellets = dirs ? dirs.length : w.pellets || 1;

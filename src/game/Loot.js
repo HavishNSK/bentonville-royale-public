@@ -12,7 +12,7 @@
 //   rifle, smg, shotgun, sniper, pistol                 — public/assets/weapons/<key>.glb
 //
 // Rendering: every visual kind is one InstancedMesh (chest body, chest lid, ammo
-// box body, ammo box lid, one per weapon, medkit, potion, and a tinted crate for
+// box body, ammo box lid, one per weapon, medkit, potion, grenade, and a tinted crate for
 // ammo/material pickups) — 12 draw calls at most. Matrices are rewritten each
 // frame only for records inside `cullDist` of the viewer. Loot beams, chest glows
 // and the chest hum loop are attached only to nearby records (the Effects pools
@@ -23,6 +23,7 @@
 import * as THREE from 'three';
 import { flattenModel } from '../core/assets.js';
 import { toToon } from '../render/Toon.js';
+import { grenadeModel } from './Grenades.js';
 import {
   WEAPONS, WEAPON_IDS, weaponStats, clampWeaponRarity, CONSUMABLES, AMMO, MATERIALS, MATERIAL_COLOR, RARITIES, MATCH,
   DROP_ZONES, STORM, QUALITY, TAU,
@@ -46,8 +47,9 @@ export const LOOT = {
   pickupRange: 2.4,
   autoRange: 2.4, // floor ammo / ammo boxes are collected automatically inside this
   verticalReach: 2.2,
-  scale: { chest: 2.0, ammo: 1.0, w: 1.3, medkit: 1.7, potion: 1.3, crateAmmo: 0.7, crateMat: 0.9 },
-  ammoTint: { light: 0xbfe6ff, medium: 0x9ee08a, shells: 0xffa477, heavy: 0xa9b2ff },
+  scale: { chest: 2.0, ammo: 1.0, w: 1.3, medkit: 1.7, potion: 1.3, grenade: 1.8, crateAmmo: 0.7, crateMat: 0.9 },
+  grenadeShare: 0.2, // of consumable rolls; the rest split medkit / tonic as before
+  ammoTint: { light: 0xbfe6ff, medium: 0x9ee08a, shells: 0xffa477, heavy: 0xa9b2ff, rockets: 0xff5a4d },
 };
 
 // placement (spawnMatch): see the comment above Loot._interiorGrid
@@ -81,6 +83,7 @@ function floorAreaOf(b) {
   return Math.max(a, b.area || 0);
 }
 const AMMO_KINDS = Object.keys(AMMO);
+const AMMO_WEIGHTS = Object.fromEntries(AMMO_KINDS.map((k) => [k, AMMO[k].weight ?? 1]));
 const CAP = { chest: MATCH.chests + 16, ammo: MATCH.ammoBoxes + 16, weapon: 120 + MATCH.floorLoot, consumable: 120 + MATCH.floorLoot, crate: 200 + MATCH.floorLoot * 2 };
 
 const _m = new THREE.Matrix4();
@@ -155,11 +158,12 @@ export function ammoFor(weaponId) {
   return { type: 'ammo', ammo: kind, count: AMMO[kind].pickup };
 }
 export function rollConsumable(rng) {
+  if (rng() < LOOT.grenadeShare) return { type: 'consumable', id: 'grenade', count: CONSUMABLES.grenade.pickup };
   const id = rng() < 0.55 ? 'medkit' : 'tonic';
   return { type: 'consumable', id, count: id === 'medkit' ? 1 : 1 + (rng() < 0.3 ? 1 : 0) };
 }
 export function rollAmmo(rng) {
-  const kind = AMMO_KINDS[Math.floor(rng() * AMMO_KINDS.length)];
+  const kind = pickWeighted(rng, AMMO_WEIGHTS);
   return { type: 'ammo', ammo: kind, count: AMMO[kind].pickup };
 }
 
@@ -290,6 +294,7 @@ export class Loot {
       ammoLid: ammo.lid ? new Batch(g, ammo.lid, CAP.ammo, { shadow: true, name: 'ammoLid' }) : null,
       medkit: new Batch(g, prepFlat(m.medkit, () => boxFlat(0.22, 0.29, 0.14, 0xd83a3a)), CAP.consumable, { name: 'medkit' }),
       potion: new Batch(g, prepFlat(m.potion, () => boxFlat(0.2, 0.4, 0.2, 0x3b9cff)), CAP.consumable, { name: 'potion' }),
+      grenade: new Batch(g, grenadeModel(true), CAP.consumable, { name: 'grenade' }),
       crate: new Batch(g, prepFlat(m.crate, () => boxFlat(0.5, 0.5, 0.5, 0xffffff)), CAP.crate, { colored: true, name: 'crate' }),
     };
     for (const id of WEAPON_KEYS) {
@@ -1136,8 +1141,8 @@ export class Loot {
             sc = S.w;
             break;
           case 'consumable':
-            batch = it.id === 'medkit' ? B.medkit : B.potion;
-            sc = it.id === 'medkit' ? S.medkit : S.potion;
+            batch = it.id === 'medkit' ? B.medkit : it.id === 'grenade' ? B.grenade : B.potion;
+            sc = it.id === 'medkit' ? S.medkit : it.id === 'grenade' ? S.grenade : S.potion;
             break;
           case 'ammo':
             batch = B.crate;

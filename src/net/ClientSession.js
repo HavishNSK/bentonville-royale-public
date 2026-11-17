@@ -15,6 +15,7 @@
 import * as THREE from 'three';
 import { WEAPONS, PLAYER, QUALITY, TAU, weaponStats } from '../core/config.js';
 import { Character } from '../game/Character.js';
+import { Inventory } from '../game/Inventory.js';
 import { SKINS, EMOTES, botLoadout } from '../game/Cosmetics.js';
 import { itemLabel } from '../game/Player.js';
 import { impactSound, placeOnShoulder } from '../game/Combat.js';
@@ -31,7 +32,7 @@ const PREDICT_MS = 3000; // a locally placed build the host has not echoed by th
 function equipIdOf(p) {
   if (p.buildPiece) return 'pickaxe';
   const it = p.inventory && p.inventory.current();
-  return it ? (it.type === 'weapon' ? it.id : 'none') : 'pickaxe';
+  return it ? (it.type === 'weapon' ? it.id : it.id === 'grenade' ? 'grenade' : 'none') : 'pickaxe';
 }
 
 function lerpAngle(a, b, t) {
@@ -175,6 +176,9 @@ export class ClientSession {
     this.seq = 0;
     this.stateSeq = 0;
     this.lastInvSeq = 0;
+    this._specAsk = -1;
+    this._specInv = null;
+    this._specInvOf = -1;
     this.pendingInv = null;
     this._stateAcc = 0;
     this._tpUntil = 0;
@@ -264,6 +268,11 @@ export class ClientSession {
   // ---------------------------------------------------------------- outgoing
 
   /** Reliable action to the host. `inv`: it changes the inventory (host sync waits for it). */
+  /** Spectating: the host's copy of actor `a`'s inventory (null until it arrives). */
+  specInventory(a) {
+    return a && this._specInv && this._specInvOf === a.id ? this._specInv : null;
+  }
+
   action(msg, inv = false) {
     msg.t = 'a';
     msg.seq = ++this.seq;
@@ -383,6 +392,15 @@ export class ClientSession {
         }
       }
     } else if (msg.t === 'inv') this.pendingInv = msg;
+    else if (msg.t === 'sinv') {
+      // inventory of the player we are spectating
+      const I = this._specInv || (this._specInv = new Inventory());
+      for (let i = 0; i < I.slots.length; i++) I.slots[i] = msg.s[i] ? { ...msg.s[i] } : null;
+      Object.assign(I.ammo, msg.ammo);
+      Object.assign(I.mats, msg.mats);
+      I.selected = msg.sel;
+      this._specInvOf = msg.id;
+    }
     else if (msg.t === 'cor') {
       if (performance.now() < this._tpUntil) return;
       const p = this.game.player;
@@ -504,6 +522,27 @@ export class ClientSession {
         if (a && fx) fx.aura(a.pos, e.kind, 1.2);
         return;
       }
+      case 'gr': {
+        // a grenade left someone's hand: fly it here too (the host owns the blast)
+        if (!g.grenades) return;
+        const a = this.actorById(e.a);
+        if (e.r) {
+          // a rocket: we already heard our own launch
+          g.grenades.spawnRocket(e.id, a, _v.set(e.p[0], e.p[1], e.p[2]), _v2.set(e.v[0], e.v[1], e.v[2]));
+          if (a !== g.player) {
+            sfx.play('rocket_launch', { x: e.p[0], y: e.p[1], z: e.p[2] });
+            if (a && a.character) a.character.fire();
+          }
+          return;
+        }
+        g.grenades.spawn(e.id, a, _v.set(e.p[0], e.p[1], e.p[2]), _v2.set(e.v[0], e.v[1], e.v[2]));
+        sfx.play('grenade_throw', { x: e.p[0], y: e.p[1], z: e.p[2], volume: 0.7 });
+        if (a && a !== g.player && a.character) a.character.swing();
+        return;
+      }
+      case 'gx':
+        if (g.grenades) g.grenades.explodeAt(e.id, _v.set(e.p[0], e.p[1], e.p[2]), !!e.r);
+        return;
       case 'la': {
         const loot = g.loot;
         if (!loot || loot.byId.has(e.id)) return;
@@ -672,6 +711,7 @@ export class ClientSession {
     const p = g.player;
     const victim = this.actorById(e.v);
     const killer = e.k >= 0 ? this.actorById(e.k) : null;
+    if (victim && killer && killer !== victim) victim.lastAttacker = killer; // spectating follows the chain
     this.aliveCount = e.n;
     const vName = victim ? victim.name : '?';
     const kName = killer ? killer.name : null;
@@ -684,7 +724,8 @@ export class ClientSession {
     } else if (e.how === 'fall') text = `${vName} fell too far`;
     else if (e.how === 'bleed') text = kName ? `${vName} bled out (${kName})` : `${vName} bled out`;
     else if (e.how === 'wipe') text = kName ? `${kName} wiped ${vName}` : `${vName} was eliminated`;
-    else if (kName) text = `${kName} ${e.how === 'pickaxe' ? 'bonked' : e.how === 'headshot' ? 'headshot' : 'eliminated'} ${vName}`;
+    else if (e.how === 'grenade' && !kName) text = `${vName} blew themselves up`;
+    else if (kName) text = `${kName} ${e.how === 'pickaxe' ? 'bonked' : e.how === 'grenade' ? 'blew up' : e.how === 'headshot' ? 'headshot' : 'eliminated'} ${vName}`;
     else text = `${vName} was eliminated`;
     if (e.k === this.id) kind = 'kill';
     if (e.v === this.id) kind = 'self';
@@ -794,6 +835,13 @@ export class ClientSession {
       for (let i = 0; i < I.slots.length; i++) I.slots[i] = inv.s[i] ? { ...inv.s[i] } : null;
       Object.assign(I.ammo, inv.ammo);
       Object.assign(I.mats, inv.mats);
+    }
+
+    // spectating: the host sends the inventory of whoever we watch
+    const st = !p.alive && g.spectating && g.spectating.id != null ? g.spectating.id : -1;
+    if (st !== this._specAsk) {
+      this._specAsk = st;
+      this.conn.send({ t: 'spec', id: st });
     }
 
     this._stateAcc += dt;
