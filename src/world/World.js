@@ -1249,6 +1249,30 @@ export class World {
     return c;
   }
 
+  /**
+   * Reserve a plan polygon ([[x, z], ...]) for a bespoke landmark (Crystal Bridges): generic
+   * scatter (trees, rocks, parked cars) and generic loot stay out; the landmark places its own.
+   */
+  reserve(pts) {
+    if (!this._reserved) this._reserved = [];
+    const p = new Float32Array(pts.length * 2);
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    pts.forEach(([x, z], i) => {
+      p[i * 2] = x;
+      p[i * 2 + 1] = z;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+    });
+    this._reserved.push({ p, n: pts.length, minX, maxX, minZ, maxZ });
+  }
+
+  reservedAt(x, z) {
+    const R = this._reserved;
+    if (!R) return false;
+    for (const r of R) if (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ && pointInPoly(r.p, r.n, x, z)) return true;
+    return false;
+  }
+
   boxById(id) {
     return (this._boxes && this._boxes[id]) || null;
   }

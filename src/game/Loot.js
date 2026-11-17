@@ -33,6 +33,7 @@ import {
 export const LOOT = {
   floorRarity: [40, 30, 18, 9, 3], // weights for common..legendary
   chestRarity: [10, 32, 33, 18, 7],
+  highChestRarity: [0, 0, 25, 45, 30], // hard-to-reach landmark chests (world.fixedLoot tier 'high')
   weaponWeights: Object.fromEntries(WEAPON_IDS.map((id) => [id, WEAPONS[id].lootWeight ?? 10])),
   floorMix: { weapon: 0.45, consumable: 0.25, ammo: 0.2, material: 0.1 },
   matPickup: 30,
@@ -639,6 +640,7 @@ export class Loot {
     if (!w.inBounds(x, z, 20)) return false;
     if (w.blockedAt(x, z, clearance)) return false;
     if (w.areaAt && w.areaAt(x, z) === 'water') return false;
+    if (w.reservedAt && w.reservedAt(x, z)) return false; // bespoke landmark: it places its own loot
     return true;
   }
 
@@ -875,6 +877,19 @@ export class Loot {
       item: opts.floorLoot ?? MATCH.floorLoot,
     };
     let indoorChests = 0;
+    // fixed spots authored by bespoke landmarks (world.fixedLoot: { kind, x, y, z, yaw, tier?, item? })
+    for (const f of w.fixedLoot || []) {
+      if (area && Math.hypot(f.x - area.x, f.z - area.z) > area.r) continue;
+      if (f.kind === 'item') {
+        const mix = pickWeighted(rng, LOOT.floorMix);
+        const item = mix === 'weapon' ? rollWeapon(rng, LOOT.floorRarity) : mix === 'consumable' ? rollConsumable(rng) : rollAmmo(rng);
+        this._add('item', f.x, f.y, f.z, f.yaw || 0, item);
+        continue;
+      }
+      const rec = this._add(f.kind === 'ammoBox' ? 'ammoBox' : 'chest', f.x, f.y, f.z, f.yaw || 0, null);
+      if (f.tier === 'high') rec.tier = 'high';
+      if (rec.kind === 'chest') indoorChests++;
+    }
     const pois = play.disks.filter((d) => d.poi);
     for (const kind of ['chest', 'ammoBox', 'item']) {
       const pIn = PLACE.indoor[kind];
@@ -966,7 +981,7 @@ export class Loot {
     const rng = this._rng;
     const items = [];
     if (rec.kind === 'chest') {
-      const wpn = rollWeapon(rng, LOOT.chestRarity);
+      const wpn = rollWeapon(rng, rec.tier === 'high' ? LOOT.highChestRarity : LOOT.chestRarity);
       items.push(wpn, ammoFor(wpn.id));
       items.push(rng() < 0.65 ? rollConsumable(rng) : rollAmmo(rng));
       items.push({ type: 'material', mat: 'wood', count: LOOT.chestMats });

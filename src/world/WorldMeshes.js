@@ -6,6 +6,8 @@
 //   view.destroyInstance(collider)         // hide a harvested tree / rock / prop / vehicle
 
 import * as THREE from 'three';
+import { createCrystalBridges, hasCrystalBridges } from './crystal-bridges/index.js';
+import { TILE as CB_TILE } from './crystal-bridges/site.js';
 import { makeRng } from '../core/config.js';
 import { flattenModel } from '../core/assets.js';
 import { pointInPoly } from './World.js';
@@ -760,6 +762,21 @@ function parkSchoolBuses(world, data, root) {
 
 // ----------------------------------------------------------------------- main
 
+/** Ground plane (XY shape, rotated flat by the caller) with a rectangular hole for a bespoke terrain tile. */
+function groundWithHole(b, margin, hole) {
+  const x0 = b.minX - margin, x1 = b.maxX + margin;
+  const z0 = b.minZ - margin, z1 = b.maxZ + margin;
+  // shape space: (x, -z) so rotation.x = -PI/2 maps it back to (x, 0, z)
+  const shape = new THREE.Shape([new THREE.Vector2(x0, -z1), new THREE.Vector2(x1, -z1), new THREE.Vector2(x1, -z0), new THREE.Vector2(x0, -z0)]);
+  shape.holes.push(new THREE.Path([new THREE.Vector2(hole.x0, -hole.z1), new THREE.Vector2(hole.x0, -hole.z0), new THREE.Vector2(hole.x1, -hole.z0), new THREE.Vector2(hole.x1, -hole.z1)]));
+  const g = new THREE.ShapeGeometry(shape);
+  // world-space UVs scaled like the plane's repeat (texture repeats every 70 m)
+  const pos = g.attributes.position;
+  const uv = g.attributes.uv;
+  for (let i = 0; i < pos.count; i++) uv.setXY(i, (pos.getX(i) - x0) / (x1 - x0), (pos.getY(i) + z1) / (z1 - z0));
+  return g;
+}
+
 export async function buildWorldMeshes({ world, scene, models, manifests, onProgress }) {
   const data = world.data;
   const b = world.bounds;
@@ -773,6 +790,11 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   root.name = 'world';
   scene.add(root);
 
+  // ---- Crystal Bridges (bespoke landmark): registered FIRST, because it sets the ravine
+  // heightfield every later collider stands on (src/world/crystal-bridges/)
+  const cb = hasCrystalBridges(data) ? createCrystalBridges(world, data) : null;
+  const skipFlat = (pts, k) => !!cb && cb.skipFlat(pts, k);
+
   // ---- ground
   progress(0.02, 'Laying out the ground');
   const margin = 2600;
@@ -780,9 +802,11 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const gd = b.maxZ - b.minZ + margin * 2;
   const groundTex = noiseTexture(256, 0.92, 0.22);
   groundTex.repeat.set(gw / 70, gd / 70);
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(gw, gd), new THREE.MeshLambertMaterial({ color: 0x7daf58, map: groundTex }));
+  // the Crystal Bridges tile is cut out of the ground plane: its own terrain mesh fills it
+  const groundGeo = cb ? groundWithHole(b, margin, CB_TILE) : new THREE.PlaneGeometry(gw, gd);
+  const ground = new THREE.Mesh(groundGeo, new THREE.MeshLambertMaterial({ color: 0x7daf58, map: groundTex }));
   ground.rotation.x = -Math.PI / 2;
-  ground.position.set((b.minX + b.maxX) / 2, 0, (b.minZ + b.maxZ) / 2);
+  if (!cb) ground.position.set((b.minX + b.maxX) / 2, 0, (b.minZ + b.maxZ) / 2);
   ground.receiveShadow = true;
   ground.renderOrder = -2;
   root.add(ground);
@@ -790,22 +814,23 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // ---- flat layers: land cover, sidewalks, paths, roads, centre lines (painter's order in one mesh)
   const flat = new Buf();
   for (const a of data.areas) {
-    if (!AREA_COLOR[a.k]) continue;
+    if (!AREA_COLOR[a.k] || skipFlat(a.p, a.k)) continue;
     addPolygon(flat, a.p, 0, AREA_COLOR[a.k]);
     world.addArea(a.p, a.k);
   }
-  for (const w of data.waterways || []) addRibbon(flat, w.p, w.k === 'river' ? 5 : 1.6, 0, AREA_COLOR.water);
+  for (const w of data.waterways || []) if (!skipFlat(w.p)) addRibbon(flat, w.p, w.k === 'river' ? 5 : 1.6, 0, AREA_COLOR.water);
+  const roads = cb ? data.roads.filter((r) => !skipFlat(r.p)) : data.roads;
   await tick();
-  for (const r of data.roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2 + 1.7, 0, 0xb7b3a8);
-  for (const r of data.roads) {
+  for (const r of roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2 + 1.7, 0, 0xb7b3a8);
+  for (const r of roads) {
     if (!PATHS.has(r.k)) continue;
     const hex = r.k === 'path' || r.k === 'track' ? 0xb7a27a : r.k === 'pedestrian' ? 0xd9d1bd : r.k === 'cycleway' ? 0xc4bda8 : 0xcdc5b0;
     addRibbon(flat, r.p, r.w / 2, 0, hex);
   }
-  for (const r of data.roads) if (r.k === 'service') addRibbon(flat, r.p, r.w / 2, 0, 0x64686d);
-  for (const r of data.roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2, 0, MAJOR.has(r.k) ? 0x484c52 : 0x53575c);
-  for (const r of data.roads) if (MAJOR.has(r.k)) addRibbon(flat, r.p, 0.14, 0, 0xe3c545);
-  for (const r of data.roads) {
+  for (const r of roads) if (r.k === 'service') addRibbon(flat, r.p, r.w / 2, 0, 0x64686d);
+  for (const r of roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2, 0, MAJOR.has(r.k) ? 0x484c52 : 0x53575c);
+  for (const r of roads) if (MAJOR.has(r.k)) addRibbon(flat, r.p, 0.14, 0, 0xe3c545);
+  for (const r of roads) {
     for (let i = 0; i + 1 < r.p.length; i++) world.addRoadSegment(r.p[i][0], r.p[i][1], r.p[i + 1][0], r.p[i + 1][1], r.w, r.k);
   }
   const flatMesh = new THREE.Mesh(
@@ -837,6 +862,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   let count = 0;
   for (const bd of data.buildings) {
     if (!bd.p || bd.p.length < 3) continue;
+    if (cb && cb.skipBuilding(bd.id)) continue; // replaced by the bespoke pavilions
     let cx = 0;
     let cz = 0;
     for (const p of bd.p) {
@@ -907,7 +933,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const VEH_LEN = { sedan: 4.6, suv: 4.8, pickup: 5.6, van: 5, truck: 7 };
   for (const n of VEHICLES) props.define(n, models[n], scaleOf(manifests.vehicles, n + '.glb'));
 
-  const isOpen = (x, z, r) => world.inBounds(x, z, 4) && !world.blockedAt(x, z, r) && !world.roadAt(x, z, 1.2);
+  const isOpen = (x, z, r) => world.inBounds(x, z, 4) && !world.blockedAt(x, z, r) && !world.roadAt(x, z, 1.2) && !world.reservedAt(x, z);
   const harvestables = { trees: 0, rocks: 0, props: 0, vehicles: 0 };
 
   // parked vehicles
@@ -1118,8 +1144,8 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   await tick();
 
   // trees: mapped ones, then woods and parks, then yards everywhere
-  const addTree = (x, z, pine) => {
-    if (!isOpen(x, z, 1.1)) return false;
+  const addTree = (x, z, pine, force = false) => {
+    if (force ? !world.inBounds(x, z, 4) || world.blockedAt(x, z, 1.1) : !isOpen(x, z, 1.1)) return false;
     const k = world.areaAt(x, z);
     if (k === 'water' || k === 'parking' || k === 'busloop' || k === 'pitch') return false;
     const pool = pine ? 4 + Math.floor(rng() * 2) : Math.floor(rng() * 4);
@@ -1127,7 +1153,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     if (!trees.has(name)) name = TREE_NAMES.find((t) => trees.has(t));
     if (!name) return false;
     const s = 0.8 + rng() * 0.55;
-    const rec = trees.add(name, x, z, rng() * 6.28, s);
+    const rec = trees.add(name, x, z, rng() * 6.28, s, null, world.terrainHeight(x, z));
     const h = TREE_H[name] * s;
     world.addCircle(x, z, 0.32 + h * 0.022, h * 0.8, 'tree', 'wood', 200, [rec]);
     harvestables.trees++;
@@ -1137,6 +1163,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const treesBy = { mapped: 0, wood: 0, park: 0, garden: 0, yard: 0 };
   const plant = (src, x, z, pine) => addTree(x, z, pine) && treesBy[src]++;
   for (const t of data.trees) plant('mapped', t[0], t[1], false);
+  if (cb) for (const t of cb.treeSpots()) if (addTree(t.x, t.z, t.pine, true)) treesBy.wood++;
   for (const info of areaInfo) {
     const k = info.a.k;
     if (k !== 'wood' && k !== 'park' && k !== 'garden') continue;
@@ -1158,7 +1185,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     const x = b.minX + rng() * (b.maxX - b.minX);
     const z = b.minZ + rng() * (b.maxZ - b.minZ);
     const k = world.areaAt(x, z);
-    if (k === 'water' || k === 'parking' || k === 'busloop' || k === 'pitch') continue;
+    if (k === 'water' || k === 'parking' || k === 'busloop' || k === 'pitch' || world.reservedAt(x, z)) continue;
     const wild = k === 'wood' || k === 'park';
     if (i % 3 === 0 && (wild || rng() < 0.35)) {
       const name = ['rock_a', 'rock_b', 'rock_b', 'rock_c'][Math.floor(rng() * 4)];
@@ -1249,6 +1276,16 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
       for (const rec of col.ref) (TREE_H[rec.name] ? trees : props).show(rec);
     },
   };
+  if (cb) {
+    // museum meshes + its breakable glass / furniture behind the shared hide/show hooks
+    const cbView = await cb.buildMeshes(root);
+    view.crystalBridges = { site: cb.site, view: cbView };
+    const hide = view.hideCollider;
+    const show = view.showCollider;
+    view.hideCollider = (col) => (col && col.type === 'box' ? cbView.hideCollider(col) : hide(col));
+    view.showCollider = (col) => (col && col.type === 'box' ? cbView.showCollider(col) : show(col));
+    view.frame = (dt, ctx) => cbView.update(dt, ctx); // every frame (water, gallery, lighting)
+  }
   progress(0.85, 'World ready');
   return view;
 }

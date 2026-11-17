@@ -1406,6 +1406,9 @@ export class Game {
     // the Drop Bus keeps flying its route after everyone has jumped
     if (this.dropBus) this.dropBus.update(this.busRoute, this.busT, dt, inMatch && !this.freeBuild && !!this.busRoute);
 
+    // bespoke landmark animation (Crystal Bridges water, gallery lighting) every frame
+    if (this.view && this.view.frame) this.view.frame(dt, { camera: cam, player: p, game: this });
+
     // world culling a few times a second
     this._cullT = (this._cullT || 0) - dt;
     if (this._cullT <= 0 && this.view) {
