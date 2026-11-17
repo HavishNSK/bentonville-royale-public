@@ -299,6 +299,7 @@ export class Game {
       if (this.net && this.net.isHost && this.net.started && this.net.events) this.net.events.push(e);
     };
     this.bots.reboot = this.reboot;
+    this.reboot.viewer = this.camera.position; // Catfish Ken waves to whoever walks up
     this.dropBus = new DropBusMesh();
     this.scene.add(this.dropBus.root);
     this.busRoute = null;
@@ -1578,7 +1579,13 @@ export class Game {
     // Catfish Ken's reboot vans (team modes), and our team's reboot cards on the ground
     // (vans: every mode, from the bus on, so drops can be planned around them; cards: team modes)
     if (this.reboot && (this.state === 'play' || this.state === 'drop')) {
-      for (const v of this.reboot.vans) blips.push({ x: v.x, z: v.z, kind: this.reboot.vanReady(v) ? 'van' : 'vanCd' });
+      // carrying a teammate's card: every car is highlighted and labeled (ready / recharging)
+      const carrying = this.teamMode && this.reboot.cardsOf(p).length > 0;
+      for (const v of this.reboot.vans) {
+        const ready = this.reboot.vanReady(v);
+        if (carrying) blips.push({ x: v.x, z: v.z, kind: ready ? 'vanHot' : 'vanCd', label: ready ? 'REBOOT VAN' : `REBOOT ${Math.ceil(this.reboot.vanCooldown(v))}s` });
+        else blips.push({ x: v.x, z: v.z, kind: ready ? 'van' : 'vanCd' });
+      }
       if (this.teamMode) for (const c of this.reboot.cards.values()) if (c.holder == null && c.team === p.team) blips.push({ x: c.x, z: c.z, kind: 'card' });
     }
     if (this.teamMode && this.mates && this.mates.length && this.state === 'play') {
