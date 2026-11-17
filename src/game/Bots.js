@@ -62,7 +62,7 @@ import { botLoadout } from './Cosmetics.js';
 import { Inventory } from './Inventory.js';
 import {
   PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, RARITIES, DIFFICULTY, QUALITY,
-  BOT_NAMES, DROP_ZONES, STORM, KNOCK, angleDelta, clamp, weaponStats,
+  BOT_NAMES, DROP_ZONES, STORM, KNOCK, REBOOT, angleDelta, clamp, weaponStats,
 } from '../core/config.js';
 import { sameTeam } from './Teams.js';
 import { busPosAt, jumpTimeFor } from './DropBus.js';
@@ -817,6 +817,25 @@ export class Bots {
     if (b.inB) b.wasInside = true;
 
     const outside = storm ? storm.isOutside(a.pos.x, a.pos.z) : false;
+    // storm pressure: outside, or (after phase 1) the closing edge is about to pass a bot that
+    // is not yet inside the next circle. Urgent bots stop fighting / boxing and run for it.
+    let urgent = outside;
+    if (!urgent && storm && (storm.phaseIndex | 0) > 0 && (storm.mode === 'shrinking' || storm.mode === 'final')) {
+      const edge = storm.r - Math.hypot(a.pos.x - storm.cx, a.pos.z - storm.cz);
+      const dn = Math.hypot(a.pos.x - storm.nextCx, a.pos.z - storm.nextCz);
+      urgent = edge < 14 && dn > storm.nextR * 0.85;
+    }
+    b.stormUrgent = urgent;
+    if (urgent) {
+      // leave any box / ramp rush / box build: they hold the bot in place in the storm
+      if (b.box) this._endBox(b, 0);
+      b.rushUntil = 0;
+      b.holdUntil = 0;
+      if (b.bqN > 0 && b.bqMode !== 'escape') {
+        b.bqN = b.bqI = 0;
+        b.buildCooldown = t + 1;
+      }
+    }
     const target = b.target;
     const dist = target ? Math.hypot(target.pos.x - a.pos.x, target.pos.z - a.pos.z) : Infinity;
     const armed = this._hasGun(inv);
@@ -837,7 +856,8 @@ export class Bots {
     if (target) {
       if (armed) fight = provoked || b.state === 'engage' || dist < 20 + b.aggression * (this.diff.sight - 20) * 0.55;
       else fight = dist < 6 && (provoked || !this._hasGun(target.inventory));
-      if (outside && storm.distanceOutside(a.pos.x, a.pos.z) > 25 && dist > 15) fight = false;
+      // in the storm (or about to be): run for the circle, shooting back on the way (_act)
+      if (urgent) fight = false;
       // badly hurt with heals in the bag: break off and patch up (cautious bots more often)
       if (fight && !b.box && dist > 8 && a.health + a.shield < 45 && t > b.retreatUntil + 6 && this.rng() < 0.35 + b.caution * 0.5 &&
           (findConsumable(inv, 'medkit') >= 0 || findConsumable(inv, 'tonic') >= 0)) {
@@ -847,11 +867,12 @@ export class Bots {
       if (!fight && !b.targetVisible) b.target = null;
     }
     const mate = this._downedMate(b, all);
-    if (mate) state = 'revive';
+    if (mate && !urgent) state = 'revive';
     else if (fight) state = 'engage';
-    else if (outside) state = 'rotate';
+    else if (urgent) state = 'rotate';
     else if (t < b.retreatUntil && target) state = 'retreat';
     else if (b.healing > 0 || this._wantHeal(b)) state = 'heal';
+    else if (this._rebootPlan(b)) state = 'reboot';
     else if (this._needRotate(b, storm)) state = 'rotate';
     else if (b.harvest && b.harvest.alive && t < b.harvestUntil && !target) state = 'harvest';
     else if (!target && this._hearFight(b, all)) state = 'hunt';
@@ -861,6 +882,7 @@ export class Bots {
 
     if (state !== 'heal' && b.healing > 0 && !b.box) this._cancelHeal(b); // boxed bots heal mid-fight
     if (state !== 'revive' && a.revivingTarget && this.combat) this.combat.stopRevive(a);
+    if (state !== 'reboot' && a.rebootVan) a.rebootVan = null;
     if (state !== b.state) {
       b.state = state;
       b.stateTime = 0;
@@ -981,8 +1003,11 @@ export class Bots {
         break;
       }
       case 'rotate': {
+        // b.goalX/Z is shared with wander / loot: re-pick when it is not inside the next circle
+        if (b.rotGoal && storm && Math.hypot(b.goalX - storm.nextCx, b.goalZ - storm.nextCz) > Math.max(2, storm.nextR * 0.8)) b.rotGoal = false;
         if (!b.rotGoal && storm) {
-          world_pointIn(this.world, this.rng, storm.nextCx, storm.nextCz, Math.max(4, storm.nextR * 0.55), _pt);
+          // tiny last circles: aim for the very centre (a 4 m scatter is already outside)
+          world_pointIn(this.world, this.rng, storm.nextCx, storm.nextCz, storm.nextR < 10 ? Math.max(0.5, storm.nextR * 0.3) : Math.max(4, storm.nextR * 0.55), _pt);
           b.goalX = _pt.x;
           b.goalZ = _pt.z;
           b.rotGoal = true;
@@ -990,7 +1015,41 @@ export class Bots {
         gx = b.goalX;
         gz = b.goalZ;
         speed = outside || (storm && storm.mode !== 'waiting') ? PLAYER.sprintSpeed : PLAYER.runSpeed;
-        stop = 3;
+        stop = storm && storm.nextR < 10 ? 0.5 : 3;
+        break;
+      }
+      case 'reboot': {
+        // bring teammates back: fetch their card, then hold interact at a reboot van
+        const rb = this.reboot;
+        if (b.rbVan) {
+          const v = b.rbVan;
+          rb.standPoint(v, _pt);
+          gx = _pt.x;
+          gz = _pt.z;
+          const d = Math.hypot(gx - a.pos.x, gz - a.pos.z);
+          if (rb.vanNear(a) === v && rb.vanReady(v) && (v.user == null || v.user === a)) {
+            speed = 0;
+            a.rebootVan = v;
+            b.faceX = v.x;
+            b.faceZ = v.z;
+          } else {
+            a.rebootVan = null;
+            speed = d > 25 ? PLAYER.sprintSpeed : PLAYER.runSpeed;
+            stop = 0.4;
+          }
+        } else if (b.rbCard) {
+          const c = b.rbCard;
+          gx = c.x;
+          gz = c.z;
+          const d = Math.hypot(gx - a.pos.x, gz - a.pos.z);
+          speed = d > 25 ? PLAYER.sprintSpeed : PLAYER.runSpeed;
+          stop = 0.5;
+          const near = rb.cardNear(a);
+          if (near) {
+            rb.take(a, near);
+            b.thinkIn = 0; // head for a van right away
+          }
+        }
         break;
       }
       case 'hunt': {
@@ -1176,6 +1235,8 @@ export class Bots {
         }
       }
     }
+    b.steerGX = gx;
+    b.steerGZ = gz;
     this._steer(b, gx, gz, speed, stop);
     this._stuckCheck(b);
   }
@@ -1459,6 +1520,94 @@ export class Bots {
     if (this.fx) this.fx.aura(a.character ? a.character.root : a.pos, c.shield > 0 ? 'shield' : 'heal', 1.2);
   }
 
+  /**
+   * Team modes: a teammate's reboot card to fetch (within 160 m), or — carrying cards — a
+   * reboot van to take them to (ready, or ready by the time we get there; inside the storm).
+   * Not while a target is in sight. Sets b.rbCard / b.rbVan.
+   */
+  _rebootPlan(b) {
+    const rb = this.reboot;
+    b.rbCard = null;
+    b.rbVan = null;
+    if (!rb || !rb.teamMode || !this.combat || !this.combat.teamMode) return false;
+    const a = b.actor;
+    if (b.target && b.targetVisible) return false;
+    const storm = this._storm;
+    const safe = (x, z) => !storm || !storm.isOutside(x, z);
+    if (rb.cardsOf(a).length) {
+      let best = null;
+      let bd = 450;
+      for (const v of rb.vans) {
+        const d = Math.hypot(v.x - a.pos.x, v.z - a.pos.z);
+        if (d >= bd || !safe(v.x, v.z)) continue;
+        if (rb.vanCooldown(v) > d / PLAYER.runSpeed + 5) continue;
+        if (v.user != null && v.user !== a) continue;
+        bd = d;
+        best = v;
+      }
+      b.rbVan = best;
+      return !!best;
+    }
+    let best = null;
+    let bd = 160;
+    for (const c of rb.groundCards(a.team)) {
+      const d = Math.hypot(c.x - a.pos.x, c.z - a.pos.z);
+      if (d < bd && safe(c.x, c.z)) {
+        bd = d;
+        best = c;
+      }
+    }
+    b.rbCard = best;
+    return !!best;
+  }
+
+  /**
+   * Reboot van (Game.respawnActor): brings a dead bot back standing at (x, y, z) with
+   * `loadout` and a fresh brain; kills / team / character are kept.
+   */
+  respawn(a, x, y, z, heading = 0, loadout = null) {
+    const old = a._bot;
+    const i = old ? this.brains.indexOf(old) : -1;
+    if (i < 0) return false;
+    a.alive = true;
+    a.health = REBOOT.health;
+    a.shield = 0;
+    a.downed = false;
+    a.downHp = 0;
+    a.knockedBy = null;
+    a.reviver = null;
+    a.reviveT = 0;
+    a.revivingTarget = null;
+    a.carrying = null;
+    a.carriedBy = null;
+    a.rebootVan = null;
+    a.lootDropped = false;
+    a.inBus = false;
+    a.gliding = false;
+    a.grounded = true;
+    a.pos.set(x, y, z);
+    a.vel.set(0, 0, 0);
+    a.heading = heading;
+    a.inventory.reset(loadout);
+    const b = newBrain(a, { x, z }, this.rng);
+    b.state = 'wander';
+    b.launchAt = 0;
+    a.botState = 'wander';
+    a._bot = b;
+    this.brains[i] = b;
+    if (a.character) {
+      a.character.reset();
+      a.character.root.visible = true;
+      a.character.root.position.copy(a.pos);
+    }
+    const cur = a.inventory.current();
+    if (a.character && a.character.setEquipped) {
+      const id = cur && cur.type === 'weapon' ? cur.id : 'pickaxe';
+      a.character.setEquipped(id, WEAPONS[id] ? WEAPONS[id].twoHanded !== false : true);
+    }
+    return true;
+  }
+
   _needRotate(b, storm) {
     if (!storm || storm.mode === 'done') return false;
     const a = b.actor;
@@ -1480,7 +1629,25 @@ export class Bots {
     if (inside > 0) return false;
     if (storm.mode !== 'waiting') return true;
     const travel = -inside / PLAYER.runSpeed;
-    return storm.secondsLeft < travel * (1.6 + (this.diff.rotateEarly || 0)) + 12 + b.caution * 25;
+    const late = (storm.phaseIndex | 0) >= 3 ? 15 : 0; // small, deadly circles: leave earlier
+    return storm.secondsLeft < travel * (1.6 + (this.diff.rotateEarly || 0)) + 12 + late + b.caution * 25;
+  }
+
+  /** Stuck in the storm: a ramp toward the goal (climb over whatever blocks us). */
+  _escapeBuild(b) {
+    const st = this.structures;
+    const a = b.actor;
+    const t = this.time;
+    if (!st || !a.grounded || b.bqI < b.bqN || t < (b.escapeAt || 0)) return;
+    if (st.count >= BUILD.maxPieces * BUILD_ROOM) return;
+    const mat = bestMat(a.inventory);
+    if (!mat) return;
+    b.escapeAt = t + 4;
+    const dx = (b.steerGX ?? b.navX) - a.pos.x;
+    const dz = (b.steerGZ ?? b.navZ) - a.pos.z;
+    const hs = (Math.round(Math.atan2(dx, -dz) / (Math.PI / 2)) * Math.PI) / 2;
+    const n = queueStep(b, 0, 'ramp', a.pos.x, a.pos.y, a.pos.z, hs, 0);
+    this._startQueue(b, n, 'escape', mat, Math.sin(hs), -Math.cos(hs));
   }
 
   _pickLoot(b) {
@@ -1614,7 +1781,7 @@ export class Bots {
   _pickHarvest(b) {
     const a = b.actor;
     const m = a.inventory.mats;
-    if (m.wood + m.brick + m.metal >= 120 || !this.combat) return false;
+    if (m.wood + m.brick + m.metal >= 300 || !this.combat) return false;
     if (this.time < b.harvestCooldown) return false;
     const fx = Math.sin(a.heading);
     const fz = -Math.cos(a.heading);
@@ -2172,6 +2339,12 @@ export class Bots {
       b.stuck++;
       b.stuckTotal++;
       b.wantJump = true;
+      // in the storm: smash whatever is in the way (builds, building walls) instead of only
+      // walking around it, and drop an escape ramp when a wall is in front of us
+      if (b.stormUrgent) {
+        b.breakUntil = t + 2.5;
+        if (b.stuck >= 2) this._escapeBuild(b);
+      }
       b.avoidSide = -b.avoidSide;
       if (b.stuck >= 2 && b.state !== 'engage' && b.pathN === 0 && b.lod < 2) {
         // plan a way around on a coarse grid toward the current goal (delivered in a later
@@ -2249,7 +2422,11 @@ export class Bots {
         const it = inv.current();
         if (it && it.type === 'weapon') {
           const w = WEAPONS[it.id];
-          it.mag += inv.takeAmmo(w.ammo, w.mag - it.mag);
+          it.mag += inv.takeAmmo(w.ammo, w.shellReload ? 1 : w.mag - it.mag);
+          // shotguns: one shell at a time; keep loading unless a visible target is in range
+          if (w.shellReload && it.mag < w.mag && inv.ammo[w.ammo] > 0 && !(it.mag >= 2 && b.targetVisible)) {
+            b.reloading = (weaponStats(it.id, it.rarity) || w).reload;
+          }
         }
       }
     }
@@ -2258,12 +2435,13 @@ export class Bots {
     let want = a.heading;
     let pitch = 0;
     const tgt = b.target;
-    if (tgt && (b.targetVisible || b.box) && b.state === 'engage') {
+    const runGun = b.state === 'rotate' && b.stormUrgent && tgt && b.targetVisible && tgt.alive;
+    if (tgt && (b.targetVisible || b.box) && (b.state === 'engage' || runGun)) {
       const dx = (b.targetVisible ? tgt.pos.x : b.lastSeenX) - a.pos.x;
       const dz = (b.targetVisible ? tgt.pos.z : b.lastSeenZ) - a.pos.z;
       want = Math.atan2(dx, -dz);
       pitch = Math.atan2(tgt.pos.y + CHEST - (a.pos.y + EYE), Math.hypot(dx, dz) || 1);
-    } else if ((b.state === 'harvest' && b.harvest) || (b.state === 'revive' && a.revivingTarget)) {
+    } else if ((b.state === 'harvest' && b.harvest) || (b.state === 'revive' && a.revivingTarget) || (b.state === 'reboot' && a.rebootVan)) {
       want = Math.atan2(b.faceX - a.pos.x, -(b.faceZ - a.pos.z));
     } else if (b.speed > 0 && (b.mx || b.mz)) {
       want = Math.atan2(b.mx, -b.mz);
@@ -2275,7 +2453,7 @@ export class Bots {
     a.heading += dh > turn ? turn : dh < -turn ? -turn : dh;
     a.pitch += (pitch - a.pitch) * Math.min(1, dt * 10);
 
-    if (b.state === 'engage' && tgt && b.targetVisible) {
+    if ((b.state === 'engage' || runGun) && tgt && b.targetVisible) {
       b.trackTime += dt;
       if (b.reactLeft > 0) {
         b.reactLeft -= dt;
@@ -2296,6 +2474,12 @@ export class Bots {
       }
     } else if (b.state === 'harvest' && b.harvestReach && b.fireCd <= 0 && b.harvest) {
       this._swingAt(b, b.harvest.x, a.pos.y + 1.0, b.harvest.z, null);
+    } else if (b.stormUrgent && t < (b.breakUntil || 0) && b.fireCd <= 0 && b.healing <= 0) {
+      // stuck in the storm: pickaxe toward where we are trying to go
+      const dx = (b.steerGX ?? b.navX) - a.pos.x;
+      const dz = (b.steerGZ ?? b.navZ) - a.pos.z;
+      const d = Math.hypot(dx, dz) || 1;
+      this._swingAt(b, a.pos.x + (dx / d) * 2, a.pos.y + 1.0, a.pos.z + (dz / d) * 2, null);
     }
   }
 
@@ -2603,6 +2787,13 @@ function newBrain(actor, target, rng) {
     wanderGoal: false,
     wanderUntil: 0,
     rotGoal: false,
+    rbCard: null, // reboot card being fetched (_rebootPlan)
+    rbVan: null, // reboot van being headed to
+    stormUrgent: false,
+    breakUntil: 0,
+    escapeAt: 0,
+    steerGX: undefined,
+    steerGZ: undefined,
     stormCx: NaN,
     stormCz: NaN,
     stormR: NaN,

@@ -1065,7 +1065,8 @@ export function buildHud(root) {
     }
   }
 
-  // setRevive({ pct, name } | null): progress ring while we hold interact over a teammate
+  // setRevive({ pct, name, verb? } | null): progress ring while we hold interact over a teammate
+  // (verb defaults to 'REVIVING'; reboot vans pass 'REBOOTING')
   const rv = { on: null, pct: -1, name: null };
   function setRevive(v) {
     const on = !!v;
@@ -1076,7 +1077,8 @@ export function buildHud(root) {
     if (!on) return;
     const pct = Math.round(clamp01(v.pct) * 100);
     if (pct !== rv.pct) r.reviveFg.style.strokeDashoffset = String(100 - (rv.pct = pct));
-    if (v.name !== rv.name) r.reviveText.textContent = 'REVIVING ' + String((rv.name = v.name) || '').toUpperCase();
+    const label = (v.verb || 'REVIVING') + ' ' + String(v.name || '').toUpperCase();
+    if (label !== rv.name) r.reviveText.textContent = rv.name = label;
   }
 
   /** Refreshes the static keycaps from the player's bindings. labelOf(actionId) -> 'Q'. */
