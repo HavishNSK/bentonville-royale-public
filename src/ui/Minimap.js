@@ -27,6 +27,7 @@
  *       bus:    { x, z, heading } | null,    // Drop Bus position on that line
  *       blips:  [{ x, z, kind }]      // optional; kind: 'chest' | 'loot' | 'enemy' | 'drop'
  *                                     //   | 'mate0'..'mate3' (teammate, slot colour) | 'mateDown' (knocked teammate)
+ *                                     //   | 'van' / 'vanCd' (reboot van ready / recharging) | 'card' (teammate's reboot card)
  *     }
  *   mm.fullCanvasToWorld(px, py)      // full-canvas backing-store pixel -> { x, z, inBounds }
  *   mm.worldToFullCanvas(x, z)        // -> { px, py }
@@ -107,10 +108,10 @@ const ROAD_STYLE = [
   { fill: '#fbf8ef', casing: '#4d573f', minPx: 3.2, minOv: 2.6, alphaOv: 1 },
   { fill: '#fff6d8', casing: '#4a4535', minPx: 3.8, minOv: 3.4, alphaOv: 1 },
 ];
-const BLIP_KINDS = ['chest', 'loot', 'enemy', 'drop', 'mate0', 'mate1', 'mate2', 'mate3', 'mateDown', 'pin0', 'pin1', 'pin2', 'pin3', 'ping0', 'ping1', 'ping2', 'ping3', 'pingEnemy'];
+const BLIP_KINDS = ['chest', 'loot', 'enemy', 'drop', 'mate0', 'mate1', 'mate2', 'mate3', 'mateDown', 'pin0', 'pin1', 'pin2', 'pin3', 'ping0', 'ping1', 'ping2', 'ping3', 'pingEnemy', 'van', 'vanCd', 'card'];
 const MATE_COLORS = ['#ffc21f', '#5ec8ff', '#7dff6b', '#ff5d8f']; // = Teams.js TEAM_COLORS
 /** Blips that stay pinned to the minimap edge at any distance. */
-const isPinnedBlip = (kind) => kind === 'enemy' || kind === 'drop' || kind.startsWith('mate') || kind.startsWith('pin');
+const isPinnedBlip = (kind) => kind === 'enemy' || kind === 'drop' || kind === 'card' || kind.startsWith('mate') || kind.startsWith('pin');
 // full-map grid: lettered columns, numbered rows (call-outs like "C4")
 const GRID_N = 10;
 const LABEL_FONT = '"Lilita One", "Arial Rounded MT Bold", "Trebuchet MS", system-ui, sans-serif';
@@ -478,6 +479,34 @@ function makeBlipSprites(k) {
     g.lineWidth = 1.6 * k;
     g.beginPath();
     g.arc(7 * k, 7 * k, 4.6 * k, 0, TAU);
+    g.fill();
+    g.stroke();
+  });
+  // reboot van: a cyan rounded square with a white "R" (grey while recharging)
+  for (const [key, col] of [['van', '#38e1ff'], ['vanCd', '#8a96a3']]) {
+    out[key] = makeSprite(18 * k, 18 * k, 9 * k, 9 * k, (g) => {
+      g.fillStyle = col;
+      g.strokeStyle = edge;
+      g.lineWidth = 1.8 * k;
+      g.beginPath();
+      if (g.roundRect) g.roundRect(2 * k, 2 * k, 14 * k, 14 * k, 3.5 * k);
+      else g.rect(2 * k, 2 * k, 14 * k, 14 * k);
+      g.fill();
+      g.stroke();
+      g.fillStyle = '#ffffff';
+      g.font = `900 ${10 * k}px sans-serif`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText('R', 9 * k, 9.6 * k);
+    });
+  }
+  // reboot card: a small cyan card
+  out.card = makeSprite(12 * k, 16 * k, 6 * k, 8 * k, (g) => {
+    g.fillStyle = '#38e1ff';
+    g.strokeStyle = '#ffffff';
+    g.lineWidth = 1.6 * k;
+    g.beginPath();
+    g.rect(2 * k, 2 * k, 8 * k, 12 * k);
     g.fill();
     g.stroke();
   });

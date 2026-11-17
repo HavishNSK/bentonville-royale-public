@@ -15,7 +15,7 @@
 //
 // HostRoom
 //   code, link, players -> [{ id, name, host, ready }], fill (bots on/off), mode, started
-//   setFill(on), setMode(mode), allReady(), onLobby(fn), close()
+//   setFill(on), setMode(mode), allReady(), onLobby(fn), close(), backlog (socket bytes not sent yet)
 //   clients: Map<id, Client>; Client = { id, name, token, ready, seq, bytesOut, bytesIn }
 //   sendTo(id, msg) / broadcast(msg) (JSON) / sendRawTo(id, buf) / broadcastRaw(buf)
 //   handlers for the match: onMessage(client, msg), onState(client, buf), onLeave(client)
@@ -364,6 +364,11 @@ class HostRoom {
     return this._send(out.buffer);
   }
 
+  /** Bytes queued in the socket but not sent yet (a backed-up upload adds delay to everything after it). */
+  get backlog() {
+    return this.ws && this.ws.bufferedAmount ? this.ws.bufferedAmount : 0;
+  }
+
   sendRawTo(id, buf) {
     const c = this.clients.get(id);
     if (!c || !this._raw(id, buf)) return 0;
@@ -527,6 +532,11 @@ class ClientConn {
     }
     this.bytesOut += n;
     return n;
+  }
+
+  /** Bytes queued in the socket but not sent yet. */
+  get backlog() {
+    return this.ws && this.ws.bufferedAmount ? this.ws.bufferedAmount : 0;
   }
 
   sendRaw(buf) {

@@ -25,7 +25,7 @@
 // - per-client inventory when it changes (with the last action seq it reflects)
 
 import * as THREE from 'three';
-import { PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, MATCH, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
+import { PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, MATCH, REBOOT, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
 import { Character } from '../game/Character.js';
 import { SKINS, EMOTES, PICKAXES, BACKBLINGS } from '../game/Cosmetics.js';
 import {
@@ -39,6 +39,7 @@ const BOT_CANOPY = [0x4fc3f7, 0xff7a45, 0x9ccc65, 0xba68c8, 0xffd54f, 0xf06292, 
 const BOT_KITS = ['bot_a', 'bot_b', 'bot_c'];
 export const HUMAN_CANOPY = [0xffc21f, 0x5ec8ff, 0xff5d8f, 0x7dff6b, 0xc08cff, 0xff6b4a, 0x4ad6c8, 0xfff07a, 0x9fa8ff, 0xff9f43, 0x26de81, 0xfd79a8, 0x74b9ff, 0xa29bfe, 0xffeaa7, 0x55efc4];
 
+const SNAP_BACKLOG_MAX = 48 * 1024; // bytes queued in the host socket before snapshots are skipped
 const MAX_SPEED = { ground: 16, freefall: 70, glide: 34, bus: 1e9, dead: 0 };
 const DEV = !!(import.meta.env && import.meta.env.DEV);
 
@@ -404,8 +405,9 @@ export class HostSession {
     if (this._snapAcc >= 1 / SNAP_HZ) {
       this._snapAcc = Math.min(this._snapAcc - 1 / SNAP_HZ, 0.1);
       this._sendSnapshot();
-      this._flushEvents();
     }
+    // events go out every frame, not with the next snapshot (up to 50 ms sooner)
+    this._flushEvents();
     this._invAcc += dt;
     if (this._invAcc >= 0.1) {
       this._invAcc = 0;
@@ -440,11 +442,19 @@ export class HostSession {
 
   _sendSnapshot() {
     const g = this.game;
-    const buf = encodeSnapshot(this.seq++, this.time, g.storm, g.combat.aliveCount, this._actorRows());
-    for (const a of this.remotes.values()) {
-      if (!this.room.clients.has(a.id)) continue;
-      this.stats.snapBytes += this.room.sendRawTo(a.id, buf);
+    // upload backed up (slow connection): skip this snapshot; the next one supersedes it, and
+    // queuing more would delay every later snapshot and event for everyone
+    if (this.room.backlog > SNAP_BACKLOG_MAX) {
+      this.stats.snapSkipped = (this.stats.snapSkipped || 0) + 1;
+      return;
     }
+    const buf = encodeSnapshot(this.seq++, this.time, g.storm, g.combat.aliveCount, this._actorRows());
+    // one upload; the relay fans it out to every guest (was one copy per guest)
+    let n = 0;
+    for (const a of this.remotes.values()) if (this.room.clients.has(a.id)) n++;
+    if (!n) return;
+    this.room.broadcastRaw(buf);
+    this.stats.snapBytes += buf.byteLength * n;
     this.stats.snaps++;
   }
 
@@ -779,11 +789,33 @@ export class HostSession {
         if (left) loot.drop(left, a.pos.clone());
         return;
       }
+      case 'rc': {
+        // pick up a teammate's reboot card (Reboot.take checks team / holder)
+        const rb = g.reboot;
+        const card = rb && g.teamMode ? rb.cards.get(m.v | 0) : null;
+        if (!card || card.holder != null || a.inBus || a.airborneDrop) return;
+        if (Math.hypot(card.x - a.pos.x, card.z - a.pos.z) > REBOOT.cardRange + 1.5 || Math.abs(card.y - a.pos.y) > 3.5) return;
+        rb.take(a, card);
+        return;
+      }
+      case 'rb': {
+        // hold / let go of interact at a reboot van (Reboot._tick validates every frame)
+        const rb = g.reboot;
+        if (!rb || !g.teamMode) return;
+        if (!(m.i >= 0)) {
+          a.rebootVan = null;
+          return;
+        }
+        const v = rb.vans[m.i | 0];
+        if (v && rb.vanNear(a, 1) === v) a.rebootVan = v;
+        return;
+      }
       case 'rl': {
         const it = inv.slots[m.s];
         if (!it || it.type !== 'weapon') return;
         const w = WEAPONS[it.id];
-        it.mag += inv.takeAmmo(w.ammo, Math.max(0, w.mag - it.mag));
+        const full = Math.max(0, w.mag - it.mag);
+        it.mag += inv.takeAmmo(w.ammo, m.n > 0 ? Math.min(full, m.n | 0) : full); // n: shells loaded one at a time
         return;
       }
       case 'use': {

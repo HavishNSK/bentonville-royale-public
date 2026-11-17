@@ -26,6 +26,7 @@ const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _n = new THREE.Vector3();
 const DEV = !!(import.meta.env && import.meta.env.DEV);
+const PREDICT_MS = 3000; // a locally placed build the host has not echoed by then was refused
 
 function equipIdOf(p) {
   if (p.buildPiece) return 'pickaxe';
@@ -99,6 +100,16 @@ export class Puppet {
     }
     this.equip = eq;
     if (this.alive && !(r.flags & FLAG.alive)) this.kill();
+    else if (!this.alive && r.flags & FLAG.alive) this.revive(); // rebooted (the 'rbd' event normally gets here first)
+  }
+
+  /** Back from the dead (reboot van). */
+  revive() {
+    if (this.alive) return;
+    this.alive = true;
+    this.downed = false;
+    this.equip = null; // re-equip from the next snapshot row
+    if (this.character) this.character.reset();
   }
 
   kill() {
@@ -156,6 +167,7 @@ export class ClientSession {
     this.snaps = [];
     this.offset = null;
     this.lastSeq = -1;
+    this._predicted = new Map(); // piece -> performance.now() it was placed locally
     this.aliveCount = 0;
     this.started = false;
     this.ended = false;
@@ -218,6 +230,25 @@ export class ClientSession {
     const q = this.queue;
     this.queue = [];
     for (const m of q) this._message(m);
+  }
+
+  /** A piece this client placed ahead of the host's echo ('sp'); see _expirePredicted. */
+  predictBuild(piece) {
+    this._predicted.set(piece, performance.now());
+  }
+
+  /** Predicted pieces the host never confirmed (refused): taken back quietly. */
+  _expirePredicted() {
+    if (!this._predicted.size) return;
+    const now = performance.now();
+    const st = this.game.structures;
+    for (const [piece, at] of this._predicted) {
+      if (!piece.alive) this._predicted.delete(piece);
+      else if (now - at > PREDICT_MS) {
+        this._predicted.delete(piece);
+        if (st) st._destroy(piece, null, false, false);
+      }
+    }
   }
 
   actorById(id) {
@@ -379,6 +410,20 @@ export class ClientSession {
         return this._hit(e);
       case 'el':
         return this._elim(e);
+      case 'rcd':
+      case 'rcx':
+      case 'rbu':
+        if (g.reboot) g.reboot.applyEvent(e);
+        return;
+      case 'rcp':
+        if (g.reboot) g.reboot.applyEvent(e);
+        if (e.by === this.id && g.reboot) {
+          const c = g.reboot.cards.get(e.v);
+          g.hud.toast((c ? c.name : 'Teammate') + "'s reboot card: take it to a reboot van", 'pickup');
+        }
+        return;
+      case 'rbd':
+        return this._rebooted(e);
       case 'kn':
         return this._knock(e);
       case 'sph':
@@ -491,7 +536,13 @@ export class ClientSession {
         const st = g.structures;
         if (!st) return;
         const pl = { kind: e.kind, x: e.x, y: e.y, z: e.z, rot: e.rot, key: e.key, level: e.lv, valid: true };
-        if (st.at(pl)) return;
+        const had = st.at(pl);
+        if (had && this._predicted.has(had)) {
+          this._predicted.delete(had);
+          if (e.a === this.id && had.mat === e.m) return; // our predicted piece: confirmed
+          // someone else got the slot first (or another material): the host's piece wins
+          st._destroy(had, null, false, false);
+        } else if (had) return;
         st.place(pl, e.m, this.actorById(e.a));
         return;
       }
@@ -655,6 +706,26 @@ export class ClientSession {
     }
   }
 
+  /** Host: a reboot van brought players back ([id, x, y, z, heading] each). */
+  _rebooted(e) {
+    const g = this.game;
+    if (g.reboot) g.reboot.applyEvent(e);
+    for (const [id, x, y, z, h] of e.r || []) {
+      const a = this.actorById(id);
+      if (!a) continue;
+      if (a === g.player) {
+        g.netRespawn(x, y, z, h);
+      } else {
+        a.revive();
+        a.pos.set(x, y, z);
+        a._prev.copy(a.pos);
+        a.heading = h;
+      }
+      g.hud.killFeed(`${a.name} was rebooted`, 'revive', [a.name], g.player.name);
+      if (g.fx && g.fx.aura) g.fx.aura(a.pos, 'shield', 1.4);
+    }
+  }
+
   _knock(e) {
     const g = this.game;
     const p = g.player;
@@ -710,6 +781,7 @@ export class ClientSession {
     const g = this.game;
     if (!this.started) return;
     this._interpolate(dt);
+    this._expirePredicted();
 
     // host inventory, once it reflects every inventory action we sent
     const inv = this.pendingInv;
@@ -727,7 +799,8 @@ export class ClientSession {
     this._stateAcc += dt;
     if (this._stateAcc >= 1 / STATE_HZ && (g.state === 'drop' || g.state === 'play' || g.state === 'over')) {
       this._stateAcc = 0;
-      if (p.alive) this._sendState();
+      // a backed-up upload only delays newer states: skip this one (the next supersedes it)
+      if (p.alive && !(this.conn.backlog > 16 * 1024)) this._sendState();
     }
   }
 
