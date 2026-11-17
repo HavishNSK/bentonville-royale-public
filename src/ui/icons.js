@@ -2,7 +2,7 @@
 // Every icon is hand-drawn inline SVG (no image files, no third-party art).
 // Square icons use a 48x48 viewBox, weapon silhouettes a 96x48 viewBox.
 
-const INK = '#15103a';
+const INK = '#0a0a14';
 const S = `stroke="${INK}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"`;
 
 /** Draws `shapes` once as a fat dark outline and once as a flat fill, so the
