@@ -58,7 +58,7 @@ SOFTWARE.
 
 ## Paintings
 
-Paintings on the walls are fetched by `scripts/fetch-cb-art.mjs` from Wikimedia Commons. Only works held by Crystal Bridges are fetched, and only files whose Commons license is "Public domain", "CC0" or "CC BY". `public/art/sources.json` records, for every file:
+Paintings on the walls are fetched by `scripts/fetch-cb-art.mjs`. Kindred Spirits came from Wikimedia Commons. Commons then rate-limited this machine, and the owner chose the museum's own collection records for the other 30, with `node scripts/fetch-cb-art.mjs --source museum`. Those are accepted only when the record says `"copyright": "Public Domain"`. Each is credited "Courtesy of Crystal Bridges Museum of American Art" together with the museum's credit line and photography credit; the per-file list is in [`ASSET_CREDITS.md`](../ASSET_CREDITS.md). Only works held by Crystal Bridges are fetched, and only files whose Commons license is "Public domain", "CC0" or "CC BY". `public/art/sources.json` records, for every file:
 
 - title, artist and year;
 - the Commons file page;

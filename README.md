@@ -198,6 +198,53 @@ Pickaxes and bullets damage wall panels; broken panels open matching visual, mov
 
 The strict browser interiors script starts free build and exercises Player movement through a door and stairs, Combat pickaxe destruction, upper-floor loot interaction and bot stair movement through the development inspection API. It avoids headless pointer-lock limitations; audible output and real multi-browser relay play still need manual checks.
 
+## Crystal Bridges Landmark
+
+Crystal Bridges Museum of American Art is a bespoke point of interest in `src/world/crystal-bridges/`. It replaces the generic OSM block (building 8240824) in the north-centre tile of the composed map, north of the Square as in the real town.
+
+**Site.** Twenty-two pavilions follow Moshe Safdie's building:
+- the Eleven and Modern Art bridges, with hull-shaped copper roofs on cables and concrete abutments, and glass walls (the Modern Art bridge's lean outward 12°);
+- concave-roofed hillside galleries (Early American, People on the Move, Contemporary);
+- the Great Hall standing in the south pond;
+- the Great Hall Corridor with the library above it;
+- the Garrison Lobby, an entrance stair hall from the crest, Walker Landing's stepwell tiers, and the 2026 expansion (west galleries, glass Bridge Gallery with café, sawtooth Hub).
+
+These sit in a ravine of three ponds that step down northward over two weirs. The site plan and its sources are in [docs/crystal-bridges-layout.md](docs/crystal-bridges-layout.md) and [docs/crystal-bridges-research.md](docs/crystal-bridges-research.md). Pavilion-to-outline assignments are inferences from schematic plans, not survey data.
+
+**Collision.**
+- **Terrain:** the ravine is a site-only heightfield (`site.js` `bakeTerrain`). It is zero (street level) everywhere off the tile, so the rest of the map is unchanged.
+- **Architecture:** walls, slabs, roofs and stairs are oriented box colliders (`World.addBox`, `src/world/boxColliders.js`). You can walk under the bridges and stand on the roofs.
+- **Hits and materials:**
+  - The building is indestructible but harvestable for brick (concrete) and wood.
+  - Glass panes break when shot or swung at, and give no materials.
+  - Benches, tables and shelves break and give wood.
+- **Multiplayer:** breakable boxes sync to clients by box id, and clients ignore destroy events for unbreakable boxes.
+
+**Loot.** The museum places its own chests, ammo boxes and floor items (`world.fixedLoot`). Two high-tier chests sit on the North Elevator Tower roof (reach it by building) and on the weir under Eleven. Generic scatter and loot stay off the site (`world.reserve`).
+
+**Galleries.**
+- **Look:** the presentation is ported from [musewalk](https://github.com/shuyan-5200/musewalk) (MIT, see [credits/crystal-bridges.md](credits/crystal-bridges.md)): gold, dark and float frames, plaques, light pools plus a pool of three real spotlights, and an interior mood crossfade (fog, light, bloom, vignette over about 1 s).
+- **Config:** works hang from `public/data/crystal-bridges.config.json`, which uses musewalk's `gallery.config.json` shape. `?cbConfig=/data/<file>.json` swaps it for testing; only same-origin `/data/*.json` is accepted, and every field is validated.
+- **Focus mode:** **E** near a painting opens it, with the info panel; **E** again, moving, or taking damage closes it, and recent combat blocks it.
+- **Portals:** walking into Kindred Spirits, The Backwoods of America or Indian Encampment plays musewalk's brush-stroke dissolve and white veil, then moves you to a paired spot. Each player has a 10 s cooldown; bots can't use portals, and they don't work from inside the storm. In multiplayer the host validates range, cooldown, storm and the exact destination.
+- **Ambience:** a synthesized ambience, ported from musewalk, plays on the music bus and ducks under nearby gunfire or the storm.
+- **Museum Mode:** **VISIT THE MUSEUM** on the title screen starts a no-bot, no-storm session in the lobby.
+
+**Art.** `node scripts/fetch-cb-art.mjs` (Commons) or `node scripts/fetch-cb-art.mjs --source museum` (crystalbridges.org collection records) fetches public-domain paintings in the museum's collection into `public/art/crystal-bridges/`, with provenance in `public/art/sources.json`. Both sources are paced, and only Public Domain / CC0 / CC BY works are accepted. Copyrighted works are never reproduced: they appear as empty frames or plinths with their real labels. See [ASSET_CREDITS.md](ASSET_CREDITS.md).
+
+**Verification.**
+- `npm test` covers the box colliders, the site's walkable routes, glass, loot placement and gallery hanging.
+- The browser walkthrough checks every wing, focus mode and a portal, after the QA setup in [tools/qa/README.md](tools/qa/README.md):
+
+```bash
+node tools/qa/smoke.mjs --url http://localhost:5173 --script tools/qa/crystal-bridges.steps.mjs --out tools/qa/out/cb --timeout 240000
+```
+
+**Limits.**
+- The galleries are rectangular rooms with bowed long walls; the real fan-shaped curved plans are simplified.
+- Bots navigate the museum with the generic open-world steering and can look clumsy on stairs.
+- Measured frame rate held at the 60 fps vsync cap inside and outside the museum in headless Chromium on an Apple M4; a typical laptop has not been measured.
+
 ## Map and Asset Maintenance
 
 The game currently consumes `public/data/bentonville-osm.json`. World units are meters: x east, z south, y up; heading zero faces north.
@@ -209,7 +256,7 @@ The optional scripts regenerate source data:
 - `scripts/fetch-terrain.mjs`: USGS terrain output.
 - `scripts/fetch-imagery.mjs`: imagery-derived canopy and ground texture; requires the map and terrain outputs first and uses `sharp`/`geotiff`.
 
-These tools contact external data services and write generated files. Preserve request pacing/caps, cache behavior, and provenance. Do not run the OSM fetch in parallel. Normal setup does not require regeneration. Terrain/canopy/ground outputs are not currently consumed by the game.
+These tools contact external data services and write generated files. Preserve request pacing/caps, cache behavior, and provenance. Do not run the OSM fetch in parallel. Normal setup does not require regeneration. Terrain/canopy/ground outputs are not currently consumed by the game (the Crystal Bridges ravine uses its own synthetic site heightfield, not the USGS terrain).
 
 Asset and data credits are maintained in [credits/](credits/). Preserve the existing notices when redistributing assets or changing data processing.
 

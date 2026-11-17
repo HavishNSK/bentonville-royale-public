@@ -162,7 +162,8 @@
       "title": "The Reader",
       "artist": "Mary Cassatt",
       "year": "1877",
-      "room": "bridge-gallery"
+      "room": "bridge-gallery",
+      "museumSlug": "a2003-007"
     },
     "robinson-columbian": {
       "title": "World's Columbian Exposition",

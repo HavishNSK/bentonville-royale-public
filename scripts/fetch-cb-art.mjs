@@ -63,7 +63,7 @@ export const WORKS = [
   ['sargent-stevenson', 'John Singer Sargent - Robert Louis Stevenson and His Wife - 2005.3' + CB, 'Sargent Robert Louis Stevenson and His Wife Crystal Bridges', 1000, { title: 'Robert Louis Stevenson and His Wife', artist: 'John Singer Sargent', year: '1885', room: 'bridge-gallery' }],
   ['hassam-paris-twilight', 'Childe Hassam - Paris at Twilight - 2005.25' + CB, 'Childe Hassam Paris at Twilight Crystal Bridges', 1000, { title: 'Paris at Twilight', artist: 'Childe Hassam', year: '1888', room: 'bridge-gallery' }],
   ['chase-seaside-flowers', 'William Merritt Chase - Seaside Flowers - 2006.75' + CB, 'Chase Seaside Flowers Crystal Bridges', 1000, { title: 'Seaside Flowers', artist: 'William Merritt Chase', year: 'c. 1890s', room: 'bridge-gallery' }],
-  ['cassatt-reader', 'Mary Cassatt - The Reader - promised gift 39 the-reader' + CB, 'Mary Cassatt The Reader Crystal Bridges', 1000, { title: 'The Reader', artist: 'Mary Cassatt', year: '1877', room: 'bridge-gallery' }],
+  ['cassatt-reader', 'Mary Cassatt - The Reader - promised gift 39 the-reader' + CB, 'Mary Cassatt The Reader Crystal Bridges', 1000, { title: 'The Reader', artist: 'Mary Cassatt', year: '1877', room: 'bridge-gallery', museumSlug: 'a2003-007' }],
   ['robinson-columbian', "Theodore Robinson - World's Columbian Exposition - 2010.73" + CB, 'Theodore Robinson Columbian Exposition Crystal Bridges', 1000, { title: "World's Columbian Exposition", artist: 'Theodore Robinson', year: '1894', room: 'bridge-gallery' }],
   ['twachtman-september', 'John Henry Twachtman - September Sunshine - 2005.16' + CB, 'Twachtman September Sunshine Crystal Bridges', 1000, { title: 'September Sunshine', artist: 'John Henry Twachtman', year: 'c. 1895', room: 'bridge-gallery' }],
   ['ryder-misty-moonlight', 'Albert Pinkham Ryder - Misty Moonlight - 2007.3' + CB, 'Ryder Misty Moonlight Crystal Bridges', 1000, { title: 'Misty Moonlight', artist: 'Albert Pinkham Ryder', year: 'c. 1890', room: 'bridge-gallery' }],
@@ -236,10 +236,70 @@ async function writeCatalog() {
   await writeFile(out, JSON.stringify({ schemaVersion: 1, generatedBy: 'scripts/fetch-cb-art.mjs', works }, null, 2) + '\n');
 }
 
+// ---------------------------------------------------------------- museum source (--source museum)
+// The owner chose the museum's own collection images (crystalbridges.org/artworks/<accession>)
+// when Commons rate-limited this machine. Same policy: a work is accepted only when the museum's
+// own record says "copyright": "Public Domain"; the credit line and photography credit are kept,
+// with "Courtesy of Crystal Bridges Museum of American Art".
+const MUSEUM_PAGE = 'https://crystalbridges.org/artworks/';
+const MUSEUM_IMG = /^https:\/\/dam\.aweoffice\.org\/AssetLink\/[a-z0-9]+\.jpg$/;
+
+/** Accession number from the Commons file title ("... - 2010.106 - Crystal Bridges ..."), or null. */
+export function accessionOf(commonsTitle) {
+  const m = /-\s(\d{4}\.\d{1,4})\s-\sCrystal Bridges/.exec(commonsTitle);
+  return m ? m[1] : null;
+}
+
+/** Pull the record fields out of a museum artwork page (JSON embedded in the Next.js payload). */
+export function parseMuseumPage(html) {
+  const field = (k) => {
+    const m = new RegExp('\\\\?"' + k + '\\\\?":\\\\?"([^"\\\\]{0,300})').exec(html);
+    return m ? m[1] : '';
+  };
+  const pre = /<link rel="preload" as="image" href="(https:\/\/dam\.aweoffice\.org\/AssetLink\/[a-z0-9]+\.jpg)"/.exec(html);
+  return { copyright: field('copyright'), creditLine: field('creditLine'), photographyCredit: field('photographyCredit'), image: pre ? pre[1] : null };
+}
+
+async function fetchText(url) {
+  const res = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(60000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
+async function museumWork(work, manifest) {
+  const [id, exact, , , info] = work;
+  const acc = accessionOf(exact);
+  const slug = info.museumSlug || (acc && acc.replace('.', '-'));
+  if (!slug || !/^[a-z0-9-]{3,20}$/.test(slug)) return `no museum record for "${exact.slice(0, 60)}"`;
+  const pageUrl = MUSEUM_PAGE + slug;
+  const rec = parseMuseumPage(await fetchText(pageUrl));
+  await sleep(1500);
+  if (rec.copyright.toLowerCase() !== 'public domain') return `museum rights "${rec.copyright || 'unknown'}" (only Public Domain is accepted)`;
+  if (!rec.image || !MUSEUM_IMG.test(rec.image)) return 'no image on the museum page';
+  const key = id + '.jpg';
+  const dest = path.join(OUT_DIR, key);
+  const local = await download(rec.image, dest);
+  await sleep(1500);
+  const { default: sharp } = await import('sharp').catch(() => ({ default: null }));
+  const meta = sharp ? await sharp(dest).metadata() : { width: 0, height: 0 };
+  manifest.files[key] = {
+    workId: id, localPath: `public/art/crystal-bridges/${key}`, url: `/art/crystal-bridges/${key}`,
+    title: info.title, artist: info.artist, year: info.year, room: info.room,
+    bytes: local.bytes, sha256: local.sha256, width: meta.width, height: meta.height,
+    source: 'crystalbridges.org', canonicalDescriptionUrl: pageUrl, imageUrl: rec.image,
+    licenseShortName: 'Public domain', museumRights: rec.copyright,
+    credit: [rec.creditLine, rec.photographyCredit, 'Courtesy of Crystal Bridges Museum of American Art'].filter(Boolean).join('. '),
+    collection: 'Crystal Bridges Museum of American Art',
+  };
+  await writeManifest(manifest);
+  return null;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   await writeCatalog();
   if (args.includes('--catalog-only')) return;
+  if (args.includes('--source') && args[args.indexOf('--source') + 1] === 'museum') return mainMuseum(args);
   const only = new Set();
   for (let i = 0; i < args.length; i++) if (args[i] === '--only') only.add(args[++i]);
   const metadataOnly = args.includes('--metadata-only');
@@ -294,6 +354,38 @@ async function main() {
   }
   console.log(`done. failures=${failures} entries=${Object.keys(manifest.files).length}`);
   process.exitCode = failures ? 1 : 0;
+}
+
+async function mainMuseum(args) {
+  const only = new Set();
+  for (let i = 0; i < args.length; i++) if (args[i] === '--only') only.add(args[++i]);
+  await mkdir(OUT_DIR, { recursive: true });
+  const manifest = (await loadManifest()) || { schemaVersion: 1, generatedBy: 'scripts/fetch-cb-art.mjs', files: {} };
+  manifest.licensePolicy = {
+    accepted: ['Public domain', 'CC0', 'CC BY <version>'],
+    rejected: ['CC BY-SA', 'CC BY-NC', 'unknown/missing'],
+    museumSource: 'crystalbridges.org records whose "copyright" is "Public Domain" only',
+  };
+  let failures = 0;
+  for (const work of WORKS) {
+    const id = work[0];
+    if (only.size && !only.has(id)) continue;
+    if (manifest.files[id + '.jpg'] && existsSync(path.join(OUT_DIR, id + '.jpg'))) {
+      console.log(`[have] ${id}`);
+      continue;
+    }
+    try {
+      const why = await museumWork(work, manifest);
+      if (why) {
+        failures++;
+        console.log(`[skip] ${id} ${why}`);
+      } else console.log(`[ok] ${id} <- crystalbridges.org`);
+    } catch (e) {
+      failures++;
+      console.log(`[FAIL] ${id} ${String(e.message || e).slice(0, 160)}`);
+    }
+  }
+  console.log(`done. not fetched=${failures} entries=${Object.keys(manifest.files).length}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
