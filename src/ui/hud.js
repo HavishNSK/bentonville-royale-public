@@ -145,6 +145,17 @@ function hudHTML() {
   <div class="br-announce-title br-ol-xl" data-ref="annTitle"></div>
   <div class="br-announce-sub" data-ref="annSub"></div>
 </div>
+<div class="br-spectate" data-ref="spectate" hidden>
+  <div class="br-spectate-label">SPECTATING</div>
+  <div class="br-spectate-name br-ol" data-ref="specName">—</div>
+  <div class="br-spectate-meta">
+    <span data-ref="specIdx">1/1</span>
+    <span class="br-spectate-sep">·</span>
+    <span data-ref="specKills">0 elims</span>
+    <span class="br-spectate-sep">·</span>
+    <span class="br-spectate-hint"><kbd class="br-key">LMB</kbd>/<kbd class="br-key">RMB</kbd> switch</span>
+  </div>
+</div>
 <div class="br-stormwarn" data-ref="stormWarn">${icon('storm')}<span>YOU'RE IN THE STORM &mdash; RUN FOR THE SAFE ZONE!</span></div>
 
 <div class="br-tr">
@@ -723,6 +734,26 @@ export function buildHud(root) {
     announceTimer = later(() => r.announce.classList.remove('is-on'), ms > 0 ? ms : 3000);
   }
 
+  // setSpectating({ name, index, total, kills, teammate } | null)
+  let lastSpec = null;
+  function setSpectating(info) {
+    const key = info
+      ? `${info.name}|${info.index}|${info.total}|${info.kills}|${info.teammate ? 1 : 0}`
+      : '';
+    if (key === lastSpec) return;
+    lastSpec = key;
+    if (!info) {
+      r.spectate.hidden = true;
+      return;
+    }
+    r.spectate.hidden = false;
+    r.spectate.classList.toggle('is-mate', !!info.teammate);
+    r.specName.textContent = String(info.name || 'Player');
+    r.specIdx.textContent = `${info.index || 1}/${Math.max(1, info.total || 1)}`;
+    const k = info.kills | 0;
+    r.specKills.textContent = `${k} elim${k === 1 ? '' : 's'}`;
+  }
+
   function toast(text, kind) {
     if (text == null || text === '') return;
     const t = String(text);
@@ -1082,6 +1113,7 @@ export function buildHud(root) {
     },
     prompt,
     announce,
+    setSpectating,
     toast,
     floatText,
     setObjectBar,
@@ -1103,6 +1135,7 @@ export function buildHud(root) {
       r.toasts.textContent = '';
       prompt(null);
       r.announce.classList.remove('is-on');
+      setSpectating(null);
       setObjectBar(null);
       showFullMap(false);
       setRevive(null);

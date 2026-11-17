@@ -8,7 +8,7 @@
 // this file or interiors/*; local coordinates are quantised to 1/64 m; ties break on index.
 // Bump INTERIOR_VERSION whenever the output can change (it is part of Game.mapId).
 //
-// ============================================================== PLAN SHAPE (v2)
+// ============================================================== PLAN SHAPE (v3)
 // plan = {
 //   v          INTERIOR_VERSION
 //   id         building id (bd.id)
@@ -36,10 +36,17 @@
 //                a full-height gap where a wall too short for a door was left out)
 //     holes      [{ a0, b0, a1, b1 }]  local floor openings for stairs
 //     floorArea  m^2 of walkable floor on this level
+//     props      Float32Array, stride 7: ax, az, bx, bz, r, y0, y1 (same format as walls): one capsule
+//                per solid furniture item on this level (spine along its longer side, r = half the
+//                shorter side, y0..y1 = its bottom..top). Built by interiors/furnishings.js.
+//     propBlock  Uint8Array, one per props capsule: 1 = stops bullets / sight rays, 0 = movement only
 //   }]
 //   stairs     [{ level, x0, z0, x1, z1, y0, y1, w, room0, room1, a0, b0, a1, b1, axis }]
-//   furniture  [{ kind, level, room, a0, b0, a1, b1, y, height, color }] (decorative)
-//   colliders  []  furniture is decorative and does not block movement
+//   furniture  [{ kind, level, room, a0, b0, a1, b1, y, lift, height, face, color, accent, solid, block, tier }]
+//              kind from interiors/furnishings.js CATALOG; a0..b1 = local footprint; y = level floor;
+//              lift = bottom above the floor (wall-mounted items); face = 'a+'|'a-'|'b+'|'b-' (front);
+//              solid -> a levels[i].props capsule; block -> stops bullets; tier 0 core .. 3 clutter
+//   lights     [{ level, a0, b0, a1, b1, y }]  ceiling light panels (y = that level's ceiling)
 //   lootSpots  [{ x, y, z, level, room }]  one per room (room centre)
 //   signs      [{ level, room, text, x, y, z, nx, nz, width, height }]
 //   panels     [panel]  breakable wall panels; panel id = its index (stable per INTERIOR_VERSION)
@@ -69,7 +76,7 @@ import { LANDMARK_RECIPES, classify } from './interiors/landmarks.js';
 import { storeyCount, addStoreys, FLOOR_THICKNESS } from './interiors/storeys.js';
 import { furnishInterior } from './interiors/furnishings.js';
 
-export const INTERIOR_VERSION = 2;
+export const INTERIOR_VERSION = 4;
 
 const HUB = { corridor: 1, hall: 1, lobby: 1, sales: 1, living: 1, open: 1 };
 
@@ -398,7 +405,6 @@ export function planInterior(bd, shell, ctx = {}) {
     levels: [level],
     stairs: [],
     furniture: [],
-    colliders: [],
     lootSpots,
     signs: [],
     panels,

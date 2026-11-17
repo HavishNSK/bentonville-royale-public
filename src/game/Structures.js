@@ -947,7 +947,19 @@ export class Structures {
   _fitsInside(c, pl) {
     const s = c.shell;
     const top = pl.y + (pl.kind === 'floor' ? 0 : pl.kind === 'cone' ? CONE_PEAK : LEVEL);
-    if (top > s.ceil + INSIDE_CEIL_SLACK || pl.y < s.floor - LEVEL * 0.75) return false;
+    // the storey the piece stands in (its base within 0.5 m of that floor or above it): the piece
+    // must fit under THAT storey's ceiling, not the top one, or it pokes up through the floor above
+    let ceil = s.ceil;
+    let floor = s.floor;
+    if (s.plan && s.plan.levels.length > 1) {
+      for (const L of s.plan.levels) {
+        if (L.y <= pl.y + 0.5 && L.y >= floor) {
+          floor = L.y;
+          ceil = L.ceil;
+        }
+      }
+    }
+    if (top > ceil + INSIDE_CEIL_SLACK || pl.y < floor - LEVEL * 0.75) return false;
     if (pl.kind === 'floor' && pl.y < s.floor + 0.5) return false; // a floor slab buried in the ground floor
     // footprint samples (inset a little) must all be inside this building's outline
     const w = this.world;

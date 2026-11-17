@@ -504,6 +504,77 @@
 .br-announce.is-on .br-announce-sub {
   animation: br-rise 0.35s ease-out 0.15s backwards;
 }
+
+/* ---- spectator banner ---------------------------------------------------- */
+.br-spectate {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--u) * 78);
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--u) * 2);
+  padding: calc(var(--u) * 10) calc(var(--u) * 22) calc(var(--u) * 12);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 18);
+  background: var(--br-panel);
+  box-shadow: 0 calc(var(--u) * 4) 0 rgba(21, 16, 58, 0.55);
+  text-align: center;
+  pointer-events: none;
+}
+.br-spectate[hidden] {
+  display: none;
+}
+.br-spectate-label {
+  font-size: calc(var(--u) * 11);
+  letter-spacing: 0.14em;
+  font-weight: 900;
+  color: var(--br-sun);
+}
+.br-spectate.is-mate .br-spectate-label {
+  color: var(--br-sky-hi);
+}
+.br-spectate-name {
+  font-size: calc(var(--u) * 28);
+  line-height: 1;
+  color: var(--br-cream);
+}
+.br-spectate-meta {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 6);
+  margin-top: calc(var(--u) * 2);
+  font-size: calc(var(--u) * 13);
+  font-weight: 800;
+  color: rgba(255, 246, 220, 0.85);
+}
+.br-spectate-sep {
+  opacity: 0.45;
+}
+.br-spectate-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--u) * 4);
+}
+.br-spectate-hint .br-key {
+  min-width: calc(var(--u) * 28);
+  height: calc(var(--u) * 22);
+  font-size: calc(var(--u) * 11);
+}
+.br-hud.is-spectating .br-xhair,
+.br-hud.is-spectating .br-hitmarker,
+.br-hud.is-spectating .br-reloadring,
+.br-hud.is-spectating .br-hotbar,
+.br-hud.is-spectating .br-weapon,
+.br-hud.is-spectating .br-build,
+.br-hud.is-spectating .br-emote,
+.br-hud.is-spectating .br-activename {
+  opacity: 0;
+  visibility: hidden;
+}
+
 @keyframes br-slam {
   from {
     opacity: 0;

@@ -104,3 +104,39 @@ test('stair geometry emits finite merged treads, risers and undersides', async (
     assert.equal(call.at(-2),null);
   }
 });
+test('big footprints get several spread-out flights; bots use the nearest one', () => {
+  const w=new World({meta:{bounds:{minX:-200,maxX:200,minZ:-200,maxZ:200},},buildings:[],roads:[],areas:[],pois:[]});
+  w.addBuilding({id:424242,t:'office',mat:'brick',lv:3,h:11,p:[[0,0],[120,0],[120,40],[0,40]]});
+  w.finishBuildings();
+  const c=w.buildingInteriors()[0].collider,p=c.shell.plan;
+  assert.equal(p.levels.length,3);
+  const shafts=p.stairs.filter(s=>s.level===0);
+  assert.ok(shafts.length>=2,`several flights on a 4800 m2 footprint: ${shafts.length}`);
+  assert.equal(p.stairs.length,shafts.length*2,'one flight per shaft per storey');
+  for(const L of p.levels.slice(1)) assert.equal(L.holes.length,shafts.length,`level ${L.i}: a hole over every flight`);
+  for(let i=0;i<shafts.length;i++) for(let j=i+1;j<shafts.length;j++)
+    assert.ok(Math.hypot((shafts[i].x0+shafts[i].x1)/2-(shafts[j].x0+shafts[j].x1)/2,(shafts[i].z0+shafts[i].z1)/2-(shafts[j].z0+shafts[j].z1)/2)>=29.9,'flights spread apart');
+  for(const s of p.stairs) {
+    let y=s.y0;
+    for(let k=0;k<=60;k++) {
+      const t=k/60,pos={x:s.x0+(s.x1-s.x0)*t,y,z:s.z0+(s.z1-s.z0)*t},before={...pos};
+      w.resolveCircle(pos,.42,1.8);
+      assert.ok(Math.hypot(pos.x-before.x,pos.z-before.z)<.02,'partitions clear every flight');
+      y=w.groundHeight(pos.x,pos.z,y,.5,w.builtAbove(pos.x,pos.z,y));
+      assert.ok(Math.abs(y-(s.y0+(s.y1-s.y0)*t))<.08,'continuous ascent on every flight');
+      assert.ok(w.ceilingAbove(pos.x,pos.z,y)>=y+1.8,'headroom on every flight');
+    }
+  }
+  // a bot starting right beside a flight's foot climbs that flight, not the first one in the list
+  const far=shafts[shafts.length-1],len=Math.hypot(far.x1-far.x0,far.z1-far.z0),ux=(far.x1-far.x0)/len,uz=(far.z1-far.z0)/len;
+  const bots=new Bots({world:w,kits:[]});bots.spawn(1,()=>.5,{dropPoints:[{x:far.x0-ux,z:far.z0-uz}]});
+  const b=bots.brains[0];
+  b.pathN=bots._roomRoute(c,far.x0-ux*2,far.z0-uz*2,far.y0,far.x1+ux,far.z1+uz,far.y1,b.path,b.pathK,0);
+  let climbs=false;
+  for(let i=0;i<b.pathN;i++) if(b.pathK[i]===2&&Math.hypot(b.path[i*2]-far.x1,b.path[i*2+1]-far.z1)<.01) climbs=true;
+  assert.ok(climbs,'route climbs the nearby flight');
+  const again=new World({meta:{bounds:{minX:-200,maxX:200,minZ:-200,maxZ:200}},buildings:[],roads:[],areas:[],pois:[]});
+  again.addBuilding({id:424242,t:'office',mat:'brick',lv:3,h:11,p:[[0,0],[120,0],[120,40],[0,40]]});
+  again.finishBuildings();
+  assert.equal(again.interiorHash,w.interiorHash,'deterministic');
+});
