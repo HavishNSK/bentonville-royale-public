@@ -533,7 +533,7 @@ def(799259121, 26.3, 21.9, 'a', () =>
 // Bentonville Community Center (751973534; 104.7 x 86.4 m). Multi-use recreation centre:
 // aquatic center, fitness center, main gymnasium, commons/meeting rooms, administration.
 // Sources: bentonvillear.com/departments/parks/community-center.
-def(751973534, 104.7, 86.4, 'b', (f) => ({
+def(751973534, 104.7, 86.4, 'b', () => ({
   levels: [
     cut('a', 0.42,
       cut('b', 0.5,
