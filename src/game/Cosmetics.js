@@ -32,21 +32,22 @@ export const SKINS = {
 /**
  * Harvesting tools. src: null = the classic pickaxe mesh, else [kit key, mesh name] in that
  * character file (parented to handslot.r there, so it already sits in the hand). tint: colour
- * multiplied into its material.
+ * multiplied into its material. swing: upper-body clips played in turn, one per hit (a combo),
+ * each timed to the pickaxe's hit rate.
  */
 export const PICKAXES = {
-  pick_default: { name: 'Default Pickaxe', src: null, tint: null, rarity: 'common', price: 0 },
-  pick_frost: { name: 'Frostbite', src: null, tint: 0x9fe4ff, rarity: 'uncommon', price: 500 },
-  pick_gilded: { name: 'Gilded Pick', src: null, tint: 0xffd36b, rarity: 'rare', price: 800 },
-  pick_hatchet: { name: 'Bus Loop Hatchet', src: ['bot_b', '1H_Axe'], tint: null, rarity: 'uncommon', price: 500 },
-  pick_dagger: { name: 'Back Alley Dagger', src: ['player', 'Knife'], tint: null, rarity: 'uncommon', price: 500 },
-  pick_wand: { name: 'Sparkle Wand', src: ['bot_c', '1H_Wand'], tint: null, rarity: 'uncommon', price: 600 },
-  pick_blade: { name: 'Square Blade', src: ['bot_a', '1H_Sword'], tint: null, rarity: 'rare', price: 900 },
-  pick_cleaver: { name: 'Razorback Cleaver', src: ['bot_b', '2H_Axe'], tint: null, rarity: 'epic', price: 1200 },
-  pick_staff: { name: 'Crystal Staff', src: ['bot_c', '2H_Staff'], tint: null, rarity: 'epic', price: 1200 },
-  pick_greatsword: { name: 'Crystal Bridge Greatsword', src: ['bot_a', '2H_Sword'], tint: 0xffe08a, rarity: 'legendary', price: 1800 },
-  pick_shadow: { name: 'Shadow Reaper', src: ['bot_b', '2H_Axe'], tint: 0x8a78c8, rarity: 'legendary', price: 1800 },
-  pick_mug: { name: 'Root Beer Float', src: ['bot_b', 'Mug'], tint: null, rarity: 'legendary', price: 1500 },
+  pick_default: { name: 'Default Pickaxe', src: null, tint: null, swing: ['2H_Melee_Attack_Chop'], rarity: 'common', price: 0 },
+  pick_frost: { name: 'Frostbite', src: null, tint: 0x9fe4ff, swing: ['2H_Melee_Attack_Chop'], rarity: 'uncommon', price: 500 },
+  pick_gilded: { name: 'Gilded Pick', src: null, tint: 0xffd36b, swing: ['2H_Melee_Attack_Chop', '2H_Melee_Attack_Slice'], rarity: 'rare', price: 800 },
+  pick_hatchet: { name: 'Bus Loop Hatchet', src: ['bot_b', '1H_Axe'], tint: null, swing: ['1H_Melee_Attack_Chop', '1H_Melee_Attack_Slice_Diagonal'], rarity: 'uncommon', price: 500 },
+  pick_dagger: { name: 'Back Alley Dagger', src: ['player', 'Knife'], tint: null, swing: ['1H_Melee_Attack_Stab', '1H_Melee_Attack_Slice_Horizontal'], rarity: 'uncommon', price: 500 },
+  pick_wand: { name: 'Sparkle Wand', src: ['bot_c', '1H_Wand'], tint: null, swing: ['Spellcast_Shoot', '1H_Melee_Attack_Slice_Horizontal'], rarity: 'uncommon', price: 600 },
+  pick_blade: { name: 'Square Blade', src: ['bot_a', '1H_Sword'], tint: null, swing: ['1H_Melee_Attack_Slice_Diagonal', '1H_Melee_Attack_Slice_Horizontal', '1H_Melee_Attack_Stab'], rarity: 'rare', price: 900 },
+  pick_cleaver: { name: 'Razorback Cleaver', src: ['bot_b', '2H_Axe'], tint: null, swing: ['2H_Melee_Attack_Chop', '2H_Melee_Attack_Slice'], rarity: 'epic', price: 1200 },
+  pick_staff: { name: 'Crystal Staff', src: ['bot_c', '2H_Staff'], tint: null, swing: ['2H_Melee_Attack_Stab', '2H_Melee_Attack_Slice'], rarity: 'epic', price: 1200 },
+  pick_greatsword: { name: 'Crystal Bridge Greatsword', src: ['bot_a', '2H_Sword'], tint: 0xffe08a, swing: ['2H_Melee_Attack_Slice', '2H_Melee_Attack_Spin', '2H_Melee_Attack_Stab'], rarity: 'legendary', price: 1800 },
+  pick_shadow: { name: 'Shadow Reaper', src: ['bot_b', '2H_Axe'], tint: 0x8a78c8, swing: ['2H_Melee_Attack_Spin', '2H_Melee_Attack_Chop'], rarity: 'legendary', price: 1800 },
+  pick_mug: { name: 'Root Beer Float', src: ['bot_b', 'Mug'], tint: null, swing: ['Unarmed_Melee_Attack_Punch_A', 'Unarmed_Melee_Attack_Punch_B'], rarity: 'legendary', price: 1500 },
 };
 
 /**
@@ -129,6 +130,13 @@ export function skinDef(id) {
 
 export function pickaxeDef(id) {
   return PICKAXES[id] || PICKAXES.pick_default;
+}
+
+/** Every clip a pickaxe can swing with (CharacterKit builds upper-body actions for these). */
+export function swingClips() {
+  const out = new Set();
+  for (const d of Object.values(PICKAXES)) for (const c of d.swing || []) out.add(c);
+  return [...out];
 }
 
 export function backblingDef(id) {

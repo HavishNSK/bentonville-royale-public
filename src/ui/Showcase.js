@@ -338,7 +338,12 @@ export function createShowcase(parent) {
       build().then(() => {
         // a pickaxe preview shows it off with a swing; a back bling turns the line-up around
         const s = slots[0];
-        if (previewPick && s && s.ch.swing) s.ch.swing();
+        if (previewPick && s && s.ch.swing) {
+          // show the whole combo: one swing per move, then back to idle
+          const moves = Math.max(1, (PICKAXES[previewPick].swing || []).length);
+          s.ch._swingN = 0;
+          for (let i = 0; i < moves * 2; i++) setTimeout(() => slots[0] === s && previewPick && s.ch.swing(), i * 520);
+        }
         if (previewBB) spinV = 0.2;
       });
     },
