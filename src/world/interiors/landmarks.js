@@ -595,6 +595,7 @@ put('greenhouse', [896842910]);
 put('garage', [912478100]);
 put('pavilion', [912514431]);
 put('shelter', [583054984]);
+put('bike_shop', [799257711]);
 
 /** pois: the POIs inside this building's footprint ({ k, ... }). area: footprint m^2. */
 export function classify(bd, pois, area = bd.a || 0) {
@@ -617,5 +618,8 @@ export function classify(bd, pois, area = bd.a || 0) {
   if (t === 'office' || has(/^office=/)) return lv >= 2 || area > 400 ? 'office_block' : 'office_small';
   if (area > 1000) return area > 1500 ? 'hall' : 'retail_block';
   if (lv >= 2 && area < 240) return 'storefront_2';
+  if (has(/amenity=restaurant|amenity=fast_food/)) return 'restaurant';
+  if (has(/shop=bicycle/)) return 'bike_shop';
+  if (has(/craft=brewery|amenity=bar/)) return 'brewpub';
   return 'shop';
 }
