@@ -876,7 +876,7 @@ export class Player {
       hud.prompt('[' + key + '] Pick up ' + card.name + "'s reboot card");
       if (input.actionHit('interact')) {
         if (net) net.action({ k: 'rc', v: card.v });
-        else if (rb.take(this, card)) hud.toast(card.name + "'s reboot card: take it to a reboot van", 'pickup');
+        else if (rb.take(this, card)) hud.toast(card.name + "'s reboot card: take it to a reboot van (marked on your map)", 'pickup');
       }
       return 1;
     }

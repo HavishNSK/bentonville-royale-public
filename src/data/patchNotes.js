@@ -7,6 +7,21 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.14.0',
+    date: '2026-11-17',
+    title: "Catfish Ken's van",
+    sections: [
+      {
+        heading: 'Reboot vans',
+        items: [
+          "The reboot van is now Catfish Ken's own van: spray-painted pink, purple and blue all over (sides, roof, hood and back), with 'Catfish Ken' down both sides and lime-green rims.",
+          'Catfish Ken himself sits in the driver\'s seat. He waves when you walk up and looks your way. He is friendly and never hurts anyone.',
+          'While you carry a teammate\'s reboot card, every reboot van is highlighted and labeled on the minimap and the full map ("REBOOT VAN", or a countdown while it recharges).',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.13.0',
     date: '2026-11-17',
     title: 'Global chat, swimming and a pickleball paddle',

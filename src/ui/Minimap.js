@@ -27,7 +27,9 @@
  *       bus:    { x, z, heading } | null,    // Drop Bus position on that line
  *       blips:  [{ x, z, kind }]      // optional; kind: 'chest' | 'loot' | 'enemy' | 'drop'
  *                                     //   | 'mate0'..'mate3' (teammate, slot colour) | 'mateDown' (knocked teammate)
- *                                     //   | 'van' / 'vanCd' (reboot van ready / recharging) | 'card' (teammate's reboot card)
+ *                                     //   | 'van' / 'vanCd' (reboot van ready / recharging) | 'vanHot' (ready, while
+ *                                     //   carrying a reboot card) | 'card' (teammate's reboot card)
+ *                                     //   optional label: text drawn under the icon (full map; mini when on view)
  *     }
  *   mm.fullCanvasToWorld(px, py)      // full-canvas backing-store pixel -> { x, z, inBounds }
  *   mm.worldToFullCanvas(x, z)        // -> { px, py }
@@ -108,10 +110,10 @@ const ROAD_STYLE = [
   { fill: '#fbf8ef', casing: '#4d573f', minPx: 3.2, minOv: 2.6, alphaOv: 1 },
   { fill: '#fff6d8', casing: '#4a4535', minPx: 3.8, minOv: 3.4, alphaOv: 1 },
 ];
-const BLIP_KINDS = ['chest', 'loot', 'enemy', 'drop', 'mate0', 'mate1', 'mate2', 'mate3', 'mateDown', 'pin0', 'pin1', 'pin2', 'pin3', 'ping0', 'ping1', 'ping2', 'ping3', 'pingEnemy', 'van', 'vanCd', 'card'];
+const BLIP_KINDS = ['chest', 'loot', 'enemy', 'drop', 'mate0', 'mate1', 'mate2', 'mate3', 'mateDown', 'pin0', 'pin1', 'pin2', 'pin3', 'ping0', 'ping1', 'ping2', 'ping3', 'pingEnemy', 'van', 'vanCd', 'vanHot', 'card'];
 const MATE_COLORS = ['#ffc21f', '#5ec8ff', '#7dff6b', '#ff5d8f']; // = Teams.js TEAM_COLORS
 /** Blips that stay pinned to the minimap edge at any distance. */
-const isPinnedBlip = (kind) => kind === 'enemy' || kind === 'drop' || kind === 'card' || kind.startsWith('mate') || kind.startsWith('pin');
+const isPinnedBlip = (kind, label) => kind === 'enemy' || kind === 'drop' || kind === 'card' || kind === 'vanHot' || (!!label && kind.startsWith('van')) || kind.startsWith('mate') || kind.startsWith('pin');
 // full-map grid: lettered columns, numbered rows (call-outs like "C4")
 const GRID_N = 10;
 const LABEL_FONT = '"Lilita One", "Arial Rounded MT Bold", "Trebuchet MS", system-ui, sans-serif';
@@ -483,7 +485,7 @@ function makeBlipSprites(k) {
     g.stroke();
   });
   // reboot van: a cyan rounded square with a white "R" (grey while recharging)
-  for (const [key, col] of [['van', '#38e1ff'], ['vanCd', '#8a96a3']]) {
+  for (const [key, col] of [['van', '#38e1ff'], ['vanCd', '#8a96a3'], ['vanHot', '#7dff6b']]) {
     out[key] = makeSprite(24 * k, 24 * k, 12 * k, 12 * k, (g) => {
       g.fillStyle = col;
       g.strokeStyle = '#ffffff';
@@ -1454,6 +1456,14 @@ export class Minimap {
     return changed;
   }
 
+  /** A blip's label: small haloed text centred at x with its top at y. */
+  _blipLabel(ctx, text, x, y, k) {
+    ctx.font = `900 ${Math.round(10 * k)}px ${this._font}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    haloText(ctx, text, Math.round(x), Math.round(y), '#ffffff', '#13202c', 3 * k);
+  }
+
   _blipHash(blips) {
     if (!blips) return 0;
     const n = blips.length;
@@ -1463,6 +1473,7 @@ export class Minimap {
       h = (Math.imul(h, 31) + ((b.x * 4) | 0)) | 0;
       h = (Math.imul(h, 31) + ((b.z * 4) | 0)) | 0;
       h = (Math.imul(h, 31) + (b.kind ? b.kind.charCodeAt(0) + b.kind.length * 7 + b.kind.charCodeAt(b.kind.length - 1) * 131 : 0)) | 0;
+      if (b.label) for (let j = 0; j < b.label.length; j++) h = (Math.imul(h, 31) + b.label.charCodeAt(j)) | 0;
     }
     return h;
   }
@@ -1713,7 +1724,7 @@ export class Minimap {
         this._toMini(bl.x, bl.z);
         this._clampMini(9 * k);
         if (this._clamped) {
-          if (!isPinnedBlip(bl.kind)) {
+          if (!isPinnedBlip(bl.kind, bl.label)) {
             const ddx = bl.x - p.x;
             const ddz = bl.z - p.z;
             if (ddx * ddx + ddz * ddz > range2) continue;
@@ -1721,7 +1732,10 @@ export class Minimap {
           ctx.globalAlpha = 0.72;
           ctx.drawImage(sp.c, this._sx - sp.ax * 0.8, this._sy - sp.ay * 0.8, sp.w * 0.8, sp.h * 0.8);
           ctx.globalAlpha = 1;
-        } else ctx.drawImage(sp.c, Math.round(this._sx - sp.ax), Math.round(this._sy - sp.ay));
+        } else {
+          ctx.drawImage(sp.c, Math.round(this._sx - sp.ax), Math.round(this._sy - sp.ay));
+          if (bl.label) this._blipLabel(ctx, bl.label, this._sx, this._sy - sp.ay + sp.h + 2 * k, k);
+        }
       }
     }
 
@@ -1948,7 +1962,10 @@ export class Minimap {
       for (let i = 0; i < blips.length; i++) {
         const bl = blips[i];
         const sp = spr[bl.kind] || spr.loot;
-        ctx.drawImage(sp.c, Math.round(bl.x * s + ox - sp.ax), Math.round(bl.z * s + oz - sp.ay));
+        const bx = Math.round(bl.x * s + ox - sp.ax);
+        const by = Math.round(bl.z * s + oz - sp.ay);
+        ctx.drawImage(sp.c, bx, by);
+        if (bl.label) this._blipLabel(ctx, bl.label, bx + sp.ax, by + sp.h + 2 * k, k * 1.5);
       }
     }
 
