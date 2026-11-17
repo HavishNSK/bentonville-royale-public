@@ -1698,9 +1698,10 @@ export class Bots {
   _wants(inv, item) {
     if (!item) return false;
     if (item.type === 'ammo' || item.type === 'material') return inv.canTake(item);
-    if (item.type === 'consumable') return inv.canTake(item);
+    // bots do not throw grenades: leave them for the humans
+    if (item.type === 'consumable') return !(CONSUMABLES[item.id] && CONSUMABLES[item.id].throwable) && inv.canTake(item);
     if (item.type === 'weapon') {
-      if (!WEAPONS[item.id]) return false;
+      if (!WEAPONS[item.id] || WEAPONS[item.id].projectile) return false; // no rocket launchers either
       let weapons = 0;
       let worst = -1;
       let worstRank = Infinity;

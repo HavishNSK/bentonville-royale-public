@@ -23,7 +23,7 @@
 //   menus.playerName()      saved name (localStorage)
 //   menus.setSettings(settings)       // update the shown settings without firing onSettings
 //   menus.showTitle() / showSettings(from) / showLoading(pct, label) / showPause()
-//   menus.showResult({ victory, placement, kills, total, time, killer })
+//   menus.showResult({ victory, placement, kills, total, time, killer, difficulty, ranked })
 //   menus.showDropBanner(on, secondsLeft, zoneLabel, { title, sub }?)  // Drop Bus banner
 //   menus.hideAll()
 
@@ -36,7 +36,7 @@ import {
 } from './settings.js';
 import { applyCrosshairStyle } from './hud.js';
 import { createFpsMeter } from './fpsMeter.js';
-import { MATCH } from '../core/config.js';
+import { MATCH, RANKED_NOTE } from '../core/config.js';
 import { TEAM_MODES, MODE_LABELS, teamSize } from '../game/Teams.js';
 
 const MODE_IDS = Object.keys(TEAM_MODES);
@@ -52,6 +52,8 @@ const TIPS = [
   (k) => `Hold ${k('aim')} to aim down sights for tighter shots.`,
   (k) => `Press ${k('inventory')} to open your inventory, then drag guns and heals to reorder your hotbar.`,
   'Headshots deal bonus damage with every weapon.',
+  'Rocket Launchers hold one rocket. A clean hit deals 100, and the blast hurts you too if you are close.',
+  (k) => `Grenades blow up about 2 seconds after you throw them with ${k('fire')}. They bounce, break builds, and hurt you too.`,
 ];
 
 const REDUCED = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -282,7 +284,7 @@ export function createMenus(root, opts = {}) {
          ${range('fov', 'Field of view', 55, 100, 1)}
          <div class="mn-row"><span>Graphics quality</span>${seg('quality', QUALITY_OPTIONS)}</div>
          ${toggle('performanceMode', 'Performance mode (Chromebook)', 'Half resolution, no bloom/outlines/shadows, shorter draw distance. Best for Chromebooks and weak laptops.')}
-         <div class="mn-row"><span>Bot difficulty</span>${seg('difficulty', DIFFICULTY_OPTIONS)}</div>
+         <div class="mn-row"><span>Bot difficulty<small class="mn-hint">${RANKED_NOTE} In a private match the host's setting counts.</small></span>${seg('difficulty', DIFFICULTY_OPTIONS)}</div>
          ${toggle('autoPickupAmmo', 'Auto-pickup ammo & mats', 'Walk over ammo and materials to take them without pressing interact.')}
          ${toggle('showFps', 'Show FPS')}
          <label class="mn-row mn-row-gtiles"><span>Real-world 3D view (Google)<small class="mn-hint" data-ref="gtilesHint"></small></span><input type="checkbox" class="mn-toggle" data-name="googleTiles"></label>
@@ -1001,6 +1003,7 @@ export function createMenus(root, opts = {}) {
       }
       // multiplayer: no instant rematch; the host makes a new room
       result.querySelector('[data-act=again]').hidden = !!r.mp;
+      if (r.difficulty && !r.ranked) R.sub.textContent += ` Unranked match (${String(r.difficulty).toUpperCase()} bots). ${RANKED_NOTE}`;
       if (r.hostNote) R.sub.textContent += ' ' + r.hostNote;
       show(result, false);
     },

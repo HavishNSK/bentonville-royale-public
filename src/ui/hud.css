@@ -2391,3 +2391,58 @@
 .has-fullmap .br-pings {
   visibility: hidden;
 }
+
+/* ---- spectating (after being eliminated) ---- */
+.br-spec {
+  display: none;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(var(--u) * 4);
+  margin-bottom: calc(var(--u) * 4);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.br-spec.is-on {
+  display: flex;
+}
+.br-spec-tag {
+  padding: calc(var(--u) * 2) calc(var(--u) * 10);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: calc(var(--u) * 8);
+  background: #ffd23d;
+  color: var(--br-ink);
+  font-size: calc(var(--u) * 12);
+  font-weight: 900;
+  letter-spacing: 0.12em;
+}
+.br-spec-name {
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 34);
+  line-height: 1.1;
+}
+.br-spec-sub {
+  font-size: calc(var(--u) * 14);
+  font-weight: 900;
+}
+.br-spec-keys {
+  display: flex;
+  gap: calc(var(--u) * 14);
+  margin-top: calc(var(--u) * 6);
+  font-size: calc(var(--u) * 13);
+  font-weight: 900;
+}
+.br-spec-keys > span {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--u) * 6);
+}
+/* nothing of our own to show while we watch someone else */
+.br-hud.is-spectating .br-build,
+.br-hud.is-spectating .br-xhair,
+.br-hud.is-spectating .br-slot-key,
+.br-hud.is-spectating .br-mats-key,
+.br-hud.is-spec-noinv .br-bc,
+.br-hud.is-spec-noinv .br-weapon,
+.br-hud.is-spec-noinv .br-mats {
+  display: none;
+}

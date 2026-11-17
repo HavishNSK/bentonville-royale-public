@@ -106,7 +106,7 @@ Place a personal track at `local-music/menu.mp3`. The dev/preview middleware ser
 | B | Emote |
 | M / Escape | Full map / pause |
 
-Click into gameplay to capture the pointer. Settings include sensitivity, invert Y, volume, graphics quality, bot difficulty, and optional Google view. Touch gameplay is not implemented.
+Click into gameplay to capture the pointer. Settings include sensitivity, invert Y, volume, graphics quality, bot difficulty, and optional Google view. Only matches on **Hard** bot difficulty count toward the RANKS leaderboards (wins and eliminations); Easy and Normal matches still pay coins. In multiplayer the host's difficulty is sent in the start message and decides for everyone. The client reports `ranked` with the match result and the account server (`party/accounts.js`) adds wins/kills only when `ranked === true`. Like kills, this is client-reported, not anti-cheat. Touch gameplay is not implemented.
 
 ## Commands and Verification
 
@@ -194,7 +194,7 @@ Every room kind gets a deterministic furniture kit scaled to its size (`src/worl
 
 Larger furniture is solid. Beds, sofas, tables, counters, shelves, crates and similar items block movement through per-level capsule colliders (`levels[i].props`). Players can step onto low pieces and land on taller ones. Pieces marked as cover (counters, shelves, fridges, lockers, crates and similar) also stop bullets and bot sight lines (`levels[i].propBlock`). Chairs, rugs, benches and wall decor never block, and furniture is not destructible. Lighting is baked into vertex colours (skirting, ceiling bands, floor-edge shading, light pools); there are no runtime lights. Props, lights and the 32 room plaques share building chunk geometry and culling, within a render budget of 12,000 quads per ordinary building and 60,000 per landmark. Over budget, decor is trimmed before core furniture.
 
-Pickaxes and bullets damage wall panels; broken panels open matching visual, movement and raycast gaps. Upper partitions are breakable; floor slabs, stairs, roofs and the exterior wall band above the ground storey remain intact. Host wall events replicate damage and breaks, and match reset restores panels. Joining an already-started match is rejected; no late-join snapshot or dedicated authoritative game server is implemented.
+Pickaxes and bullets damage wall panels; broken panels open matching visual, movement and raycast gaps. Upper partitions are breakable. Floors between storeys (the ceiling of the storey below) are breakable too: each is split into tiles of up to 4 m (2 m in rooms under 80 m²; `src/world/interiors/floorTiles.js`) that you can pickaxe or shoot from above or below, then fall, see, shoot or climb through. A 0.5 m rim along every room edge, and the floor under furniture, ceiling lights and loot, stays solid. Ground floors, stairs, roofs and the exterior wall band above the ground storey remain intact. Host wall events replicate damage and breaks (walls and floor tiles alike), and match reset restores panels. Joining an already-started match is rejected; no late-join snapshot or dedicated authoritative game server is implemented.
 
 The strict browser interiors script starts free build and exercises Player movement through a door and stairs, Combat pickaxe destruction, upper-floor loot interaction and bot stair movement through the development inspection API. It avoids headless pointer-lock limitations; audible output and real multi-browser relay play still need manual checks.
 

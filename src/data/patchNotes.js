@@ -7,7 +7,7 @@
 
 export const PATCH_NOTES = [
   {
-    version: '0.12.0',
+    version: '0.13.0',
     date: '2026-11-17',
     title: 'Global chat, swimming and a pickleball paddle',
     sections: [
@@ -33,6 +33,27 @@ export const PATCH_NOTES = [
       {
         heading: 'Map',
         items: ["Catfish Ken's reboot vans now show on the minimap and the full map in every mode, from the Drop Bus on, with a bigger icon."],
+      },
+    ],
+  },
+  {
+    version: '0.12.0',
+    date: '2026-11-17',
+    title: 'Hard mode ranks and breakable ceilings',
+    sections: [
+      {
+        heading: 'Ranks',
+        items: [
+          'Only matches on HARD bot difficulty count toward the RANKS boards now. Wins and eliminations from Easy or Normal matches are not added.',
+          'In a private match, the host\'s bot difficulty decides whether the match counts.',
+          'You still earn coins on every difficulty. The results screen tells you when a match was unranked.',
+        ],
+      },
+      {
+        heading: 'Buildings',
+        items: [
+          'Ceilings between floors can be broken. Pickaxe or shoot them from above or below, then drop, shoot or climb through the hole.',
+        ],
       },
     ],
   },

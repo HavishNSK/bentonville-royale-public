@@ -139,6 +139,7 @@ export class Combat {
     this.onEliminate = null;
     this.onHarvest = null;
     this.onFire = null;
+    this.launchProjectile = null; // (shooter, stats, muzzle, origin, dir): rocket launchers (set by Game)
     this.onBurstShot = null;
     this.onColliderDestroyed = null;
     this.onKnock = null;
@@ -250,7 +251,10 @@ export class Combat {
     if (!c || !pn || !this.world.breakPanel(c, pn.id)) return false;
     const y = (pn.y0 + pn.y1) / 2;
     const at = point ? point.clone() : new THREE.Vector3(pn.x, y, pn.z);
-    if (this.fx) {
+    if (this.fx && pn.kind === 'floor') {
+      // a floor / ceiling tile: a burst of slab debris at the tile (it falls to the storey below)
+      this.fx.debris(new THREE.Vector3(pn.x, y, pn.z), SURFACE[pn.mat] || 'wood', { count: 22, size: 0.45, spread: 2.2 });
+    } else if (this.fx) {
       const ends = panelEnds(c, pn);
       if (this.fx.wallBreak) this.fx.wallBreak(ends, pn.y0, pn.y1, pn.mat);
       else this.fx.debris(at, SURFACE[pn.mat] || 'wood', { count: 18, size: 0.4, spread: 2.4 });
@@ -288,6 +292,14 @@ export class Combat {
     else _from.copy(origin);
     if (this.fx) this.fx.muzzleFlash(_from, dir, { scale: w.kind === 'shotgun' ? 1.4 : 1 });
     if (this.sfx) this.sfx.play(w.sound, { x: _from.x, y: _from.y, z: _from.z, volume: w.soundVolume });
+
+    // launchers fire a projectile; the blast does the damage (game/Grenades.js)
+    if (w.projectile) {
+      _dir.copy(dirs ? dirs[0] : dir).normalize();
+      this.lastDirs = [_dir.clone()];
+      if (auth && this.launchProjectile) this.launchProjectile(shooter, w, _from, origin, _dir);
+      return out;
+    }
 
     const actorDamage = new Map();
     const pellets = dirs ? dirs.length : w.pellets || 1;

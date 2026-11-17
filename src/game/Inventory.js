@@ -64,7 +64,7 @@ export class Inventory {
   constructor(loadout) {
     this.slots = new Array(SLOT_COUNT).fill(null);
     this.selected = -1;
-    this.ammo = { light: 0, medium: 0, shells: 0, heavy: 0 };
+    this.ammo = Object.fromEntries(AMMO_KINDS.map((k) => [k, 0]));
     this.mats = { wood: 0, brick: 0, metal: 0 };
     /** Bumped on every change; cheap dirty check for HUD code. */
     this.version = 0;
@@ -112,7 +112,7 @@ export class Inventory {
       case 'consumable':
         return this._emptySlot() >= 0 || this._stackRoom(item.id) > 0;
       case 'ammo':
-        return this.ammo[item.ammo] < AMMO_CAP;
+        return this.ammo[item.ammo] < (AMMO[item.ammo].cap || AMMO_CAP);
       case 'material':
         return this.mats[item.mat] < PLAYER.matCap;
     }
@@ -172,7 +172,7 @@ export class Inventory {
         break;
       }
       case 'ammo': {
-        const n = Math.min(AMMO_CAP - this.ammo[it.ammo], it.count);
+        const n = Math.min((AMMO[it.ammo].cap || AMMO_CAP) - this.ammo[it.ammo], it.count);
         this.ammo[it.ammo] += Math.max(0, n);
         if (it.count - n > 0) out = { type: 'ammo', ammo: it.ammo, count: it.count - n };
         break;

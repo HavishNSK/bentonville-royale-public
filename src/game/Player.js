@@ -7,7 +7,7 @@
 //
 // Keys: WASD move, Shift sprint, Space jump, Ctrl/Z crouch, 1-5 / wheel hotbar,
 // F pickaxe, Q/C/V/X build pieces, G cycle material, R reload, E interact,
-// LMB fire / place / swing / use, RMB aim, B emote.
+// LMB fire / place / swing / use / throw a grenade, RMB aim, B emote.
 //
 // Multiplayer client (g.net.isClient): this stays the local, predicted
 // controller, but every authoritative effect goes to the host instead:
@@ -17,7 +17,7 @@
 
 import * as THREE from 'three';
 import { rampDragQuarter, validEdit } from './Structures.js';
-import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, KNOCK, REBOOT, SWIM, clamp, damp, TAU, weaponStats } from '../core/config.js';
+import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, KNOCK, REBOOT, SWIM, clamp, damp, TAU, weaponStats } from '../core/config.js';
 import { sameTeam } from './Teams.js';
 import { placeOnShoulder } from './Combat.js';
 
@@ -183,6 +183,7 @@ export class Player {
 
   update(dt, input, g) {
     const { world, hud } = g;
+    this.throwAim = false;
     if (!this.alive) {
       this.mode = 'dead';
       this.ads = false;
@@ -641,7 +642,7 @@ export class Player {
     this.placeCooldown -= dt;
 
     // equipped model on the character
-    const eqId = this.buildPiece ? 'pickaxe' : cur ? (cur.type === 'weapon' ? cur.id : 'none') : 'pickaxe';
+    const eqId = this.buildPiece ? 'pickaxe' : cur ? (cur.type === 'weapon' ? cur.id : cur.id === 'grenade' ? 'grenade' : 'none') : 'pickaxe';
     if (eqId !== this.lastEquipped) {
       if (this.lastEquipped !== null) g.sfx.play('weapon_switch', { volume: 0.5 });
       this.lastEquipped = eqId;
@@ -731,6 +732,9 @@ export class Player {
         const w = WEAPONS[cur.id];
         const want = w.auto ? lmb : lmbClick || (lmb && !this.triggerHeld);
         if (want) this.fire(g);
+      } else if (cur && cur.type === 'consumable' && CONSUMABLES[cur.id] && CONSUMABLES[cur.id].throwable) {
+        this.throwAim = true; // Game draws the aim arc
+        if (lmbClick) this.throwGrenade(g);
       } else if (cur && cur.type === 'consumable') {
         if (lmbClick && this.useT <= 0) this.startUse(g);
       } else if (lmb && this.cooldown <= 0) {
@@ -1063,7 +1067,7 @@ export class Player {
     const net = clientNet(g);
     if (net) net.sendFire(this, it, this.aimOrigin, g.combat.lastDirs, res);
     // recoil
-    this.pitch = clamp(this.pitch + (w.kind === 'sniper' ? 0.05 : w.kind === 'shotgun' ? 0.04 : 0.008), CAMERA.minPitch, CAMERA.maxPitch);
+    this.pitch = clamp(this.pitch + (w.kind === 'sniper' || w.kind === 'launcher' ? 0.05 : w.kind === 'shotgun' ? 0.04 : 0.008), CAMERA.minPitch, CAMERA.maxPitch);
     if (it.mag <= 0) this.startReload(g);
     return res;
   }
@@ -1102,13 +1106,41 @@ export class Player {
     return res;
   }
 
+  // --- grenades
+
+  /** Where a throw leaves the hand: beside the chest, inside the body's collision circle. */
+  throwOrigin(out = new THREE.Vector3()) {
+    const sh = Math.sin(this.heading);
+    const ch = Math.cos(this.heading);
+    return out.set(this.pos.x + ch * 0.25 + sh * 0.2, this.pos.y + (this.crouching ? 1.05 : 1.45), this.pos.z + sh * 0.25 - ch * 0.2);
+  }
+
+  /** Throws one of the held grenades along the aim ray. */
+  throwGrenade(g) {
+    const it = this.inventory.current();
+    if (!it || it.type !== 'consumable' || !CONSUMABLES[it.id] || !CONSUMABLES[it.id].throwable) return false;
+    if (this.cooldown > 0 || !g.grenades) return false;
+    this._cancelReload();
+    const slot = this.inventory.selected;
+    if (!this.inventory.useConsumable()) return false;
+    this.cooldown = GRENADE.cooldown;
+    if (this.character) this.character.swing();
+    const o = this.throwOrigin(_v);
+    const d = this.aimDir;
+    const net = clientNet(g);
+    // a client asks the host, which throws it and echoes the flight to everyone
+    if (net) net.action({ k: 'gr', s: slot, o: [o.x, o.y, o.z], d: [d.x, d.y, d.z] }, true);
+    else g.grenades.throw(this, o, d);
+    return true;
+  }
+
   // --- consumables
 
   startUse(g) {
     const it = this.inventory.current();
     if (!it || it.type !== 'consumable') return false;
     const def = CONSUMABLES[it.id];
-    if (!def) return false;
+    if (!def || def.throwable) return false;
     if (def.heal > 0 && def.shield <= 0 && this.health >= PLAYER.maxHealth) {
       g.hud.toast('Health is full', 'warn');
       return false;

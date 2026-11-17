@@ -55,6 +55,8 @@ export const AMMO = {
   medium: { name: 'Medium Rounds', pickup: 30 },
   shells: { name: 'Shells', pickup: 8 },
   heavy: { name: 'Heavy Rounds', pickup: 6 },
+  // cap: most you can carry (default Inventory AMMO_CAP); weight: share of random ammo drops (default 1)
+  rockets: { name: 'Rockets', pickup: 2, cap: 12, weight: 0.12 },
 };
 
 // Classic battle-royale roster (generic names). Fields:
@@ -198,6 +200,20 @@ export const WEAPONS = {
     },
   },
 };
+// Fires a rocket (game/Grenades.js) instead of a hitscan shot: `damage` is a clean hit, the
+// blast around it is ROCKET below.
+WEAPONS.rocket_launcher = {
+  id: 'rocket_launcher', name: 'Rocket Launcher', kind: 'launcher', projectile: 'rocket', icon: 'rocket_launcher', model: 'rocket_launcher', sound: 'rocket_launch', ammo: 'rockets',
+  headMult: 1, rate: 0.75, auto: false, mag: 1,
+  spread: 0, bloom: 0, maxBloom: 0, pellets: 1, range: 300, falloffStart: 300, falloffEnd: 300, minFalloff: 1,
+  zoom: 0.85, twoHanded: true, botRange: 30, tracer: 0xffb070, lootWeight: 2,
+  rarities: {
+    rare: { damage: 100, reload: 2.8 },
+    epic: { damage: 100, reload: 2.66 },
+    legendary: { damage: 100, reload: 2.52 },
+  },
+};
+
 // Top-level damage/reload mirror the lowest rarity so code that reads WEAPONS[id]
 // directly still gets sane numbers.
 for (const id in WEAPONS) {
@@ -253,6 +269,37 @@ export function weaponShotInterval(id) {
 export const CONSUMABLES = {
   medkit: { id: 'medkit', name: 'Med Kit', icon: 'medkit', model: 'medkit', rarity: 'uncommon', useTime: 3.2, heal: 60, shield: 0, stack: 3, sound: 'heal' },
   tonic: { id: 'tonic', name: 'Shield Tonic', icon: 'potion', model: 'potion', rarity: 'rare', useTime: 2.4, heal: 0, shield: 50, stack: 3, sound: 'drink_shield' },
+  // throwable: fire throws one instead of channelling a heal (see GRENADE and game/Grenades.js)
+  grenade: { id: 'grenade', name: 'Grenade', icon: 'grenade', model: 'grenade', rarity: 'common', throwable: true, useTime: 0, heal: 0, shield: 0, stack: 6, pickup: 3, sound: null },
+};
+
+// Grenades (game/Grenades.js): thrown along the aim ray in an arc, bounce off the world,
+// and explode when the fuse (started at the throw) runs out.
+export const GRENADE = {
+  damage: 75, // flat, to every character within `radius` that the blast can see (the thrower too)
+  radius: 5.5, // m
+  structureDamage: 375, // to built pieces, trees, rocks and props in the blast
+  fuse: 2.2, // s
+  speed: 20, // m/s along the aim direction
+  lift: 4, // m/s added straight up
+  gravity: 22,
+  bounce: 0.36, // speed kept along the surface normal
+  friction: 0.6, // speed kept along the surface per bounce
+  size: 0.13, // collision radius (m)
+  cooldown: 0.75, // s between throws
+};
+
+// Rockets fly straight at whatever the crosshair is on and explode on the first thing they
+// touch. A clean hit (the body it struck, or anyone within `cleanRadius`) takes the
+// launcher's full damage; the blast fades to `minDamage` at `radius`. It hurts the shooter too.
+export const ROCKET = {
+  speed: 26, // m/s: slow enough to see coming and dodge
+  life: 6, // s before it goes off on its own
+  radius: 4.5, // m
+  cleanRadius: 1.3, // m
+  minDamage: 40,
+  structureDamage: 300, // to built pieces, trees, rocks and props in the blast
+  size: 0.15, // collision radius (m)
 };
 
 export const PICKAXE = {
@@ -266,7 +313,8 @@ export const PICKAXE = {
 // Breakable building wall panels (see World.breakPanel / Interiors.js): outer walls use the
 // building's material, interior partitions are wood. Panels are at most panelW m wide and one
 // storey tall; bullets do bulletMult of their damage to a panel (and grant no mats).
-export const BUILDING_WALL = { hp: { wood: 300, brick: 450, metal: 600 }, innerHp: 150, panelW: 4, bulletMult: 0.5 };
+// floorHp: each breakable floor / ceiling tile between storeys (interiors/floorTiles.js).
+export const BUILDING_WALL = { hp: { wood: 300, brick: 450, metal: 600 }, innerHp: 150, floorHp: 200, panelW: 4, bulletMult: 0.5 };
 
 export const MATERIALS = ['wood', 'brick', 'metal'];
 export const MATERIAL_COLOR = { wood: 0xb9803f, brick: 0xb5533c, metal: 0x8d99a6 };
@@ -366,6 +414,11 @@ export const REBOOT = {
 // boxFight = odds a close fight is taken from a full 1x1 box with edit peeks (window / door
 // edited into the wall facing the enemy, shoot, reset the edit); peekOpen / peekClosed =
 // seconds the edit stays open / closed.
+// Only matches against HARD bots count toward the RANKS boards (wins + eliminations).
+export const RANKED_DIFFICULTY = 'hard';
+export const isRankedDifficulty = (d) => d === RANKED_DIFFICULTY;
+export const RANKED_NOTE = 'Only matches on HARD bot difficulty count toward the ranks (wins and eliminations).';
+
 export const DIFFICULTY = {
   easy: { lead: 0.5, aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.35, buildPieces: 2, buildCooldown: 6, buildRate: 0.45, sight: 80, damageScale: 0.6, wallOnHit: 0.25, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0.3 },
   normal: {

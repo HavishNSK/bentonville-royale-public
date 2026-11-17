@@ -191,6 +191,12 @@ function hudHTML() {
 <div class="br-toasts" data-ref="toasts"></div>
 
 <div class="br-bl">
+<div class="br-spec" data-ref="spec">
+  <div class="br-spec-tag">SPECTATING</div>
+  <div class="br-spec-name br-ol-xl" data-ref="specName"></div>
+  <div class="br-spec-sub" data-ref="specSub"></div>
+  <div class="br-spec-keys" data-ref="specKeys"></div>
+</div>
   <div class="br-team" data-ref="team"></div>
   <div class="br-emote" data-ref="emote"><kbd class="br-key">B</kbd>EMOTE</div>
   <div class="br-vitals">
@@ -1041,6 +1047,32 @@ export function buildHud(root) {
     }
   }
 
+  // setSpectate({ name, sub, keys } | null): banner while we watch someone after being eliminated.
+  // `keys` is keyed text ("[LMB] Next player"), one entry per hint.
+  const sp = { on: null, name: null, sub: null, keys: null };
+  function setSpectate(d) {
+    const on = !!d;
+    if (on !== sp.on) {
+      r.spec.classList.toggle('is-on', on);
+      hud.classList.toggle('is-spectating', on);
+      sp.on = on;
+    }
+    if (!on) return;
+    if (d.name !== sp.name) r.specName.textContent = sp.name = d.name;
+    const sub = d.sub || '';
+    if (sub !== sp.sub) r.specSub.textContent = sp.sub = sub;
+    const keys = (d.keys || []).join('|');
+    if (keys !== sp.keys) {
+      sp.keys = keys;
+      r.specKeys.textContent = '';
+      for (const k of d.keys || []) {
+        const el = document.createElement('span');
+        fillKeyedText(el, k);
+        r.specKeys.appendChild(el);
+      }
+    }
+  }
+
   // setDowned({ down01, revive01, by } | null): our own knocked overlay
   const dn = { on: null, down: -1, rev: -1, by: undefined };
   function setDowned(d) {
@@ -1135,6 +1167,7 @@ export function buildHud(root) {
     setTeam,
     setTags,
     setDowned,
+    setSpectate,
     setRevive,
     /** Clears transient HUD bits (feed, toasts, prompt, announce) — used when leaving a match. */
     clearTransient() {
@@ -1147,6 +1180,7 @@ export function buildHud(root) {
       showFullMap(false);
       setRevive(null);
       setDowned(null);
+      setSpectate(null);
       setTags(null);
     },
     destroy() {

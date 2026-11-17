@@ -54,7 +54,7 @@
 //   hash       uint32 FNV-1a over the quantised plan
 // }
 // panel = {
-//   id, kind: 'outer' | 'inner', level
+//   id, kind: 'outer' | 'inner' | 'floor', level   ('floor': a slab tile, see interiors/floorTiles.js)
 //   e, f0, f1         outer only: footprint edge e (vertex e -> e + 1) between fractions f0 < f1
 //   ax, az, bx, bz    inner only: the wall centre line (world); the matching walls entry is wall
 //   wall              inner only: index of its entry in levels[level].walls (stride 7 index / 7)
@@ -75,8 +75,9 @@ import { LANDMARK_RECIPES, classify } from './interiors/landmarks.js';
 
 import { storeyCount, addStoreys, FLOOR_THICKNESS } from './interiors/storeys.js';
 import { furnishInterior } from './interiors/furnishings.js';
+import { addFloorTiles } from './interiors/floorTiles.js';
 
-export const INTERIOR_VERSION = 4;
+export const INTERIOR_VERSION = 5;
 
 const HUB = { corridor: 1, hall: 1, lobby: 1, sales: 1, living: 1, open: 1 };
 
@@ -414,7 +415,7 @@ export function planInterior(bd, shell, ctx = {}) {
   if (ctx._single) return plan;
   const complete = addStoreys(plan, bd, { ...shell, ceil }, count, trees, authored?.stairs, (upperShell, upperTree) =>
     planInterior(bd, upperShell, { ...ctx, _single: true, _tree: upperTree }));
-  return furnishInterior(complete, shell);
+  return addFloorTiles(furnishInterior(complete, shell), shell); // breakable slabs between storeys
 }
 
 /**
