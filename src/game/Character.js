@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { damp, clamp, WEAPONS } from '../core/config.js';
 import { toToon } from '../render/Toon.js';
-import { emoteClips, emoteDef, pickaxeDef, backblingDef } from './Cosmetics.js';
+import { emoteClips, emoteDef, pickaxeDef, backblingDef, swingClips } from './Cosmetics.js';
 
 // Characters and their weapons are cel-shaded; colours get a small saturation lift.
 const TOON_CHAR = { saturate: 1.2 };
@@ -48,6 +48,17 @@ export class CharacterKit {
     for (const k in UPPER_CLIP) {
       const c = byName.get(UPPER_CLIP[k]);
       if (c) this.over[k] = part(c, true, k);
+    }
+    // pickaxe swings (Cosmetics.PICKAXES[].swing), keyed 'sw:<clip>', each with the time scale
+    // that makes it last as long as the classic chop (so every pickaxe hits at the same rate)
+    this.swingScale = {};
+    const chop = byName.get(UPPER_CLIP.swing);
+    const want = chop ? chop.duration / 3.2 : 0.35;
+    for (const name of swingClips()) {
+      const c = byName.get(name);
+      if (!c) continue;
+      this.over['sw:' + name] = part(c, true, 'sw:' + name);
+      this.swingScale[name] = c.duration / want;
     }
     for (const k in FULL_CLIP) {
       const c = byName.get(FULL_CLIP[k]);
@@ -175,6 +186,7 @@ export class Character {
     }
     this.ov = {};
     for (const k in kit.over) {
+      if (k.startsWith('sw:')) continue; // pickaxe swings: created on first use (swing())
       const a = this.mixer.clipAction(kit.over[k]);
       a.play();
       a.setEffectiveWeight(0);
@@ -287,8 +299,21 @@ export class Character {
     this._oneShot(this.twoHanded ? 'shoot2' : 'shoot1', 2.6);
   }
 
+  /** One pickaxe hit: the next move of this pickaxe's combo (Cosmetics swing list). */
   swing() {
-    this._oneShot('swing', 3.2);
+    const list = pickaxeDef(this.pickaxeId).swing;
+    const n = this._swingN || 0;
+    this._swingN = n + 1;
+    const clip = list && list.length ? list[n % list.length] : null;
+    const key = clip && 'sw:' + clip;
+    if (key && !this.ov[key] && this.kit.over[key]) {
+      const a = this.mixer.clipAction(this.kit.over[key]);
+      a.play();
+      a.setEffectiveWeight(0);
+      this.ov[key] = a;
+    }
+    if (key && this.ov[key]) this._oneShot(key, this.kit.swingScale[clip] || 3.2);
+    else this._oneShot('swing', 3.2);
   }
 
   useItem(seconds) {

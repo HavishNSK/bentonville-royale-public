@@ -7,7 +7,7 @@
 
 export const PATCH_NOTES = [
   {
-    version: '0.8.1',
+    version: '0.12.0',
     date: '2026-11-17',
     title: 'Hard mode ranks and breakable ceilings',
     sections: [
@@ -23,6 +23,90 @@ export const PATCH_NOTES = [
         heading: 'Buildings',
         items: [
           'Ceilings between floors can be broken. Pickaxe or shoot them from above or below, then drop, shoot or climb through the hole.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.11.0',
+    date: '2026-11-17',
+    title: "Catfish Ken's reboot vans",
+    sections: [
+      {
+        heading: 'Reboot vans',
+        items: [
+          "Catfish Ken's reboot van is parked at every major POI. Look for the food truck with the big catfish on the roof.",
+          'In Duos, Trios and Squads, an eliminated player drops a reboot card. Teammates press E to pick it up.',
+          'Hold E at a reboot van while carrying cards to bring those teammates back with a pistol, ammo and 100 wood.',
+          'A van needs 60 seconds to recharge after a reboot. Vans and your team\'s cards show on the minimap.',
+          'Bot teammates pick up your card and reboot you too.',
+        ],
+      },
+      {
+        heading: 'Less lag',
+        items: [
+          "A match no longer runs in slow motion when the host's computer drops below 20 FPS.",
+          'Hosted matches keep running when the host switches tabs.',
+          'Your builds show up instantly in multiplayer instead of after a round trip to the host.',
+          'Hits, eliminations and other match events reach players sooner.',
+          'Hosts upload much less data per player, and a slow connection no longer builds up a growing delay.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.10.0',
+    date: '2026-11-17',
+    title: 'Fast shotguns, smarter bots',
+    sections: [
+      {
+        heading: 'Shotguns',
+        items: [
+          'Shotguns reload one shell at a time (about half a second per shell) instead of one long reload.',
+          'Shoot any time during a shotgun reload to stop it and fire the shells you have already loaded.',
+        ],
+      },
+      {
+        heading: 'Bots',
+        items: [
+          'Bots stop fighting and run for the safe zone when the storm is on them or about to catch them, shooting back on the way.',
+          'Bots leave late-game circles earlier and head for the middle of tiny final circles.',
+          'Bots stuck in the storm break through builds and walls in their way, or build a ramp over them.',
+          'Bots build much more: more walls, ramps, ramp rushes and boxes on every difficulty, and they gather more materials to do it.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.9.0',
+    date: '2026-11-17',
+    title: 'Pickaxe moves',
+    sections: [
+      {
+        heading: 'Pickaxes',
+        items: [
+          'Every pickaxe now has its own moves, chained into a combo: the Hatchet chops and slices, the Dagger slashes and stabs, the Crystal Bridge Greatsword and Shadow Reaper spin, the Sparkle Wand casts, and the Root Beer Float throws punches.',
+          'Every pickaxe still hits at the same speed, so none of them is better than another.',
+          'Trying a pickaxe on in the Item Shop or Locker shows off its full combo.',
+          'The hotbar shows the name of your equipped pickaxe.',
+        ],
+      },
+      {
+        heading: 'Shop',
+        items: ["If an item can't be bought yet while the shop is being updated, the shop says so (and keeps your coins) instead of 'This item is not in the shop'."],
+      },
+    ],
+  },
+  {
+    version: '0.8.1',
+    date: '2026-11-17',
+    title: 'Roof and stairwell fixes',
+    sections: [
+      {
+        heading: 'Fixes',
+        items: [
+          'You can stand on the roof of the Bentonville Community Center again (you used to sink into the building), and its walls are solid.',
+          'You can no longer climb sideways out of a building stairwell up through the floor above. Take the stairs!',
         ],
       },
     ],

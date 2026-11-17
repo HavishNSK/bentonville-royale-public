@@ -17,7 +17,7 @@
 
 import * as THREE from 'three';
 import { rampDragQuarter, validEdit } from './Structures.js';
-import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, KNOCK, clamp, damp, TAU, weaponStats } from '../core/config.js';
+import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, KNOCK, REBOOT, clamp, damp, TAU, weaponStats } from '../core/config.js';
 import { sameTeam } from './Teams.js';
 import { placeOnShoulder } from './Combat.js';
 
@@ -148,6 +148,8 @@ export class Player {
     this.reviveT = 0;
     this.revivingTarget = null;
     this.reviveLocalT = 0;
+    this.rebootVan = null; // reboot van we hold interact at (Reboot.js)
+    this.rebootLocalT = 0;
     this._wasDown = false;
     this.mantle = null;
     this.assists = 0;
@@ -209,6 +211,7 @@ export class Player {
       this._cancelReload();
       this._cancelUse();
       if (this.revivingTarget) this._stopRevive(g);
+      if (this.rebootVan) this._stopReboot(g);
       if (this.emoting && this.character) this.character.emote(false);
       this.emoting = false;
       this.mantle = null;
@@ -250,7 +253,7 @@ export class Player {
     if (this.ads || this.useT > 0) speed = PLAYER.walkSpeed;
     if (this.crouching) speed = PLAYER.walkSpeed * 0.65;
     if (down) speed = PLAYER.runSpeed * KNOCK.crawlSpeed;
-    if (this.revivingTarget) speed = 0; // kneeling over a teammate (a move key lets go, see _reviveInput)
+    if (this.revivingTarget || this.rebootVan) speed = 0; // kneeling over a teammate / at a reboot van (a move key lets go)
     if (this.carrying) speed *= 0.8; // a teammate on the shoulder slows you down
     if (down && this.carriedBy) speed = 0; // riding on a teammate's shoulder
 
@@ -439,6 +442,9 @@ export class Player {
     const ez = p.z + fz * this.radius;
     if (world.builtAbove(p.x, p.z, p.y) <= top + 0.05 || world.builtAbove(ex, ez, p.y) <= top + 0.05) return null;
     if (world.ceilingAbove(p.x, p.z, p.y, 0.05) <= top + 0.05) return null;
+    // ...and not with the front of the body under a floor's edge either (e.g. climbing sideways
+    // out of a building's stairwell): the rise would carry it up through the slab
+    if (world.ceilingAbove(ex, ez, p.y, 0.05) <= top + 0.05) return null;
     if (world.groundHeight(ax, az, p.y) >= top - 0.05) return null; // just a step: walking handles it
     // stand-on spot a bit further in, with room for a whole body above it
     const lx = p.x + fx * (reach + 0.35);
@@ -664,7 +670,15 @@ export class Player {
       this.triggerHeld = lmb;
       return;
     }
-    if (rv !== 1) this._interact(input, g, dt);
+    // ---- reboot cards / Catfish Ken's reboot vans (team modes)
+    const rb = rv === 1 ? 0 : this._rebootInput(input, g, dt);
+    if (rb === 2) {
+      if (g.structures) g.structures.setGhost(null);
+      this.placement = null;
+      this.triggerHeld = lmb;
+      return;
+    }
+    if (rv !== 1 && rb !== 1) this._interact(input, g, dt);
 
     // ---- edit (T): opens edit mode on your own piece and it stays open; T again confirms.
     // With "Confirm edit on release" on, letting go of the mouse after selecting confirms too.
@@ -791,6 +805,75 @@ export class Player {
     return 0;
   }
 
+  /**
+   * Reboot cards and vans. Interact next to a teammate's card picks it up; holding interact at
+   * a ready van while carrying cards reboots them (REBOOT.time). Solo / host: Reboot._tick
+   * runs the authoritative timer from this.rebootVan; a client sends 'rc' / 'rb' to the host.
+   * Returns 2 while holding at the van, 1 when it shows a card / van prompt, else 0.
+   */
+  _rebootInput(input, g, dt) {
+    const rb = g.reboot;
+    const hud = g.hud;
+    if (!g.teamMode || !rb || this.airborneDrop || this.carrying || this.mode !== 'ground') {
+      if (this.rebootVan) this._stopReboot(g);
+      return 0;
+    }
+    const key = input.label ? input.label('interact') : 'E';
+    const net = clientNet(g);
+    const mine = rb.cardsOf(this);
+    const names = mine.map((c) => c.name).join(', ');
+    let v = this.rebootVan;
+    if (v) {
+      const moving = input.action('moveForward') || input.action('moveBack') || input.action('moveLeft') || input.action('moveRight') || input.actionHit('jump');
+      if (!input.action('interact') || moving || !rb.vanReady(v) || rb.vanNear(this, 0.5) !== v || !mine.length) {
+        this._stopReboot(g);
+        v = null;
+      }
+    }
+    if (v) {
+      this.rebootLocalT += dt;
+      hud.prompt(null);
+      if (hud.setRevive) hud.setRevive({ pct: Math.min(1, this.rebootLocalT / REBOOT.time), name: names, verb: 'REBOOTING' });
+      return 2;
+    }
+    const card = rb.cardNear(this);
+    if (card) {
+      hud.prompt('[' + key + '] Pick up ' + card.name + "'s reboot card");
+      if (input.actionHit('interact')) {
+        if (net) net.action({ k: 'rc', v: card.v });
+        else if (rb.take(this, card)) hud.toast(card.name + "'s reboot card: take it to a reboot van", 'pickup');
+      }
+      return 1;
+    }
+    const van = rb.vanNear(this);
+    if (!van) return 0;
+    const meId = this.id;
+    const busy = van.user != null && van.user !== this && van.user !== meId;
+    if (!rb.vanReady(van)) hud.prompt("Catfish Ken's reboot van: recharging " + Math.ceil(rb.vanCooldown(van)) + 's');
+    else if (!mine.length) hud.prompt("Catfish Ken's reboot van: bring a teammate's reboot card");
+    else if (busy) hud.prompt('Reboot van in use');
+    else {
+      hud.prompt('[' + key + '] Hold to reboot ' + names);
+      if (input.actionHit('interact')) {
+        this.rebootVan = van;
+        this.rebootLocalT = 0;
+        this._cancelReload();
+        this._cancelUse();
+        this._endEdit(g);
+        if (net) net.action({ k: 'rb', i: van.i });
+      }
+    }
+    return 1;
+  }
+
+  _stopReboot(g) {
+    if (!this.rebootVan) return;
+    const net = clientNet(g);
+    if (net) net.action({ k: 'rb', i: -1 });
+    this.rebootVan = null;
+    this.rebootLocalT = 0;
+  }
+
   /** Picks up a knocked teammate (target) or puts down the one we hold (null). */
   _carry(g, target) {
     const net = clientNet(g);
@@ -897,10 +980,18 @@ export class Player {
     this.reloadT = 0;
     if (!it) return;
     const w = WEAPONS[it.id];
-    const got = this.inventory.takeAmmo(w.ammo, w.mag - it.mag);
+    // shell-by-shell guns (shotguns) load one shell per `reload` seconds and keep going
+    const n = w.shellReload ? 1 : w.mag - it.mag;
+    const got = this.inventory.takeAmmo(w.ammo, n);
     it.mag += got;
     const net = clientNet(this._g);
-    if (net) net.action({ k: 'rl', s: this.inventory.slots.indexOf(it) }, true);
+    if (net) net.action(w.shellReload ? { k: 'rl', s: this.inventory.slots.indexOf(it), n: 1 } : { k: 'rl', s: this.inventory.slots.indexOf(it) }, true);
+    if (w.shellReload && got > 0 && it.mag < w.mag && (this.inventory.ammo[w.ammo] || 0) > 0 && this.inventory.current() === it) {
+      const per = weaponStats(it.id, it.rarity).reload;
+      this.reloadItem = it;
+      this.reloadT = this.reloadTotal = per;
+      if (this.character) this.character.reload(per);
+    }
   }
 
   computeSpread() {
@@ -920,9 +1011,11 @@ export class Player {
   fire(g) {
     const it = this._gun();
     if (!it || this.cooldown > 0) return false;
+    const w = WEAPONS[it.id];
+    // shotguns: pulling the trigger with shells loaded stops the shell-by-shell reload
+    if (this.reloadT > 0 && w.shellReload && it.mag > 0 && this.reloadItem === it) this._cancelReload();
     if (this.reloadT > 0) return false;
     this._cancelUse();
-    const w = WEAPONS[it.id];
     if (it.mag <= 0) {
       if (!this.startReload(g)) {
         g.sfx.play('empty_click', { volume: 0.6 });
@@ -1056,6 +1149,12 @@ export class Player {
       if (st.at && st.at(pl)) return null;
       net.action({ k: 'b', p: { kind: pl.kind, x: pl.x, y: pl.y, z: pl.z, rot: pl.rot, key: pl.key, level: pl.level }, m: this.buildMat }, true);
       this.inventory.spendMats(this.buildMat, BUILD.cost);
+      // show it now instead of after the round trip; the host's echo confirms it, or it is
+      // taken back (ClientSession.predictBuild)
+      if (net.predictBuild) {
+        const local = st.place(pl, this.buildMat, this);
+        if (local) net.predictBuild(local);
+      }
       return pl;
     }
     const piece = st.place(pl, this.buildMat, this);

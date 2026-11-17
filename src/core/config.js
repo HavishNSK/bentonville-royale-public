@@ -104,11 +104,13 @@ export const WEAPONS = {
     spread: 0.045, bloom: 0, maxBloom: 0, pellets: 10, range: 60, falloffStart: 7, falloffEnd: 28, minFalloff: 0.2,
     zoom: 0.86, twoHanded: true, botRange: 12, tracer: 0xffd890, lootWeight: 13,
     // 10 pellets: 90 / 95 / 100 / 105 for a full body hit
+    // shellReload: `reload` is seconds per shell (one shell at a time; firing stops the reload)
+    shellReload: true,
     rarities: {
-      uncommon: { damage: 9, reload: 4.8 },
-      rare: { damage: 9.5, reload: 4.6 },
-      epic: { damage: 10, reload: 4.4 },
-      legendary: { damage: 10.5, reload: 4.2 },
+      uncommon: { damage: 9, reload: 0.5 },
+      rare: { damage: 9.5, reload: 0.47 },
+      epic: { damage: 10, reload: 0.44 },
+      legendary: { damage: 10.5, reload: 0.41 },
     },
   },
   sniper: {
@@ -153,12 +155,13 @@ export const WEAPONS = {
     spread: 0.06, bloom: 0, maxBloom: 0, pellets: 10, range: 55, falloffStart: 6, falloffEnd: 24, minFalloff: 0.2,
     zoom: 0.86, twoHanded: true, botRange: 11, tracer: 0xffd890, lootWeight: 13,
     // 10 pellets: 67 / 71 / 74 / 77 / 81 for a full body hit
+    shellReload: true,
     rarities: {
-      common: { damage: 6.7, reload: 5.6 },
-      uncommon: { damage: 7.1, reload: 5.4 },
-      rare: { damage: 7.4, reload: 5.2 },
-      epic: { damage: 7.7, reload: 5.0 },
-      legendary: { damage: 8.1, reload: 4.8 },
+      common: { damage: 6.7, reload: 0.45 },
+      uncommon: { damage: 7.1, reload: 0.43 },
+      rare: { damage: 7.4, reload: 0.41 },
+      epic: { damage: 7.7, reload: 0.39 },
+      legendary: { damage: 8.1, reload: 0.37 },
     },
   },
   heavy_shotgun: {
@@ -167,9 +170,10 @@ export const WEAPONS = {
     spread: 0.035, bloom: 0, maxBloom: 0, pellets: 10, range: 65, falloffStart: 9, falloffEnd: 32, minFalloff: 0.25,
     zoom: 0.86, twoHanded: true, botRange: 13, tracer: 0xffd890, lootWeight: 3,
     // 10 pellets: 73 / 77 for a full body hit
+    shellReload: true,
     rarities: {
-      epic: { damage: 7.3, reload: 5.6 },
-      legendary: { damage: 7.7, reload: 5.3 },
+      epic: { damage: 7.3, reload: 0.55 },
+      legendary: { damage: 7.7, reload: 0.5 },
     },
   },
   suppressed_smg: {
@@ -330,6 +334,24 @@ export const KNOCK = {
   botReviveClear: 40, // m: bots only revive with no enemy this close
 };
 
+// Reboot vans (team modes): an eliminated player drops a reboot card; a teammate picks it up
+// and holds interact at one of Catfish Ken's reboot vans (one per DROP_ZONES POI) to bring
+// them back next to the van with REBOOT.loadout. See game/Reboot.js.
+export const REBOOT = {
+  cardTime: 90, // s a dropped card waits for a teammate before it is gone
+  cardRange: 2.4, // m to pick a card up
+  useRange: 1.9, // m from the van's side to use it
+  time: 8, // s holding interact at the van
+  cooldown: 60, // s before the same van can reboot again
+  health: 100,
+  loadout: {
+    items: [{ type: 'weapon', id: 'pistol', rarity: 'common' }],
+    ammo: { light: 48 },
+    mats: { wood: 100 },
+    selected: 0,
+  },
+};
+
 // Bot building: buildChance = odds a build roll in a fight succeeds; buildPieces = most
 // pieces in one response (1 wall / 2 wall+ramp / 3+ ramp rush / 5 box: 4 walls + cone);
 // buildCooldown = seconds between responses; buildRate = seconds between pieces in one.
@@ -346,11 +368,14 @@ export const isRankedDifficulty = (d) => d === RANKED_DIFFICULTY;
 export const RANKED_NOTE = 'Only matches on HARD bot difficulty count toward the ranks (wins and eliminations).';
 
 export const DIFFICULTY = {
-  easy: { lead: 0.5, aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.15, buildPieces: 1, buildCooldown: 10, buildRate: 0.6, sight: 80, damageScale: 0.6, wallOnHit: 0, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0 },
-  normal: { lead: 0.8, aimError: 0.05, reaction: 0.55, burst: 0.7, buildChance: 0.4, buildPieces: 3, buildCooldown: 5, buildRate: 0.3, sight: 100, damageScale: 0.8, wallOnHit: 0.4, boxHeal: 0.35, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.3 },
+  easy: { lead: 0.5, aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.35, buildPieces: 2, buildCooldown: 6, buildRate: 0.45, sight: 80, damageScale: 0.6, wallOnHit: 0.25, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0.3 },
+  normal: {
+    lead: 0.8, aimError: 0.05, reaction: 0.55, burst: 0.7, buildChance: 0.75, buildPieces: 6, buildCooldown: 2.5, buildRate: 0.18, sight: 100, damageScale: 0.8,
+    wallOnHit: 0.7, boxHeal: 0.6, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.6, boxFight: 0.35, peekOpen: 1.1, peekClosed: 0.8,
+  },
   hard: {
-    lead: 1, aimError: 0.017, reaction: 0.18, burst: 0.92, buildChance: 0.9, buildPieces: 8, buildCooldown: 1.2, buildRate: 0.07, sight: 150, damageScale: 1,
-    wallOnHit: 1, boxHeal: 1, pushWeak: 0.95, thirdParty: 0.7, rotateEarly: 0.8, boxFight: 0.9, peekOpen: 0.9, peekClosed: 0.55,
+    lead: 1, aimError: 0.017, reaction: 0.18, burst: 0.92, buildChance: 1, buildPieces: 10, buildCooldown: 0.8, buildRate: 0.06, sight: 150, damageScale: 1,
+    wallOnHit: 1, boxHeal: 1, pushWeak: 0.95, thirdParty: 0.7, rotateEarly: 1, boxFight: 0.9, peekOpen: 0.9, peekClosed: 0.55,
   },
 };
 

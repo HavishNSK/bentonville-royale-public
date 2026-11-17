@@ -21,7 +21,7 @@
 // storm, bots, storm damage and the win check are left to the host.
 
 import * as THREE from 'three';
-import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, STORM, MATERIALS, KNOCK, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
+import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, STORM, MATERIALS, KNOCK, REBOOT, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
 import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
 import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
@@ -37,9 +37,10 @@ import { createInventoryPanel } from '../ui/inventoryPanel.js';
 import { createEmoteWheel } from '../ui/emoteWheel.js';
 import { Minimap } from '../ui/Minimap.js';
 import { CharacterKit, Character, registerKits } from './Character.js';
-import { skinDef, emoteDef, DEFAULT_EQUIPPED, PICKAXES, BACKBLINGS } from './Cosmetics.js';
+import { skinDef, emoteDef, pickaxeDef, DEFAULT_EQUIPPED, PICKAXES, BACKBLINGS } from './Cosmetics.js';
 import { Combat, rayActor } from './Combat.js';
 import { Pings } from './Pings.js';
+import { Reboot } from './Reboot.js';
 import { Player, placeOrbitCamera, itemLabel } from './Player.js';
 import * as StormMod from './Storm.js';
 import * as LootMod from './Loot.js';
@@ -53,6 +54,10 @@ import { planBusRoute, makeRoute, routeWire, busPosAt, planBotTargets, DropBusMe
 const BUS_CAM_DIST = 34; // third-person distance behind the Drop Bus
 const DEATH_SCREEN_DELAY = 3.5;
 const WIN_SCREEN_DELAY = 3;
+const SIM_STEP = 1 / 20; // longest simulation sub-step (s)
+const SIM_CATCHUP_MAX = 0.2; // longest stretch one frame catches up (below 5 fps the match slows)
+// Worker clock for a hidden host tab (see Game._backgroundTick)
+const BG_CLOCK_SRC = 'setInterval(() => postMessage(0), 50);';
 
 const NATURE = ['tree_a', 'tree_b', 'tree_c', 'tree_d', 'pine_a', 'pine_b', 'rock_a', 'rock_b', 'rock_c', 'bush_a', 'bush_b', 'stump'];
 const PROPS = ['bench', 'streetlamp', 'streetlamp_curved', 'fire_hydrant', 'dumpster', 'trash_can', 'table', 'parasol', 'tent', 'traffic_cone', 'planter'];
@@ -149,6 +154,7 @@ export class Game {
     this._last = performance.now();
     this._loop = this._loop.bind(this);
     requestAnimationFrame(this._loop);
+    this._startBackgroundClock();
 
     this._installDebug();
   }
@@ -270,6 +276,18 @@ export class Game {
       ? new BotsCls({ scene: this.scene, world: this.world, kits: botKits, weaponModels: weaponScenes, loot: this.loot, structures: this.structures, combat: this.combat, fx: this.fx, sfx })
       : new NullBots();
     this.bots.dropLootOnDeath = false; // Game drops every actor's inventory in _onEliminate
+    // Catfish Ken's reboot vans (one per POI) and reboot cards (team modes)
+    this.reboot = new Reboot({ scene: this.scene, world: this.world, fx: this.fx, sfx });
+    try {
+      this.reboot.setup();
+    } catch (err) {
+      this._error('reboot.setup', err);
+    }
+    this.reboot.onReboot = (victim, van, x, y, z, h) => this.respawnActor(victim, x, y, z, h);
+    this.reboot.onEvent = (e) => {
+      if (this.net && this.net.isHost && this.net.started && this.net.events) this.net.events.push(e);
+    };
+    this.bots.reboot = this.reboot;
     this.dropBus = new DropBusMesh();
     this.scene.add(this.dropBus.root);
     this.busRoute = null;
@@ -290,6 +308,7 @@ export class Game {
     if (skin) this.skin = skin;
     if (emotes) this.emotes = emotes.slice();
     if (pickaxe && PICKAXES[pickaxe]) this.pickaxe = pickaxe;
+    if (this.hud && this.hud.setPickaxeName) this.hud.setPickaxeName(pickaxeDef(this.pickaxe).name);
     if (backbling && BACKBLINGS[backbling]) this.backbling = backbling;
     if (this.loaded && this.player) this._applySkin();
   }
@@ -330,6 +349,7 @@ export class Game {
 
   /** (Re)builds the player's Character for this.skin when it changed. */
   _applySkin() {
+    if (this.hud && this.hud.setPickaxeName) this.hud.setPickaxeName(pickaxeDef(this.pickaxe).name);
     const def = skinDef(this.skin);
     const kit = this.kits && (this.kits[def.model] || this.kits.player);
     const p = this.player;
@@ -645,6 +665,53 @@ export class Game {
     const members = this.teamMode ? actors.filter((a) => a === p || sameTeam(a, p)).sort((a, b) => a.id - b.id) : [p];
     members.forEach((a, i) => (a.teamSlot = i));
     this.mates = members.filter((a) => a !== p);
+    if (this.reboot) this.reboot.reset({ teamMode: this.teamMode, authoritative: !(this.net && this.net.isClient), myTeam: this.teamMode ? p.team : null });
+  }
+
+  /**
+   * Reboot van (host / solo): brings an eliminated actor back standing at (x, y, z) with
+   * REBOOT.loadout, keeping their kills / assists / damage. Clients hear about it through the
+   * 'rbd' event (ClientSession) and call netRespawn for themselves.
+   */
+  respawnActor(a, x, y, z, heading = 0) {
+    if (!a || a.alive) return;
+    if (a._bot && this.bots.respawn) {
+      this.bots.respawn(a, x, y, z, heading, rebootLoadout());
+    } else {
+      reviveFields(a, x, y, z, heading);
+      if (a.isRemote) {
+        a.allowJump = true; // its next state comes from the van, wherever it was before
+        a.lastStateT = 0;
+      }
+    }
+    if (a === this.player) this._onRespawned();
+    this.hud.killFeed(`${a.name} was rebooted`, 'revive', [a.name], this.player.name);
+    if (this.fx && this.fx.aura) this.fx.aura(a.pos, 'shield', 1.4);
+  }
+
+  /** Multiplayer client: the host rebooted us. */
+  netRespawn(x, y, z, heading) {
+    const p = this.player;
+    if (p.alive) return;
+    reviveFields(p, x, y, z, heading);
+    this._onRespawned();
+  }
+
+  _onRespawned() {
+    const p = this.player;
+    p.mode = 'ground';
+    p.cooldown = p.reloadT = p.useT = 0;
+    p.reloadItem = p.useItem = null;
+    p.lastEquipped = null;
+    p.buildPiece = null;
+    p.editing = null;
+    this.spectating = null;
+    this._specH = this._specP = null;
+    this._endTimer = DEATH_SCREEN_DELAY;
+    this._deathPlacement = 0;
+    if (this.hud.setDowned) this.hud.setDowned(null);
+    this.hud.announce('REBOOTED', 'Back in the fight at Catfish Ken\'s van', 2400);
+    sfx.play('heal', { volume: 0.8 });
   }
 
   /** Teammates still alive (knocked or not). */
@@ -923,6 +990,14 @@ export class Game {
   _onEliminate(victim, killer, info) {
     const p = this.player;
     if (this.net && this.net.isHost) this.net.onEliminate(victim, killer, info);
+    // team modes: a reboot card for a teammate to bring to a reboot van
+    if (this.reboot && this.teamMode && !info.left && !(this.net && this.net.isClient)) {
+      try {
+        this.reboot.dropCard(victim, this.combat.actors);
+      } catch (err) {
+        this._error('reboot.dropCard', err);
+      }
+    }
     // death loot
     if (this.loot && victim.inventory && victim.inventory.dropAll) {
       const items = victim.inventory.dropAll();
@@ -1046,7 +1121,9 @@ export class Game {
     let dt = (now - this._last) / 1000;
     this._last = now;
     if (!(dt > 0)) dt = 0;
-    dt = Math.min(dt, 1 / 20);
+    // up to SIM_CATCHUP_MAX s per frame: a slow frame is simulated in <= SIM_STEP sub-steps
+    // (frame()), so a host below 20 fps no longer runs the match in slow motion for everyone
+    dt = Math.min(dt, SIM_CATCHUP_MAX);
     try {
       this.frame(dt);
     } catch (err) {
@@ -1075,10 +1152,70 @@ export class Game {
 
     // a multiplayer match keeps running under the pause menu
     const live = (!this.paused || !!this.net) && (this.state === 'drop' || this.state === 'play' || this.state === 'over');
-    if (live) this._simulate(dt);
+    if (live) this._simulateSteps(dt);
 
-    this._present(dt);
+    this._present(Math.min(dt, SIM_STEP));
     input.endFrame();
+  }
+
+  /**
+   * Runs _simulate over `dt` in sub-steps of at most SIM_STEP s. Key / click presses and
+   * mouse look count once (first sub-step); held keys apply to every sub-step.
+   */
+  _simulateSteps(dt) {
+    const n = Math.max(1, Math.ceil(dt / SIM_STEP - 1e-6));
+    const step = dt / n;
+    const t1 = this.time;
+    for (let i = 0; i < n; i++) {
+      this.time = t1 - dt + step * (i + 1);
+      this._simulate(step);
+      if (i < n - 1) this.input.endFrame();
+    }
+    this.time = t1;
+  }
+
+  /**
+   * A hosted match keeps running while the host's tab is hidden (requestAnimationFrame stops
+   * there): a worker clock (not throttled like page timers) drives the simulation without
+   * rendering until the tab is visible again.
+   */
+  _startBackgroundClock() {
+    if (this._bgWorker || typeof Worker === 'undefined' || typeof Blob === 'undefined') return;
+    try {
+      const url = URL.createObjectURL(new Blob([BG_CLOCK_SRC], { type: 'text/javascript' }));
+      this._bgWorker = new Worker(url);
+      URL.revokeObjectURL(url);
+      this._bgWorker.onmessage = () => this._backgroundTick();
+    } catch {
+      this._bgWorker = null; // CSP / old browser: hidden host tabs just pause, as before
+    }
+  }
+
+  _backgroundTick() {
+    const now = performance.now();
+    if (!document.hidden || !(this.net && this.net.isHost)) {
+      this._bgLast = now;
+      return;
+    }
+    // rAF still ran recently: nothing to cover
+    if (now - this._last < 250) {
+      this._bgLast = now;
+      return;
+    }
+    const from = Math.max(this._last, this._bgLast || 0);
+    let dt = (now - from) / 1000;
+    this._bgLast = now;
+    if (!(dt > 0)) return;
+    dt = Math.min(dt, SIM_CATCHUP_MAX);
+    this.time += dt;
+    try {
+      const live = this.state === 'drop' || this.state === 'play' || this.state === 'over';
+      if (live) this._simulateSteps(dt);
+    } catch (err) {
+      this._error('background', err);
+    }
+    this.input.endFrame();
+    this._last = now; // the next visible frame starts from here
   }
 
   _simulate(dt) {
@@ -1144,6 +1281,7 @@ export class Game {
     if (!client) this._syncStats(dt);
     if (this.structures) this.structures.update(dt);
     if (this.loot) this.loot.update(dt, this.camera.position);
+    if (this.reboot && (this.state === 'play' || this.state === 'over')) this.reboot.update(dt, this.combat.actors);
 
     // match end (team modes: a team is out once nobody on it is alive; dead members wait)
     if (this.state === 'play') {
@@ -1388,6 +1526,11 @@ export class Game {
       }
     }
     if (this.pings) this.pings.blips(blips);
+    // Catfish Ken's reboot vans (team modes), and our team's reboot cards on the ground
+    if (this.teamMode && this.reboot && this.state === 'play') {
+      for (const v of this.reboot.vans) blips.push({ x: v.x, z: v.z, kind: this.reboot.vanReady(v) ? 'van' : 'vanCd' });
+      for (const c of this.reboot.cards.values()) if (c.holder == null && c.team === p.team) blips.push({ x: c.x, z: c.z, kind: 'card' });
+    }
     if (this.teamMode && this.mates && this.mates.length && this.state === 'play') {
       for (const m of this.mates) {
         if (!m.alive || m.inBus) continue;
@@ -2110,6 +2253,42 @@ export class Game {
       debug,
     };
   }
+}
+
+/** Shared by respawnActor / netRespawn: alive and standing at (x, y, z) with REBOOT.loadout. */
+function reviveFields(a, x, y, z, heading) {
+  a.alive = true;
+  a.health = REBOOT.health;
+  a.shield = 0;
+  a.downed = false;
+  a.downHp = 0;
+  a.knockedBy = null;
+  a.reviver = null;
+  a.reviveT = 0;
+  a.revivingTarget = null;
+  a.carrying = null;
+  a.carriedBy = null;
+  a.rebootVan = null;
+  a.lootDropped = false;
+  a.mode = 'ground';
+  a.inBus = false;
+  a.gliding = false;
+  a.grounded = true;
+  a.pos.set(x, y, z);
+  if (a.vel) a.vel.set(0, 0, 0);
+  a.heading = heading;
+  if (a.inventory && a.inventory.reset) a.inventory.reset(rebootLoadout());
+  if (a.character) {
+    a.character.reset();
+    a.character.root.visible = true;
+    a.character.root.position.copy(a.pos);
+  }
+}
+
+/** A fresh copy of REBOOT.loadout (inventories keep the item objects they are given). */
+function rebootLoadout() {
+  const L = REBOOT.loadout;
+  return { items: L.items.map((it) => ({ ...it })), ammo: { ...L.ammo }, mats: { ...L.mats }, selected: L.selected };
 }
 
 const NO_INPUT = {
