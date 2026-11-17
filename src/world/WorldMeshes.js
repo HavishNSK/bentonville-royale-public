@@ -93,6 +93,35 @@ class Buf {
 
 const _c = new THREE.Color();
 
+// Subdivide a triangle until its longest edge is <= POLYGON_STEP, sampling
+// the height function at every new midpoint so the mesh follows terrain.
+const POLYGON_STEP = 4;
+function emitSubTri(buf, ax, ay, az, bx, by, bz, cx, cy, cz, getY, r, g, b) {
+  const abLen = Math.hypot(bx - ax, bz - az);
+  const bcLen = Math.hypot(cx - bx, cz - bz);
+  const caLen = Math.hypot(ax - cx, az - cz);
+  if (Math.max(abLen, bcLen, caLen) <= POLYGON_STEP) {
+    const ia = buf.v(ax, ay, az, 0, 1, 0, r, g, b);
+    const ib = buf.v(bx, by, bz, 0, 1, 0, r, g, b);
+    const ic = buf.v(cx, cy, cz, 0, 1, 0, r, g, b);
+    buf.idx.push(ia, ib, ic);
+    return;
+  }
+  if (abLen >= bcLen && abLen >= caLen) {
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2, my = getY(mx, mz);
+    emitSubTri(buf, ax, ay, az, mx, my, mz, cx, cy, cz, getY, r, g, b);
+    emitSubTri(buf, mx, my, mz, bx, by, bz, cx, cy, cz, getY, r, g, b);
+  } else if (bcLen >= caLen) {
+    const mx = (bx + cx) / 2, mz = (bz + cz) / 2, my = getY(mx, mz);
+    emitSubTri(buf, ax, ay, az, bx, by, bz, mx, my, mz, getY, r, g, b);
+    emitSubTri(buf, ax, ay, az, mx, my, mz, cx, cy, cz, getY, r, g, b);
+  } else {
+    const mx = (cx + ax) / 2, mz = (cz + az) / 2, my = getY(mx, mz);
+    emitSubTri(buf, ax, ay, az, bx, by, bz, mx, my, mz, getY, r, g, b);
+    emitSubTri(buf, mx, my, mz, bx, by, bz, cx, cy, cz, getY, r, g, b);
+  }
+}
+
 export function addPolygon(buf, pts, y, hex) {
   if (pts.length < 3) return;
   const contour = pts.map((p) => new THREE.Vector2(p[0], p[1]));
@@ -103,16 +132,28 @@ export function addPolygon(buf, pts, y, hex) {
     return;
   }
   _c.setHex(hex);
-  const base = buf.n;
   const getY = typeof y === 'function' ? y : () => y;
-  for (const p of pts) buf.v(p[0], getY(p[0], p[1]), p[1], 0, 1, 0, _c.r, _c.g, _c.b);
-  for (const t of tris) {
-    const a = pts[t[0]];
-    const c = pts[t[1]];
-    const d = pts[t[2]];
-    const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
-    if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
-    else buf.idx.push(base + t[0], base + t[2], base + t[1]);
+  const r = _c.r, g = _c.g, b = _c.b;
+  if (typeof y === 'function') {
+    // Terrain-aware: subdivide each triangle so interior points sample the heightfield.
+    for (const t of tris) {
+      const a = pts[t[0]], c = pts[t[1]], d = pts[t[2]];
+      const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
+      let ax, az, bx, bz, cx, cz;
+      if (up > 0) { [ax, az] = a; [bx, bz] = c; [cx, cz] = d; }
+      else         { [ax, az] = a; [bx, bz] = d; [cx, cz] = c; }
+      emitSubTri(buf, ax, getY(ax, az), az, bx, getY(bx, bz), bz, cx, getY(cx, cz), cz, getY, r, g, b);
+    }
+  } else {
+    // Flat polygon: share boundary vertices, no subdivision needed.
+    const base = buf.n;
+    for (const p of pts) buf.v(p[0], getY(p[0], p[1]), p[1], 0, 1, 0, r, g, b);
+    for (const t of tris) {
+      const a = pts[t[0]], c = pts[t[1]], d = pts[t[2]];
+      const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
+      if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
+      else        buf.idx.push(base + t[0], base + t[2], base + t[1]);
+    }
   }
 }
 
