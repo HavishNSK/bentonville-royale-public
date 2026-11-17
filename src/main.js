@@ -382,6 +382,7 @@ async function startPresence() {
     const [{ partyToken }, { openPresence }, { createChat }] = await Promise.all([import('./net/Party.js'), import('./net/Presence.js'), import('./ui/chat.js')]);
     chat = createChat({
       onSend: (text) => presence && presence.sendChat(text),
+      onBlocked: (category) => presence && presence.reportBlocked && presence.reportBlocked(category),
       onTypingChange: (on) => game && game.setChatTyping && game.setChatTyping(on),
     });
     presence = openPresence({ token: partyToken(), accountToken: account.sessionToken, name: menus.playerName(), status: presenceStatus(), mode: partyMode() });

@@ -26,7 +26,7 @@ function el(tag, cls, text) {
   return e;
 }
 
-export function createChat({ onSend = () => false, onTypingChange = () => {} } = {}) {
+export function createChat({ onSend = () => false, onBlocked = () => {}, onTypingChange = () => {} } = {}) {
   const root = el('div', 'br-chat');
   root.setAttribute('aria-label', 'Global chat');
   const box = el('div', 'br-chat-box');
@@ -159,7 +159,9 @@ export function createChat({ onSend = () => false, onTypingChange = () => {} } =
     }
     const r = cleanChat(raw);
     if (!r.ok) {
+      // not kid-friendly: never sent; the server only hears the rule it broke (repeat offenders get paused)
       err.textContent = r.reason === 'empty' ? '' : r.reason;
+      if (r.category) onBlocked(r.category);
       return;
     }
     if (!onSend(r.text)) {
