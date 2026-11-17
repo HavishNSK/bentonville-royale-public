@@ -361,7 +361,7 @@ function presenceStatus() {
 }
 
 function syncPresence() {
-  if (presence) presence.set({ name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
+  if (presence) presence.set({ name: menus.playerName(), status: presenceStatus(), mode: partyMode(), accountToken: account.sessionToken() });
   if (chat) {
     chat.setMe(menus.playerName());
     chat.setMode(presenceInMatch ? 'match' : 'lobby');
@@ -380,7 +380,7 @@ function othersSearching() {
 async function startPresence() {
   try {
     const [{ partyToken }, { openPresence }, { createChat }] = await Promise.all([import('./net/Party.js'), import('./net/Presence.js'), import('./ui/chat.js')]);
-    presence = openPresence({ token: partyToken(), name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
+    presence = openPresence({ token: partyToken(), accountToken: account.sessionToken(), name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
     chat = createChat({
       onSend: (text) => presence.sendChat(text),
       onTypingChange: (on) => game && game.setChatTyping && game.setChatTyping(on),
@@ -650,6 +650,7 @@ try {
   });
   account.on('change', (p) => {
     if (p.guest) menus.setAccountName(null);
+    syncPresence();
   });
   // QA (dev builds): the party as this tab sees it
   if (import.meta.env && import.meta.env.DEV) window.__party = () => (party && party.party ? JSON.parse(JSON.stringify(party.party)) : null);

@@ -77,6 +77,23 @@
 .br-chat-msg.is-me .br-chat-name {
   color: #8fd4ff;
 }
+.br-chat-msg.is-dev .br-chat-name,
+.br-chat-msg.is-dev.is-me .br-chat-name {
+  color: #ff3b3b;
+}
+.br-chat-ann {
+  display: block;
+  font-family: var(--br-display, 'Lilita One', sans-serif);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: #ff3b3b;
+}
+.br-chat-msg.is-announce {
+  margin: 4px 0;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: rgba(255, 59, 59, 0.16);
+}
 .br-chat-sys {
   color: rgba(255, 246, 220, 0.6);
   font-style: italic;
@@ -219,4 +236,51 @@
 /* lobby: the open chat sits where the controls hints are (they hide while it is open) */
 body:has(.br-chat:not(.is-match):not(.is-collapsed)) .mn-controls {
   visibility: hidden;
+}
+
+/* ---- full screen (lobby): the chat fills the window over a dimmed backdrop; Esc exits */
+.br-chat.is-full {
+  inset: 0;
+  width: auto;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: rgba(21, 16, 58, 0.6);
+}
+.br-chat.is-full .br-chat-box {
+  display: flex;
+  flex-direction: column;
+  width: min(880px, 100%);
+  height: min(760px, 100%);
+  background: rgba(21, 16, 58, 0.96);
+}
+.br-chat.is-full .br-chat-head {
+  padding: 14px 14px 10px 18px;
+  font-size: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.br-chat.is-full .br-chat-toggle {
+  font-size: 14px;
+  padding: 6px 12px;
+}
+.br-chat.is-full .br-chat-list {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  padding: 10px 18px;
+  font-size: 16.5px;
+  line-height: 1.45;
+}
+.br-chat.is-full .br-chat-form {
+  padding: 12px;
+}
+.br-chat.is-full .br-chat-input {
+  padding: 11px 14px;
+  font-size: 16px;
+}
+.br-chat.is-full .br-chat-send {
+  padding: 0 20px;
+  font-size: 16px;
 }

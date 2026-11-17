@@ -18,6 +18,7 @@
 //   redeemAuthTicket {ticket}                             -> {token, profile}
 //   leaderboard {}                                        -> {online, wins:[{name,wins,kills}], kills:[...]}
 //   me {token}  logout {token}
+//   rename {token, name}  only while profile.mustRename (the current name has a swear word / slur)
 //   buy {token, item}   equip {token, skin?, emotes?}
 //   reward {token, kills, placement, players, won, ranked} -> {profile, earned, ranked}
 //     (wins/kills reach the boards only when ranked === true: a HARD bot-difficulty match)
@@ -37,6 +38,7 @@ import { Server } from 'partyserver';
 import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS } from '../src/game/Cosmetics.js';
 import { verifyGoogleIdToken } from './googleIdToken.js';
 import { applyMatchStats } from './matchStats.js';
+import { nameIsClean } from '../src/net/chatFilter.js';
 
 const START_COINS = 1500;
 const SESSION_DAYS = 30;
@@ -113,6 +115,8 @@ function profileOf(acc) {
     incoming: acc.incoming.slice(),
     outgoing: acc.outgoing.slice(),
     stats: acc.stats,
+    // a name made before the username filter: the client blocks play until it is renamed
+    mustRename: !nameIsClean(acc.name),
   };
 }
 
@@ -137,7 +141,13 @@ export class Accounts extends Server {
     if (typeof token !== 'string' || !/^[a-f0-9]{48}$/.test(token)) return null;
     const s = await this.ctx.storage.get('sess:' + token);
     if (!s || s.exp < Date.now()) return null;
-    return this._acc(s.u);
+    const acc = await this._acc(s.u);
+    if (acc) return acc;
+    // the account was renamed (forced rename of a bad name): follow it and fix this session
+    const to = await this.ctx.storage.get('renamed:' + s.u);
+    const moved = to ? await this._acc(to) : null;
+    if (moved) await this.ctx.storage.put('sess:' + token, { ...s, u: to });
+    return moved;
   }
 
   async _newSession(acc) {
@@ -150,11 +160,11 @@ export class Accounts extends Server {
   async _uniqueGoogleName(claims) {
     const raw = String(claims.given_name || claims.name || (claims.email && claims.email.split('@')[0]) || 'Player');
     let base = raw.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 12);
-    if (!validName(base)) base = 'Player';
+    if (!validName(base) || !nameIsClean(base)) base = 'Player';
     if (!(await this._acc(base.toLowerCase()))) return base;
     for (let i = 0; i < 8; i++) {
       const cand = (base.slice(0, 12) + randHex(2)).slice(0, 16);
-      if (validName(cand) && !(await this._acc(cand.toLowerCase()))) return cand;
+      if (validName(cand) && nameIsClean(cand) && !(await this._acc(cand.toLowerCase()))) return cand;
     }
     const fallback = ('Player' + randHex(4)).slice(0, 16);
     return validName(fallback) ? fallback : 'Player' + randHex(3).slice(0, 3);
@@ -293,6 +303,7 @@ export class Accounts extends Server {
       if (!acc || typeof acc !== 'object' || !acc.name || !acc.stats) continue;
       const wins = Math.max(0, acc.stats.wins | 0);
       const kills = Math.max(0, acc.stats.kills | 0);
+      if (!nameIsClean(acc.name)) continue; // hidden from the boards until renamed
       rows.push({ name: String(acc.name).slice(0, 16), wins, kills });
     }
     const byWins = rows
@@ -383,6 +394,7 @@ export class Accounts extends Server {
         const name = String(m.name || '').trim();
         const password = String(m.password || '');
         if (!validName(name)) return err('Usernames are 3-16 letters, numbers, _ or -.');
+        if (!nameIsClean(name)) return err('That username is not allowed. Pick one without swear words.');
         if (password.length < 6 || password.length > 72) return err('Passwords need 6-72 characters.');
         const lower = name.toLowerCase();
         if (await this._acc(lower)) return err('That username is taken.', 409);
@@ -433,6 +445,15 @@ export class Accounts extends Server {
       case 'logout':
         await this.ctx.storage.delete('sess:' + m.token);
         return json({ ok: true });
+      case 'rename': {
+        // Only for names that fail the username filter; normal renames are not a feature.
+        if (nameIsClean(acc.name)) return err('Your username is fine. Renaming is only needed for names that break the rules.');
+        const name = String(m.name || '').trim();
+        if (!validName(name)) return err('Usernames are 3-16 letters, numbers, _ or -.');
+        if (!nameIsClean(name)) return err('That username is not allowed. Pick one without swear words.');
+        if (name.toLowerCase() !== lower && (await this._acc(name.toLowerCase()))) return err('That username is taken.', 409);
+        return this._rename(acc, name, m.token);
+      }
       case 'buy': {
         const id = String(m.item || '');
         const price = PRICES[id];
@@ -546,6 +567,51 @@ export class Accounts extends Server {
       }
     }
     return err('Unknown request.');
+  }
+
+  /** Move an account to a new name: storage key, sign-in indexes, friends' lists, live sockets. */
+  async _rename(acc, name, token) {
+    const old = acc.name.toLowerCase();
+    const next = name.toLowerCase();
+    const st = this.ctx.storage;
+    acc.name = name;
+    if (next === old) {
+      await this._save(acc);
+    } else {
+      await st.put('user:' + next, acc);
+      await st.put('renamed:' + old, next); // other devices' sessions follow it (see _session)
+      await st.delete('user:' + old);
+      if (acc.googleSub) await st.put('google:' + acc.googleSub, next);
+      if (acc.cleverId) await st.put('clever:' + acc.cleverId, next);
+      const sess = await st.get('sess:' + token);
+      if (sess) await st.put('sess:' + token, { ...sess, u: next });
+      const swap = (arr) => arr.map((n) => (n === old ? next : n));
+      for (const o of new Set([...acc.friends, ...acc.incoming, ...acc.outgoing])) {
+        const other = await this._acc(o);
+        if (!other) continue;
+        other.friends = swap(other.friends);
+        other.incoming = swap(other.incoming);
+        other.outgoing = swap(other.outgoing);
+        await this._save(other);
+      }
+      const conns = this.online.get(old);
+      if (conns) {
+        this.online.delete(old);
+        this.online.set(next, conns);
+        for (const id of conns) {
+          const c = this.getConnection(id);
+          if (c) c.setState({ u: next });
+        }
+      }
+      if (this.status.has(old)) {
+        this.status.set(next, this.status.get(old));
+        this.status.delete(old);
+      }
+    }
+    this._push(next, { t: 'profile', profile: profileOf(acc) });
+    this._sendFriends(next, acc);
+    this._sendFriendsOf(next);
+    return json({ profile: profileOf(acc) });
   }
 
   async _accept(acc, other) {

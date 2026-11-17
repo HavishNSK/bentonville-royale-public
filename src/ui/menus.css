@@ -763,6 +763,10 @@
   outline: calc(var(--u) * 3) solid var(--br-sun);
   outline-offset: 2px;
 }
+.mn-field.is-invalid {
+  border-color: var(--br-coral);
+  background: #fff0ee;
+}
 .mn-join {
   display: grid;
   grid-template-columns: minmax(calc(var(--u) * 120), 1fr) auto;

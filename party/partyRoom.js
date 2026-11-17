@@ -23,6 +23,7 @@
 
 import { Server, getServerByName } from 'partyserver';
 import { MODE_SIZE, PARTY_MAX, modeSize, validMode, modeFor } from './modes.js';
+import { nameIsClean } from '../src/net/chatFilter.js';
 
 const POLL_MS = 2000;
 const MATCHED_MS = 4000;
@@ -35,7 +36,7 @@ function cleanName(name) {
     .replace(/[\u0000-\u001f<>]/g, '')
     .trim()
     .slice(0, 16);
-  return s || 'Player';
+  return s && nameIsClean(s) ? s : 'Player'; // names with swear words show as Player
 }
 
 /** Look shown in the lobby line-up: "skin|pickaxe|backbling" (Cosmetics.lookString; unchecked, cosmetic only). */

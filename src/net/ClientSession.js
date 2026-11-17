@@ -440,7 +440,7 @@ export class ClientSession {
         if (g.reboot) g.reboot.applyEvent(e);
         if (e.by === this.id && g.reboot) {
           const c = g.reboot.cards.get(e.v);
-          g.hud.toast((c ? c.name : 'Teammate') + "'s reboot card: take it to a reboot van", 'pickup');
+          g.hud.toast((c ? c.name : 'Teammate') + "'s reboot card: take it to a reboot van (marked on your map)", 'pickup');
         }
         return;
       case 'rbd':

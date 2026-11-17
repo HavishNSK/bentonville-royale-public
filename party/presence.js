@@ -11,16 +11,21 @@
 //
 // Global chat (everyone connected, in a lobby or in a match):
 //   client -> server  {t:'chat', text}
-//   server -> client  {t:'chat', m:{id, name, text, at}}       one new message (to everyone)
+//   server -> client  {t:'chat', m:{id, name, text, at, dev, announce}}
 //                     {t:'chatHistory', list:[m...]}           the last CHAT_KEEP, on connect
 //                     {t:'chatError', reason}                  to the sender only
+// Dev accounts (src/net/devs.js) are verified from the signed-in session (`acct` on the
+// socket, or a later status message). Their name is sent as `[DEV]` by the client, in red.
+// `/announce ...` from a dev is broadcast to everyone as an announcement. Anyone else
+// who tries it is refused. The displayed name is the account name, not a typed nickname.
 // The server is the authority: text goes through cleanChat (src/net/chatFilter.js: length,
 // no links / e-mails / phone numbers, swear words masked) and is rate limited per player.
 // History lives in memory only (it is gone when the room sleeps).
 
 import { Server } from 'partyserver';
 import { validMode } from './modes.js';
-import { cleanChat } from '../src/net/chatFilter.js';
+import { cleanChat, nameIsClean } from '../src/net/chatFilter.js';
+import { isDevName, parseDevChat } from '../src/net/devs.js';
 
 export const ROOM = 'global';
 const MAX_CONNECTIONS = 2000; // well past what a prototype sees; refuses floods
@@ -40,7 +45,14 @@ function cleanName(name) {
     .replace(/[\u0000-\u001f<>]/g, '')
     .trim()
     .slice(0, 16);
-  return s || 'Player';
+  return s && nameIsClean(s) ? s : 'Player'; // names with swear words show as Player
+}
+
+function cleanAcct(t) {
+  const s = String(t || '')
+    .replace(/[^a-f0-9]/gi, '')
+    .slice(0, 64);
+  return s.length >= 32 ? s : '';
 }
 
 function cleanToken(t) {
@@ -110,12 +122,18 @@ export class Presence extends Server {
     }
     this.players.set(conn.id, {
       token,
+      acct: cleanAcct(url.searchParams.get('acct')),
       name: cleanName(url.searchParams.get('name')),
+      dev: false,
+      devName: '',
+      devFor: '',
+      devCheck: null,
       status: cleanStatus(url.searchParams.get('status')),
       mode: cleanMode(url.searchParams.get('mode')),
       since: Date.now(),
       last: 0,
     });
+    this._markDev(this.players.get(conn.id));
     try {
       conn.send(JSON.stringify(snapshot(this.players.values())));
       if (this.chat.length) conn.send(JSON.stringify({ t: 'chatHistory', list: this.chat }));
@@ -125,8 +143,55 @@ export class Presence extends Server {
     this._schedule();
   }
 
+  /** Resolve the signed-in account. Dev rights stick to that account, not the typed name. */
+  _markDev(p) {
+    const acct = p.acct;
+    if (!acct) {
+      p.dev = false;
+      p.devName = '';
+      p.devFor = '';
+      p.devCheck = null;
+      return Promise.resolve();
+    }
+    if (p.devCheck && p.devFor === acct) return p.devCheck;
+    p.devFor = acct;
+    p.dev = false;
+    p.devName = '';
+    p.devCheck = this._lookupDev(acct)
+      .then((name) => {
+        if (p.acct !== acct) return;
+        p.dev = !!name;
+        p.devName = name || '';
+        if (name) p.name = name;
+      })
+      .catch(() => {
+        if (p.acct === acct) {
+          p.dev = false;
+          p.devName = '';
+        }
+      });
+    return p.devCheck;
+  }
+
+  async _lookupDev(acct) {
+    if (!this.env || !this.env.Accounts) return null;
+    const id = this.env.Accounts.idFromName('global');
+    const stub = this.env.Accounts.get(id);
+    const res = await stub.fetch(
+      new Request('https://accounts/global', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'me', token: acct }),
+      })
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const name = data && data.profile && data.profile.name;
+    return isDevName(name) ? String(name).slice(0, 16) : null;
+  }
+
   /** One chat message from `p` (rate limited, filtered), broadcast to everyone. */
-  _chat(conn, p, raw) {
+  async _chat(conn, p, raw) {
     const now = Date.now();
     const lim = this.chatBy.get(p.token) || { last: 0, times: [], mutedUntil: 0, lastText: '' };
     this.chatBy.set(p.token, lim);
@@ -145,13 +210,16 @@ export class Presence extends Server {
       lim.mutedUntil = now + CHAT_MUTE_MS;
       return fail('Too many messages: chat paused for a minute.');
     }
-    const r = cleanChat(raw);
+    await this._markDev(p);
+    const parsed = parseDevChat(raw, p.dev);
+    if (parsed.error) return fail(parsed.error);
+    const r = cleanChat(parsed.text);
     if (!r.ok) return r.reason === 'empty' ? undefined : fail(r.reason);
     if (r.text.toLowerCase() === lim.lastText) return fail('You just said that.');
     lim.last = now;
     lim.times.push(now);
     lim.lastText = r.text.toLowerCase();
-    const m = { id: ++this.chatSeq, name: p.name, text: r.text, at: now };
+    const m = { id: ++this.chatSeq, name: p.dev ? p.devName : p.name, text: r.text, at: now, dev: !!p.dev, announce: !!parsed.announce };
     this.chat.push(m);
     if (this.chat.length > CHAT_KEEP) this.chat.shift();
     this.broadcast(JSON.stringify({ t: 'chat', m }));
@@ -166,14 +234,24 @@ export class Presence extends Server {
     } catch {
       return;
     }
-    if (msg && msg.t === 'chat') return this._chat(sender, p, msg.text); // own rate limit
+    if (msg && msg.t === 'chat') {
+      this._chat(sender, p, msg.text).catch(() => {});
+      return;
+    }
+    if (msg && msg.acct != null) {
+      const next = cleanAcct(msg.acct);
+      if (next !== p.acct) {
+        p.acct = next;
+        this._markDev(p);
+      }
+    }
     const now = Date.now();
     if (now - p.last < MIN_MSG_MS) return;
     p.last = now;
     if (!msg || msg.t !== 'status') return;
     p.status = cleanStatus(msg.status);
     p.mode = cleanMode(msg.mode);
-    if (msg.name != null) p.name = cleanName(msg.name);
+    if (msg.name != null && !p.dev) p.name = cleanName(msg.name);
     this._schedule();
   }
 
