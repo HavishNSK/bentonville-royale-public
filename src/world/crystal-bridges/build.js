@@ -226,6 +226,15 @@ export function buildSite(world, mapData) {
           }
           continue;
         }
+        // a whole wall span is one hang line (paintings follow the bow via sidePoint)
+        if (sp.t === 'wall' && pv.wing && len > 3) {
+          let top = Infinity;
+          for (let k = 0; k <= 8; k++) {
+            const [qx, qz] = sidePoint(pv, side, sp.a + (len * k) / 8);
+            top = Math.min(top, roofUnder(pv, qx, qz));
+          }
+          hangLines.push({ type: 'side', pv: pv.id, wing: pv.wing, side, a: sp.a, b: sp.b, floor: pv.floor, top });
+        }
         // wall / door: cut into ~2.4 m pieces when the wall bows or the roof varies along it
         const pieces = bowed || along ? Math.max(1, Math.ceil(len / 2.4)) : 1;
         for (let i = 0; i < pieces; i++) {
@@ -253,8 +262,7 @@ export function buildSite(world, mapData) {
           const top = Math.min(roofUnder(pv, ax, az), roofUnder(pv, bx, bz));
           const mat = 'concrete';
           if (sp.t === 'wall') {
-            const p = seg(ex0, ez0, ex1, ez1, WALL_T, pv.floor - 0.02, top, mat, 'arch', { wall: true, pv: pv.id, side });
-            if (p && pv.wing) hangLines.push({ pv: pv.id, wing: pv.wing, side, ax, az, bx, bz, floor: pv.floor, top, n: sideNormal(side) });
+            seg(ex0, ez0, ex1, ez1, WALL_T, pv.floor - 0.02, top, mat, 'arch', { wall: true, pv: pv.id, side });
           } else if (sp.t === 'door') {
             const sill = sp.sill !== undefined ? sp.sill : pv.floor;
             if (i === 0) threshold(pv, side, sp, sill);
@@ -278,6 +286,22 @@ export function buildSite(world, mapData) {
         const z1 = bz0 + ((bz1 - bz0) * (k + 1)) / nz;
         const y = roofUnder(pv, (x0 + x1) / 2, (z0 + z1) / 2);
         for (const r of subtractRects({ x0, x1, z0, z1 }, holes)) rect(r.x0, r.x1, r.z0, r.z1, y, y + ROOF_T, pv.roof.mat, 'arch', { roofOf: pv.id });
+      }
+    }
+
+    // ---- free-standing partitions (the bridge's "box galleries"): hang on both faces
+    for (const pt of pv.partitions || []) {
+      // along x ({ x0, x1, z }) or along z ({ z0, z1, x })
+      const h = pt.h || 3.8;
+      const alongX = pt.z !== undefined;
+      const [ax, az, bx, bz] = alongX ? [pt.x0, pt.z, pt.x1, pt.z] : [pt.x, pt.z0, pt.x, pt.z1];
+      seg(ax, az, bx, bz, 0.3, pv.floor - 0.02, pv.floor + h, 'concrete', 'arch', { wall: true, pv: pv.id, partition: true });
+      for (const sgn of [-1, 1]) {
+        const nx = alongX ? 0 : sgn;
+        const nz = alongX ? sgn : 0;
+        const ux = alongX ? 0.6 : 0;
+        const uz = alongX ? 0 : 0.6;
+        hangLines.push({ type: 'line', pv: pv.id, wing: pv.wing, ax: ax + ux + nx * 0.15, az: az + uz + nz * 0.15, bx: bx - ux + nx * 0.15, bz: bz - uz + nz * 0.15, nx, nz, floor: pv.floor, top: pv.floor + h });
       }
     }
 

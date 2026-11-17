@@ -144,6 +144,7 @@ export const PAVILIONS = Object.freeze([
     roof: { type: 'concave', rise: 2.4, mat: 'copper', high: 'e' }, floorMat: 'oak', ribs: true, wing: 'early-american',
     sides: { s: [O(32, 38), W(38, 54)], n: [W(32, 34), O(34, 50), W(50, 54)], w: [W(-296, -272)], e: [W(-296, -272)] },
     bow: { w: 2 },
+    partitions: [{ x: 48.5, z0: -292, z1: -277, h: 4 }],
   },
   {
     id: 'east-terrace', name: 'East Terrace', x0: 34, x1: 50, z0: -304, z1: -296, floor: LEVEL.MAIN, height: 4.4, wing: null,
@@ -155,6 +156,7 @@ export const PAVILIONS = Object.freeze([
     roof: { type: 'concave', rise: 2.4, mat: 'copper', high: 'e' }, floorMat: 'oak', ribs: true, wing: 'nineteenth',
     sides: { s: [W(32, 34), O(34, 50), W(50, 54)], n: [W(32, 46), O(46, 52), W(52, 54)], w: [W(-336, -304)], e: [W(-336, -304)] },
     bow: { w: 2.5 },
+    partitions: [{ x: 38, z0: -330, z1: -312, h: 4 }],
   },
   {
     id: 'reflection', name: 'Reflection Room', x0: 32, x1: 54, z0: -350, z1: -336, floor: LEVEL.LOWER, height: 8, wing: null,
@@ -180,6 +182,7 @@ export const PAVILIONS = Object.freeze([
   {
     id: 'modern-bridge', name: 'Modern Art Bridge', x0: -36, x1: 18, z0: -364, z1: -344, floor: LEVEL.LOWER, height: 6.6, bridge: true,
     roof: { type: 'convex', rise: 2.8, mat: 'copper', along: 'x' }, floorMat: 'oak', ribs: true, wing: 'bridge-gallery', leanGlass: true,
+    partitions: [{ x0: -27, x1: -13, z: -354, h: 3.8 }, { x0: -3, x1: 11, z: -354, h: 3.8 }],
     sides: { n: [W(-36, -32), G(-32, 14), W(14, 18)], s: [W(-36, -32), G(-32, 14), W(14, 18)], w: [O(-364, -344)], e: [W(-364, -362), O(-362, -350), W(-350, -344)] },
   },
   {

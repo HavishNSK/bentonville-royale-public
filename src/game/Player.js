@@ -56,7 +56,8 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
   const hit = world ? world.raycast(_cam.x, _cam.y, _cam.z, _v.x, _v.y, _v.z, dist + 0.3, null) : null;
   const d = hit ? Math.max(0.6, hit.t - 0.3) : dist;
   _cam.addScaledVector(_v, d);
-  if (_cam.y < 0.3) _cam.y = 0.3;
+  const floorY = (world && world.terrainHeight ? world.terrainHeight(_cam.x, _cam.z) : 0) + 0.3; // the ravine is below y 0
+  if (_cam.y < floorY) _cam.y = floorY;
   camera.position.copy(_cam);
   _v.copy(_cam).add(_fwd);
   camera.lookAt(_v);
@@ -926,7 +927,7 @@ export class Player {
         if (net) net.action({ k: 'dr', key: door.piece.key, c: door.c, s: door.sign });
         else st.toggleDoor(door.piece, door.c, door.sign);
       }
-    } else g.hud.prompt(null);
+    } else if (!(g.cbGallery && g.cbGallery.interact(this, input, g.hud))) g.hud.prompt(null);
   }
 
   /** Opens / takes a loot record (see Loot.nearest). */

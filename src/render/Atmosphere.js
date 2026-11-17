@@ -58,6 +58,8 @@
  */
 import * as THREE from 'three';
 
+const _intTmp = new THREE.Color();
+
 const TAU = Math.PI * 2;
 
 const QUALITY = {
@@ -736,6 +738,7 @@ export class Atmosphere {
     this._storm += (target - this._storm) * k;
     if (Math.abs(target - this._storm) < 1e-4) this._storm = target;
     this._applyMood(this._storm);
+    this._applyInterior();
 
     // time-based animation (clamped so a background-tab hitch does not teleport things)
     const adt = dt > 0.25 ? 0.25 : dt;
@@ -760,6 +763,37 @@ export class Atmosphere {
 
     if (focus) this._focus.copy(focus);
     this._placeShadowBox();
+  }
+
+  /**
+   * Interior gallery mood (Crystal Bridges): k 0..1 blends fog, hemisphere and sun toward a
+   * musewalk wing palette { fog, floor, lightColor } (hex strings). Applied after the storm mood
+   * every update(); k = 0 leaves the outdoor look untouched. Cheap; call every frame.
+   */
+  setInterior(k, pal) {
+    this._interiorK = k > 0 ? Math.min(1, k) : 0;
+    if (pal && pal !== this._interiorPal) {
+      this._interiorPal = pal;
+      if (!this._intCol) this._intCol = { fog: new THREE.Color(), floor: new THREE.Color(), light: new THREE.Color() };
+      this._intCol.fog.set(pal.fog || '#0c0908');
+      this._intCol.floor.set(pal.floor || '#0d0a08');
+      this._intCol.light.set(pal.lightColor || '#ffe2b8');
+    }
+  }
+
+  _applyInterior() {
+    const k = this._interiorK || 0;
+    if (k <= 0.001 || !this._intCol) return;
+    const c = this._intCol;
+    // musewalk halls: Fog(hall.fog, 10, 64) and HemisphereLight(light * 0.5, floor, 1.1). Kept
+    // lighter than musewalk's black box: the real galleries are daylit through the glass.
+    this._fog.color.lerp(_intTmp.copy(c.fog).lerp(c.light, 0.12), k * 0.85);
+    this._fog.density = this._fog.density + (0.024 - this._fog.density) * k;
+    this._uniforms.uFogDensity.value = this._fog.density;
+    this._hemi.color.lerp(_intTmp.copy(c.light).multiplyScalar(0.5), k);
+    this._hemi.groundColor.lerp(_intTmp.copy(c.floor).lerp(c.light, 0.2), k);
+    this._hemi.intensity *= 1 - 0.5 * k;
+    this._sun.intensity *= 1 - 0.75 * k;
   }
 
   /**

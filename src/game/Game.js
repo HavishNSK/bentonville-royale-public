@@ -206,6 +206,16 @@ export class Game {
     if (mb && this.hud.setFullMapAspect) this.hud.setFullMapAspect((mb.maxX - mb.minX) / (mb.maxZ - mb.minZ));
     this.minimap = new Minimap({ mapData, miniCanvas: this.hud.getMinimapCanvas(), fullCanvas: this.hud.getFullMapCanvas() });
     this.pings = new Pings(this.hud.el);
+    // Crystal Bridges galleries (musewalk-style art, focus mode, portals, ambience): optional
+    if (this.view && this.view.crystalBridges) {
+      try {
+        const { createGallery } = await import('../world/crystal-bridges/gallery/index.js');
+        this.cbGallery = await createGallery({ game: this, site: this.view.crystalBridges.site, sfx });
+      } catch (err) {
+        console.warn('Crystal Bridges gallery failed to load:', err);
+        this.cbGallery = null;
+      }
+    }
     // full map: left click places your marker, right click removes it
     const fc = this.hud.getFullMapCanvas();
     fc.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -1395,7 +1405,7 @@ export class Game {
         _v.set(p.pos.x, p.pos.y + 1.2, p.pos.z);
         this._specH = (this._specH == null ? p.heading : this._specH) + dt * 0.15;
         placeOrbitCamera(cam, this.world, _v, this._specH, -0.35, 7, 0);
-      } else p.updateCamera(cam, dt, this.world, this.settings.fov || CAMERA.fov);
+      } else if (!(this.cbGallery && this.cbGallery.cameraOverride(cam, dt))) p.updateCamera(cam, dt, this.world, this.settings.fov || CAMERA.fov);
     }
     // grenade aim arc, from the fresh aim ray
     if (this.grenades) {
@@ -1408,6 +1418,7 @@ export class Game {
 
     // bespoke landmark animation (Crystal Bridges water, gallery lighting) every frame
     if (this.view && this.view.frame) this.view.frame(dt, { camera: cam, player: p, game: this });
+    if (this.cbGallery) this.cbGallery.update(dt);
 
     // world culling a few times a second
     this._cullT = (this._cullT || 0) - dt;

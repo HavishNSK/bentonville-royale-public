@@ -667,9 +667,10 @@ export class HostSession {
       busPosAt(route, Math.min(this.time, route.tClose), a.pos); // riding: wherever the bus is
     } else if (a.carriedBy) {
       // on a teammate's shoulder: the host owns where they are (Combat.tickCarry)
-    } else if (inBounds && (fromBus || a.allowJump || dist <= cap || was === 'bus')) {
+    } else if (inBounds && (fromBus || a.allowJump || dist <= cap || was === 'bus' || this._portalOk(a, s))) {
       a.pos.set(s.x, s.y, s.z);
       a.allowJump = false;
+      a.portalTo = null;
     } else if (this.time - (a.lastCorrect || -9) > 0.5) {
       a.lastCorrect = this.time;
       this.room.sendTo(a.id, { t: 'cor', x: a.pos.x, y: a.pos.y, z: a.pos.z });
@@ -973,6 +974,14 @@ export class HostSession {
         if (d > 0) g.combat.applyDamage(a, d, { fall: true, source: null, storm: true });
         return;
       }
+      case 'ptl': {
+        // Crystal Bridges painting portal (peer input is untrusted: the gallery checks range, cooldown, storm)
+        const gal = g.cbGallery;
+        const to = gal && Number.isInteger(m.i) ? gal.validatePortal(a, m.i) : null;
+        if (!to) return;
+        a.portalTo = { x: to[0], z: to[2], until: this.time + 2 }; // only a jump to THIS destination
+        return;
+      }
       case 'tp':
         // QA teleport (dev builds only): the next state packet may jump anywhere
         if (!DEV) return;
@@ -989,6 +998,12 @@ export class HostSession {
         return;
       default:
     }
+  }
+
+  /** A Crystal Bridges portal jump the host approved: lands at the approved destination, soon. */
+  _portalOk(a, s) {
+    const p = a.portalTo;
+    return !!p && this.time < p.until && Math.hypot(s.x - p.x, s.z - p.z) < 3;
   }
 
   _onLeave(c) {

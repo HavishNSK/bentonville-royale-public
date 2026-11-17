@@ -2688,7 +2688,8 @@ export class Bots {
     else if (pos.x > bd.maxX - 1) pos.x = bd.maxX - 1;
     if (pos.z < bd.minZ + 1) pos.z = bd.minZ + 1;
     else if (pos.z > bd.maxZ - 1) pos.z = bd.maxZ - 1;
-    if (pos.y < 0) pos.y = 0;
+    const floor = this.world.terrainHeight ? this.world.terrainHeight(pos.x, pos.z) : 0; // the Crystal Bridges ravine is below 0
+    if (pos.y < floor) pos.y = floor;
   }
 
   // ------------------------------------------------------------- presentation

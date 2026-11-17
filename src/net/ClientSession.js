@@ -298,6 +298,12 @@ export class ClientSession {
     for (const pj of this.game.combat.lastProjectiles || []) pj.netSeq = this.seq;
   }
 
+  /** Crystal Bridges painting portal: the host validates (range, cooldown, storm) and allows the jump. */
+  portal(i) {
+    this._tpUntil = performance.now() + 1500;
+    this.action({ k: 'ptl', i: i | 0 });
+  }
+
   /** QA: teleports must be announced so the host's speed check lets them through. */
   debugTeleport(p) {
     this._tpUntil = performance.now() + 1500;
