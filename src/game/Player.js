@@ -17,7 +17,7 @@
 
 import * as THREE from 'three';
 import { rampDragQuarter, validEdit } from './Structures.js';
-import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, KNOCK, REBOOT, clamp, damp, TAU, weaponStats } from '../core/config.js';
+import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, KNOCK, REBOOT, SWIM, clamp, damp, TAU, weaponStats } from '../core/config.js';
 import { sameTeam } from './Teams.js';
 import { placeOnShoulder } from './Combat.js';
 
@@ -148,6 +148,7 @@ export class Player {
     this.reviveT = 0;
     this.revivingTarget = null;
     this.reviveLocalT = 0;
+    this.swimming = false;
     this.rebootVan = null; // reboot van we hold interact at (Reboot.js)
     this.rebootLocalT = 0;
     this._wasDown = false;
@@ -241,9 +242,10 @@ export class Player {
     const wx = sh * mf + ch * ms;
     const wz = -ch * mf + sh * ms;
 
-    this.crouching = this.mode === 'ground' && !down && (input.action('crouch') || input.action('crouchAlt'));
-    this.sprinting = this.mode === 'ground' && !down && input.action('sprint') && mf > 0 && !this.ads && !this.crouching && this.useT <= 0;
-    this.ads = this.mode === 'ground' && !down && !this.carrying && input.action('aim') && !this.buildPiece && !this.editing && !!this._gun();
+    const swim = this.swimming; // last frame's (set after the ground resolve below)
+    this.crouching = this.mode === 'ground' && !down && !swim && (input.action('crouch') || input.action('crouchAlt'));
+    this.sprinting = this.mode === 'ground' && !down && !swim && input.action('sprint') && mf > 0 && !this.ads && !this.crouching && this.useT <= 0;
+    this.ads = this.mode === 'ground' && !down && !swim && !this.carrying && input.action('aim') && !this.buildPiece && !this.editing && !!this._gun();
     // scoped guns: a short raise-to-eye, then the view snaps into the scope; lowering is instant
     const scoping = this.ads && !!WEAPONS[this._gun().id].scope;
     this.scopeT = scoping ? Math.min(1, this.scopeT + dt / 0.16) : 0;
@@ -255,6 +257,7 @@ export class Player {
     if (this.crouching) speed = PLAYER.walkSpeed * 0.65;
     if (down) speed = PLAYER.runSpeed * KNOCK.crawlSpeed;
     if (this.revivingTarget || this.rebootVan) speed = 0; // kneeling over a teammate / at a reboot van (a move key lets go)
+    if (swim) speed = PLAYER.runSpeed * SWIM.speed;
     if (this.carrying) speed *= 0.8; // a teammate on the shoulder slows you down
     if (down && this.carriedBy) speed = 0; // riding on a teammate's shoulder
 
@@ -287,7 +290,7 @@ export class Player {
         v.x += (dx / dl) * step;
         v.z += (dz / dl) * step;
       }
-      if (this.grounded && input.actionHit('jump') && !this.crouching && !down && !this.revivingTarget) {
+      if (this.grounded && input.actionHit('jump') && !this.crouching && !down && !this.revivingTarget && !swim) {
         v.y = PLAYER.jumpSpeed;
         this.grounded = false;
         g.sfx.play('jump', { volume: 0.5 });
@@ -365,6 +368,20 @@ export class Player {
     }
     }
     this.surface = world.surface;
+    // ---- swimming: on the terrain inside a water area (World.inWater)
+    const wasSwim = this.swimming;
+    this.swimming = !down && this.mode === 'ground' && this.grounded && this.surface === 'ground' && !this.carriedBy && world.inWater(p.x, p.z, p.y);
+    if (this.swimming !== wasSwim) {
+      if (this.swimming) {
+        this._cancelUse();
+        this._endEdit(g);
+        this.buildPiece = null;
+        if (this.emoting && this.character) this.character.emote(false);
+        this.emoting = false;
+      }
+      g.sfx.play('splash', { volume: this.swimming ? 0.8 : 0.4 });
+      if (g.fx && g.fx.impact) g.fx.impact(_v.set(p.x, p.y + 0.05, p.z), null, 'water');
+    }
     if (down && this.carriedBy && this.carriedBy.alive) {
       placeOnShoulder(this, this.carriedBy);
       this.grounded = true;
@@ -391,6 +408,7 @@ export class Player {
       c.root.position.copy(p);
       c.root.visible = !this.scopeView; // first person through the scope: don't draw our own body
       c.setDowned(down);
+      c.setSwim(this.swimming);
       c.update(dt, {
         fwd: hspeed > 0.1 ? (v.x * sh - v.z * ch) / hspeed : 0,
         side: hspeed > 0.1 ? (v.x * ch + v.z * sh) / hspeed : 0,
@@ -402,8 +420,15 @@ export class Player {
       });
     }
 
-    // ---- footsteps
-    if (this.grounded && hspeed > 2 && !this.crouching) {
+    // ---- swim strokes: a splash and a ripple instead of footsteps
+    if (this.swimming && hspeed > 1) {
+      this.stepT -= dt;
+      if (this.stepT <= 0) {
+        this.stepT = SWIM.strokeT;
+        g.sfx.play('splash', { volume: 0.3 });
+        if (g.fx && g.fx.ring) g.fx.ring(_v.set(p.x, p.y + 0.04, p.z), { radius: 1.6, duration: 0.7, color: 0xd8f1ff });
+      }
+    } else if (this.grounded && hspeed > 2 && !this.crouching) {
       this.stepT -= dt * (hspeed / PLAYER.runSpeed);
       if (this.stepT <= 0) {
         this.stepT = 0.36;
@@ -688,7 +713,13 @@ export class Player {
       else this._startEdit(g);
     }
 
-    if (this.editing) {
+    if (this.swimming) {
+      // in the water: hands are busy swimming (no shots, swings, builds or heals)
+      if (g.structures) g.structures.setGhost(null);
+      this.placement = null;
+      this.buildPiece = null;
+      if (this.editing) this._endEdit(g);
+    } else if (this.editing) {
       if (g.structures) g.structures.setGhost(null);
       this.placement = null;
       this._editMode(input, lmb, lmbClick, g);

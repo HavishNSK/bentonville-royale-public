@@ -1359,6 +1359,15 @@ export class World {
     return found;
   }
 
+  /**
+   * Swimming: feet on the terrain (not a bridge deck, build, floor or roof) inside a water
+   * area. feetY: the actor's feet height.
+   */
+  inWater(x, z, feetY) {
+    if (this.areaAt(x, z) !== 'water') return false;
+    return feetY - this.terrainHeight(x, z) < 0.4;
+  }
+
   /** The solid prism (building / vehicle) whose footprint contains the point, or null. */
   polyAt(x, z) {
     const cell = this.cellAt(x, z);

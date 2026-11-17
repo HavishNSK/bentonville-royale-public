@@ -484,20 +484,23 @@ function makeBlipSprites(k) {
   });
   // reboot van: a cyan rounded square with a white "R" (grey while recharging)
   for (const [key, col] of [['van', '#38e1ff'], ['vanCd', '#8a96a3']]) {
-    out[key] = makeSprite(18 * k, 18 * k, 9 * k, 9 * k, (g) => {
+    out[key] = makeSprite(24 * k, 24 * k, 12 * k, 12 * k, (g) => {
       g.fillStyle = col;
-      g.strokeStyle = edge;
-      g.lineWidth = 1.8 * k;
+      g.strokeStyle = '#ffffff';
+      g.lineWidth = 2.6 * k;
       g.beginPath();
-      if (g.roundRect) g.roundRect(2 * k, 2 * k, 14 * k, 14 * k, 3.5 * k);
-      else g.rect(2 * k, 2 * k, 14 * k, 14 * k);
+      if (g.roundRect) g.roundRect(2.5 * k, 2.5 * k, 19 * k, 19 * k, 5 * k);
+      else g.rect(2.5 * k, 2.5 * k, 19 * k, 19 * k);
       g.fill();
       g.stroke();
-      g.fillStyle = '#ffffff';
-      g.font = `900 ${10 * k}px sans-serif`;
+      g.strokeStyle = edge;
+      g.lineWidth = 1.2 * k;
+      g.stroke();
+      g.fillStyle = edge;
+      g.font = `900 ${13 * k}px sans-serif`;
       g.textAlign = 'center';
       g.textBaseline = 'middle';
-      g.fillText('R', 9 * k, 9.6 * k);
+      g.fillText('R', 12 * k, 12.8 * k);
     });
   }
   // reboot card: a small cyan card

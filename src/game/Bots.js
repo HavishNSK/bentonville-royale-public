@@ -62,7 +62,7 @@ import { botLoadout } from './Cosmetics.js';
 import { Inventory } from './Inventory.js';
 import {
   PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, RARITIES, DIFFICULTY, QUALITY,
-  BOT_NAMES, DROP_ZONES, STORM, KNOCK, REBOOT, angleDelta, clamp, weaponStats,
+  BOT_NAMES, DROP_ZONES, STORM, KNOCK, REBOOT, SWIM, angleDelta, clamp, weaponStats,
 } from '../core/config.js';
 import { sameTeam } from './Teams.js';
 import { busPosAt, jumpTimeFor } from './DropBus.js';
@@ -2487,7 +2487,7 @@ export class Bots {
   _fireControl(b, tgt) {
     const a = b.actor;
     const inv = a.inventory;
-    if (b.fireCd > 0 || b.reloading > 0 || b.healing > 0) return;
+    if (b.fireCd > 0 || b.reloading > 0 || b.healing > 0 || a.swimming) return;
     const it = inv.current();
     const dx = tgt.pos.x - a.pos.x;
     const dz = tgt.pos.z - a.pos.z;
@@ -2647,6 +2647,9 @@ export class Bots {
 
     let sp = b.speed;
     if (b.healing > 0) sp = Math.min(sp, 1.5);
+    // swimming (World.inWater): slower, like players
+    a.swimming = a.grounded && !a.downed && !!world.inWater && world.inWater(pos.x, pos.z, pos.y);
+    if (a.swimming) sp = Math.min(sp, PLAYER.runSpeed * SWIM.speed);
     approach(vel, b.mx * sp, b.mz * sp, (a.grounded ? PLAYER.accelGround : PLAYER.accelAir) * dt);
     if (b.wantJump && a.grounded) {
       vel.y = PLAYER.jumpSpeed;
@@ -2707,6 +2710,7 @@ export class Bots {
     const show = d2 < cd2 && !(b.state === 'dead' && b.deadTime > 6);
     ch.root.visible = show;
     ch.setDowned(!!a.downed);
+    ch.setSwim(!!a.swimming);
     if (!show) {
       b.animAcc = 0;
       return;

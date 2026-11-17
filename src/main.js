@@ -349,6 +349,7 @@ const lastLocal = { mode: 'solo', fill: true }; // offline mode / fill, and what
 // so players can see each other and queue in the same mode at the same time.
 let presence = null;
 let presenceInMatch = false;
+let chat = null; // global chat (src/ui/chat.js), fed by the presence socket
 
 function partyMode() {
   return party && party.party ? party.party.mode : lastLocal.mode;
@@ -361,6 +362,10 @@ function presenceStatus() {
 
 function syncPresence() {
   if (presence) presence.set({ name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
+  if (chat) {
+    chat.setMe(menus.playerName());
+    chat.setMode(presenceInMatch ? 'match' : 'lobby');
+  }
 }
 
 /** Players searching in our mode right now, not counting our own party. */
@@ -374,10 +379,19 @@ function othersSearching() {
 
 async function startPresence() {
   try {
-    const [{ partyToken }, { openPresence }] = await Promise.all([import('./net/Party.js'), import('./net/Presence.js')]);
+    const [{ partyToken }, { openPresence }, { createChat }] = await Promise.all([import('./net/Party.js'), import('./net/Presence.js'), import('./ui/chat.js')]);
     presence = openPresence({ token: partyToken(), name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
+    chat = createChat({
+      onSend: (text) => presence.sendChat(text),
+      onTypingChange: (on) => game && game.setChatTyping && game.setChatTyping(on),
+    });
+    chat.setMe(menus.playerName());
+    chat.setMode(presenceInMatch ? 'match' : 'lobby');
+    presence.onChat = (m) => chat.add(m);
+    presence.onChatError = (reason) => chat.error(reason);
     presence.onUpdate = (snap) => {
       if (meta) meta.setOnline(snap);
+      if (chat) chat.setOnline(!!snap);
       renderParty();
     };
   } catch (err) {
