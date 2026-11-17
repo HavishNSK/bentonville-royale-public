@@ -9,6 +9,7 @@ import { inject as injectAnalytics } from '@vercel/analytics';
 import { teamSize, normalizeMode } from './game/Teams.js';
 import { createAccount } from './net/Account.js';
 import { createMeta } from './ui/meta.js';
+import { RANKED_NOTE } from './core/config.js';
 import { lookString, parseLook } from './game/Cosmetics.js';
 
 // Vercel Web Analytics: anonymous page views / visitors (no cookies). Only reports from the Vercel deployment.
@@ -672,11 +673,13 @@ try {
   // coins + leaderboard stats for every finished match
   game.onMatchEnd = async (r) => {
     const players = r.mode && r.mode !== 'solo' ? r.teams : r.total;
-    const out = await account.reward({ kills: r.kills | 0, placement: r.placement | 0, players: players | 0, won: !!r.victory });
+    const ranked = !!r.ranked;
+    const out = await account.reward({ kills: r.kills | 0, placement: r.placement | 0, players: players | 0, won: !!r.victory, ranked });
     if (out.saved && out.earned > 0) menus.showReward(out.earned);
     if (!meta) return;
     if (out.guest) meta.matchReward(0, 'Sign in to save eliminations and coins.');
     else if (out.saved && out.earned > 0) meta.matchReward(out.earned);
+    else if (out.saved && !ranked) meta.matchReward(0, `Not ranked. ${RANKED_NOTE}`);
     else if (out.saved && (r.kills | 0) > 0) meta.matchReward(0, `Saved ${r.kills | 0} elim${(r.kills | 0) === 1 ? '' : 's'} to the ranks.`);
     else if (!out.saved && out.error) meta.matchReward(0, out.error);
   };

@@ -22,6 +22,7 @@ import './meta.css';
 import { SKINS, EMOTES, PICKAXES, BACKBLINGS, EMOTE_SLOTS, PRICES, featuredToday, emoteDef, cosmeticDef } from '../game/Cosmetics.js';
 import { createShowcase } from './Showcase.js';
 import { PATCH_NOTES, LATEST_VERSION } from '../data/patchNotes.js';
+import { RANKED_NOTE } from '../core/config.js';
 
 const SEEN_KEY = 'bentonville-royale.seenPatch';
 const seenPatch = () => {
@@ -462,6 +463,7 @@ export function createMeta(menus, account, opts = {}) {
     panelTitle.textContent = 'RANKS';
     const onlineEl = h('p', 'mt-online br-ol', boardCache ? `${boardCache.online} PLAYERS ONLINE` : 'Loading…');
     panelBody.appendChild(onlineEl);
+    panelBody.appendChild(h('p', 'mt-hint mt-ranked-note', RANKED_NOTE));
     panelBody.appendChild(h('p', 'mt-hint', 'Signed-in players only. Guests do not appear on the boards.'));
 
     const paint = (data) => {
