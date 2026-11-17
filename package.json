@@ -1,6 +1,6 @@
 {
   "name": "bentonville-royale",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "description": "An original third-person building battle royale set in real Bentonville, Arkansas.",

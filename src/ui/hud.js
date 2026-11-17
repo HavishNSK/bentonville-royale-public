@@ -368,6 +368,7 @@ export function buildHud(root) {
   let lastActiveSlot;
   let lastBuild = null;
   let lastActiveName = null;
+  let pickaxeName = null; // setPickaxeName(): the equipped pickaxe cosmetic's name
   function refreshActive() {
     const idx = lastActiveSlot;
     const hasSlot = idx >= 0 && idx < slotEls.length;
@@ -376,7 +377,7 @@ export function buildHud(root) {
     let name = '';
     if (lastBuild) name = '';
     else if (hasSlot) name = slotEls[idx].name || '';
-    else name = 'Pickaxe';
+    else name = pickaxeName || 'Pickaxe';
     if (name !== lastActiveName) {
       r.activeName.textContent = name;
       lastActiveName = name;
@@ -1108,6 +1109,10 @@ export function buildHud(root) {
     hitMarker,
     damageFlash,
     killFeed,
+    setPickaxeName(n) {
+      pickaxeName = n || null;
+      refreshActive();
+    },
     setFeedName(n) {
       meName = n || null;
     },

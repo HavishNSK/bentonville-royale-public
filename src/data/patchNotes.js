@@ -7,6 +7,26 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.9.0',
+    date: '2026-11-17',
+    title: 'Pickaxe moves',
+    sections: [
+      {
+        heading: 'Pickaxes',
+        items: [
+          'Every pickaxe now has its own moves, chained into a combo: the Hatchet chops and slices, the Dagger slashes and stabs, the Crystal Bridge Greatsword and Shadow Reaper spin, the Sparkle Wand casts, and the Root Beer Float throws punches.',
+          'Every pickaxe still hits at the same speed, so none of them is better than another.',
+          'Trying a pickaxe on in the Item Shop or Locker shows off its full combo.',
+          'The hotbar shows the name of your equipped pickaxe.',
+        ],
+      },
+      {
+        heading: 'Shop',
+        items: ["If an item can't be bought yet while the shop is being updated, the shop says so (and keeps your coins) instead of 'This item is not in the shop'."],
+      },
+    ],
+  },
+  {
     version: '0.8.1',
     date: '2026-11-17',
     title: 'Roof and stairwell fixes',

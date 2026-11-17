@@ -37,7 +37,7 @@ import { createInventoryPanel } from '../ui/inventoryPanel.js';
 import { createEmoteWheel } from '../ui/emoteWheel.js';
 import { Minimap } from '../ui/Minimap.js';
 import { CharacterKit, Character, registerKits } from './Character.js';
-import { skinDef, emoteDef, DEFAULT_EQUIPPED, PICKAXES, BACKBLINGS } from './Cosmetics.js';
+import { skinDef, emoteDef, pickaxeDef, DEFAULT_EQUIPPED, PICKAXES, BACKBLINGS } from './Cosmetics.js';
 import { Combat, rayActor } from './Combat.js';
 import { Pings } from './Pings.js';
 import { Player, placeOrbitCamera, itemLabel } from './Player.js';
@@ -290,6 +290,7 @@ export class Game {
     if (skin) this.skin = skin;
     if (emotes) this.emotes = emotes.slice();
     if (pickaxe && PICKAXES[pickaxe]) this.pickaxe = pickaxe;
+    if (this.hud && this.hud.setPickaxeName) this.hud.setPickaxeName(pickaxeDef(this.pickaxe).name);
     if (backbling && BACKBLINGS[backbling]) this.backbling = backbling;
     if (this.loaded && this.player) this._applySkin();
   }
@@ -330,6 +331,7 @@ export class Game {
 
   /** (Re)builds the player's Character for this.skin when it changed. */
   _applySkin() {
+    if (this.hud && this.hud.setPickaxeName) this.hud.setPickaxeName(pickaxeDef(this.pickaxe).name);
     const def = skinDef(this.skin);
     const kit = this.kits && (this.kits[def.model] || this.kits.player);
     const p = this.player;

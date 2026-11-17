@@ -782,7 +782,8 @@ export function createMeta(menus, account, opts = {}) {
         pending = null;
         render();
       } catch (err) {
-        say(err.message, true);
+        // the account server's catalog is older than this page's (it has not been redeployed yet)
+        say(/not in the shop/i.test(err.message) ? `${c.def.name} isn't on sale yet: the shop server is being updated. Try again soon. Your coins were not spent.` : err.message, true);
         b.disabled = false;
       }
     });
