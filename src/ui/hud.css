@@ -644,6 +644,25 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 700;
+}
+/* who (bold, cream) reads apart from what happened */
+.br-feed-name {
+  font-family: var(--br-display);
+  font-weight: 400;
+  font-size: 1.08em;
+  letter-spacing: 0.01em;
+  color: var(--br-cream);
+}
+.br-feed-name.is-me {
+  color: var(--br-sun-hi);
+  text-decoration: underline calc(var(--u) * 2) var(--br-sun);
+  text-underline-offset: calc(var(--u) * 2);
+}
+.br-feed-line[data-kind='self'] .br-feed-name,
+.br-feed-line[data-kind='kill'] .br-feed-name,
+.br-feed-line[data-kind='you'] .br-feed-name {
+  color: var(--br-ink);
 }
 .br-feed-line[data-kind='storm'] {
   background: rgba(98, 48, 196, 0.88);

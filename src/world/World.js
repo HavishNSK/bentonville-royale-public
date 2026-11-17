@@ -37,6 +37,8 @@ const WEDGE_LIFT = 3.2;
 const SLAB = 0.3;
 // A slab piece younger than this (s) still lifts an actor it was built around onto it.
 const SLAB_LIFT_AGE = 0.6;
+// a built floor tile's thickness (Structures FLOOR_THICK): its underside is the ceiling below it
+const FLOOR_THICK = 0.22;
 const WALL_HALF = 0.14;
 // Pieces whose base is below this count as 'at ground level' for blockedAt / randomOpenPoint.
 const PIECE_GROUND_BAND = 2.5;
@@ -1411,7 +1413,7 @@ export class World {
    * Sets this.surface to 'ground' | 'roof' | 'vehicle' | 'build' | 'floor'
    * ('floor' = the ground floor inside an enterable building, when it is above the terrain).
    */
-  groundHeight(x, z, feetY, step = STEP) {
+  groundHeight(x, z, feetY, step = STEP, cap = Infinity) {
     let y = this.terrainHeight(x, z);
     this.surface = 'ground';
     const cell = this.cellAt(x, z);
@@ -1466,7 +1468,7 @@ export class World {
         d.wedge && feetY >= d.y0 - 0.3 && sy - feetY <= WEDGE_LIFT &&
         (!d.slab || (d.age || 0) < SLAB_LIFT_AGE) && // walking under an old ramp never lifts you onto it
         x > d.minX + 0.01 && x < d.maxX - 0.01 && z > d.minZ + 0.01 && z < d.maxZ - 0.01;
-      if (sy > y && (sy <= lim || around)) {
+      if (sy > y && sy < cap && (sy <= lim || around)) {
         y = sy;
         this.surface = 'build';
       }
@@ -1520,8 +1522,37 @@ export class World {
       // under a ramp / cone (feet below its base): it is solid from its base up, so the base
       // is the ceiling — jumping up into one bonks instead of phasing in and popping on top
       // a ramp is a plank: its underside is the ceiling (you can stand under its high end)
-      const sy = d.slab ? d.surf(x, z) - SLAB : d.wedge && feetY < d.y0 - 0.3 ? d.y0 : d.surf(x, z);
+      const sy = d.slab
+        ? d.surf(x, z) - SLAB
+        : d.wedge && feetY < d.y0 - 0.3
+          ? d.y0
+          : d.kind === 'floor'
+            ? d.surf(x, z) - FLOOR_THICK // a floor's underside, not its top
+            : d.surf(x, z);
       if (sy > lim && sy < y) y = sy;
+    }
+    return y;
+  }
+
+  /**
+   * Top of the lowest settled built floor (or ramp plank) above the feet at (x, z), or Infinity.
+   * Something already above you can't be stepped / snapped onto from below: the caller passes
+   * this (taken where the body WAS) as groundHeight's `cap`, so walking uphill or jumping under
+   * a floor never pops you through it. Fresh pieces (still rising) are skipped so a floor or ramp
+   * built at your feet still lifts you.
+   */
+  builtAbove(x, z, feetY) {
+    let y = Infinity;
+    const cell = this.cellAt(x, z);
+    if (!cell) return y;
+    const dyn = cell.dyn;
+    for (let i = 0; i < dyn.length; i++) {
+      const d = dyn[i];
+      if (!d.surf || (d.kind !== 'floor' && !d.slab) || (d.age || 0) < SLAB_LIFT_AGE) continue;
+      if (x < d.minX || x > d.maxX || z < d.minZ || z > d.maxZ) continue;
+      const sy = d.surf(x, z);
+      const under = sy - (d.slab ? SLAB : FLOOR_THICK);
+      if (under > feetY + 0.05 && sy < y) y = sy;
     }
     return y;
   }

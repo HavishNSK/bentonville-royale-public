@@ -15,7 +15,7 @@
 import * as THREE from 'three';
 import { WEAPONS, PLAYER, QUALITY, TAU, weaponStats } from '../core/config.js';
 import { Character } from '../game/Character.js';
-import { SKINS, EMOTES } from '../game/Cosmetics.js';
+import { SKINS, EMOTES, botLoadout } from '../game/Cosmetics.js';
 import { itemLabel } from '../game/Player.js';
 import { impactSound, placeOnShoulder } from '../game/Combat.js';
 import {
@@ -183,7 +183,14 @@ export class ClientSession {
         continue;
       }
       const kit = kits[info.k] || kits.player;
-      const ch = info.sk && SKINS[info.sk] && game.makeSkinCharacter ? game.makeSkinCharacter(info.sk, info.c) : kit ? new Character(kit, { weapons: game.weaponScenes, canopyColor: info.c }) : null;
+      // bots' pickaxe / back bling follow from their id; humans send theirs
+      const look = info.h ? { pickaxe: info.px || undefined, backbling: info.bb || undefined } : botLoadout(info.id);
+      const ch =
+        info.sk && SKINS[info.sk] && game.makeSkinCharacter
+          ? game.makeSkinCharacter(info.sk, info.c, look.pickaxe, look.backbling)
+          : kit
+            ? new Character(kit, { weapons: game.weaponScenes, canopyColor: info.c, ...look })
+            : null;
       if (ch) {
         ch.root.visible = false;
         game.scene.add(ch.root);
@@ -195,7 +202,7 @@ export class ClientSession {
     }
     this.aliveCount = start.roster.length;
     // tell the host (and through it everyone) which outfit we wear
-    if (game.skin && SKINS[game.skin]) this.action({ k: 'sk', id: game.skin });
+    if (game.skin && SKINS[game.skin]) this.action({ k: 'sk', id: game.skin, px: game.pickaxe, bb: game.backbling });
     // Follow-up rounds of a burst gun are scheduled by Combat; forward each one like a trigger pull.
     game.combat.onBurstShot = (s, it, o, dirs, res) => {
       if (s === game.player) this.sendFire(s, it, o, dirs, res);
@@ -400,9 +407,9 @@ export class ClientSession {
         }
         return;
       case 'sk': {
-        if (e.a === this.id || !SKINS[e.id]) return;
+        if (e.a === this.id) return;
         const pup = this.puppets.get(e.a);
-        if (pup && g.reskinActor) g.reskinActor(pup, e.id);
+        if (pup && g.reskinActor) g.reskinActor(pup, SKINS[e.id] ? e.id : null, e.px, e.bb);
         return;
       }
       case 'em': {
@@ -444,7 +451,7 @@ export class ClientSession {
           g.player.reviveLocalT = 0;
         }
         if (fx && fx.aura) fx.aura(v.pos, 'heal', 1.2);
-        g.hud.killFeed(by ? `${by.name} revived ${v.name}` : `${v.name} is back up`, 'revive');
+        g.hud.killFeed(by ? `${by.name} revived ${v.name}` : `${v.name} is back up`, 'revive', [v.name, by && by.name], g.player.name);
         return;
       }
       case 'au': {
@@ -630,7 +637,7 @@ export class ClientSession {
     else text = `${vName} was eliminated`;
     if (e.k === this.id) kind = 'kill';
     if (e.v === this.id) kind = 'self';
-    g.hud.killFeed(text, kind);
+    g.hud.killFeed(text, kind, [vName, kName], g.player.name);
 
     if (victim && victim !== p) {
       victim.kill();
@@ -661,7 +668,7 @@ export class ClientSession {
     else if (e.how === 'fall') text = `${vName} fell and was knocked`;
     else if (kName) text = `${kName} ${e.how === 'pickaxe' ? 'bonked' : 'knocked'} ${vName}`;
     else text = `${vName} was knocked`;
-    g.hud.killFeed(text, e.k === this.id ? 'kill' : e.v === this.id ? 'self' : victim.team === p.team ? 'mate' : 'knock');
+    g.hud.killFeed(text, e.k === this.id ? 'kill' : e.v === this.id ? 'self' : victim.team === p.team ? 'mate' : 'knock', [vName, kName], g.player.name);
     if (e.k === this.id) g.hud.announce(`KNOCKED ${vName.toUpperCase()}`, 'Finish them before they are revived', 1600);
     if (victim === p) g.netKnock(kName);
     else {

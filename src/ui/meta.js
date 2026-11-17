@@ -4,9 +4,9 @@
 //
 //   const meta = createMeta(menus, account, {
 //     partyCode: () => 'ABCD' | null,       // current party (invites)
-//     partyMembers: () => [{name, skin, you}],
+//     partyMembers: () => [{name, skin, pickaxe, backbling, you}],
 //     onJoinParty(code),                    // accept an invite / join a friend
-//     onCosmetics({ skin, emotes }),        // equipped outfit / wheel changed
+//     onCosmetics({ skin, pickaxe, backbling, emotes }),  // equipped loadout changed
 //     onName(name),                         // signed in: play under the account name
 //     onClick(),
 //   });
@@ -19,7 +19,7 @@
 // User text always goes through textContent.
 
 import './meta.css';
-import { SKINS, EMOTES, EMOTE_SLOTS, PRICES, featuredToday, skinDef, emoteDef } from '../game/Cosmetics.js';
+import { SKINS, EMOTES, PICKAXES, BACKBLINGS, EMOTE_SLOTS, PRICES, featuredToday, emoteDef, cosmeticDef } from '../game/Cosmetics.js';
 import { createShowcase } from './Showcase.js';
 import { PATCH_NOTES, LATEST_VERSION } from '../data/patchNotes.js';
 
@@ -84,8 +84,7 @@ function btn(label, cls = 'mn-btn mn-btn-small', act) {
   return b;
 }
 const RARITY_CSS = { common: 'var(--br-common)', uncommon: 'var(--br-uncommon)', rare: 'var(--br-rare)', epic: 'var(--br-epic)', legendary: 'var(--br-legendary)' };
-const hexCss = (n) => '#' + n.toString(16).padStart(6, '0');
-const SKIN_BASE = { player: '#5b6bb5', bot_a: '#8a96b0', bot_b: '#b06a3c', bot_c: '#6d4fb8' };
+const KIND_LABEL = { skin: 'Outfit', pickaxe: 'Pickaxe', backbling: 'Back Bling', emote: 'Emote' };
 
 export function createMeta(menus, account, opts = {}) {
   const titleEl = menus.el.querySelector('.mn-title');
@@ -120,13 +119,19 @@ export function createMeta(menus, account, opts = {}) {
   }
 
   function lineUp() {
-    const me = { name: account.profile.guest ? '' : account.profile.name, skin: account.profile.equipped.skin, you: true };
-    const others = (opts.partyMembers ? opts.partyMembers() : []).filter((m) => !m.you).map((m) => ({ name: m.name, skin: m.skin || 'skin_rogue' }));
+    const eq = account.profile.equipped;
+    const me = { name: account.profile.guest ? '' : account.profile.name, skin: eq.skin, pickaxe: eq.pickaxe, backbling: eq.backbling, you: true };
+    const others = (opts.partyMembers ? opts.partyMembers() : [])
+      .filter((m) => !m.you)
+      .map((m) => ({ name: m.name, skin: m.skin || 'skin_rogue', pickaxe: m.pickaxe, backbling: m.backbling }));
     showcase.setMembers([me, ...others]);
   }
 
   // ---------------------------------------------------------------- account bar
-  const bar = h('div', 'mt-bar');
+  const bar = h('nav', 'mt-bar');
+  bar.setAttribute('aria-label', 'Main menu');
+  const tabs = h('div', 'mt-tabs');
+  const right = h('div', 'mt-right');
   const who = h('div', 'mt-who');
   const whoName = h('b', 'br-ol');
   const whoSub = h('small');
@@ -135,13 +140,20 @@ export function createMeta(menus, account, opts = {}) {
   coins.title = 'Coins: sign in to earn them in matches and spend them in the shop';
   const coinsNum = h('b', 'br-ol', '0');
   coins.append(h('i', 'mt-coin', ''), coinsNum);
-  const bNews = btn('PATCH NOTES', 'mn-chip mt-chip', 'news');
+  const tab = (label, act) => {
+    const b = btn(label, 'mt-tab', act);
+    b.setAttribute('aria-pressed', 'false');
+    return b;
+  };
+  const bPlay = tab('PLAY', 'play');
+  const bLocker = tab('LOCKER', 'locker');
+  const bShop = tab('ITEM SHOP', 'shop');
+  const bBoard = tab('RANKS', 'leaderboard');
+  const bNews = tab('PATCH NOTES', 'news');
   const newBadge = h('em', 'mt-badge mt-badge-new', 'NEW');
   newBadge.hidden = seenPatch() === LATEST_VERSION;
   bNews.appendChild(newBadge);
-  const bShop = btn('SHOP', 'mn-chip mt-chip', 'shop');
-  const bLocker = btn('LOCKER', 'mn-chip mt-chip', 'locker');
-  const bBoard = btn('RANKS', 'mn-chip mt-chip', 'leaderboard');
+  tabs.append(bPlay, bLocker, bShop, bBoard, bNews);
   const bFriends = btn('FRIENDS', 'mn-chip mt-chip', 'friends');
   const badge = h('em', 'mt-badge');
   bFriends.appendChild(badge);
@@ -151,9 +163,19 @@ export function createMeta(menus, account, opts = {}) {
   bOnline.appendChild(onlineNum);
   bOnline.title = 'Players on the title screen or in a match right now';
   const bAuth = btn('SIGN IN', 'mn-chip mt-chip mt-chip-sun', 'auth');
-  bar.append(who, coins, bNews, bShop, bLocker, bBoard, bFriends, bOnline, bAuth);
+  right.append(bOnline, bFriends, coins, who, bAuth);
+  bar.append(tabs, right);
   let online = null; // last presence snapshot
   titleEl.appendChild(bar);
+  function syncTabs() {
+    for (const b of tabs.children) {
+      const on = (open || 'play') === b.dataset.act;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-pressed', String(on));
+    }
+    bFriends.classList.toggle('is-on', open === 'friends');
+    bOnline.classList.toggle('is-on', open === 'online');
+  }
 
   // ---------------------------------------------------------------- panel shell
   const panel = h('aside', 'mt-panel');
@@ -177,10 +199,24 @@ export function createMeta(menus, account, opts = {}) {
     panelMsg.classList.toggle('is-error', !!isError);
   }
 
+  let hideT = 0;
   function openPanel(which) {
+    const switching = !!open && open !== which;
     open = which;
+    clearTimeout(hideT);
     panel.hidden = false;
+    // slide in (or cross-fade the content when switching tabs)
+    if (!switching) {
+      panel.classList.remove('is-open');
+      void panel.offsetWidth;
+    } else {
+      panelBody.classList.remove('is-swap');
+      void panelBody.offsetWidth;
+      panelBody.classList.add('is-swap');
+    }
+    panel.classList.add('is-open');
     titleEl.classList.add('has-meta');
+    syncTabs();
     panel.dataset.kind = which;
     say('');
     render();
@@ -188,11 +224,15 @@ export function createMeta(menus, account, opts = {}) {
     if (f) f.focus();
   }
   function closePanel() {
+    if (!open) return;
     open = null;
-    panel.hidden = true;
+    panel.classList.remove('is-open');
+    hideT = setTimeout(() => (panel.hidden = true), 220);
     titleEl.classList.remove('has-meta');
     showcase.preview(null);
+    showcase.emote(null);
     selSlot = -1;
+    syncTabs();
   }
   close.addEventListener('click', () => {
     click();
@@ -210,6 +250,10 @@ export function createMeta(menus, account, opts = {}) {
     if (!b) return;
     click();
     const act = b.dataset.act;
+    if (act === 'play') {
+      closePanel();
+      return;
+    }
     // Signed-in SIGN OUT opens a confirm panel (no one-click logout).
     if (act === 'auth' && account.signedIn) {
       if (open === 'signout') closePanel();
@@ -603,30 +647,43 @@ export function createMeta(menus, account, opts = {}) {
     }
   }
 
-  function itemCard(id, { owned, equipped, onClick, action }) {
-    const s = SKINS[id];
-    const e = EMOTES[id];
-    const d = s || e;
+  /** Fortnite-style item tile: rarity backdrop, 3D thumbnail, name banner, price or state. */
+  function itemCard(id, { owned, equipped, onClick, action, selected }) {
+    const c = cosmeticDef(id);
+    const d = c.def;
     const card = h('button', 'mt-item');
     card.type = 'button';
+    card.dataset.rarity = d.rarity;
+    card.dataset.id = id;
     card.style.setProperty('--rar', RARITY_CSS[d.rarity] || RARITY_CSS.common);
     const art = h('span', 'mt-item-art');
-    if (s) {
-      art.classList.add('is-skin');
-      art.style.setProperty('--skin', s.tint != null ? hexCss(s.tint) : SKIN_BASE[s.model] || '#5b6bb5');
-    } else art.classList.add('is-emote');
-    const name = h('b', 'mt-item-name', d.name);
-    const kind = h('small', 'mt-item-kind', `${d.rarity} ${s ? 'outfit' : 'emote'}`);
+    art.dataset.kind = c.kind;
+    showcase.thumb(id).then((url) => {
+      if (!url) {
+        art.classList.add('is-blank'); // nothing to draw (e.g. "No Back Bling")
+        return;
+      }
+      const img = h('img');
+      img.alt = '';
+      img.decoding = 'async';
+      img.src = url;
+      art.appendChild(img);
+      art.classList.add('has-img');
+    });
+    const info = h('span', 'mt-item-info');
+    info.append(h('b', 'mt-item-name', d.name), h('small', 'mt-item-kind', `${d.rarity} ${KIND_LABEL[c.kind]}`));
     const foot = h('span', 'mt-item-foot');
     if (equipped) foot.textContent = 'EQUIPPED';
     else if (owned) foot.textContent = action || 'OWNED';
     else {
       foot.appendChild(h('i', 'mt-coin'));
-      foot.appendChild(document.createTextNode(String(PRICES[id])));
+      foot.appendChild(document.createTextNode(PRICES[id].toLocaleString()));
     }
     card.classList.toggle('is-owned', !!owned);
     card.classList.toggle('is-equipped', !!equipped);
-    card.append(art, name, kind, foot);
+    card.classList.toggle('is-sel', !!selected);
+    card.setAttribute('aria-label', `${d.name}, ${d.rarity} ${KIND_LABEL[c.kind]}${equipped ? ', equipped' : owned ? ', owned' : `, ${PRICES[id]} coins`}`);
+    card.append(art, info, foot);
     card.addEventListener('click', () => {
       click();
       onClick();
@@ -634,27 +691,46 @@ export function createMeta(menus, account, opts = {}) {
     return card;
   }
 
+  /** Try an item on in the line-up: outfits / pickaxes / back blings are worn, emotes played. */
+  function tryOn(id) {
+    const c = cosmeticDef(id);
+    if (!c) return;
+    if (c.kind === 'emote') {
+      showcase.preview(null);
+      showcase.emote(id);
+    } else {
+      showcase.emote(null);
+      showcase.preview(id);
+    }
+  }
+
   let pending = null; // shop item awaiting BUY confirm
+  const forSale = (table) => Object.keys(table).filter((k) => PRICES[k]);
   function renderShop() {
     panelTitle.textContent = 'ITEM SHOP';
     const p = account.profile;
+    const eq = p.equipped;
     const sections = [
-      ['FEATURED TODAY', featuredToday(4)],
-      ['OUTFITS', Object.keys(SKINS).filter((k) => PRICES[k])],
-      ['EMOTES', Object.keys(EMOTES).filter((k) => PRICES[k])],
+      ['FEATURED TODAY', featuredToday(4), 'is-featured'],
+      ['OUTFITS', forSale(SKINS)],
+      ['PICKAXES', forSale(PICKAXES)],
+      ['BACK BLINGS', forSale(BACKBLINGS)],
+      ['EMOTES', forSale(EMOTES)],
     ];
-    for (const [label, ids] of sections) {
-      panelBody.appendChild(h('div', 'mn-party-label mt-sub', label));
-      const grid = h('div', 'mt-grid');
+    for (const [label, ids, cls] of sections) {
+      panelBody.appendChild(h('div', 'mt-sub', label));
+      const grid = h('div', 'mt-grid' + (cls ? ' ' + cls : ''));
       for (const id of ids) {
         grid.appendChild(
           itemCard(id, {
             owned: p.owned.includes(id),
-            equipped: p.equipped.skin === id,
+            equipped: eq.skin === id || eq.pickaxe === id || eq.backbling === id,
+            selected: pending === id,
             onClick: () => {
-              if (SKINS[id]) showcase.preview(id);
-              else showcase.emote(id);
+              tryOn(id);
               pending = p.owned.includes(id) ? null : id;
+              for (const el of panelBody.querySelectorAll('.mt-item.is-sel')) el.classList.remove('is-sel');
+              for (const el of panelBody.querySelectorAll(`.mt-item[data-id="${id}"]`)) el.classList.add('is-sel');
               renderBuy();
             },
           })
@@ -673,7 +749,7 @@ export function createMeta(menus, account, opts = {}) {
     if (!bar) return;
     bar.replaceChildren();
     if (!account.signedIn) {
-      bar.appendChild(h('span', 'mt-hint', 'Sign in to earn coins from matches and unlock outfits & emotes.'));
+      bar.appendChild(h('span', 'mt-hint', 'Sign in to earn coins from matches and unlock outfits, pickaxes, back blings and emotes.'));
       const sign = btn('SIGN IN', 'mn-btn mn-btn-hero');
       sign.addEventListener('click', () => {
         click();
@@ -686,11 +762,14 @@ export function createMeta(menus, account, opts = {}) {
       bar.appendChild(h('span', 'mt-hint', 'Pick an item to try it on. Earn coins in matches: placing well, eliminations and wins.'));
       return;
     }
-    const d = SKINS[pending] || EMOTES[pending];
+    const c = cosmeticDef(pending);
     const price = PRICES[pending];
     const can = account.profile.coins >= price;
-    bar.appendChild(h('b', null, d.name));
-    const b = btn(`BUY · ${price}`, 'mn-btn mn-btn-hero mt-buy-go');
+    const name = h('span', 'mt-buy-name');
+    name.append(h('b', null, c.def.name), h('small', 'mt-item-kind', `${c.def.rarity} ${KIND_LABEL[c.kind]}`));
+    bar.appendChild(name);
+    const b = btn('', 'mn-btn mn-btn-hero mt-buy-go');
+    b.firstChild.append('BUY ', h('i', 'mt-coin'), ` ${price.toLocaleString()}`);
     b.disabled = !can;
     b.classList.toggle('is-disabled', !can);
     b.addEventListener('click', async () => {
@@ -699,7 +778,7 @@ export function createMeta(menus, account, opts = {}) {
       b.disabled = true;
       try {
         await account.buy(id);
-        say(`${d.name} is yours! Equip it in the Locker.`);
+        say(`${c.def.name} is yours! Equip it in the Locker.`);
         pending = null;
         render();
       } catch (err) {
@@ -708,40 +787,92 @@ export function createMeta(menus, account, opts = {}) {
       }
     });
     bar.appendChild(b);
-    if (!can) bar.appendChild(h('small', 'mt-hint', `You need ${price - account.profile.coins} more coins.`));
+    if (!can) bar.appendChild(h('small', 'mt-hint mt-buy-need', `You need ${(price - account.profile.coins).toLocaleString()} more coins.`));
   }
 
-  let selSlot = -1;
+  // ---- locker: Fortnite-style loadout slots; pick a slot, then an item for it
+  let lockerSlot = 'skin';
+  let selSlot = -1; // emote wheel slot being filled
+  const LOADOUT = [
+    ['skin', 'OUTFIT', SKINS],
+    ['backbling', 'BACK BLING', BACKBLINGS],
+    ['pickaxe', 'PICKAXE', PICKAXES],
+    ['emotes', 'EMOTES', EMOTES],
+  ];
   function renderLocker() {
     panelTitle.textContent = 'LOCKER';
     const p = account.profile;
-    panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'OUTFIT'));
-    const grid = h('div', 'mt-grid');
-    for (const id of Object.keys(SKINS).filter((k) => p.owned.includes(k))) {
-      grid.appendChild(
-        itemCard(id, {
-          owned: true,
-          equipped: p.equipped.skin === id,
-          action: 'EQUIP',
-          onClick: async () => {
-            showcase.preview(null);
-            try {
-              await account.equip({ skin: id });
-            } catch (err) {
-              say(err.message, true);
-            }
-            render();
-          },
-        })
-      );
+    const eq = p.equipped;
+    const row = h('div', 'mt-loadout');
+    for (const [key, label] of LOADOUT) {
+      const id = key === 'emotes' ? eq.emotes.find(Boolean) : eq[key];
+      const s = h('button', 'mt-load' + (lockerSlot === key ? ' is-on' : ''));
+      s.type = 'button';
+      s.setAttribute('aria-pressed', String(lockerSlot === key));
+      const c = cosmeticDef(id);
+      if (c) s.style.setProperty('--rar', RARITY_CSS[c.def.rarity] || RARITY_CSS.common);
+      const art = h('span', 'mt-load-art');
+      if (id)
+        showcase.thumb(id).then((url) => {
+          if (!url) return;
+          const img = h('img');
+          img.alt = '';
+          img.src = url;
+          art.appendChild(img);
+        });
+      s.append(art, h('small', null, label), h('b', null, key === 'emotes' ? `${eq.emotes.filter(Boolean).length} / ${EMOTE_SLOTS}` : c ? c.def.name : '—'));
+      s.addEventListener('click', () => {
+        click();
+        lockerSlot = key;
+        selSlot = -1;
+        render();
+      });
+      row.appendChild(s);
     }
-    panelBody.appendChild(grid);
+    panelBody.appendChild(row);
 
-    panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'EMOTE WHEEL'));
+    if (lockerSlot !== 'emotes') {
+      const [, label, table] = LOADOUT.find((l) => l[0] === lockerSlot);
+      const ids = Object.keys(table).filter((k) => p.owned.includes(k));
+      const notOwned = Object.keys(table).length - ids.length;
+      panelBody.appendChild(h('div', 'mt-sub', `${label} · ${ids.length} OWNED`));
+      const grid = h('div', 'mt-grid');
+      for (const id of ids) {
+        grid.appendChild(
+          itemCard(id, {
+            owned: true,
+            equipped: eq[lockerSlot] === id,
+            action: 'EQUIP',
+            onClick: async () => {
+              showcase.preview(null);
+              try {
+                await account.equip({ [lockerSlot]: id });
+                if (lockerSlot !== 'skin') tryOn(id); // show it off (the line-up already wears it)
+              } catch (err) {
+                say(err.message, true);
+              }
+              render();
+            },
+          })
+        );
+      }
+      panelBody.appendChild(grid);
+      if (notOwned > 0) {
+        const more = btn(`${notOwned} MORE IN THE ITEM SHOP`, 'mn-chip mt-more');
+        more.addEventListener('click', () => {
+          click();
+          openPanel('shop');
+        });
+        panelBody.appendChild(more);
+      }
+      return;
+    }
+
+    panelBody.appendChild(h('div', 'mt-sub', 'EMOTE WHEEL'));
     panelBody.appendChild(h('p', 'mt-hint', 'Pick a slot, then an emote. In a match, hold the emote key and flick the mouse (or press 1-6).'));
     const slots = h('div', 'mt-slots');
     for (let i = 0; i < EMOTE_SLOTS; i++) {
-      const id = p.equipped.emotes[i];
+      const id = eq.emotes[i];
       const s = h('button', 'mt-slot' + (selSlot === i ? ' is-sel' : ''));
       s.type = 'button';
       s.appendChild(h('kbd', 'br-key', String(i + 1)));
@@ -750,6 +881,7 @@ export function createMeta(menus, account, opts = {}) {
       s.addEventListener('click', () => {
         click();
         selSlot = selSlot === i ? -1 : i;
+        if (id) tryOn(id);
         render();
       });
       slots.appendChild(s);
@@ -762,10 +894,10 @@ export function createMeta(menus, account, opts = {}) {
         pick.appendChild(
           itemCard(id, {
             owned: true,
-            equipped: p.equipped.emotes[selSlot] === id,
+            equipped: eq.emotes[selSlot] === id,
             action: 'SET',
             onClick: async () => {
-              const list = p.equipped.emotes.slice();
+              const list = eq.emotes.slice();
               const j = list.indexOf(id);
               if (j >= 0 && j !== selSlot) list[j] = list[selSlot]; // swap if it sat in another slot
               list[selSlot] = id;
@@ -784,7 +916,7 @@ export function createMeta(menus, account, opts = {}) {
       const clear = btn('CLEAR SLOT', 'mn-chip');
       clear.addEventListener('click', async () => {
         click();
-        const list = p.equipped.emotes.slice();
+        const list = eq.emotes.slice();
         list[selSlot] = null;
         selSlot = -1;
         await account.equip({ emotes: list }).catch((err) => say(err.message, true));
@@ -947,7 +1079,7 @@ export function createMeta(menus, account, opts = {}) {
     lineUp();
     renderEmoteBar();
     if (open && open !== 'auth') render();
-    if (opts.onCosmetics) opts.onCosmetics({ skin: account.profile.equipped.skin, emotes: account.profile.equipped.emotes });
+    if (opts.onCosmetics) opts.onCosmetics({ ...account.profile.equipped });
     if (!account.profile.guest && opts.onName) opts.onName(account.profile.name);
   });
 

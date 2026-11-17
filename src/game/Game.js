@@ -36,8 +36,8 @@ import { buildHud } from '../ui/hud.js';
 import { createInventoryPanel } from '../ui/inventoryPanel.js';
 import { createEmoteWheel } from '../ui/emoteWheel.js';
 import { Minimap } from '../ui/Minimap.js';
-import { CharacterKit, Character } from './Character.js';
-import { skinDef, emoteDef, DEFAULT_EQUIPPED } from './Cosmetics.js';
+import { CharacterKit, Character, registerKits } from './Character.js';
+import { skinDef, emoteDef, DEFAULT_EQUIPPED, PICKAXES, BACKBLINGS } from './Cosmetics.js';
 import { Combat, rayActor } from './Combat.js';
 import { Pings } from './Pings.js';
 import { Player, placeOrbitCamera, itemLabel } from './Player.js';
@@ -112,6 +112,8 @@ export class Game {
     this.settings = { ...settings };
     this.skin = DEFAULT_EQUIPPED.skin; // Cosmetics: outfit + emote wheel (setCosmetics)
     this.emotes = DEFAULT_EQUIPPED.emotes.slice();
+    this.pickaxe = DEFAULT_EQUIPPED.pickaxe;
+    this.backbling = DEFAULT_EQUIPPED.backbling;
     this.state = 'menu'; // 'menu' | 'loading' | 'drop' | 'play' | 'over'
     this.paused = false;
     this.loaded = false;
@@ -252,6 +254,7 @@ export class Game {
       const g = models['char_' + n];
       if (g) this.kits[n] = new CharacterKit(g, chars.characters[n]);
     }
+    registerKits(this.kits);
     const weaponScenes = {};
     for (const n of WEAPON_MODELS) if (models[n]) weaponScenes[n] = models[n].scene;
     this.weaponScenes = weaponScenes;
@@ -283,25 +286,35 @@ export class Game {
    * Outfit (Cosmetics.SKINS id) for the local player and the emotes on their wheel. Applied
    * now when loaded (the character is rebuilt with that model / tint), else at load.
    */
-  setCosmetics({ skin, emotes } = {}) {
+  setCosmetics({ skin, emotes, pickaxe, backbling } = {}) {
     if (skin) this.skin = skin;
     if (emotes) this.emotes = emotes.slice();
+    if (pickaxe && PICKAXES[pickaxe]) this.pickaxe = pickaxe;
+    if (backbling && BACKBLINGS[backbling]) this.backbling = backbling;
     if (this.loaded && this.player) this._applySkin();
   }
 
   /** A new Character wearing outfit `skinId` (null when kits are missing). */
-  makeSkinCharacter(skinId, canopyColor) {
+  makeSkinCharacter(skinId, canopyColor, pickaxe, backbling) {
     const def = skinDef(skinId);
     const kit = this.kits && (this.kits[def.model] || this.kits.player);
-    return kit ? new Character(kit, { weapons: this.weaponScenes, canopyColor, tint: def.tint ?? undefined }) : null;
+    return kit ? new Character(kit, { weapons: this.weaponScenes, canopyColor, tint: def.tint ?? undefined, pickaxe, backbling }) : null;
   }
 
   /** Swaps a remote human's / puppet's character for outfit `skinId` (keeps visibility, pose state resets). */
-  reskinActor(a, skinId) {
-    if (!a || !skinId || a.skin === skinId) return;
+  reskinActor(a, skinId, pickaxe, backbling) {
+    if (!a) return;
+    const px = PICKAXES[pickaxe] ? pickaxe : null;
+    const bb = BACKBLINGS[backbling] ? backbling : null;
+    if (px) a.pickaxeCos = px;
+    if (bb) a.backbling = bb;
+    if (!skinId || a.skin === skinId) {
+      if (a.character && (px || bb)) a.character.setLoadout({ pickaxe: px, backbling: bb });
+      return;
+    }
     a.skin = skinId;
     const old = a.character;
-    const ch = this.makeSkinCharacter(skinId, old && old.canopy ? old.canopy.material.color.getHex() : 0xff7a45);
+    const ch = this.makeSkinCharacter(skinId, old && old.canopy ? old.canopy.material.color.getHex() : 0xff7a45, a.pickaxeCos, a.backbling);
     if (!ch) return;
     if (old) {
       ch.root.visible = old.root.visible;
@@ -322,9 +335,12 @@ export class Game {
     const p = this.player;
     if (!kit || !p) return;
     const key = def.model + '|' + def.tint;
-    if (p.character && p._skinKey === key) return;
+    if (p.character && p._skinKey === key) {
+      p.character.setLoadout({ pickaxe: this.pickaxe, backbling: this.backbling });
+      return;
+    }
     const old = p.character;
-    const ch = new Character(kit, { weapons: this.weaponScenes, canopyColor: 0xffc21f, tint: def.tint ?? undefined });
+    const ch = new Character(kit, { weapons: this.weaponScenes, canopyColor: 0xffc21f, tint: def.tint ?? undefined, pickaxe: this.pickaxe, backbling: this.backbling });
     if (old) {
       ch.root.visible = old.root.visible;
       ch.root.position.copy(old.root.position);
@@ -858,7 +874,7 @@ export class Game {
     } else text = `${victim.name} was eliminated`;
     if (killer === p) kind = 'kill';
     if (victim === p) kind = 'self';
-    this.hud.killFeed(text, kind);
+    this.hud.killFeed(text, kind, [victim.name, killer && killer.name], p.name);
 
     if (killer === p) {
       this.hud.announce(`ELIMINATED ${victim.name.toUpperCase()}`, `${p.kills} elimination${p.kills === 1 ? '' : 's'}`, 1800);
@@ -884,7 +900,7 @@ export class Game {
     else if (by) text = `${by.name} ${info.weapon === 'pickaxe' ? 'bonked' : 'knocked'} ${victim.name}`;
     else text = `${victim.name} was knocked`;
     if (victim === p && !by && !info.storm && !info.fall) text = 'You were knocked';
-    this.hud.killFeed(text, by === p ? 'kill' : victim === p ? 'self' : victim.team === p.team ? 'mate' : 'knock');
+    this.hud.killFeed(text, by === p ? 'kill' : victim === p ? 'self' : victim.team === p.team ? 'mate' : 'knock', [victim.name, by && by.name], p.name);
     if (by === p) this.hud.announce(`KNOCKED ${victim.name.toUpperCase()}`, 'Finish them before they are revived', 1600);
     if (victim === p) sfx.play('hurt', { volume: 0.9 }); // the knocked overlay says the rest
   }
@@ -937,7 +953,7 @@ export class Game {
   _onRevive(victim, by) {
     const p = this.player;
     if (this.net && this.net.isHost && this.net.onRevive) this.net.onRevive(victim, by);
-    this.hud.killFeed(by ? `${by.name} revived ${victim.name}` : `${victim.name} is back up`, 'revive');
+    this.hud.killFeed(by ? `${by.name} revived ${victim.name}` : `${victim.name} is back up`, 'revive', [victim.name, by && by.name], p.name);
     if (victim === p) this.hud.announce('REVIVED', by ? `by ${by.name}` : '', 1800);
     sfx.play('pickup', { x: victim.pos.x, y: victim.pos.y + 1, z: victim.pos.z, volume: 0.6 });
   }

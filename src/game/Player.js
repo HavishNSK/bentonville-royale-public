@@ -35,6 +35,8 @@ const _v = new THREE.Vector3();
 const _mv = new THREE.Vector3();
 // mantle: climbable ledge height above the feet (m); lower ones are steps, higher ones walls
 const MANTLE = { min: 0.7, max: 2.3 };
+const STEP_UP = 0.62; // World STEP: highest surface walked onto without jumping
+const FLOOR_UNDER = 0.22; // a built floor's thickness: its underside sits this far below its top
 
 /** The client session when this player is a multiplayer client, else null. */
 const clientNet = (g) => (g && g.net && g.net.isClient ? g.net : null);
@@ -313,22 +315,41 @@ export class Player {
       }
     } else {
     // ---- integrate
+    const ox = p.x;
+    const oz = p.z;
+    const oy = p.y;
+    // a floor / ramp already above us (where we stand now) can't be stepped or snapped onto
+    const cap = world.builtAbove(ox, oz, oy);
     p.x += v.x * dt;
     p.z += v.z * dt;
     if (!this.airborneDrop || p.y - groundY < 20) world.resolveCircle(p, this.radius, this.height);
     const b = world.bounds;
     p.x = clamp(p.x, b.minX + 2, b.maxX - 2);
     p.z = clamp(p.z, b.minZ + 2, b.maxZ - 2);
+    // walking into a floor's edge at body height (too high to step onto) blocks like a wall
+    const fa = world.builtAbove(p.x, p.z, oy);
+    if (fa < cap - 0.01 && fa - oy > STEP_UP && fa - FLOOR_UNDER < oy + this.height) {
+      p.x = ox;
+      p.z = oz;
+    } else if (this.grounded && fa < Infinity && (p.x !== ox || p.z !== oz)) {
+      // ground rising under a floor: stop where the head would push into it
+      const ng = world.groundHeight(p.x, p.z, oy, undefined, cap);
+      if (ng > oy + 0.02 && fa - FLOOR_UNDER - ng < this.height * 0.8) {
+        p.x = ox;
+        p.z = oz;
+      }
+    }
 
     const wasGrounded = this.grounded;
     const prevVy = v.y;
     p.y += v.y * dt;
-    const gy = world.groundHeight(p.x, p.z, Math.max(p.y, p.y - v.y * dt));
+    const gy = world.groundHeight(p.x, p.z, Math.max(p.y, p.y - v.y * dt), undefined, cap);
     if (wasGrounded && v.y <= 0 && p.y > gy && p.y - gy < 0.75) p.y = gy; // stick to ramps / steps
-    const ceil = world.ceilingAbove(p.x, p.z, p.y);
-    if (v.y > 0 && p.y + this.height > ceil) {
-      p.y = Math.max(gy, ceil - this.height);
-      v.y = 0;
+    const ceil = world.ceilingAbove(p.x, p.z, Math.min(oy, p.y));
+    // head bump whenever we rose (jump, ramp snap, step-up), not only while jumping
+    if ((v.y > 0 || p.y > oy) && p.y + this.height > ceil) {
+      p.y = Math.max(Math.min(gy, oy), ceil - this.height);
+      if (v.y > 0) v.y = 0;
     }
     if (p.y <= gy) {
       p.y = gy;
@@ -412,6 +433,12 @@ export class Player {
     const top = world.groundHeight(ax, az, p.y, MANTLE.max);
     const rise = top - p.y;
     if (!(rise > MANTLE.min && rise <= MANTLE.max)) return null;
+    // a floor over our own head is a ceiling, not a ledge in front of us: never climb through it
+    // (checked at the body centre and its front edge)
+    const ex = p.x + fx * this.radius;
+    const ez = p.z + fz * this.radius;
+    if (world.builtAbove(p.x, p.z, p.y) <= top + 0.05 || world.builtAbove(ex, ez, p.y) <= top + 0.05) return null;
+    if (world.ceilingAbove(p.x, p.z, p.y, 0.05) <= top + 0.05) return null;
     if (world.groundHeight(ax, az, p.y) >= top - 0.05) return null; // just a step: walking handles it
     // stand-on spot a bit further in, with room for a whole body above it
     const lx = p.x + fx * (reach + 0.35);

@@ -7,6 +7,47 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.8.0',
+    date: '2026-11-16',
+    title: 'Pickaxes, back blings and a new lobby',
+    sections: [
+      {
+        heading: 'Fixes',
+        items: [
+          'You can no longer jump, mantle or walk up through build floors (or ramps) from underneath. Floors block your head like a ceiling.',
+          'Bots can no longer fall through floors at low frame rates.',
+          'Fixed overlapping text and boxes: the NEW tag on Patch Notes, the credits line under open panels, the squished party code box, cut-off names in party slots, emote wheel prompts and crowded place names on the full map.',
+        ],
+      },
+      {
+        heading: 'Cosmetics',
+        items: [
+          'New: 11 pickaxes, from the Bus Loop Hatchet to the Crystal Bridge Greatsword and the Root Beer Float.',
+          'New: back blings, with capes, shields and a spellbook to wear on your back.',
+          '7 new outfits and 5 new emotes in the Item Shop.',
+          'Your pickaxe and back bling show in the lobby, to your party and to everyone in the match.',
+        ],
+      },
+      {
+        heading: 'Lobby & menus',
+        items: [
+          'New top bar with PLAY, LOCKER, ITEM SHOP, RANKS and PATCH NOTES tabs.',
+          'Item Shop cards show a 3D picture of every item. Click one to try it on in the lobby.',
+          'The Locker has Outfit, Back Bling, Pickaxe and Emote slots.',
+          'Panels slide in, settings use real switches and sliders, and loading tips change while you wait.',
+        ],
+      },
+      {
+        heading: 'In the match',
+        items: [
+          'A new emote wheel with highlighted wedges and rarity colours.',
+          'The kill feed shows player names in bold, with your own name in gold.',
+          'The results screen reveals your placement and stats one at a time, shows the coins you earned, and throws confetti when you win.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.7.0',
     date: '2026-11-16',
     title: 'Sniper bullet drop, custom crosshairs, who is online',

@@ -2,17 +2,18 @@
 // screen in 3D, idling, emoting on request. Its own small renderer, drawn only while shown.
 //
 //   const sc = createShowcase(parentEl);
-//   sc.setMembers([{ skin: 'skin_knight', name: 'You', you: true }, { skin, name }, ...])  // up to 4
+//   sc.setMembers([{ skin: 'skin_knight', pickaxe, backbling, name: 'You', you: true }, { skin, name }, ...])  // up to 4
 //   sc.emote('emote_spin')      // the "you" character plays it (null stops)
 //   sc.setActive(on)            // render loop on / off (title screen visible)
-//   sc.preview(skinId|null)     // locker: try an outfit on without equipping (null = back)
+//   sc.preview(id|null)         // shop / locker: try an outfit, pickaxe or back bling on (null = back)
+//   await sc.thumb(id)          // PNG data URL of any cosmetic (shop / locker cards), cached
 //
 // Drag to turn the line-up. Characters load lazily (the GLBs are shared with the match load).
 
 import * as THREE from 'three';
 import { loadGLB, loadJSON } from '../core/assets.js';
-import { CharacterKit, Character } from '../game/Character.js';
-import { skinDef } from '../game/Cosmetics.js';
+import { CharacterKit, Character, registerKits, cosmeticMesh } from '../game/Character.js';
+import { skinDef, SKINS, PICKAXES, BACKBLINGS, cosmeticDef } from '../game/Cosmetics.js';
 
 const SPOTS = [0, -1.25, 1.25, -2.4]; // x of member i (you in the middle)
 
@@ -73,9 +74,31 @@ export function createShowcase(parent) {
     return kits.get(model);
   }
 
+  // every model's accessories (pickaxes / back blings come from all four files) + the classic pick
+  let extras = null;
+  function loadExtras() {
+    if (!extras) {
+      extras = (async () => {
+        manifest = manifest || (await loadJSON('/assets/characters/manifest.json'));
+        const all = await Promise.all(Object.keys(manifest.characters).map(async (k) => [k, await kitFor(k).catch(() => null)]));
+        registerKits(Object.fromEntries(all));
+        let pick = null;
+        try {
+          pick = (await loadGLB('/assets/weapons/pickaxe.glb')).scene;
+        } catch {
+          /* no classic pickaxe: the hand stays empty */
+        }
+        return { pickaxe: pick };
+      })();
+    }
+    return extras;
+  }
+
   const slots = []; // { key, ch, holder, name }
   let members = [];
   let previewSkin = null;
+  let previewPick = null;
+  let previewBB = null;
   let emoteId = null;
   let active = false;
   let last = 0;
@@ -83,13 +106,25 @@ export function createShowcase(parent) {
 
   async function build() {
     const my = ++gen;
-    const want = members.slice(0, SPOTS.length).map((m, i) => ({ ...m, skin: i === 0 && previewSkin ? previewSkin : m.skin }));
+    const want = members.slice(0, SPOTS.length).map((m, i) =>
+      i === 0 ? { ...m, skin: previewSkin || m.skin, pickaxe: previewPick || m.pickaxe, backbling: previewBB || m.backbling } : m
+    );
+    let weapons = {};
+    try {
+      weapons = await loadExtras();
+    } catch {
+      /* accessories are optional */
+    }
+    if (my !== gen) return;
     // keep characters that did not change
     for (let i = 0; i < SPOTS.length; i++) {
       const w = want[i];
       const s = slots[i];
       const key = w ? skinDef(w.skin).model + '|' + skinDef(w.skin).tint : null;
-      if (s && s.key === key) continue;
+      if (s && s.key === key) {
+        s.ch.setLoadout({ pickaxe: w.pickaxe || 'pick_default', backbling: w.backbling || 'bb_outfit' });
+        continue;
+      }
       if (s) {
         turn.remove(s.holder);
         if (s.ch && s.ch.dispose) s.ch.dispose();
@@ -105,7 +140,7 @@ export function createShowcase(parent) {
         continue;
       }
       if (my !== gen) return;
-      const ch = new Character(kit, { weapons: {}, tint: def.tint ?? undefined });
+      const ch = new Character(kit, { weapons, tint: def.tint ?? undefined, pickaxe: w.pickaxe || 'pick_default', backbling: w.backbling || 'bb_outfit' });
       const holder = new THREE.Group();
       holder.position.set(SPOTS[i], 0, i === 0 ? 0.4 : -0.3);
       const disc = new THREE.Mesh(discGeo, discMat);
@@ -183,18 +218,129 @@ export function createShowcase(parent) {
     renderer.render(scene, camera);
   }
 
+  // ---- item thumbnails: one small offscreen renderer, items drawn one at a time
+  const THUMB = 200;
+  const thumbs = new Map(); // id -> Promise<dataURL|null>
+  let thumbQ = Promise.resolve();
+  let tr = null;
+  let trIdle = 0;
+  const tScene = new THREE.Scene();
+  tScene.add(new THREE.HemisphereLight(0xfff1d6, 0x4b2f9a, 1.7));
+  const tSun = new THREE.DirectionalLight(0xffffff, 2.4);
+  tSun.position.set(2, 4, 5);
+  tScene.add(tSun);
+  const tRim = new THREE.DirectionalLight(0xffb27a, 1.2);
+  tRim.position.set(-3, 2, -2);
+  tScene.add(tRim);
+  const tCam = new THREE.PerspectiveCamera(30, 1, 0.05, 60);
+  const _box = new THREE.Box3();
+  const _c = new THREE.Vector3();
+  const _sz = new THREE.Vector3();
+
+  async function drawThumb(id) {
+    const c = cosmeticDef(id);
+    if (!c) return null;
+    let weapons = {};
+    try {
+      weapons = await loadExtras();
+    } catch {
+      /* no accessories */
+    }
+    if (!tr) {
+      try {
+        tr = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true, powerPreference: 'low-power' });
+      } catch {
+        return null;
+      }
+      tr.outputColorSpace = THREE.SRGBColorSpace;
+      tr.setPixelRatio(1);
+      tr.setSize(THUMB, THUMB, false);
+      tr.setClearColor(0x000000, 0);
+    }
+    clearTimeout(trIdle);
+    let obj = null;
+    let ch = null;
+    if (c.kind === 'backbling' && c.def.none) return null;
+    const ownCape = c.kind === 'backbling' && !c.def.src; // "outfit's own cape": the rogue from behind
+    if (c.kind === 'skin' || c.kind === 'emote' || ownCape) {
+      const def = skinDef(c.kind === 'skin' ? id : 'skin_rogue');
+      const kit = await kitFor(def.model);
+      ch = new Character(kit, { weapons: {}, tint: def.tint ?? undefined });
+      const st = { fwd: 0, side: 0, speed: 0, grounded: true, gliding: false, heading: Math.PI, pitch: 0 };
+      if (c.kind === 'emote') {
+        ch.emote(true, id);
+        for (let i = 0; i < 24; i++) ch.update(0.05, st); // into the move, fully faded in
+      } else for (let i = 0; i < 4; i++) ch.update(0.05, st);
+      obj = ch.root;
+      obj.rotation.y = ownCape ? Math.PI * 0.82 : 0.35;
+      tCam.position.set(0, 1.05, 3.9);
+      tCam.lookAt(0, 0.88, 0);
+    } else {
+      const m = cosmeticMesh(id, weapons.pickaxe);
+      if (!m) return null;
+      obj = new THREE.Group();
+      obj.add(m);
+      m.position.set(0, 0, 0);
+      m.quaternion.identity();
+      if (c.kind === 'pickaxe') m.rotation.z = -0.65; // a jaunty diagonal
+      else if (c.def.src && c.def.src[2] === 'back') m.rotation.y = 0.35; // shields / books: their face
+      else m.rotation.y = Math.PI * 0.85; // a cape shows its outside
+      obj.updateMatrixWorld(true);
+      _box.setFromObject(obj);
+      _box.getCenter(_c);
+      _box.getSize(_sz);
+      m.position.sub(_c);
+      const r = Math.max(_sz.x, _sz.y, _sz.z) * 0.62;
+      const d = r / Math.tan((tCam.fov * Math.PI) / 360);
+      tCam.position.set(d * 0.18, d * 0.12, d);
+      tCam.lookAt(0, 0, 0);
+    }
+    tScene.add(obj);
+    tCam.updateProjectionMatrix();
+    tr.render(tScene, tCam);
+    const url = tr.domElement.toDataURL('image/png');
+    tScene.remove(obj);
+    if (ch && ch.dispose) ch.dispose();
+    trIdle = setTimeout(() => {
+      // free the extra GL context once the cards are drawn
+      if (tr) {
+        tr.dispose();
+        tr.forceContextLoss();
+        tr = null;
+      }
+    }, 4000);
+    return url;
+  }
+
   return {
     el: wrap,
+    thumb(id) {
+      if (!thumbs.has(id)) {
+        const p = (thumbQ = thumbQ.then(() => drawThumb(id)).catch(() => null));
+        thumbs.set(id, p);
+      }
+      return thumbs.get(id);
+    },
     setMembers(list) {
       const next = (list || []).slice(0, SPOTS.length);
-      const same = next.length === members.length && next.every((m, i) => m.skin === members[i].skin && m.name === members[i].name);
+      const same =
+        next.length === members.length &&
+        next.every((m, i) => m.skin === members[i].skin && m.name === members[i].name && m.pickaxe === members[i].pickaxe && m.backbling === members[i].backbling);
       members = next;
       if (!same) build();
     },
-    preview(skin) {
-      if (previewSkin === skin) return;
-      previewSkin = skin || null;
-      build();
+    preview(id) {
+      const was = [previewSkin, previewPick, previewBB].join();
+      previewSkin = SKINS[id] ? id : null;
+      previewPick = PICKAXES[id] ? id : null;
+      previewBB = BACKBLINGS[id] ? id : null;
+      if ([previewSkin, previewPick, previewBB].join() === was) return;
+      build().then(() => {
+        // a pickaxe preview shows it off with a swing; a back bling turns the line-up around
+        const s = slots[0];
+        if (previewPick && s && s.ch.swing) s.ch.swing();
+        if (previewBB) spinV = 0.2;
+      });
     },
     emote(id) {
       emoteId = id || null;

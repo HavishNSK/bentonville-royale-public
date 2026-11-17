@@ -38,9 +38,9 @@ function cleanName(name) {
   return s || 'Player';
 }
 
-/** Outfit id shown in the lobby line-up (Cosmetics.SKINS key; unchecked, cosmetic only). */
+/** Look shown in the lobby line-up: "skin|pickaxe|backbling" (Cosmetics.lookString; unchecked, cosmetic only). */
 function cleanSkin(s) {
-  const v = String(s || '').replace(/[^a-z0-9_]/g, '').slice(0, 40);
+  const v = String(s || '').replace(/[^a-z0-9_|]/g, '').slice(0, 96);
   return v.startsWith('skin_') ? v : null;
 }
 
