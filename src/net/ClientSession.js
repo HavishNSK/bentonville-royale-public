@@ -803,6 +803,13 @@ export class ClientSession {
     const g = this.game;
     const w = g.world;
     let found = null;
+    if (e.ty === 'b') {
+      // architecture box (Crystal Bridges glass): ids are assigned in build order, equal on every client
+      const b = Number.isInteger(e.id) && w.boxById ? w.boxById(e.id) : null;
+      if (!b || !b.alive || !(b.maxHp < 1e6)) return; // only breakable boxes (glass, furniture), never the building
+      g.combat._destroyCollider(b, new THREE.Vector3(b.cx, (b.y0 + b.y1) / 2, b.cz));
+      return;
+    }
     w._each(e.x - 1, e.z - 1, e.x + 1, e.z + 1, false, (cell) => {
       const list = e.ty === 'p' ? cell.polys : cell.circles;
       for (const c of list) {

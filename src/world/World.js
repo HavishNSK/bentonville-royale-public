@@ -9,6 +9,8 @@
 //   roads   road centre-line segments (surface lookup only, never collide)
 //   areas   land-cover polygons (surface lookup only)
 //   decks   bridge decks (walkable surfaces above the terrain)
+//   boxes   oriented boxes with a base and a top (static architecture that can float:
+//           slabs, walls, glass, roofs; see boxColliders.js and addBox())
 //
 // The ground is a heightfield (USGS 3DEP, 4 m grid; see public/data/
 // bentonville-terrain.json). terrainHeight(x, z) samples it bilinearly. Prisms
@@ -30,6 +32,7 @@ import { planInterior } from './Interiors.js';
 import { inHole, stairHeight, FLOOR_THICKNESS } from './interiors/storeys.js';
 import { tileIdAt } from './interiors/floorTiles.js';
 import { toLocal as planLocal } from './interiors/layout.js';
+import { makeBox, boxContains, boxPushCircle, boxRay } from './boxColliders.js';
 
 const CELL = 32;
 const STEP = 0.62;
@@ -360,7 +363,7 @@ export class World {
     const i = cz * this.cols + cx;
     let c = this.cells[i];
     if (!c && create) {
-      c = { polys: [], circles: [], dyn: [], roads: [], areas: [], decks: [] };
+      c = { polys: [], circles: [], dyn: [], roads: [], areas: [], decks: [], boxes: [] };
       this.cells[i] = c;
     }
     return c;
@@ -1232,10 +1235,33 @@ export class World {
     return c;
   }
 
+  /**
+   * Oriented box collider (see boxColliders.js): { cx, cz, hx, hz, yaw, y0, y1, kind, mat, hp, ref }
+   * with ABSOLUTE y0 / y1. Gets a sequential id (stable for the same build order on every
+   * client: multiplayer destroy events name boxes by id). Returns the collider.
+   */
+  addBox(o) {
+    if (!this._boxes) this._boxes = [];
+    const c = makeBox({ ...o, id: this._boxes.length });
+    this._boxes.push(c);
+    this._each(c.minX, c.minZ, c.maxX, c.maxZ, true, (cell) => cell.boxes.push(c));
+    this.counts.boxes = this._boxes.length;
+    return c;
+  }
+
+  boxById(id) {
+    return (this._boxes && this._boxes[id]) || null;
+  }
+
   remove(c) {
     if (!c || !c.alive) return;
     c.alive = false;
-    if (c.type === 'poly') {
+    if (c.type === 'box') {
+      this._each(c.minX, c.minZ, c.maxX, c.maxZ, false, (cell) => {
+        const i = cell.boxes.indexOf(c);
+        if (i >= 0) cell.boxes.splice(i, 1);
+      });
+    } else if (c.type === 'poly') {
       this._each(c.minX, c.minZ, c.maxX, c.maxZ, false, (cell) => {
         const i = cell.polys.indexOf(c);
         if (i >= 0) cell.polys.splice(i, 1);
@@ -1258,7 +1284,8 @@ export class World {
     if (!c || c.alive || c.type === 'piece') return;
     c.alive = true;
     c.hp = c.maxHp;
-    if (c.type === 'poly') this._each(c.minX, c.minZ, c.maxX, c.maxZ, true, (cell) => cell.polys.push(c));
+    if (c.type === 'box') this._each(c.minX, c.minZ, c.maxX, c.maxZ, true, (cell) => cell.boxes.push(c));
+    else if (c.type === 'poly') this._each(c.minX, c.minZ, c.maxX, c.maxZ, true, (cell) => cell.polys.push(c));
     else this._each(c.x - c.r, c.z - c.r, c.x + c.r, c.z + c.r, true, (cell) => cell.circles.push(c));
   }
 
@@ -1408,6 +1435,12 @@ export class World {
       for (let i = 0; i < dyn.length && !hit; i++) {
         if (this._pieceOverlaps(dyn[i], x, z, r, band)) hit = true;
       }
+      // architecture boxes that reach down into the ground band (a slab high overhead is no obstacle)
+      const boxes = cell.boxes;
+      for (let i = 0; i < boxes.length && !hit; i++) {
+        const c = boxes[i];
+        if (c.y0 < band && c.y1 > band - PIECE_GROUND_BAND && boxContains(c, x, z, r)) hit = true;
+      }
     });
     return hit;
   }
@@ -1525,6 +1558,15 @@ export class World {
         this.surface = 'ground';
       }
     }
+    const boxes = cell.boxes;
+    for (let i = 0; i < boxes.length; i++) {
+      const c = boxes[i];
+      if (c.y1 <= y || c.y1 > lim || c.y1 >= cap || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
+      if (boxContains(c, x, z)) {
+        y = c.y1;
+        this.surface = 'floor';
+      }
+    }
     const dyn = cell.dyn;
     for (let i = 0; i < dyn.length; i++) {
       const d = dyn[i];
@@ -1583,6 +1625,13 @@ export class World {
       }
       if (cy > lim && cy < y) y = cy;
     }
+    // the underside of an architecture box overhead (bridge slab, roof, upper floor)
+    const boxes = cell.boxes;
+    for (let i = 0; i < boxes.length; i++) {
+      const c = boxes[i];
+      if (c.y0 <= lim || c.y0 >= y || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
+      if (boxContains(c, x, z)) y = c.y0;
+    }
     const dyn = cell.dyn;
     for (let i = 0; i < dyn.length; i++) {
       const d = dyn[i];
@@ -1629,6 +1678,13 @@ export class World {
         }
       }
       if (top < y) y = top;
+    }
+    // an architecture box whose underside is above the feet can't be stepped onto from below
+    const boxes = cell.boxes;
+    for (let i = 0; i < boxes.length; i++) {
+      const c = boxes[i];
+      if (c.y0 <= feetY + 0.05 || c.y1 >= y || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
+      if (boxContains(c, x, z)) y = c.y1;
     }
     const dyn = cell.dyn;
     for (let i = 0; i < dyn.length; i++) {
@@ -1734,6 +1790,24 @@ export class World {
             pos.z += nz * (lim - d);
             this.pushX += nx;
             this.pushZ += nz;
+            moved = touched = true;
+          }
+
+          // architecture boxes: solid between y0 and y1, stepped onto when the top is within step
+          const boxes = cell.boxes;
+          for (let i = 0; i < boxes.length; i++) {
+            const c = boxes[i];
+            if (c.stamp === stamp) continue;
+            c.stamp = stamp;
+            if (feet >= c.y1 - step || head <= c.y0 + 0.05) continue;
+            if (pos.x < c.minX - r || pos.x > c.maxX + r || pos.z < c.minZ - r || pos.z > c.maxZ + r) continue;
+            const p = boxPushCircle(c, pos.x, pos.z, r);
+            if (!p) continue;
+            pos.x += p.x;
+            pos.z += p.z;
+            const pl = Math.hypot(p.x, p.z) || 1;
+            this.pushX += p.x / pl;
+            this.pushZ += p.z / pl;
             moved = touched = true;
           }
 
@@ -2218,6 +2292,23 @@ export class World {
             out.collider = c;
             out.kind = c.kind;
           }
+        }
+
+        // ---- architecture boxes (any direction, including straight down / up)
+        const boxes = cell.boxes;
+        for (let i = 0; i < boxes.length; i++) {
+          const c = boxes[i];
+          if (c.stamp === stamp || c === ignore) continue;
+          c.stamp = stamp;
+          const h = boxRay(c, ox, oy, oz, dx, dy, dz, 1e-4, best);
+          if (!h) continue;
+          best = h.t;
+          found = true;
+          out.nx = h.nx;
+          out.ny = h.ny;
+          out.nz = h.nz;
+          out.collider = c;
+          out.kind = c.kind;
         }
 
         // ---- built pieces (triangles, double sided)

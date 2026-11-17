@@ -286,7 +286,8 @@ export class HostSession {
       ev({ e: 'sh', a: shooter ? shooter.id : -1, w: wid, o: [rnd(origin.x), rnd(origin.y), rnd(origin.z)], p, k });
     };
     combat.onColliderDestroyed = (c) => {
-      if (c.type === 'poly') ev({ e: 'cx', ty: 'p', x: c.minX, z: c.minZ });
+      if (c.type === 'box') ev({ e: 'cx', ty: 'b', id: c.id, x: c.cx, z: c.cz }); // museum glass: by box id
+      else if (c.type === 'poly') ev({ e: 'cx', ty: 'p', x: c.minX, z: c.minZ });
       else ev({ e: 'cx', ty: 'c', x: c.x, z: c.z });
     };
     // building wall panels (keyed by building map id + panel index; never the `cx` event, which
