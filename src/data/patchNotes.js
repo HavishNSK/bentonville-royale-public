@@ -7,13 +7,16 @@
 
 export const PATCH_NOTES = [
   {
-    version: '0.14.0',
+    version: '0.15.0',
     date: '2026-11-17',
-    title: 'Full-screen chat and cleaner names',
+    title: 'Developer announcements and cleaner names',
     sections: [
       {
         heading: 'Global chat',
-        items: ['New Full screen button on the lobby chat: the chat fills the window with bigger text. Press Esc, Exit full screen or click outside it to go back.'],
+        items: [
+          'New Full screen button on the lobby chat: the chat fills the window with bigger text. Press Esc, Exit full screen or click outside it to go back.',
+          'Developer accounts show a red [DEV] name in chat and can post announcements everyone sees.',
+        ],
       },
       {
         heading: 'Names',
@@ -26,6 +29,21 @@ export const PATCH_NOTES = [
       {
         heading: 'Fixes',
         items: ['Clicking into the game, dropping from the Drop Bus or unpausing now switches the game to full screen along with locking the mouse.'],
+      },
+    ],
+  },
+  {
+    version: '0.14.0',
+    date: '2026-11-17',
+    title: "Catfish Ken's van",
+    sections: [
+      {
+        heading: 'Reboot vans',
+        items: [
+          "The reboot van is now Catfish Ken's own van: spray-painted pink, purple and blue all over (sides, roof, hood and back), with 'Catfish Ken' down both sides and lime-green rims.",
+          'Catfish Ken himself sits in the driver\'s seat. He waves when you walk up and looks your way. He is friendly and never hurts anyone.',
+          'While you carry a teammate\'s reboot card, every reboot van is highlighted and labeled on the minimap and the full map ("REBOOT VAN", or a countdown while it recharges).',
+        ],
       },
     ],
   },
