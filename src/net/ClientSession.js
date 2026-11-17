@@ -19,7 +19,7 @@ import { SKINS, EMOTES, botLoadout } from '../game/Cosmetics.js';
 import { itemLabel } from '../game/Player.js';
 import { impactSound, placeOnShoulder } from '../game/Combat.js';
 import {
-  STATE_HZ, INTERP_DELAY, FLAG, XFLAG, EQUIP, SURF, decodeSnapshot, encodeState, seqNewer, rnd,
+  STATE_HZ, INTERP_DELAY, FLAG, XFLAG, EQUIP, SURF, decodeSnapshot, encodeState, seqNewer, rnd, resolvePanelEvent,
 } from './protocol.js';
 
 const _v = new THREE.Vector3();
@@ -207,6 +207,10 @@ export class ClientSession {
     game.combat.onBurstShot = (s, it, o, dirs, res) => {
       if (s === game.player) this.sendFire(s, it, o, dirs, res);
     };
+    // Our own sniper round reached someone here: ask the host to count it (it checks its own path).
+    game.combat.onProjectileHit = (pj, actor) => {
+      if (pj.shooter === game.player && pj.netSeq && actor && actor.id != null) this.action({ k: 'ph', n: pj.netSeq, v: actor.id });
+    };
     this.started = true;
     this.stats.t0 = performance.now();
     this.conn.bytesIn = 0;
@@ -250,6 +254,8 @@ export class ClientSession {
       },
       true
     );
+    // sniper rounds from this trigger pull carry the action seq, so a later hit claim names them
+    for (const pj of this.game.combat.lastProjectiles || []) pj.netSeq = this.seq;
   }
 
   /** QA: teleports must be announced so the host's speed check lets them through. */
@@ -517,6 +523,9 @@ export class ClientSession {
       }
       case 'cx':
         return this._colliderGone(e);
+      case 'wd':
+      case 'wx':
+        return this._panelEvent(e);
       case 'left':
         return;
       case 'end':
@@ -535,6 +544,7 @@ export class ClientSession {
     if (a && a.character && a.character.root.visible) a.character.muzzle(from);
     else from.set(e.o[0], e.o[1], e.o[2]);
     if (a && a.character) a.character.fire();
+    if (e.b && Array.isArray(e.d) && Array.isArray(e.o)) return this._ballisticShot(e, w, a, from);
     const n = e.p.length / 3;
     if (!n) return;
     _v2.set(e.p[0], e.p[1], e.p[2]);
@@ -556,6 +566,22 @@ export class ClientSession {
     }
     if (impact) g.sfx.play('bullet_impact', { x: impact.x, y: impact.y, z: impact.z, volume: 0.6, surface: impactSound(impact.surf) });
     if (w.pump) setTimeout(() => g.sfx.play('shotgun_pump', { x: from.x, y: from.y, z: from.z, volume: 0.7 }), 350);
+  }
+
+  /** Someone else's sniper round: fly a local copy for the streak and impact (no damage here). */
+  _ballisticShot(e, w, a, from) {
+    const g = this.game;
+    if (!w.ballistic) return;
+    _v2.set(+e.o[0], +e.o[1], +e.o[2]);
+    if (!Number.isFinite(_v2.x + _v2.y + _v2.z)) return;
+    if (g.fx) g.fx.muzzleFlash(from, _n.set(+e.d[0][0], +e.d[0][1], +e.d[0][2]), { scale: 1 });
+    g.sfx.play(w.sound, { x: from.x, y: from.y, z: from.z, volume: w.soundVolume });
+    for (const d of e.d.slice(0, 1)) {
+      if (!Array.isArray(d)) continue;
+      _n.set(+d[0], +d[1], +d[2]);
+      if (!Number.isFinite(_n.x + _n.y + _n.z) || _n.lengthSq() < 1e-6) continue;
+      g.combat.spawnProjectile(a || null, w, 1, _v2, _n.normalize(), from, 0);
+    }
   }
 
   _hit(e) {
@@ -650,6 +676,15 @@ export class ClientSession {
       victim.health = 0;
       victim.shield = 0;
     }
+  }
+
+  /** Host's building wall panel damage / break (validated: peer messages are untrusted). */
+  _panelEvent(e) {
+    const g = this.game;
+    const r = resolvePanelEvent(g.world, e);
+    if (!r || !r.pn.alive) return;
+    if (e.e === 'wx') g.combat.breakPanel(r.c, r.pn);
+    else r.pn.hp = r.hp;
   }
 
   _colliderGone(e) {
@@ -751,6 +786,7 @@ export class ClientSession {
   dispose(game) {
     this.started = false;
     if (game.combat.onBurstShot) game.combat.onBurstShot = null;
+    game.combat.onProjectileHit = null;
     for (const pup of this.puppets.values()) {
       game.combat.unregister(pup);
       pup.dispose();

@@ -61,8 +61,26 @@ export const DEFAULT_SETTINGS = Object.freeze({
   difficulty: 'normal', // 'easy' | 'normal' | 'hard'
   performanceMode: false, // Chromebook / weak laptop: half-res, no post, short draw distances
   googleTiles: false, // optional Google Photorealistic 3D Tiles view (needs VITE_GOOGLE_MAPS_API_KEY)
+  // Gun crosshair look (hud.setCrosshairStyle). Cosmetic only: fixed palette, capped size,
+  // spread still shown, shotgun / build / pickaxe / scope reticles unchanged.
+  crosshairStyle: 'classic', // CROSSHAIR_STYLES
+  crosshairColor: 'white', // CROSSHAIR_COLORS key
+  crosshairSize: 1, // 0.75 .. 1.4
+  crosshairThickness: 1, // 0.75 .. 1.5
+  crosshairOutline: true,
   bindings: DEFAULT_BINDINGS,
 });
+
+export const CROSSHAIR_STYLES = ['classic', 'dot', 'cross', 'circle'];
+export const CROSSHAIR_COLORS = Object.freeze({
+  white: '#ffffff',
+  green: '#5dff7a',
+  yellow: '#ffe14d',
+  cyan: '#4df0ff',
+  pink: '#ff7ad9',
+  red: '#ff5a5a',
+});
+export const CROSSHAIR_LIMITS = Object.freeze({ size: [0.75, 1.4], thickness: [0.75, 1.5] });
 
 export const QUALITY_OPTIONS = ['low', 'medium', 'high'];
 export const DIFFICULTY_OPTIONS = ['easy', 'normal', 'hard'];
@@ -108,6 +126,11 @@ export function sanitizeSettings(raw) {
     performanceMode: bool(s.performanceMode, d.performanceMode),
     // Performance mode forces Google tiles off (too heavy for Chromebooks).
     googleTiles: s.performanceMode === true ? false : s.googleTiles === true,
+    crosshairStyle: CROSSHAIR_STYLES.includes(s.crosshairStyle) ? s.crosshairStyle : d.crosshairStyle,
+    crosshairColor: Object.prototype.hasOwnProperty.call(CROSSHAIR_COLORS, s.crosshairColor) ? s.crosshairColor : d.crosshairColor,
+    crosshairSize: num(s.crosshairSize, ...CROSSHAIR_LIMITS.size, d.crosshairSize),
+    crosshairThickness: num(s.crosshairThickness, ...CROSSHAIR_LIMITS.thickness, d.crosshairThickness),
+    crosshairOutline: bool(s.crosshairOutline, d.crosshairOutline),
     bindings: sanitizeBindings(s.bindings),
   };
 }

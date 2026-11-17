@@ -16,7 +16,8 @@
 //                                   mode, ready (guest's own), status, canStart, error }
 //   menus.setParty(view)    title party panel: { online, connecting, code, link, isLeader, mode, fill,
 //                                   state: idle|queued|matched, queuedSince (performance.now ms),
-//                                   members:[{id,name,ready,leader,you}], match (hand-off status text) }
+//                                   members:[{id,name,ready,leader,you}], match (hand-off status text),
+//                                   searching (others queued in this mode, from the online list) }
 //   menus.partyNotice(text, isError)
 //   menus.showNotice(text)  title screen with a message (host left, room full, ...)
 //   menus.playerName()      saved name (localStorage)
@@ -29,7 +30,11 @@
 import './hud.css';
 import './menus.css';
 import { icon } from './icons.js';
-import { QUALITY_OPTIONS, DIFFICULTY_OPTIONS, sanitizeSettings, ACTIONS, DEFAULT_BINDINGS, RESERVED_CODES, keyLabel, rebind } from './settings.js';
+import {
+  QUALITY_OPTIONS, DIFFICULTY_OPTIONS, sanitizeSettings, ACTIONS, DEFAULT_BINDINGS, RESERVED_CODES, keyLabel, rebind,
+  CROSSHAIR_STYLES, CROSSHAIR_COLORS, CROSSHAIR_LIMITS,
+} from './settings.js';
+import { applyCrosshairStyle } from './hud.js';
 import { createFpsMeter } from './fpsMeter.js';
 import { MATCH } from '../core/config.js';
 import { TEAM_MODES, MODE_LABELS, teamSize } from '../game/Teams.js';
@@ -72,6 +77,7 @@ function countUp(el, n, ms, fmt) {
 function fitNames(root) {
   requestAnimationFrame(() => {
     for (const n of root.querySelectorAll('.mn-slot-name')) {
+      if (!n.clientWidth) continue; // hidden screen: fitted again once it has a size
       n.style.fontSize = '';
       const base = parseFloat(getComputedStyle(n).fontSize) || 16;
       let f = base;
@@ -170,6 +176,9 @@ export function createMenus(root, opts = {}) {
   wrap.appendChild(title);
   const T = {};
   title.querySelectorAll('[data-ref]').forEach((e) => (T[e.dataset.ref] = e));
+  // party names are shrunk to fit their slot: refit when the slots get a size / fonts load
+  if (typeof ResizeObserver === 'function') new ResizeObserver(() => fitNames(T.slots)).observe(T.slots);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => fitNames(T.slots));
   const NAME_KEY = 'bentonville-royale.playerName';
   const savedName = () => {
     try {
@@ -264,6 +273,7 @@ export function createMenus(root, opts = {}) {
          <button type="button" role="tab" data-tab="game" class="is-on">GAME</button>
          <button type="button" role="tab" data-tab="audio">AUDIO</button>
          <button type="button" role="tab" data-tab="controls">CONTROLS</button>
+         <button type="button" role="tab" data-tab="crosshair">CROSSHAIR</button>
        </div>
        <div class="mn-pane is-on" data-pane="game">
          ${range('sensitivity', 'Mouse sensitivity', 0.2, 3, 0.05)}
@@ -282,6 +292,22 @@ export function createMenus(root, opts = {}) {
          ${range('sfxVolume', 'Effects', 0, 1, 0.05)}
          ${range('musicVolume', 'Music', 0, 1, 0.05)}
          ${range('uiVolume', 'Menu sounds', 0, 1, 0.05)}
+       </div>
+       <div class="mn-pane" data-pane="crosshair">
+         <div class="mn-xh-preview" aria-hidden="true">
+           <div class="br-xhair" data-ref="xhPreview" data-kind="gun" style="--spread: 0.2">
+             <i class="br-xh-t"></i><i class="br-xh-r"></i><i class="br-xh-b"></i><i class="br-xh-l"></i>
+             <i class="br-xh-dot"></i><i class="br-xh-ring"></i>
+           </div>
+         </div>
+         <div class="mn-row"><span>Style</span>${seg('crosshairStyle', CROSSHAIR_STYLES)}</div>
+         <div class="mn-row"><span>Color</span><div class="mn-seg mn-seg-swatch" data-name="crosshairColor">${Object.entries(CROSSHAIR_COLORS)
+           .map(([k, hex]) => `<button data-val="${k}" aria-label="${k}" title="${k}"><i class="mn-swatch" style="background:${hex}"></i></button>`)
+           .join('')}</div></div>
+         ${range('crosshairSize', 'Size', CROSSHAIR_LIMITS.size[0], CROSSHAIR_LIMITS.size[1], 0.05)}
+         ${range('crosshairThickness', 'Thickness', CROSSHAIR_LIMITS.thickness[0], CROSSHAIR_LIMITS.thickness[1], 0.05)}
+         ${toggle('crosshairOutline', 'Outline', 'Dark edge so it stays visible on bright backgrounds.')}
+         <p class="mn-hint">Changes only the regular gun crosshair. Sniper scopes, the shotgun frame and build / pickaxe reticles stay the same for everyone, and the crosshair still opens up with spread.</p>
        </div>
        <div class="mn-pane" data-pane="controls">
          ${toggle('editOnRelease', 'Confirm edit on release', 'Releasing the mouse after selecting tiles confirms the edit.')}
@@ -392,6 +418,8 @@ export function createMenus(root, opts = {}) {
     sfxVolume: pct,
     musicVolume: pct,
     uiVolume: pct,
+    crosshairSize: pct,
+    crosshairThickness: pct,
   };
   const SR = {};
   settingsEl.querySelectorAll('[data-ref]').forEach((e) => (SR[e.dataset.ref] = e));
@@ -435,6 +463,7 @@ export function createMenus(root, opts = {}) {
     }
     renderBindings();
     fpsMeter.setVisible(settings.showFps);
+    applyCrosshairStyle(SR.xhPreview, settings);
   }
   function commit(patch) {
     settings = sanitizeSettings({ ...settings, ...patch });
@@ -652,10 +681,12 @@ export function createMenus(root, opts = {}) {
     if (v.match) return v.match;
     if (!v.online) return v.connecting ? 'Connecting to the party server…' : 'Party server offline. PLAY starts a match with bots.';
     if (v.state === 'matched') return 'Match found!';
-    if (v.state === 'queued') return `Finding match… ${fmt((performance.now() - (v.queuedSince || performance.now())) / 1000)}`;
+    const others = v.searching > 0 ? `${v.searching} other${v.searching === 1 ? '' : 's'} searching` : '';
+    if (v.state === 'queued') return `Finding match… ${fmt((performance.now() - (v.queuedSince || performance.now())) / 1000)}` + (others ? ` · ${others}` : '');
     const waiting = v.members.filter((m) => !m.leader && !m.ready).length;
     if (v.isLeader) {
       if (waiting) return `Waiting for ${waiting} to ready up`;
+      if (others) return `${others} in this mode. Press PLAY to join them.`;
       return v.members.length > 1 ? 'Everyone is ready. Press PLAY.' : 'Invite friends, or press PLAY to find a match.';
     }
     const me = v.members.find((m) => m.you);

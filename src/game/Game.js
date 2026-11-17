@@ -27,6 +27,7 @@ import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
 import { World } from '../world/World.js';
 import { buildWorldMeshes } from '../world/WorldMeshes.js';
+import { INTERIOR_VERSION } from '../world/Interiors.js';
 import { Atmosphere } from '../render/Atmosphere.js';
 import { Effects } from '../render/Effects.js';
 import { Post } from '../render/Post.js';
@@ -187,6 +188,8 @@ export class Game {
       manifests: { nature, props, vehicles },
       onProgress: (v, label) => P(0.5 + v * 0.4, label || 'Building Bentonville'),
     });
+    // a broken / restored building wall panel shows / hides its triangles
+    this.world.onPanelChange = (c, panel, alive) => (alive ? this.view.showPanel(c, panel) : this.view.hidePanel(c, panel));
 
     P(0.92, 'Gearing up');
     this.fx = new Effects({ scene: this.scene, camera: this.camera, quality: graphicsQuality(this.settings) });
@@ -361,6 +364,7 @@ export class Game {
     this.rng = rng;
     this.matchTime = 0;
     this.result = null;
+    this._matchEndPosted = false;
     this.paused = false;
     this._endTimer = 0;
     this._stormTick = 0;
@@ -449,12 +453,15 @@ export class Game {
   get mapId() {
     const meta = this.mapData && this.mapData.meta;
     if (!meta) return null;
-    if (meta.generated) return String(meta.generated);
+    // '+i<version>.<hash>': building interiors are generated on every client, so their version
+    // and plan hash are part of the map (catches stale builds and any nondeterministic layout)
+    const iv = '+i' + INTERIOR_VERSION + (this.world && this.world.interiorHash ? '.' + this.world.interiorHash : '');
+    if (meta.generated) return String(meta.generated) + iv;
     if (!meta.composition) return null;
     const str = JSON.stringify(meta.composition);
     let h = 0x811c9dc5;
     for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
-    return 'c' + (h >>> 0).toString(16);
+    return 'c' + (h >>> 0).toString(16) + iv;
   }
 
   /** Puts the local player aboard the Drop Bus flying `route`. */
@@ -555,6 +562,7 @@ export class Game {
     this.rng = makeRng(start.seed);
     this.matchTime = 0;
     this.result = null;
+    this._matchEndPosted = false;
     this.paused = false;
     this._endTimer = 0;
     this._stormTick = 0;
@@ -748,6 +756,10 @@ export class Game {
 
   /** Back to the main menu. */
   leave() {
+    // Leaving while dead / after a win still counts the match (rewards + leaderboard).
+    if (this.state === 'play' && this.player && (!this.player.alive || this._winPending)) {
+      this._postMatchEnd(!!this._winPending);
+    }
     if (this.net) {
       this.net.dispose(this);
       this.net = null;
@@ -771,15 +783,15 @@ export class Game {
     this.menus.showTitle();
   }
 
-  _endMatch(victory) {
-    if (this.state === 'over') return;
-    this.closeInventory(false);
-    this.state = 'over';
+  /** Build the result payload and notify account rewards once per match. */
+  _postMatchEnd(victory) {
+    if (this._matchEndPosted || !this.player) return this.result;
+    this._matchEndPosted = true;
     const placement = victory ? 1 : this._deathPlacement || (this.teamMode ? this.combat.aliveTeams + 1 : this.combat.aliveCount + 1);
     this.result = {
       victory,
       placement,
-      kills: this.player.kills,
+      kills: this.player.kills | 0,
       total: this.totalActors,
       time: this.matchTime,
       killer: this.player.lastKillerName || null,
@@ -791,6 +803,21 @@ export class Game {
       // the host keeps simulating for everyone until it leaves
       this.result.hostNote = this.net.isHost && !this.net.ended ? 'You are hosting: leaving ends the match for everyone still playing.' : null;
     }
+    if (this.onMatchEnd) {
+      try {
+        this.onMatchEnd(this.result);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    return this.result;
+  }
+
+  _endMatch(victory) {
+    if (this.state === 'over') return;
+    this.closeInventory(false);
+    this.state = 'over';
+    this._postMatchEnd(victory);
     this.input.unlock();
     sfx.stopLoop('storm_wind');
     sfx.stopLoop('glide_wind');
@@ -799,13 +826,6 @@ export class Game {
     this.hud.setRevive(null);
     this.hud.setDowned(null);
     this.menus.showResult(this.result);
-    if (this.onMatchEnd) {
-      try {
-        this.onMatchEnd(this.result);
-      } catch (err) {
-        console.error(err);
-      }
-    }
   }
 
   // ---------------------------------------------------------------- events
@@ -1022,6 +1042,8 @@ export class Game {
       if (!client && !this.freeBuild) this._stormDamage(dt);
       if (!client && this.teamMode) this.combat.tickTeams(dt);
     }
+    // sniper rounds in flight (host / solo: damage; client: effects only)
+    if (this.state === 'play' || this.state === 'over') this.combat.tickProjectiles(dt);
 
     if (!client) {
       try {
@@ -1329,6 +1351,7 @@ export class Game {
     if (typeof document !== 'undefined') createFpsMeter(document.body).setVisible(!!this.settings.showFps); // shared with the settings screen
     if (this.input) this.input.setBindings(this.settings.bindings);
     if (this.hud && this.hud.setKeyLabels && this.input) this.hud.setKeyLabels((a) => this.input.label(a));
+    if (this.hud && this.hud.setCrosshairStyle) this.hud.setCrosshairStyle(this.settings);
     if (this.invPanel && this.input) this.invPanel.setKeyLabels((a) => this.input.label(a));
     const qKey = graphicsQuality(this.settings);
     this._applyPixelRatio();
@@ -1774,6 +1797,26 @@ export class Game {
           if (!w.polyAt(pt.x, pt.z) && !w.blockedAt(pt.x, pt.z, 6)) return debug.teleport(pt.x, pt.z);
         }
         return null;
+      },
+      /** Interior plan of building `id` (map OSM id), or null. */
+      interior(id) {
+        const c = game.world.buildingById(id);
+        return c ? c.shell.plan : null;
+      },
+      /** Teleport into room i on `level` of building `id` (the room's centre point). */
+      tpRoom(id, level = 0, i = 0) {
+        const plan = debug.interior(id);
+        const L = plan && plan.levels[level];
+        const r = L && L.rooms[i];
+        if (!r) return null;
+        return { room: r.label || r.kind, ...debug.teleport(r.cx, r.cz, L.y) };
+      },
+      /** Break panel `idx` of building `id` (World.breakPanel; the mesh hides via onPanelChange). */
+      breakPanel(id, idx) {
+        return game.world.breakPanel(id, idx);
+      },
+      restorePanels() {
+        return game.world.restoreAllPanels();
       },
       /** Nearest harvestable cylinder (tree / rock / prop) within r metres. */
       nearestHarvestable(r = 150) {

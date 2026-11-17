@@ -206,6 +206,7 @@ export class HostSession {
     this._spawning = false;
     this._pendingLoot.length = 0;
     this.events.length = 0;
+    if (this._wdPending) this._wdPending.clear();
     this.ended = false;
     this.started = true;
     this.room.started = true;
@@ -253,13 +254,21 @@ export class HostSession {
     const keep = (obj, k) => obj && saved.push([obj, k, Object.prototype.hasOwnProperty.call(obj, k), obj[k]]);
     keep(game.combat, 'onFire');
     keep(game.combat, 'onColliderDestroyed');
+    keep(game.combat, 'onPanelDamage');
+    keep(game.combat, 'onPanelBreak');
     keep(game.combat, 'swingPickaxe');
     for (const k of ['_add', 'take', 'open']) keep(game.loot, k);
     for (const k of ['place', 'damage', '_destroy', 'edit', 'setDoor']) keep(game.structures, k);
     const ev = (e) => this.started && !this._spawning && this.events.push(e);
     const combat = game.combat;
-    combat.onFire = (shooter, wid, origin, records) => {
+    combat.onFire = (shooter, wid, origin, records, dirs, ballistic) => {
       if (!this.started) return;
+      if (ballistic) {
+        // sniper rounds: clients fly their own copy from the origin and direction
+        const d = (dirs || []).slice(0, 1).map((v) => [rnd(v.x, 5), rnd(v.y, 5), rnd(v.z, 5)]);
+        ev({ e: 'sh', a: shooter ? shooter.id : -1, w: wid, o: [rnd(origin.x, 3), rnd(origin.y, 3), rnd(origin.z, 3)], d, b: 1, p: [], k: [] });
+        return;
+      }
       const p = [];
       const k = [];
       for (const r of records) {
@@ -271,6 +280,27 @@ export class HostSession {
     combat.onColliderDestroyed = (c) => {
       if (c.type === 'poly') ev({ e: 'cx', ty: 'p', x: c.minX, z: c.minZ });
       else ev({ e: 'cx', ty: 'c', x: c.x, z: c.z });
+    };
+    // building wall panels (keyed by building map id + panel index; never the `cx` event, which
+    // is keyed by x, z and would delete the whole building on clients). Damage to one panel is
+    // coalesced to one `wd` per flush.
+    const wd = (this._wdPending = new Map());
+    combat.onPanelDamage = (c, pn) => {
+      const b = c.ref && c.ref.id;
+      if (b == null || !this.started || this._spawning) return;
+      const k = b + ':' + pn.id;
+      const hp = Math.max(1, Math.round(pn.hp));
+      const prev = wd.get(k);
+      if (prev) prev.hp = hp;
+      else {
+        const e = { e: 'wd', b, p: pn.id, hp };
+        wd.set(k, e);
+        ev(e);
+      }
+    };
+    combat.onPanelBreak = (c, pn) => {
+      const b = c.ref && c.ref.id;
+      if (b != null) ev({ e: 'wx', b, p: pn.id });
     };
     const swing = combat.swingPickaxe.bind(combat);
     combat.swingPickaxe = (shooter, origin, dir) => {
@@ -430,6 +460,7 @@ export class HostSession {
     if (!adds.length && !this.events.length) return;
     const msg = { t: 'ev', l: adds.concat(this.events) };
     this.events = [];
+    if (this._wdPending) this._wdPending.clear();
     this.stats.evBytes += this.room.broadcast(msg);
   }
 
@@ -669,7 +700,16 @@ export class HostSession {
         if (newPull) a.lastFire = this.time;
         it.mag--;
         if (a.character) a.character.fire();
-        g.combat.fireWeapon(a, it, _o, dirs[0], 0, { dirs, claims });
+        g.combat.fireWeapon(a, it, _o, dirs[0], 0, { dirs, claims, shot: m.seq });
+        return;
+      }
+      case 'ph': {
+        // a guest's sniper round reached someone on its screen: Combat checks it against our path
+        const n = Number(m.n);
+        const v = Number(m.v);
+        if (!Number.isInteger(n) || n <= 0 || !Number.isInteger(v) || v === a.id) return;
+        const victim = g.combat.actors.find((x) => x.id === v);
+        if (victim) g.combat.claimProjectile(a, n, victim);
         return;
       }
       case 'sw': {

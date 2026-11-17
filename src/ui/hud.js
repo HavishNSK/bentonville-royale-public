@@ -4,6 +4,21 @@
 
 import './hud.css';
 import { icon, hasIcon } from './icons.js';
+import { CROSSHAIR_COLORS, sanitizeSettings } from './settings.js';
+
+/**
+ * Applies the crosshair settings to a `.br-xhair` element (the HUD's, or the settings preview).
+ * Values go through sanitizeSettings, so only the fixed palette and capped sizes ever reach CSS.
+ */
+export function applyCrosshairStyle(el, settings) {
+  if (!el) return;
+  const s = sanitizeSettings(settings);
+  el.dataset.style = s.crosshairStyle;
+  el.style.setProperty('--xh-color', CROSSHAIR_COLORS[s.crosshairColor]);
+  el.style.setProperty('--xh-size', String(s.crosshairSize));
+  el.style.setProperty('--xh-thick', String(s.crosshairThickness));
+  el.classList.toggle('is-no-outline', !s.crosshairOutline);
+}
 
 const BUILD_PIECES = [
   { id: 'wall', key: 'Q', label: 'Wall' },
@@ -601,6 +616,11 @@ export function buildHud(root) {
     }
   }
 
+  /** Custom gun crosshair from settings (style / color / size / thickness / outline; see settings.js). */
+  function setCrosshairStyle(settings) {
+    applyCrosshairStyle(r.xhair, settings);
+  }
+
   function hitMarker(isHeadshot, isKill) {
     const el = r.hitmarker;
     const cls = 'br-hitmarker' + (isKill ? ' is-kill' : isHeadshot ? ' is-head' : '');
@@ -1053,6 +1073,7 @@ export function buildHud(root) {
     setCounts,
     setCompass,
     setCrosshair,
+    setCrosshairStyle,
     hitMarker,
     damageFlash,
     killFeed,

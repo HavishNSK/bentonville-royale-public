@@ -7,7 +7,7 @@
 
 export const PATCH_NOTES = [
   {
-    version: '0.7.0',
+    version: '0.8.0',
     date: '2026-11-16',
     title: 'Pickaxes, back blings and a new lobby',
     sections: [
@@ -43,6 +43,34 @@ export const PATCH_NOTES = [
           'A new emote wheel with highlighted wedges and rarity colours.',
           'The kill feed shows player names in bold, with your own name in gold.',
           'The results screen reveals your placement and stats one at a time, shows the coins you earned, and throws confetti when you win.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.7.0',
+    date: '2026-11-16',
+    title: 'Sniper bullet drop, custom crosshairs, who is online',
+    sections: [
+      {
+        heading: 'Weapons',
+        items: [
+          'Sniper rounds now fly instead of hitting instantly. Lead moving targets a little; the bullet takes about a quarter second to cross 100 m.',
+          'Sniper rounds drop slightly over distance: barely noticeable at 100 m, about a player’s height at 250 m.',
+          'The Hunting Rifle is about half as common in loot and chests.',
+        ],
+      },
+      {
+        heading: 'Settings',
+        items: [
+          'New CROSSHAIR tab: pick a style (classic, dot, cross, circle), a color, the size, the thickness and the outline. It only changes the regular gun crosshair.',
+        ],
+      },
+      {
+        heading: 'Online',
+        items: [
+          'The ONLINE button on the title screen shows who is playing right now and who is searching for a match.',
+          'Press PLAY in the same mode around the same time as other players to land in the same match. Bots fill the rest.',
         ],
       },
     ],

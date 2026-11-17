@@ -29,7 +29,7 @@
 
 import { WEAPONS, TAU } from '../core/config.js';
 
-export const PROTO_VERSION = 2; // 2: teams (roster tm, start mode, snapshot xflags, knock / revive events)
+export const PROTO_VERSION = 3; // 2: teams (roster tm, start mode, snapshot xflags, knock / revive events); 3: ballistic sniper rounds ('sh' b/d, 'ph' claims)
 export const MAX_HUMANS = 16;
 export const SNAP_HZ = 20;
 export const STATE_HZ = 30;
@@ -222,4 +222,29 @@ export function makeReassembler() {
 export function rnd(v, d = 2) {
   const m = 10 ** d;
   return Math.round(v * m) / m;
+}
+
+/**
+ * Building wall panel events from the host (`{ e: 'wd', b, p, hp }` damaged, `{ e: 'wx', b, p }`
+ * broken; b = building map id, p = panel index). Peer messages are untrusted: b must be a
+ * number / short string naming a hollow building (never an object, which World.buildingById
+ * would accept as a collider), p an integer index into its panels, hp finite (clamped to
+ * 1..maxHp). Returns { c, pn, hp } (hp only meaningful for 'wd') or null.
+ */
+export function resolvePanelEvent(world, e) {
+  if (!world || !world.buildingById || !e || (e.e !== 'wd' && e.e !== 'wx')) return null;
+  const b = e.b;
+  const okId = (typeof b === 'number' && Number.isSafeInteger(b)) || (typeof b === 'string' && b.length > 0 && b.length <= 40);
+  if (!okId) return null;
+  const c = world.buildingById(b);
+  const panels = c && c.shell && c.shell.panels;
+  if (!panels) return null;
+  const p = e.p;
+  if (!Number.isInteger(p) || p < 0 || p >= panels.length) return null;
+  const pn = panels[p];
+  if (!pn) return null;
+  if (e.e === 'wx') return { c, pn, hp: 0 };
+  const hp = e.hp;
+  if (typeof hp !== 'number' || !Number.isFinite(hp)) return null;
+  return { c, pn, hp: Math.min(pn.maxHp, Math.max(1, hp)) };
 }

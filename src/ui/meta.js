@@ -13,6 +13,7 @@
 //   meta.refresh()            // party changed: line-up + invite buttons
 //   meta.setActive(on)        // title screen shown / hidden (3D line-up render loop)
 //   meta.matchReward(coins)   // "+340 coins" after a match
+//   meta.setOnline(snap|null) // who's online (src/net/Presence.js); null = list unavailable
 //
 // Panels dock on the right so the line-up stays visible while shopping.
 // User text always goes through textContent.
@@ -156,9 +157,15 @@ export function createMeta(menus, account, opts = {}) {
   const bFriends = btn('FRIENDS', 'mn-chip mt-chip', 'friends');
   const badge = h('em', 'mt-badge');
   bFriends.appendChild(badge);
+  const bOnline = btn('ONLINE', 'mn-chip mt-chip mt-chip-online', 'online');
+  const onlineNum = h('em', 'mt-online-num', '');
+  bOnline.prepend(h('i', 'mt-dot', ''));
+  bOnline.appendChild(onlineNum);
+  bOnline.title = 'Players on the title screen or in a match right now';
   const bAuth = btn('SIGN IN', 'mn-chip mt-chip mt-chip-sun', 'auth');
-  right.append(bFriends, coins, who, bAuth);
+  right.append(bOnline, bFriends, coins, who, bAuth);
   bar.append(tabs, right);
+  let online = null; // last presence snapshot
   titleEl.appendChild(bar);
   function syncTabs() {
     for (const b of tabs.children) {
@@ -167,6 +174,7 @@ export function createMeta(menus, account, opts = {}) {
       b.setAttribute('aria-pressed', String(on));
     }
     bFriends.classList.toggle('is-on', open === 'friends');
+    bOnline.classList.toggle('is-on', open === 'online');
   }
 
   // ---------------------------------------------------------------- panel shell
@@ -266,7 +274,47 @@ export function createMeta(menus, account, opts = {}) {
     else if (open === 'locker') renderLocker();
     else if (open === 'leaderboard') renderLeaderboard();
     else if (open === 'friends') renderFriends();
+    else if (open === 'online') renderOnline();
   }
+
+  // ---------------------------------------------------------------- who's online
+  const MODE_LABEL = { solo: 'Solo', duo: 'Duos', trio: 'Trios', squad: 'Squads' };
+  function renderOnline() {
+    panelTitle.textContent = 'ONLINE';
+    if (!online) {
+      panelBody.appendChild(h('p', 'mt-hint', 'Can’t reach the online list right now. You can still press PLAY for a match with bots.'));
+      return;
+    }
+    const searching = Object.values(online.searching).reduce((a, b) => a + b, 0);
+    panelBody.appendChild(h('p', 'mt-hint', `${online.count} online · ${searching} searching · ${online.inMatch} in a match`));
+    panelBody.appendChild(
+      h('p', 'mt-hint', 'Pick the same mode and press PLAY within a few seconds of each other to land in the same match. Bots fill the empty spots.')
+    );
+    const modes = Object.entries(online.searching).filter(([, n]) => n > 0);
+    if (modes.length) {
+      panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'SEARCHING NOW'));
+      const row = h('div', 'mt-online-modes');
+      for (const [m, n] of modes) row.appendChild(h('span', 'mn-chip mt-chip-sun', `${MODE_LABEL[m]} · ${n}`));
+      panelBody.appendChild(row);
+    }
+    panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'PLAYERS'));
+    for (const p of online.players) {
+      const row = h('div', 'mt-friend is-online' + (p.status === 'queued' ? ' is-queued' : p.status === 'match' ? ' is-busy' : ''));
+      const info = h('span', 'mt-friend-info');
+      const what = p.status === 'queued' ? `Searching · ${MODE_LABEL[p.mode]}` : p.status === 'match' ? 'In a match' : 'In the lobby';
+      info.append(h('b', null, p.name), h('small', null, what));
+      row.append(h('i', 'mt-dot'), info);
+      panelBody.appendChild(row);
+    }
+    if (online.count > online.players.length) panelBody.appendChild(h('p', 'mt-hint', `…and ${online.count - online.players.length} more`));
+  }
+
+  function renderOnlineChip() {
+    onlineNum.textContent = online ? String(online.count) : '–';
+    bOnline.classList.toggle('is-off', !online);
+    bOnline.setAttribute('aria-label', online ? `Online: ${online.count} players` : 'Online list unavailable');
+  }
+  renderOnlineChip();
 
   // ---------------------------------------------------------------- patch notes + board
   let newsTab = 'notes';
@@ -1026,6 +1074,7 @@ export function createMeta(menus, account, opts = {}) {
     if (open === 'friends') render();
   });
   account.on('change', () => {
+    boardCache = null; // refresh RANKS after match rewards update stats
     renderBar();
     lineUp();
     renderEmoteBar();
@@ -1059,9 +1108,15 @@ export function createMeta(menus, account, opts = {}) {
       showcase.setActive(on);
       if (!on && open) closePanel();
     },
-    matchReward(n) {
+    matchReward(n, note) {
       if (n > 0) toast(`+${n} coins for that match`, [['SHOP', () => openPanel('shop'), 'mt-chip-sun']]);
+      else if (note) toast(note, account.signedIn ? [] : [['SIGN IN', () => openPanel('auth'), 'mt-chip-sun']]);
     },
     openPanel,
+    setOnline(snap) {
+      online = snap || null;
+      renderOnlineChip();
+      if (open === 'online') render();
+    },
   };
 }

@@ -863,6 +863,73 @@
   border-color: var(--br-coral);
 }
 
+/* ---- custom gun crosshair (Settings > Crosshair; hud.setCrosshairStyle) ----------------
+   Only the plain gun reticle changes. The spread part of the gap is the same for everyone,
+   size / thickness are capped in settings.js, and the scope, shotgun, build and pickaxe
+   reticles keep their fixed look. */
+.br-xhair[data-kind='gun'] {
+  --gap: calc(var(--u) * (5 * var(--xh-size, 1) + 24 * var(--spread)));
+}
+.br-xhair[data-kind='gun'] i {
+  background: var(--xh-color, #fff);
+}
+.br-xhair[data-kind='gun'] .br-xh-t,
+.br-xhair[data-kind='gun'] .br-xh-b {
+  width: calc(var(--u) * 3 * var(--xh-thick, 1));
+  height: calc(var(--u) * 10 * var(--xh-size, 1));
+}
+.br-xhair[data-kind='gun'] .br-xh-l,
+.br-xhair[data-kind='gun'] .br-xh-r {
+  width: calc(var(--u) * 10 * var(--xh-size, 1));
+  height: calc(var(--u) * 3 * var(--xh-thick, 1));
+}
+.br-xhair[data-kind='gun'] .br-xh-dot {
+  width: calc(var(--u) * 4 * var(--xh-thick, 1));
+  height: calc(var(--u) * 4 * var(--xh-thick, 1));
+}
+.br-xhair[data-kind='gun'].is-no-outline i {
+  box-shadow: none;
+}
+/* dot: the lines go (and with them the spread readout: a trade-off, not an edge) */
+.br-xhair[data-kind='gun'][data-style='dot'] .br-xh-t,
+.br-xhair[data-kind='gun'][data-style='dot'] .br-xh-r,
+.br-xhair[data-kind='gun'][data-style='dot'] .br-xh-b,
+.br-xhair[data-kind='gun'][data-style='dot'] .br-xh-l,
+.br-xhair[data-kind='gun'][data-style='cross'] .br-xh-dot,
+.br-xhair[data-kind='gun'][data-style='circle'] .br-xh-t,
+.br-xhair[data-kind='gun'][data-style='circle'] .br-xh-r,
+.br-xhair[data-kind='gun'][data-style='circle'] .br-xh-b,
+.br-xhair[data-kind='gun'][data-style='circle'] .br-xh-l {
+  display: none;
+}
+.br-xhair[data-kind='gun'][data-style='dot'] .br-xh-dot {
+  width: calc(var(--u) * 4 * var(--xh-thick, 1) * var(--xh-size, 1));
+  height: calc(var(--u) * 4 * var(--xh-thick, 1) * var(--xh-size, 1));
+}
+/* circle: radius = the same gap the lines use, so it still opens up with bloom */
+.br-xhair[data-kind='gun'][data-style='circle'] .br-xh-ring {
+  display: block;
+  width: calc(var(--gap) * 2 + var(--u) * 8 * var(--xh-size, 1));
+  height: calc(var(--gap) * 2 + var(--u) * 8 * var(--xh-size, 1));
+  border: calc(var(--u) * 2.5 * var(--xh-thick, 1)) solid var(--xh-color, #fff);
+  border-radius: 50%;
+  background: none;
+  box-shadow:
+    0 0 0 calc(var(--u) * 1.5) var(--br-ink),
+    inset 0 0 0 calc(var(--u) * 1.5) var(--br-ink);
+  transform: translate(-50%, -50%);
+}
+.br-xhair[data-kind='gun'][data-style='circle'].is-no-outline .br-xh-ring {
+  box-shadow: none;
+}
+.br-xhair.is-hit[data-kind='gun'] i {
+  background: var(--br-coral);
+}
+.br-xhair.is-hit[data-kind='gun'][data-style='circle'] .br-xh-ring {
+  background: none;
+  border-color: var(--br-coral);
+}
+
 .br-hitmarker {
   position: absolute;
   left: 0;

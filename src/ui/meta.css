@@ -749,6 +749,32 @@
 .mt-friend.is-online .mt-dot {
   background: var(--br-leaf);
 }
+/* online list: searching players glow sun-gold, players mid-match go dim */
+.mt-friend.is-queued .mt-dot {
+  background: var(--br-sun);
+}
+.mt-friend.is-busy .mt-dot {
+  background: #6b6890;
+}
+.mt-chip-online {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--u) * 6);
+}
+.mt-chip-online .mt-dot {
+  background: var(--br-leaf);
+}
+.mt-chip-online.is-off .mt-dot {
+  background: #6b6890;
+}
+.mt-online-num {
+  font-style: normal;
+}
+.mt-online-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 6);
+}
 .mt-x {
   min-width: 0;
 }

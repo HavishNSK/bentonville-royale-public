@@ -355,6 +355,31 @@
   background: var(--br-sun);
   color: var(--br-ink);
 }
+/* crosshair color picker: a swatch per fixed palette entry */
+.mn-seg-swatch button {
+  padding: calc(var(--u) * 6) calc(var(--u) * 9);
+}
+.mn-swatch {
+  display: block;
+  width: calc(var(--u) * 16);
+  height: calc(var(--u) * 16);
+  border-radius: 50%;
+  border: calc(var(--u) * 2) solid var(--br-ink);
+}
+/* crosshair preview: the real HUD reticle on a sky strip */
+.mn-xh-preview {
+  position: relative;
+  height: calc(var(--u) * 96);
+  margin-bottom: calc(var(--u) * 10);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: calc(var(--u) * 12);
+  background: linear-gradient(180deg, #8fc9ff 0%, #cfe9ff 55%, #6fae5a 55%, #4f8a3e 100%);
+  overflow: hidden;
+}
+.mn-xh-preview .br-xhair {
+  left: 50%;
+  top: 50%;
+}
 .mn-toggle {
   grid-column: 3;
   justify-self: end;

@@ -467,22 +467,26 @@ export class Accounts extends Server {
         return json({ profile: profileOf(acc) });
       }
       case 'reward': {
-        // match payout: 25 per player outlasted (scaled to 100), 75 per elimination, 400 for a win
+        // match payout: outlasted (scaled), 75 per elimination, 400 for a win
+        // Coin payout is rate-limited; wins/kills still count so the boards stay honest after quick rematches.
         const now = Date.now();
-        if (now - (acc.lastReward || 0) < REWARD_GAP_MS) return json({ profile: profileOf(acc), earned: 0 });
         const players = Math.max(1, Math.min(100, m.players | 0));
         const placement = Math.max(1, Math.min(players, m.placement | 0 || players));
         const kills = Math.max(0, Math.min(40, m.kills | 0));
         const won = !!m.won && placement === 1;
-        const outlasted = Math.round(((players - placement) / Math.max(1, players - 1)) * 250);
-        const earned = Math.min(1500, outlasted + kills * 75 + (won ? 400 : 0));
-        acc.coins += earned;
-        acc.lastReward = now;
+        const rateLimited = now - (acc.lastReward || 0) < REWARD_GAP_MS;
+        let earned = 0;
+        if (!rateLimited) {
+          const outlasted = Math.round(((players - placement) / Math.max(1, players - 1)) * 250);
+          earned = Math.min(1500, outlasted + kills * 75 + (won ? 400 : 0));
+          acc.coins += earned;
+          acc.lastReward = now;
+        }
         acc.stats.matches++;
         acc.stats.kills += kills;
         if (won) acc.stats.wins++;
         await this._save(acc);
-        return json({ profile: profileOf(acc), earned });
+        return json({ profile: profileOf(acc), earned, rateLimited });
       }
       case 'friendAdd': {
         const to = String(m.name || '').trim().toLowerCase();

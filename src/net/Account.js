@@ -6,7 +6,7 @@
 //   await acct.register(name, pw) / acct.login(name, pw) / acct.loginWithGoogle(idToken)
 //   await acct.redeemAuthTicket(ticket) / acct.logout()
 //   await acct.buy(id) / acct.equip({ skin, pickaxe, backbling, emotes })
-//   await acct.reward({ kills, placement, players, won })   -> coins earned
+//   await acct.reward({ kills, placement, players, won })   -> { earned, saved, guest?, error? }
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
 //   await acct.leaderboard() -> { online, wins:[{name,wins,kills}], kills:[...] }
 //   acct.setStatus('lobby'|'match', partyCode)
@@ -217,15 +217,18 @@ export function createAccount() {
       return r.profile;
     },
 
-    /** Match payout. Returns coins earned. Guests earn nothing — sign in required. */
+    /**
+     * Match payout + stats. Guests earn nothing — sign in required.
+     * Returns { earned, saved, guest?, error? }.
+     */
     async reward({ kills = 0, placement = 1, players = 1, won = false } = {}) {
-      if (!acct.signedIn) return 0;
+      if (!acct.signedIn) return { earned: 0, saved: false, guest: true };
       try {
         const r = await api('reward', { token, kills, placement, players, won });
         setProfile(r.profile);
-        return r.earned || 0;
-      } catch {
-        return 0;
+        return { earned: r.earned || 0, saved: true, rateLimited: !!r.rateLimited };
+      } catch (err) {
+        return { earned: 0, saved: false, error: err && err.message ? err.message : 'Could not save match stats.' };
       }
     },
 
