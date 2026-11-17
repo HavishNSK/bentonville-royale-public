@@ -1190,8 +1190,9 @@ export class Minimap {
       const lines = wrapWords(p.l.n.toUpperCase(), p.poi ? 16 : 18);
       let tw = 0;
       for (const ln of lines) tw = Math.max(tw, ctx.measureText(ln).width);
-      tw += 8 * k;
-      const th = lineH * lines.length + 4 * k;
+      // room for the outline halo + drop shadow, plus a gap, so neighbouring names never touch
+      tw += (p.poi ? 18 : 14) * k;
+      const th = lineH * lines.length + (p.poi ? 14 : 10) * k;
       let best = null;
       for (let ring = 0; ring < 4 && !best; ring++) {
         const gap = ring * 14 * k;

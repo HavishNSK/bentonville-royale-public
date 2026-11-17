@@ -5,7 +5,7 @@
 //   acct.signedIn, acct.profile = { name, coins, owned, equipped:{skin, emotes}, friends, incoming, outgoing, stats }
 //   await acct.register(name, pw) / acct.login(name, pw) / acct.loginWithGoogle(idToken)
 //   await acct.redeemAuthTicket(ticket) / acct.logout()
-//   await acct.buy(id) / acct.equip({ skin, emotes })
+//   await acct.buy(id) / acct.equip({ skin, pickaxe, backbling, emotes })
 //   await acct.reward({ kills, placement, players, won })   -> coins earned
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
 //   await acct.leaderboard() -> { online, wins:[{name,wins,kills}], kills:[...] }
@@ -18,7 +18,7 @@
 // require a signed-in account. Guest localStorage no longer stores a coin balance.
 
 import { partyHost, isLocal } from './Net.js';
-import { DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, SKINS, EMOTES } from '../game/Cosmetics.js';
+import { DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, SKINS, EMOTES, PICKAXES, BACKBLINGS } from '../game/Cosmetics.js';
 
 const TOKEN_KEY = 'bentonville-royale.account';
 const GUEST_KEY = 'bentonville-royale.guest';
@@ -100,6 +100,8 @@ function guestProfile() {
     owned,
     equipped: {
       skin: owned.includes(eq.skin) && SKINS[eq.skin] ? eq.skin : DEFAULT_EQUIPPED.skin,
+      pickaxe: owned.includes(eq.pickaxe) && PICKAXES[eq.pickaxe] ? eq.pickaxe : DEFAULT_EQUIPPED.pickaxe,
+      backbling: owned.includes(eq.backbling) && BACKBLINGS[eq.backbling] ? eq.backbling : DEFAULT_EQUIPPED.backbling,
       emotes: Array.from({ length: EMOTE_SLOTS }, (_, i) => {
         const e = Array.isArray(eq.emotes) ? eq.emotes[i] : DEFAULT_EQUIPPED.emotes[i];
         return e && owned.includes(e) && EMOTES[e] ? e : null;
@@ -197,17 +199,19 @@ export function createAccount() {
       return r.profile;
     },
 
-    async equip({ skin, emotes } = {}) {
+    async equip({ skin, emotes, pickaxe, backbling } = {}) {
       const p = acct.profile;
       // optimistic: the locker updates at once, the server confirms
       if (skin && p.owned.includes(skin)) p.equipped.skin = skin;
+      if (pickaxe && p.owned.includes(pickaxe)) p.equipped.pickaxe = pickaxe;
+      if (backbling && p.owned.includes(backbling)) p.equipped.backbling = backbling;
       if (emotes) p.equipped.emotes = emotes.slice(0, EMOTE_SLOTS);
       emit('change', p);
       if (!acct.signedIn) {
         saveGuest();
         return p;
       }
-      const r = await api('equip', { token, skin, emotes });
+      const r = await api('equip', { token, skin, emotes, pickaxe, backbling });
       setProfile(r.profile);
       if (skin) acct.setStatus(status.s, status.party);
       return r.profile;
@@ -277,7 +281,9 @@ export function createAccount() {
   }
 
   function setProfile(p) {
-    acct.profile = { ...p, guest: false };
+    // an older server may not send the newer loadout slots yet
+    const eq = { ...DEFAULT_EQUIPPED, ...(p.equipped || {}) };
+    acct.profile = { ...p, owned: [...new Set([...(p.owned || []), ...DEFAULT_OWNED])], equipped: eq, guest: false };
     emit('change', acct.profile);
   }
 

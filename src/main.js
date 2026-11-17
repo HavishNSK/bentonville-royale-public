@@ -9,6 +9,7 @@ import { inject as injectAnalytics } from '@vercel/analytics';
 import { teamSize, normalizeMode } from './game/Teams.js';
 import { createAccount } from './net/Account.js';
 import { createMeta } from './ui/meta.js';
+import { lookString, parseLook } from './game/Cosmetics.js';
 
 // Vercel Web Analytics: anonymous page views / visitors (no cookies). Only reports from the Vercel deployment.
 try {
@@ -418,7 +419,7 @@ async function joinParty(code = null, quiet = false) {
   renderParty();
   try {
     partyMod = partyMod || (await import('./net/Party.js'));
-    const p = await partyMod.openParty({ name: menus.playerName(), code, mode: lastLocal.mode, fill: lastLocal.fill, skin: account.profile.equipped.skin });
+    const p = await partyMod.openParty({ name: menus.playerName(), code, mode: lastLocal.mode, fill: lastLocal.fill, skin: lookString(account.profile.equipped) });
     if (gen !== partyGen) return p.leave();
     partyConnecting = false;
     party = p;
@@ -426,7 +427,7 @@ async function joinParty(code = null, quiet = false) {
     // the account may have loaded while we were connecting: make sure the party shows our
     // real name and outfit, not what we had when the connection started
     p.setName(menus.playerName());
-    if (p.setSkin) p.setSkin(account.profile.equipped.skin);
+    if (p.setSkin) p.setSkin(lookString(account.profile.equipped));
     p.onState = (st) => {
       if (party !== p) return;
       lastLocal.mode = st.mode;
@@ -572,18 +573,18 @@ async function playLocal(mode = 'solo', fill = true) {
 
 try {
   game = new Game({ canvas, uiRoot, menus, settings });
-  game.setCosmetics({ skin: account.profile.equipped.skin, emotes: account.profile.equipped.emotes });
+  game.setCosmetics(account.profile.equipped);
   meta = createMeta(menus, account, {
     onClick: () => sfx.play('ui_click'),
     partyCode: () => (party && party.party ? party.party.code : null),
-    partyMembers: () => (party && party.party ? party.party.members.map((m) => ({ name: m.name, skin: m.skin, you: m.id === party.you })) : []),
+    partyMembers: () => (party && party.party ? party.party.members.map((m) => ({ name: m.name, ...parseLook(m.skin), you: m.id === party.you })) : []),
     onJoinParty: (code) => {
       if (game.state !== 'menu') return;
       joinParty(code);
     },
     onCosmetics: (c) => {
       game.setCosmetics(c);
-      if (party && party.setSkin) party.setSkin(c.skin);
+      if (party && party.setSkin) party.setSkin(lookString(c));
     },
     onName: (name) => {
       menus.setAccountName(name);
@@ -627,6 +628,7 @@ try {
   game.onMatchEnd = async (r) => {
     const players = r.mode && r.mode !== 'solo' ? r.teams : r.total;
     const earned = await account.reward({ kills: r.kills | 0, placement: r.placement | 0, players: players | 0, won: !!r.victory });
+    if (earned > 0) menus.showReward(earned);
     if (earned > 0 && meta) meta.matchReward(earned);
   };
   menus.showTitle();

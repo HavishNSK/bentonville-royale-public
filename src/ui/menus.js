@@ -49,6 +49,40 @@ const TIPS = [
   'Headshots deal bonus damage with every weapon.',
 ];
 
+const REDUCED = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/** Counts el's text up from 0 to n over ms (instantly with reduced motion). */
+function countUp(el, n, ms, fmt) {
+  n = Math.max(0, Math.round(n) || 0);
+  if (REDUCED || n === 0) {
+    el.textContent = fmt(n);
+    return;
+  }
+  const t0 = performance.now() + 450; // after the tile has popped in
+  el.textContent = fmt(0);
+  const step = (now) => {
+    const k = Math.min(1, Math.max(0, (now - t0) / ms));
+    el.textContent = fmt(Math.round(n * (1 - (1 - k) * (1 - k))));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+/** Shrinks each `.mn-slot-name` until it fits on one line (long names stay whole and readable). */
+function fitNames(root) {
+  requestAnimationFrame(() => {
+    for (const n of root.querySelectorAll('.mn-slot-name')) {
+      n.style.fontSize = '';
+      const base = parseFloat(getComputedStyle(n).fontSize) || 16;
+      let f = base;
+      while (n.scrollWidth > n.clientWidth + 1 && f > base * 0.55) {
+        f -= base * 0.06;
+        n.style.fontSize = f + 'px';
+      }
+    }
+  });
+}
+
 function el(tag, cls, html) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -271,9 +305,10 @@ export function createMenus(root, opts = {}) {
        <div class="mn-load-bar"><i data-ref="fill"></i></div>
        <div class="mn-load-pct br-ol" data-ref="pct">0%</div>
      </div>
-     <div class="mn-tip"><b>TIP</b><span data-ref="tip"></span></div>`
+     <div class="mn-tip" data-ref="tipBox"><b>TIP</b><span data-ref="tip"></span></div>`
   );
   wrap.appendChild(loading);
+  let tipTimer = 0;
   const L = {};
   loading.querySelectorAll('[data-ref]').forEach((e) => (L[e.dataset.ref] = e));
 
@@ -302,7 +337,9 @@ export function createMenus(root, opts = {}) {
          <div class="mn-stat">${icon('crown')}<b class="br-ol" data-ref="placement"></b><span>PLACED</span></div>
          <div class="mn-stat">${icon('skull')}<b class="br-ol" data-ref="kills"></b><span>ELIMS</span></div>
          <div class="mn-stat">${icon('clock')}<b class="br-ol" data-ref="time"></b><span>SURVIVED</span></div>
+         <div class="mn-stat mn-stat-coins" data-ref="coinStat" hidden><i class="mt-coin" aria-hidden="true"></i><b class="br-ol" data-ref="coins">+0</b><span>COINS</span></div>
        </div>
+       <div class="mn-confetti" data-ref="confetti" aria-hidden="true"></div>
        <div class="mn-stack mn-stack-row">
          <button class="mn-btn mn-btn-hero" data-act="again">${icon('replay')}<span>PLAY AGAIN</span></button>
          <button class="mn-btn" data-act="menu">${icon('home')}<span>MAIN MENU</span></button>
@@ -377,6 +414,8 @@ export function createMenus(root, opts = {}) {
     settingsEl.querySelectorAll('input[type=range]').forEach((inp) => {
       const name = inp.dataset.name;
       inp.value = settings[name];
+      // fill the slider track up to the thumb (CSS --pct)
+      inp.style.setProperty('--pct', `${((inp.value - inp.min) / (inp.max - inp.min || 1)) * 100}%`);
       const out = settingsEl.querySelector(`[data-out="${name}"]`);
       if (out) out.textContent = (FORMAT[name] || String)(settings[name]);
     });
@@ -661,6 +700,7 @@ export function createMenus(root, opts = {}) {
       li.appendChild(btn);
       T.slots.appendChild(li);
     }
+    fitNames(T.slots);
     // keep the kick / promote row only while that member is still here and we still lead
     if (selectedSlot != null) selectSlot(v.isLeader && v.members.some((m) => m.id === selectedSlot && !m.you) ? selectedSlot : null, false);
 
@@ -857,8 +897,18 @@ export function createMenus(root, opts = {}) {
     },
     showLoading(pct = 0, label) {
       if (current !== loading) {
-        const tip = TIPS[Math.floor(Math.random() * TIPS.length)];
-        L.tip.textContent = typeof tip === 'function' ? tip((a) => keyLabel((settings.bindings || DEFAULT_BINDINGS)[a] || DEFAULT_BINDINGS[a])) : tip;
+        // a new tip every few seconds while the map loads
+        let ti = Math.floor(Math.random() * TIPS.length);
+        const showTip = () => {
+          const tip = TIPS[ti++ % TIPS.length];
+          L.tip.textContent = typeof tip === 'function' ? tip((a) => keyLabel((settings.bindings || DEFAULT_BINDINGS)[a] || DEFAULT_BINDINGS[a])) : tip;
+          L.tipBox.classList.remove('is-new');
+          void L.tipBox.offsetWidth;
+          L.tipBox.classList.add('is-new');
+        };
+        showTip();
+        clearInterval(tipTimer);
+        tipTimer = setInterval(() => (current === loading ? showTip() : clearInterval(tipTimer)), 5000);
         show(loading, true);
       }
       api.setLoading(pct, label);
@@ -898,10 +948,36 @@ export function createMenus(root, opts = {}) {
       }
       R.kills.textContent = String(r.kills);
       R.time.textContent = fmt(r.time);
+      R.coinStat.hidden = true;
+      // staged reveal: placement slams in, then the title, then each stat tile (menus.css)
+      result.classList.remove('is-reveal');
+      void result.offsetWidth;
+      result.classList.add('is-reveal');
+      countUp(R.kills, r.kills, 900, (v) => String(v));
+      R.confetti.replaceChildren();
+      if (r.victory && !REDUCED) {
+        const colors = ['var(--br-sun)', 'var(--br-coral)', 'var(--br-sky)', 'var(--br-leaf)', 'var(--br-storm)', 'var(--br-cream)'];
+        for (let i = 0; i < 70; i++) {
+          const c = document.createElement('i');
+          c.style.left = `${Math.random() * 100}%`;
+          c.style.background = colors[i % colors.length];
+          c.style.animationDelay = `${(Math.random() * 1.6).toFixed(2)}s`;
+          c.style.animationDuration = `${(2.4 + Math.random() * 2).toFixed(2)}s`;
+          c.style.setProperty('--spin', `${Math.round(360 + Math.random() * 720) * (i % 2 ? 1 : -1)}deg`);
+          c.style.setProperty('--drift', `${Math.round((Math.random() - 0.5) * 160)}px`);
+          R.confetti.appendChild(c);
+        }
+      }
       // multiplayer: no instant rematch; the host makes a new room
       result.querySelector('[data-act=again]').hidden = !!r.mp;
       if (r.hostNote) R.sub.textContent += ' ' + r.hostNote;
       show(result, false);
+    },
+    /** Coins the match paid out (after the server confirms): counts up on the result screen. */
+    showReward(n) {
+      if (!(n > 0) || !result.classList.contains('is-reveal')) return;
+      R.coinStat.hidden = false;
+      countUp(R.coins, n, 1100, (v) => '+' + v.toLocaleString());
     },
     showDropBanner(on, secondsLeft, zone, text) {
       banner.classList.toggle('is-on', !!on);

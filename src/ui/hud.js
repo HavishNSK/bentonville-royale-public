@@ -626,20 +626,49 @@ export function buildHud(root) {
   const r_dmg = hud.querySelector('.br-vig-dmg');
 
   // ---- kill feed -------------------------------------------------------------------
+  let meName = null; // setFeedName(): the local player's name, highlighted in feed lines
   function removeFeedLine(line) {
     if (!line.parentNode || line.dataset.leaving) return;
     line.dataset.leaving = '1';
     line.classList.add('is-leaving');
     later(() => line.remove(), 260);
   }
-  function killFeed(text, kind) {
+  /**
+   * One feed line. names: player names inside `text` drawn bold (killer / victim), so the
+   * "who" reads apart from the "how"; `meName` (the local player) is underlined in gold.
+   */
+  function killFeed(text, kind, names, me) {
     if (text == null || text === '') return;
+    if (me) meName = me;
     const line = document.createElement('div');
     line.className = 'br-feed-line';
     line.dataset.kind = kind || 'elim';
-    line.innerHTML = icon(kind === 'storm' ? 'storm' : kind === 'info' ? 'star' : 'skull');
+    line.innerHTML = icon(kind === 'storm' ? 'storm' : kind === 'info' ? 'star' : kind === 'revive' ? 'heart' : kind === 'knock' || kind === 'mate' ? 'target' : 'skull');
     const span = document.createElement('span');
-    span.textContent = String(text);
+    const str = String(text);
+    const list = (names || []).filter((n) => n && str.includes(n)).sort((a, b) => b.length - a.length);
+    if (!list.length) span.textContent = str;
+    else {
+      let i = 0;
+      while (i < str.length) {
+        let hit = null;
+        let at = str.length;
+        for (const n of list) {
+          const j = str.indexOf(n, i);
+          if (j >= 0 && j < at) {
+            at = j;
+            hit = n;
+          }
+        }
+        if (at > i) span.append(str.slice(i, at));
+        if (!hit) break;
+        const b = document.createElement('b');
+        b.className = 'br-feed-name' + (hit === meName ? ' is-me' : '');
+        b.textContent = hit;
+        span.appendChild(b);
+        i = at + hit.length;
+      }
+    }
     line.appendChild(span);
     r.feed.appendChild(line);
     const live = r.feed.querySelectorAll('.br-feed-line:not(.is-leaving)');
@@ -1027,6 +1056,9 @@ export function buildHud(root) {
     hitMarker,
     damageFlash,
     killFeed,
+    setFeedName(n) {
+      meName = n || null;
+    },
     prompt,
     announce,
     toast,

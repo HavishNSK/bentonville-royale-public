@@ -27,7 +27,7 @@
 import * as THREE from 'three';
 import { PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, MATCH, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
 import { Character } from '../game/Character.js';
-import { SKINS, EMOTES } from '../game/Cosmetics.js';
+import { SKINS, EMOTES, PICKAXES, BACKBLINGS } from '../game/Cosmetics.js';
 import {
   SNAP_HZ, FLAG, XFLAG, EQUIP, SURF, encodeSnapshot, decodeState, seqNewer, rnd,
 } from './protocol.js';
@@ -212,8 +212,8 @@ export class HostSession {
     this.time = 0;
     this.stats = { t0: 0, snapBytes: 0, snaps: 0, evBytes: 0, invBytes: 0, startBytes: 0 };
     this._invSent.clear();
-    const roster = [{ id: 0, n: game.player.name, k: 'player', c: HUMAN_CANOPY[0], h: 1, tm: game.player.team, sk: game.skin }];
-    for (const a of this.remotes.values()) roster.push({ id: a.id, n: a.name, k: 'player', c: HUMAN_CANOPY[a.id % HUMAN_CANOPY.length], h: 1, tm: a.team, sk: a.skin || null });
+    const roster = [{ id: 0, n: game.player.name, k: 'player', c: HUMAN_CANOPY[0], h: 1, tm: game.player.team, sk: game.skin, px: game.pickaxe, bb: game.backbling }];
+    for (const a of this.remotes.values()) roster.push({ id: a.id, n: a.name, k: 'player', c: HUMAN_CANOPY[a.id % HUMAN_CANOPY.length], h: 1, tm: a.team, sk: a.skin || null, px: a.pickaxeCos || null, bb: a.backbling || null });
     const idBase = game.bots.list.length ? game.bots.list[0].id : 0;
     for (const b of game.bots.list) {
       const i = b.id - idBase;
@@ -783,11 +783,13 @@ export class HostSession {
         return;
       }
       case 'sk': {
-        // the guest's outfit (sent once at match start)
-        const id = typeof m.id === 'string' ? m.id : '';
-        if (!SKINS[id] || a.skin === id) return;
-        g.reskinActor(a, id);
-        this.events.push({ e: 'sk', a: a.id, id });
+        // the guest's outfit, pickaxe and back bling (sent once at match start)
+        const id = typeof m.id === 'string' && SKINS[m.id] ? m.id : null;
+        const px = typeof m.px === 'string' && PICKAXES[m.px] ? m.px : null;
+        const bb = typeof m.bb === 'string' && BACKBLINGS[m.bb] ? m.bb : null;
+        if (!id && !px && !bb) return;
+        g.reskinActor(a, id, px, bb);
+        this.events.push({ e: 'sk', a: a.id, id, px, bb });
         return;
       }
       case 'em': {

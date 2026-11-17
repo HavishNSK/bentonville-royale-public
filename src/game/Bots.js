@@ -54,6 +54,7 @@
 
 import * as THREE from 'three';
 import { Character } from './Character.js';
+import { botLoadout } from './Cosmetics.js';
 import { Inventory } from './Inventory.js';
 import {
   PLAYER, WEAPONS, CONSUMABLES, PICKAXE, BUILD, MATERIALS, RARITIES, DIFFICULTY, QUALITY,
@@ -217,7 +218,7 @@ export class Bots {
       };
       if (this.kits.length) {
         const kit = this.kits[i % this.kits.length];
-        const ch = new Character(kit, { weapons: this.weaponModels, canopyColor: CANOPY_COLORS[i % CANOPY_COLORS.length] });
+        const ch = new Character(kit, { weapons: this.weaponModels, canopyColor: CANOPY_COLORS[i % CANOPY_COLORS.length], ...botLoadout(actor.id) });
         ch.root.position.copy(actor.pos);
         ch.root.visible = false;
         actor.character = ch;
@@ -2231,7 +2232,8 @@ export class Bots {
       pos.y += vel.y * dt;
       pos.z += vel.z * dt;
       world.resolveCircle(pos, a.radius, a.height);
-      const g = world.groundHeight(pos.x, pos.z, pos.y);
+      // feet before this frame's sink: a fast glide at a low frame rate can't skip a floor
+      const g = world.groundHeight(pos.x, pos.z, pos.y - vel.y * dt);
       if (d > 0.5) a.heading += clamp(angleDelta(a.heading, Math.atan2(dx, -dz)), -3 * dt, 3 * dt);
       if (pos.y <= g + 0.02) {
         pos.y = g;
@@ -2264,11 +2266,22 @@ export class Bots {
     }
     b.wantJump = false;
     if (!a.grounded) vel.y -= PLAYER.gravity * dt;
+    const oy = pos.y;
+    const cap = world.builtAbove(pos.x, pos.z, oy); // a floor over our head is not a step
     pos.x += vel.x * dt;
     pos.y += vel.y * dt;
     pos.z += vel.z * dt;
     world.resolveCircle(pos, a.radius, a.height);
-    const g = world.groundHeight(pos.x, pos.z, pos.y);
+    // head bump: jumping (or a step-up) never pushes the body up through a floor or ramp
+    if (pos.y > oy) {
+      const ceil = world.ceilingAbove(pos.x, pos.z, oy);
+      if (pos.y + a.height > ceil) {
+        pos.y = Math.max(oy, ceil - a.height);
+        if (vel.y > 0) vel.y = 0;
+      }
+    }
+    // ground from the feet before the move, so a fast fall can't skip a floor
+    const g = world.groundHeight(pos.x, pos.z, Math.max(pos.y, oy), undefined, cap);
     if (pos.y <= g) {
       pos.y = g;
       if (vel.y < 0) vel.y = 0;

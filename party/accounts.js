@@ -33,7 +33,7 @@
 // The shop catalog's prices are mirrored here (PRICES) so a client cannot buy for free.
 
 import { Server } from 'partyserver';
-import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS } from '../src/game/Cosmetics.js';
+import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS } from '../src/game/Cosmetics.js';
 import { verifyGoogleIdToken } from './googleIdToken.js';
 
 const START_COINS = 1500;
@@ -85,8 +85,23 @@ function json(body, status = 200) {
   });
 }
 
+/**
+ * Accounts made before a cosmetic slot existed: give them the free defaults (new free items,
+ * the default pickaxe / back bling). Mutates `acc`; saved with the next write.
+ */
+function upgradeAccount(acc) {
+  for (const id of DEFAULT_OWNED) if (!acc.owned.includes(id)) acc.owned.push(id);
+  const eq = (acc.equipped = acc.equipped || {});
+  if (!eq.skin) eq.skin = DEFAULT_EQUIPPED.skin;
+  if (!Array.isArray(eq.emotes)) eq.emotes = DEFAULT_EQUIPPED.emotes.slice();
+  if (!PICKAXES[eq.pickaxe] || !acc.owned.includes(eq.pickaxe)) eq.pickaxe = DEFAULT_EQUIPPED.pickaxe;
+  if (!BACKBLINGS[eq.backbling] || !acc.owned.includes(eq.backbling)) eq.backbling = DEFAULT_EQUIPPED.backbling;
+  return acc;
+}
+
 /** What the owner sees about their own account. */
 function profileOf(acc) {
+  upgradeAccount(acc);
   return {
     name: acc.name,
     coins: acc.coins,
@@ -182,7 +197,7 @@ export class Accounts extends Server {
         googleSub: claims.sub,
         coins: START_COINS,
         owned: DEFAULT_OWNED.slice(),
-        equipped: { skin: DEFAULT_EQUIPPED.skin, emotes: DEFAULT_EQUIPPED.emotes.slice() },
+        equipped: { ...DEFAULT_EQUIPPED, emotes: DEFAULT_EQUIPPED.emotes.slice() },
         friends: [],
         incoming: [],
         outgoing: [],
@@ -226,7 +241,7 @@ export class Accounts extends Server {
         cleverId,
         coins: START_COINS,
         owned: DEFAULT_OWNED.slice(),
-        equipped: { skin: DEFAULT_EQUIPPED.skin, emotes: DEFAULT_EQUIPPED.emotes.slice() },
+        equipped: { ...DEFAULT_EQUIPPED, emotes: DEFAULT_EQUIPPED.emotes.slice() },
         friends: [],
         incoming: [],
         outgoing: [],
@@ -376,7 +391,7 @@ export class Accounts extends Server {
           hash: await hashPassword(password, salt),
           coins: START_COINS,
           owned: DEFAULT_OWNED.slice(),
-          equipped: { skin: DEFAULT_EQUIPPED.skin, emotes: DEFAULT_EQUIPPED.emotes.slice() },
+          equipped: { ...DEFAULT_EQUIPPED, emotes: DEFAULT_EQUIPPED.emotes.slice() },
           friends: [],
           incoming: [],
           outgoing: [],
@@ -429,9 +444,18 @@ export class Accounts extends Server {
         return json({ profile: profileOf(acc) });
       }
       case 'equip': {
+        upgradeAccount(acc);
         if (m.skin != null) {
           if (!acc.owned.includes(m.skin) || !String(m.skin).startsWith('skin_')) return err('You do not own that outfit.');
           acc.equipped.skin = m.skin;
+        }
+        if (m.pickaxe != null) {
+          if (!acc.owned.includes(m.pickaxe) || !PICKAXES[m.pickaxe]) return err('You do not own that pickaxe.');
+          upgradeAccount(acc).equipped.pickaxe = m.pickaxe;
+        }
+        if (m.backbling != null) {
+          if (!acc.owned.includes(m.backbling) || !BACKBLINGS[m.backbling]) return err('You do not own that back bling.');
+          upgradeAccount(acc).equipped.backbling = m.backbling;
         }
         if (Array.isArray(m.emotes)) {
           const list = m.emotes.slice(0, EMOTE_SLOTS).map((e) => (e && acc.owned.includes(e) && String(e).startsWith('emote_') ? e : null));

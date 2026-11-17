@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { damp, clamp, WEAPONS } from '../core/config.js';
 import { toToon } from '../render/Toon.js';
-import { emoteClips, emoteDef } from './Cosmetics.js';
+import { emoteClips, emoteDef, pickaxeDef, backblingDef } from './Cosmetics.js';
 
 // Characters and their weapons are cel-shaded; colours get a small saturation lift.
 const TOON_CHAR = { saturate: 1.2 };
@@ -79,6 +79,62 @@ function tinted(mat, tint) {
 const _v = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 
+// Every loaded CharacterKit by model key: pickaxes and back blings are cut from their scenes.
+const KITS = {};
+/** Game / Showcase register their kits so any Character can wear any kit's accessories. */
+export function registerKits(kits) {
+  for (const k in kits) if (kits[k]) KITS[k] = kits[k];
+}
+
+/** A toon-shaded copy of accessory `name` from kit `key` (local transform kept), or null. */
+function accessory(key, name, tint) {
+  const kit = KITS[key];
+  const src = kit && kit.scene.getObjectByName(name);
+  if (!src) return null;
+  const g = src.clone(true);
+  g.visible = true;
+  g.traverse((o) => {
+    o.visible = true;
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.material = toToon(o.material, TOON_CHAR);
+      if (tint != null) o.material = tinted(o.material, tint);
+    }
+  });
+  return g;
+}
+/**
+ * A pickaxe / back bling on its own (shop thumbnails): a toon copy of its mesh, or null.
+ * pickSrc: the classic pickaxe scene for src-less pickaxes.
+ */
+export function cosmeticMesh(id, pickSrc) {
+  const pk = PICKAXES_ID.test(id) ? pickaxeDef(id) : null;
+  const bb = !pk ? backblingDef(id) : null;
+  const def = pk || bb;
+  if (!def) return null;
+  if (def.src) return accessory(def.src[0], def.src[1], def.tint);
+  if (pk && pickSrc) {
+    const g = pickSrc.clone(true);
+    g.traverse((o) => {
+      if (o.isMesh) {
+        o.material = toToon(o.material, TOON_CHAR);
+        if (def.tint != null) o.material = tinted(o.material, def.tint);
+      }
+    });
+    return g;
+  }
+  return null;
+}
+const PICKAXES_ID = /^pick_/;
+
+// a hand item moved onto the back (chest bone frame: +Y up the spine, +Z forward)
+const BACK_POSE = {
+  Round_Shield: { p: [0, 0.18, -0.42], r: [0, Math.PI, 0], s: 0.75 },
+  Spike_Shield: { p: [0, 0.18, -0.42], r: [0, Math.PI, 0], s: 0.72 },
+  Badge_Shield: { p: [0, 0.18, -0.42], r: [0, Math.PI, 0], s: 0.75 },
+  Spellbook: { p: [0, 0.15, -0.42], r: [0, Math.PI / 2, 0], s: 1 },
+};
+
 export class Character {
   /**
    * @param {CharacterKit} kit
@@ -146,11 +202,7 @@ export class Character {
         }
       });
       if (id === 'pickaxe') {
-        g.scale.setScalar(0.62);
-        g.position.set(0, 0.1, 0);
-        const slot = this.bones.handslotr;
-        (slot || this.gunPivot).add(g);
-        this.pickaxe = g;
+        this._pickSrc = src[id]; // the classic pickaxe (setLoadout)
       } else {
         const holder = new THREE.Group();
         g.rotation.y = Math.PI; // model barrel is -Z; the character faces +Z
@@ -165,6 +217,11 @@ export class Character {
     this.equipped = 'pickaxe';
     this.gunKey = 'pickaxe';
     this.twoHanded = true;
+    this.pickaxe = null;
+    this._backItem = null;
+    this.pickaxeId = null;
+    this.backblingId = null;
+    this.setLoadout({ pickaxe: opts.pickaxe || 'pick_default', backbling: opts.backbling || 'bb_outfit' });
 
     // a simple canopy shown while gliding in
     const canopy = new THREE.Mesh(
@@ -285,6 +342,64 @@ export class Character {
    * Starts (on) or stops an emote. id: a Cosmetics.EMOTES id (default: the cheer). A new id
    * while already emoting switches to it.
    */
+  /**
+   * Pickaxe (Cosmetics.PICKAXES id) in the right hand and back bling (BACKBLINGS id) on the
+   * chest; swapped in place (no rebuild), keeping whether the pickaxe is currently shown.
+   */
+  setLoadout({ pickaxe, backbling } = {}) {
+    if (pickaxe && pickaxe !== this.pickaxeId) {
+      const def = pickaxeDef(pickaxe);
+      let g = null;
+      if (def.src) g = accessory(def.src[0], def.src[1], def.tint);
+      else if (this._pickSrc) {
+        g = this._pickSrc.clone(true);
+        g.traverse((o) => {
+          if (o.isMesh) {
+            o.castShadow = true;
+            o.material = toToon(o.material, TOON_CHAR);
+            if (def.tint != null) o.material = tinted(o.material, def.tint);
+          }
+        });
+        g.scale.setScalar(0.62);
+        g.position.set(0, 0.1, 0);
+      }
+      const shown = this.pickaxe ? this.pickaxe.visible : this.equipped === 'pickaxe' && this.mode !== 'emote';
+      if (this.pickaxe && this.pickaxe.parent) this.pickaxe.parent.remove(this.pickaxe);
+      this.pickaxe = g;
+      if (g) {
+        g.visible = shown;
+        (this.bones.handslotr || this.gunPivot).add(g);
+      }
+      this.pickaxeId = pickaxe;
+    }
+    if (backbling && backbling !== this.backblingId) {
+      const def = backblingDef(backbling);
+      if (this._backItem && this._backItem.parent) this._backItem.parent.remove(this._backItem);
+      this._backItem = null;
+      // the outfit's own cape shows only with 'bb_outfit'
+      const own = !def.src && !def.none;
+      this.model.traverse((o) => {
+        if (o.isMesh && !o.isSkinnedMesh && (/_Cape/.test(o.name) || (o.parent && /_Cape/.test(o.parent.name)))) o.visible = own;
+      });
+      if (def.src) {
+        const [key, name, slot] = def.src;
+        const g = accessory(key, name, def.tint);
+        const chest = this.bones.chest;
+        if (g && chest) {
+          const pose = slot === 'back' && BACK_POSE[name];
+          if (pose) {
+            g.position.set(...pose.p);
+            g.rotation.set(...pose.r);
+            g.scale.setScalar(pose.s);
+          }
+          chest.add(g);
+          this._backItem = g;
+        }
+      }
+      this.backblingId = backbling;
+    }
+  }
+
   emote(on, id = null) {
     if (this.mode === 'dead') return;
     if (!on) {
@@ -314,7 +429,7 @@ export class Character {
     this.emoteId = id;
     const hold = def && def.hold ? this.fullActions['e:' + def.hold] : null;
     a.reset();
-    if (hold) {
+    if (hold || (def && def.once)) {
       a.setLoop(THREE.LoopOnce, 1);
       a.clampWhenFinished = true;
     } else a.setLoop(THREE.LoopRepeat, Infinity);
