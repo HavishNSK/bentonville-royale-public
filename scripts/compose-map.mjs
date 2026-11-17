@@ -11,7 +11,7 @@
 // the game map is a designed TILE PACK, not real distances:
 //   - TILES: a rectangle around each POI is cut out of the real map (sized to the POI's key
 //     buildings) and translated into a 3 x 3 grid. Real neighbours stay neighbours where
-//     possible (Crystal Bridges north, the Home Office south-east, ...), the Square is in
+//     possible (Crystal Bridges north, the Community Center south-east, ...), the Square is in
 //     the middle, and neighbouring tile centres are ~270-310 m apart (~30-45 s of running).
 //   - STREETS: every gap between tiles is exactly one street wide (GAP m). A synthetic road
 //     runs down every gap and around the outside, and the cut ends of real roads are
@@ -66,7 +66,9 @@ const TILES = [
   // (re-tagged `busloop`: asphalt with parked school buses instead of cars)
   { key: 'bentonville_west', col: 0, row: 2, src: [-7979, -509.5], busloop: [[-7938, -404]] },
   { key: 'bentonville_high', col: 1, row: 2, src: [1223, 2398] },
-  { key: 'home_office', col: 2, row: 2, src: [1466, 1070] },
+  // Bentonville Community Center (1101 SW Citizens Circle) replaced the Walmart Home Office
+  // (was src [1466, 1070]); scripts/swap-tile.mjs spliced it in without a full re-fetch
+  { key: 'community_center', col: 2, row: 2, src: [-1499, 4651] },
 ];
 const PATH_KINDS = new Set(['footway', 'path', 'steps', 'cycleway', 'track', 'pedestrian']);
 
@@ -178,7 +180,7 @@ const cellX = (c) => ORIGIN.x + COLS.slice(0, c).reduce((s, w) => s + w + GAP, 0
 const cellZ = (r) => ORIGIN.z + ROWS.slice(0, r).reduce((s, h) => s + h + GAP, 0);
 
 /** Tile -> { key, rect (source), dx, dz, game } with game = the cell in game metres. */
-function tilePieces() {
+export function tilePieces() {
   const pieces = TILES.map((t) => {
     const w = COLS[t.col];
     const h = ROWS[t.row];
@@ -202,16 +204,14 @@ function compose(full) {
   const pieces = tilePieces();
   const out = { buildings: [], roads: [], areas: [], waterways: [], trees: [], pois: [], buildingParts: [], landmarks: {} };
   const stats = { droppedEdgeBuildings: {}, kept: {}, extended: 0 };
+  for (const P of pieces) composeTile(full, P, out, stats);
+  return finish(full, pieces, out, stats);
+}
 
-  const W = COLS.reduce((s, w) => s + w, 0) + GAP * (COLS.length - 1);
-  const H = ROWS.reduce((s, h) => s + h, 0) + GAP * (ROWS.length - 1);
-  const ext = [ORIGIN.x, ORIGIN.z, ORIGIN.x + W, ORIGIN.z + H]; // tiles' outer edge
+/** Cuts tile P (a tilePieces() entry) out of `full` and moves it into its cell, into `out`. */
+export function composeTile(full, P, out, stats) {
   const half = GAP / 2;
-  // street centre lines: between columns / rows and the outer ring
-  const xs = [ext[0] - half, ...COLS.slice(0, -1).map((_, c) => cellX(c) + COLS[c] + half), ext[2] + half];
-  const zs = [ext[1] - half, ...ROWS.slice(0, -1).map((_, r) => cellZ(r) + ROWS[r] + half), ext[3] + half];
-
-  for (const P of pieces) {
+  {
     const R = P.rect;
     const G = P.game;
     let nb = 0;
@@ -256,6 +256,16 @@ function compose(full) {
     stats.kept[P.key] = nb;
     stats.droppedEdgeBuildings[P.key] = edge;
   }
+}
+
+function finish(full, pieces, out, stats) {
+  const W = COLS.reduce((s, w) => s + w, 0) + GAP * (COLS.length - 1);
+  const H = ROWS.reduce((s, h) => s + h, 0) + GAP * (ROWS.length - 1);
+  const ext = [ORIGIN.x, ORIGIN.z, ORIGIN.x + W, ORIGIN.z + H]; // tiles' outer edge
+  const half = GAP / 2;
+  // street centre lines: between columns / rows and the outer ring
+  const xs = [ext[0] - half, ...COLS.slice(0, -1).map((_, c) => cellX(c) + COLS[c] + half), ext[2] + half];
+  const zs = [ext[1] - half, ...ROWS.slice(0, -1).map((_, r) => cellZ(r) + ROWS[r] + half), ext[3] + half];
 
   // landmarks: move with the tile that holds their point (radius kept inside the tile)
   const kept = new Set(out.buildings.map((b) => b.id));
@@ -367,7 +377,10 @@ async function main() {
   for (const [k, l] of Object.entries(data.landmarks)) console.log(`  landmark ${k.padEnd(16)} x=${l.x} z=${l.z} r=${l.r} ids=${l.ids.length}`);
 }
 
-main().catch((e) => {
+export { TILES, GAP };
+
+// run as a script (not when scripts/swap-tile.mjs imports the tile helpers)
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch((e) => {
   console.error(e);
   process.exit(1);
 });

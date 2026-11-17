@@ -61,6 +61,6 @@ outside are invented, and everything else is left out.
 - momentary: source rectangle 445, 575, 695, 805 moved by (-300, -690) m
 - bentonville_west: source rectangle -8144, -672, -7814, -347 moved by (7669, 807) m
 - bentonville_high: source rectangle 1098, 2235.5, 1348, 2560.5 moved by (-1223, -2100.5) m
-- home_office: source rectangle 1341, 907.5, 1591, 1232.5 moved by (-1196, -772.5) m
+- community_center: source rectangle -1624, 4488.5, -1374, 4813.5 moved by (1769, -4353.5) m
 - Map bounds -499..419 x -504..484
 <!-- compose-map:end -->

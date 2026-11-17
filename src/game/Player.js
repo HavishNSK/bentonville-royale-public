@@ -539,6 +539,25 @@ export class Player {
     this._cancelReload();
   }
 
+  /**
+   * Out of the selected material: switch to the next one you can afford (wood -> brick ->
+   * metal order), no keybind needed. Stays put when nothing is affordable.
+   */
+  _autoMaterial(g) {
+    const mats = this.inventory.mats;
+    if ((mats[this.buildMat] || 0) >= BUILD.cost) return;
+    const i = MATERIALS.indexOf(this.buildMat);
+    for (let k = 1; k < MATERIALS.length; k++) {
+      const m = MATERIALS[(i + k) % MATERIALS.length];
+      if ((mats[m] || 0) >= BUILD.cost) {
+        const was = this.buildMat;
+        this.buildMat = m;
+        if (g && g.hud) g.hud.toast(`Out of ${was}: building with ${m}`, 'pickup');
+        return;
+      }
+    }
+  }
+
   cycleMaterial() {
     const i = MATERIALS.indexOf(this.buildMat);
     this.buildMat = MATERIALS[(i + 1) % MATERIALS.length];
@@ -982,6 +1001,7 @@ export class Player {
   _buildMode(dt, lmb, lmbClick, g) {
     const st = g.structures;
     if (!st || !st.plan) return;
+    this._autoMaterial(g);
     this.placement = st.plan(this.buildPiece, this.pos, this.heading, this.pitch);
     st.setGhost(this.placement, this.buildMat);
     if ((lmbClick || (lmb && this.placeCooldown <= 0)) && this.placement) this.tryPlace(g);
@@ -996,6 +1016,7 @@ export class Player {
     this.placeCooldown = 0.12;
     if (!pl || !pl.valid) return null;
     const mats = this.inventory.mats;
+    this._autoMaterial(g);
     if ((mats[this.buildMat] || 0) < BUILD.cost) {
       g.sfx.play('build_denied', { volume: 0.6 });
       g.hud.toast('Not enough ' + this.buildMat, 'warn');
