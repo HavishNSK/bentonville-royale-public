@@ -29,6 +29,7 @@ const FRAMES = {
   211198877: [28.3, 25.9, 'b'], 949466246: [126.1, 84.1, 'b'], 952075842: [228.2, 137.2, 'b'], 952075843: [111.8, 103, 'b'],
   651787776: [308.9, 200, 'a'], 577226262: [55.2, 47.6, 'b'], 577262580: [24.1, 19.9, 'a'], 896842915: [47.5, 19.9, 'b'],
   1578366349: [36, 15, 'b'], 912573722: [22, 12.5, 'a'], 799259120: [26.5, 21.2, 'b'], 799259121: [26.3, 21.9, 'a'],
+  751973534: [104.7, 86.4, 'b'],
 };
 
 /** Leaf labels per level for a landmark, from its authored recipe (max 4 levels, no POIs). */
@@ -51,7 +52,7 @@ function labelsByLevel(id) {
   });
 }
 
-test('all 16 landmarks are dressed and every key is a landmark id', () => {
+test('all 17 landmarks are dressed and every key is a landmark id', () => {
   const keys = Object.keys(LANDMARK_DRESSING);
   for (const k of keys) assert.ok(LANDMARK_IDS[k], `unknown landmark id ${k}`);
   for (const id of Object.keys(LANDMARK_IDS)) {
@@ -59,7 +60,7 @@ test('all 16 landmarks are dressed and every key is a landmark id', () => {
     assert.ok(LANDMARK_DRESSING[id].length >= 8, `too little dressing for ${id}`);
     assert.ok(FRAMES[id], `test frame table missing ${id}`);
   }
-  assert.equal(keys.length, 16);
+  assert.equal(keys.length, 17);
 });
 
 test('directives use catalog kinds, valid places and in-range options', () => {

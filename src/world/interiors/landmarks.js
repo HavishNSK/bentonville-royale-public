@@ -16,7 +16,7 @@
 // Room kinds used here beyond the Phase 1 list: gallery auditorium classroom gym cafeteria
 // library courtroom stall bar cafe studio brewhouse.
 
-import { leaf, cut } from './layout.js';
+import { leaf, cut, row } from './layout.js';
 import { RECIPES } from './archetypes.js';
 
 // ------------------------------------------------------------------ helpers
@@ -530,6 +530,30 @@ def(799259121, 26.3, 21.9, 'a', () =>
   cut('b', { abs: 8 }, cut('a', { abs: 13 }, R('sales', 'Block Street Records'), R('storage', 'Record Stock Room')), cut('a', { abs: 18.5 }, R('cafe', 'Onyx Coffee Lab'), cut('b', { abs: 15 }, R('lobby', 'Side Entrance'), R('bar', 'Coffee Bar'))))
 );
 
+// Bentonville Community Center (751973534; 104.7 x 86.4 m). Multi-use recreation centre:
+// aquatic center, fitness center, main gymnasium, commons/meeting rooms, administration.
+// Sources: bentonvillear.com/departments/parks/community-center.
+def(751973534, 104.7, 86.4, 'b', () => ({
+  levels: [
+    cut('a', 0.42,
+      cut('b', 0.5,
+        leaf('open', 'Aquatic Center'),
+        leaf('gym', 'Fitness Center'),
+      ),
+      leaf('gym', 'Main Gymnasium'),
+    ),
+    cut('b', 0.5,
+      row('a', [[0.25, leaf('lobby', 'Lobby')], [0.75, leaf('hall', 'Commons')]]),
+      row('a', [[0.5, leaf('classroom', 'Meeting Room A')], [0.5, leaf('classroom', 'Meeting Room B')]]),
+    ),
+    cut('b', 0.5,
+      leaf('office', 'Administration'),
+      leaf('storage', 'Storage'),
+    ),
+  ],
+  stairs: [{ level: 0, end: 1 }, { level: 1, end: 2 }],
+}));
+
 // Ids of the landmark buildings and the generic recipe each falls back to.
 export const LANDMARK_IDS = {
   8240824: { key: 'crystal_bridges', fallback: 'hall' },
@@ -548,6 +572,7 @@ export const LANDMARK_IDS = {
   912573722: { key: 'wrights_barbecue', fallback: 'shop' },
   799259120: { key: 'food_theater', fallback: 'shop' },
   799259121: { key: 'onyx_block_street_records', fallback: 'storefront_2' },
+  751973534: { key: 'community_center', fallback: 'hall' },
 };
 
 // The ordinary buildings of the current map (by OSM id).
@@ -570,6 +595,7 @@ put('greenhouse', [896842910]);
 put('garage', [912478100]);
 put('pavilion', [912514431]);
 put('shelter', [583054984]);
+put('bike_shop', [799257711]);
 
 /** pois: the POIs inside this building's footprint ({ k, ... }). area: footprint m^2. */
 export function classify(bd, pois, area = bd.a || 0) {
@@ -592,5 +618,8 @@ export function classify(bd, pois, area = bd.a || 0) {
   if (t === 'office' || has(/^office=/)) return lv >= 2 || area > 400 ? 'office_block' : 'office_small';
   if (area > 1000) return area > 1500 ? 'hall' : 'retail_block';
   if (lv >= 2 && area < 240) return 'storefront_2';
+  if (has(/amenity=restaurant|amenity=fast_food/)) return 'restaurant';
+  if (has(/shop=bicycle/)) return 'bike_shop';
+  if (has(/craft=brewery|amenity=bar/)) return 'brewpub';
   return 'shop';
 }
