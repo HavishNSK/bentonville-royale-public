@@ -439,6 +439,9 @@ export class Player {
     const ez = p.z + fz * this.radius;
     if (world.builtAbove(p.x, p.z, p.y) <= top + 0.05 || world.builtAbove(ex, ez, p.y) <= top + 0.05) return null;
     if (world.ceilingAbove(p.x, p.z, p.y, 0.05) <= top + 0.05) return null;
+    // ...and not with the front of the body under a floor's edge either (e.g. climbing sideways
+    // out of a building's stairwell): the rise would carry it up through the slab
+    if (world.ceilingAbove(ex, ez, p.y, 0.05) <= top + 0.05) return null;
     if (world.groundHeight(ax, az, p.y) >= top - 0.05) return null; // just a step: walking handles it
     // stand-on spot a bit further in, with room for a whole body above it
     const lx = p.x + fx * (reach + 0.35);

@@ -7,6 +7,17 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.8.1',
+    date: '2026-11-17',
+    title: 'Stairwell fix',
+    sections: [
+      {
+        heading: 'Fixes',
+        items: ['You can no longer climb sideways out of a building stairwell up through the floor above. Take the stairs!'],
+      },
+    ],
+  },
+  {
     version: '0.8.0',
     date: '2026-11-16',
     title: 'Pickaxes, back blings and a new lobby',
