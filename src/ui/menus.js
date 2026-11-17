@@ -237,6 +237,7 @@ export function createMenus(root, opts = {}) {
          ${toggle('invertY', 'Invert mouse Y')}
          ${range('fov', 'Field of view', 55, 100, 1)}
          <div class="mn-row"><span>Graphics quality</span>${seg('quality', QUALITY_OPTIONS)}</div>
+         ${toggle('performanceMode', 'Performance mode (Chromebook)', 'Half resolution, no bloom/outlines/shadows, shorter draw distance. Best for Chromebooks and weak laptops.')}
          <div class="mn-row"><span>Bot difficulty</span>${seg('difficulty', DIFFICULTY_OPTIONS)}</div>
          ${toggle('autoPickupAmmo', 'Auto-pickup ammo & mats', 'Walk over ammo and materials to take them without pressing interact.')}
          ${toggle('showFps', 'Show FPS')}
@@ -386,8 +387,13 @@ export function createMenus(root, opts = {}) {
       if (inp.dataset.name !== 'googleTiles') inp.checked = !!settings[inp.dataset.name];
     });
     const gt = settingsEl.querySelector('[data-name=googleTiles]');
-    gt.disabled = !gtilesAvailable;
-    gt.checked = gtilesAvailable && settings.googleTiles;
+    gt.disabled = !gtilesAvailable || !!settings.performanceMode;
+    gt.checked = gtilesAvailable && settings.googleTiles && !settings.performanceMode;
+    const qualitySeg = settingsEl.querySelector('.mn-seg[data-name=quality]');
+    if (qualitySeg) {
+      qualitySeg.classList.toggle('is-disabled', !!settings.performanceMode);
+      qualitySeg.querySelectorAll('button').forEach((b) => { b.disabled = !!settings.performanceMode; });
+    }
     renderBindings();
     fpsMeter.setVisible(settings.showFps);
   }

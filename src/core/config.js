@@ -342,6 +342,8 @@ export const DIFFICULTY = {
 // outline / bloom: post passes (render/Post.js); both off = plain render (cheapest).
 // renderScale multiplies the device pixel ratio (internal resolution).
 export const QUALITY = {
+  // Chromebook / weak GPU: half-res, no post, short draw distances.
+  performance: { pixelRatio: 1, renderScale: 0.5, outline: false, bloom: false, msaa: false, buildingDist: 420, treeDist: 160, propDist: 70, charDist: 80 },
   low: { pixelRatio: 1, renderScale: 1, outline: false, bloom: false, buildingDist: 1100, treeDist: 380, propDist: 160, charDist: 160 },
   medium: { pixelRatio: 1.5, renderScale: 1, outline: true, bloom: true, buildingDist: 1700, treeDist: 620, propDist: 260, charDist: 240 },
   high: { pixelRatio: 2, renderScale: 1, outline: true, bloom: true, buildingDist: 2400, treeDist: 950, propDist: 380, charDist: 320 },

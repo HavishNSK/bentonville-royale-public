@@ -62,6 +62,7 @@ import { toonGradient } from './Toon.js';
 const TAU = Math.PI * 2;
 
 const QUALITY = {
+  performance: { count: 0.25, life: 0.7, lights: 0, smoke: false },
   low: { count: 0.5, life: 0.85, lights: 0, smoke: false },
   medium: { count: 1.0, life: 1.0, lights: 2, smoke: true },
   high: { count: 1.6, life: 1.35, lights: 3, smoke: true },

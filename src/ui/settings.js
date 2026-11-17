@@ -59,6 +59,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   editOnRelease: false, // releasing the mouse after selecting edit tiles confirms the edit
   editWheelReset: false, // the mouse wheel resets the piece being edited
   difficulty: 'normal', // 'easy' | 'normal' | 'hard'
+  performanceMode: false, // Chromebook / weak laptop: half-res, no post, short draw distances
   googleTiles: false, // optional Google Photorealistic 3D Tiles view (needs VITE_GOOGLE_MAPS_API_KEY)
   bindings: DEFAULT_BINDINGS,
 });
@@ -104,9 +105,17 @@ export function sanitizeSettings(raw) {
     editOnRelease: bool(s.editOnRelease, d.editOnRelease),
     editWheelReset: bool(s.editWheelReset, d.editWheelReset),
     difficulty: DIFFICULTY_OPTIONS.includes(s.difficulty) ? s.difficulty : d.difficulty,
-    googleTiles: s.googleTiles === true,
+    performanceMode: bool(s.performanceMode, d.performanceMode),
+    // Performance mode forces Google tiles off (too heavy for Chromebooks).
+    googleTiles: s.performanceMode === true ? false : s.googleTiles === true,
     bindings: sanitizeBindings(s.bindings),
   };
+}
+
+/** QUALITY key actually used for rendering (performance mode overrides the quality picker). */
+export function graphicsQuality(settings) {
+  if (settings && settings.performanceMode) return 'performance';
+  return settings && QUALITY_OPTIONS.includes(settings.quality) ? settings.quality : 'medium';
 }
 
 /** Human label for a binding code: 'KeyW' -> 'W', 'Mouse0' -> 'LMB', 'ShiftLeft' -> 'L-SHIFT'. */

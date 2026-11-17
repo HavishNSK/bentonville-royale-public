@@ -3,24 +3,25 @@
 //   const acct = createAccount();
 //   await acct.init();                      // resumes a saved session, else a local guest profile
 //   acct.signedIn, acct.profile = { name, coins, owned, equipped:{skin, emotes}, friends, incoming, outgoing, stats }
-//   await acct.register(name, pw) / acct.login(name, pw) / acct.logout()
+//   await acct.register(name, pw) / acct.login(name, pw) / acct.loginWithGoogle(idToken)
+//   await acct.redeemAuthTicket(ticket) / acct.logout()
 //   await acct.buy(id) / acct.equip({ skin, emotes })
 //   await acct.reward({ kills, placement, players, won })   -> coins earned
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
+//   await acct.leaderboard() -> { online, wins:[{name,wins,kills}], kills:[...] }
 //   acct.setStatus('lobby'|'match', partyCode)
 //   await acct.feedbackList() / feedback(kind, text) / feedbackVote(id)   suggestions + bugs board
 //   acct.on('change', fn(profile)) / on('friends', fn({list, incoming, outgoing})) / on('invite', fn({from, code}))
 //   acct.on('request', fn(from)) / on('online', fn(bool))
 //
-// Without the account server (or signed out) everything still works on a guest profile
-// kept in localStorage: coins, shop, locker. Friends need a signed-in account.
+// Guests can play and equip free defaults only. Coins, match rewards, and shop purchases
+// require a signed-in account. Guest localStorage no longer stores a coin balance.
 
 import { partyHost, isLocal } from './Net.js';
-import { DEFAULT_OWNED, DEFAULT_EQUIPPED, PRICES, EMOTE_SLOTS, SKINS, EMOTES } from '../game/Cosmetics.js';
+import { DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, SKINS, EMOTES } from '../game/Cosmetics.js';
 
 const TOKEN_KEY = 'bentonville-royale.account';
 const GUEST_KEY = 'bentonville-royale.guest';
-const GUEST_COINS = 1500;
 const ANON_KEY = 'bentonville-royale.anon'; // stable id for guests' board posts / votes
 
 function anonId() {
@@ -89,13 +90,13 @@ function guestProfile() {
     p = null;
   }
   if (!p || typeof p !== 'object') p = {};
-  const owned = Array.isArray(p.owned) ? p.owned.filter((id) => SKINS[id] || EMOTES[id]) : [];
-  for (const id of DEFAULT_OWNED) if (!owned.includes(id)) owned.push(id);
+  // Guests only keep free defaults (no leftover shop unlocks or coin balance).
+  const owned = DEFAULT_OWNED.slice();
   const eq = p.equipped || {};
   return {
     name: 'Guest',
     guest: true,
-    coins: Number.isFinite(p.coins) ? Math.max(0, p.coins | 0) : GUEST_COINS,
+    coins: 0,
     owned,
     equipped: {
       skin: owned.includes(eq.skin) && SKINS[eq.skin] ? eq.skin : DEFAULT_EQUIPPED.skin,
@@ -107,7 +108,7 @@ function guestProfile() {
     friends: [],
     incoming: [],
     outgoing: [],
-    stats: p.stats || { matches: 0, wins: 0, kills: 0 },
+    stats: { matches: 0, wins: 0, kills: 0 },
   };
 }
 
@@ -161,6 +162,24 @@ export function createAccount() {
       return r.profile;
     },
 
+    /** Google Identity Services ID token (credential). Server verifies JWT + JWKS. */
+    async loginWithGoogle(idToken) {
+      const r = await api('googleLogin', { idToken });
+      setToken(r.token);
+      setProfile(r.profile);
+      connect();
+      return r.profile;
+    },
+
+    /** One-time ticket from Clever OAuth callback (?br_auth=). */
+    async redeemAuthTicket(ticket) {
+      const r = await api('redeemAuthTicket', { ticket });
+      setToken(r.token);
+      setProfile(r.profile);
+      connect();
+      return r.profile;
+    },
+
     async logout() {
       const t = token;
       setToken(null);
@@ -172,18 +191,7 @@ export function createAccount() {
     },
 
     async buy(id) {
-      if (!acct.signedIn) {
-        const p = acct.profile;
-        const price = PRICES[id];
-        if (price == null) throw new Error('That item is not in the shop.');
-        if (p.owned.includes(id)) throw new Error('You already own that.');
-        if (p.coins < price) throw new Error('Not enough coins.');
-        p.coins -= price;
-        p.owned.push(id);
-        saveGuest();
-        emit('change', p);
-        return p;
-      }
+      if (!acct.signedIn) throw new Error('Sign in to earn coins and buy outfits.');
       const r = await api('buy', { token, item: id });
       setProfile(r.profile);
       return r.profile;
@@ -205,21 +213,9 @@ export function createAccount() {
       return r.profile;
     },
 
-    /** Match payout. Returns coins earned. */
+    /** Match payout. Returns coins earned. Guests earn nothing — sign in required. */
     async reward({ kills = 0, placement = 1, players = 1, won = false } = {}) {
-      if (!acct.signedIn) {
-        // guests earn with the same formula (no server: no cap beyond the formula itself)
-        const outlasted = Math.round(((players - placement) / Math.max(1, players - 1)) * 250);
-        const earned = Math.min(1500, Math.max(0, outlasted) + Math.min(40, kills) * 75 + (won ? 400 : 0));
-        const p = acct.profile;
-        p.coins += earned;
-        p.stats.matches++;
-        p.stats.kills += kills;
-        if (won) p.stats.wins++;
-        saveGuest();
-        emit('change', p);
-        return earned;
-      }
+      if (!acct.signedIn) return 0;
       try {
         const r = await api('reward', { token, kills, placement, players, won });
         setProfile(r.profile);
@@ -244,6 +240,11 @@ export function createAccount() {
     async invite(name, code) {
       if (!acct.signedIn) throw new Error('Sign in to invite friends.');
       await api('invite', { token, name, code });
+    },
+
+    /** Public wins/kills boards + displayed online count (server pads the number). */
+    async leaderboard() {
+      return api('leaderboard', {});
     },
 
     /** Suggestions / bug board (works signed in or as a guest). */
@@ -282,7 +283,8 @@ export function createAccount() {
 
   function saveGuest() {
     const p = acct.profile;
-    store(GUEST_KEY, { coins: p.coins, owned: p.owned, equipped: p.equipped, stats: p.stats });
+    // Coins/shop unlocks are account-only; guests only persist free equip prefs.
+    store(GUEST_KEY, { equipped: p.equipped });
   }
 
   function send(msg) {

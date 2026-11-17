@@ -45,7 +45,22 @@ export const PATCH_NOTES = [
       },
       {
         heading: 'Community',
-        items: ['New: PATCH NOTES on the title screen, with a board to post suggestions and bug reports and upvote other players’ posts.'],
+        items: [
+          'New: PATCH NOTES on the title screen, with a board to post suggestions and bug reports and upvote other players’ posts.',
+          'New: RANKS: leaderboards for the most wins and eliminations, plus how many players are online.',
+        ],
+      },
+      {
+        heading: 'Accounts',
+        items: [
+          'Sign in with Google, or with Clever on school Chromebooks.',
+          'Coins, match rewards and shop unlocks now need a signed-in account.',
+          'Signing out asks you to confirm first.',
+        ],
+      },
+      {
+        heading: 'Performance',
+        items: ['New Chromebook Performance mode in Settings: half resolution, no bloom or outlines, and a shorter draw distance for smooth play on low-end laptops.'],
       },
     ],
   },

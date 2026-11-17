@@ -101,10 +101,11 @@ const menus = createMenus(uiRoot, {
     menus.showTitle();
   },
   googleTilesAvailable: hasGoogleTilesKey(),
+  // menus.js settings → onSettings; sole boot-path googleTiles wiring; reads settings.performanceMode/googleTiles; user: Chromebook performance mode
   onSettings: (s) => {
     settings = s;
     saveSettings(s);
-    googleTiles.setEnabled(s.googleTiles);
+    googleTiles.setEnabled(!!s.googleTiles && !s.performanceMode);
     if (game) game.applySettings(s);
     else {
       // no Game yet (WebGL failed): still honour the audio sliders, as Game.applySettings does
@@ -600,9 +601,28 @@ try {
     if (s === 'title') account.setStatus('lobby', code);
     else if (s === null) account.setStatus('match', code); // the HUD took over: in a match
   };
-  account.init().then((p) => {
+  // Clever OAuth returns ?br_auth=<ticket>; redeem once then strip from the URL.
+  const authTicket = new URLSearchParams(location.search).get('br_auth');
+  const afterAuth = (p) => {
     if (!p.guest) menus.setAccountName(p.name);
-  });
+  };
+  if (authTicket) {
+    account
+      .redeemAuthTicket(authTicket)
+      .then((p) => {
+        afterAuth(p);
+        try {
+          const u = new URL(location.href);
+          u.searchParams.delete('br_auth');
+          history.replaceState({}, '', u.pathname + u.search + u.hash);
+        } catch {
+          /* ignore */
+        }
+      })
+      .catch(() => account.init().then(afterAuth));
+  } else {
+    account.init().then(afterAuth);
+  }
   // coins for every finished match
   game.onMatchEnd = async (r) => {
     const players = r.mode && r.mode !== 'solo' ? r.teams : r.total;

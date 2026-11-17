@@ -23,6 +23,7 @@
 
 import { Server, routePartykitRequest } from 'partyserver';
 import { MAX_HUMANS } from '../src/net/protocol.js';
+import { handleCleverAuth } from './cleverAuth.js';
 
 // The party lobby and matchmaker run in the same Worker (wrangler.jsonc binds all three).
 export { Party } from './partyRoom.js';
@@ -191,6 +192,9 @@ export class Main extends Server {
 
 export default {
   async fetch(request, env) {
+    // Clever OAuth start/callback (needs Worker secrets; not a PartyServer room).
+    const clever = await handleCleverAuth(request, env);
+    if (clever) return clever;
     return (await routePartykitRequest(request, env)) || new Response('Not found', { status: 404 });
   },
 };
