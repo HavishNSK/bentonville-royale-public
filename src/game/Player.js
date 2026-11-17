@@ -304,69 +304,8 @@ export class Player {
       if (this.mantle) g.sfx.play('jump', { volume: 0.35 });
     }
 
-    if (this.mantle) {
-      // scripted climb: rise to the ledge first, then step over onto it
-      const m = this.mantle;
-      m.t = Math.min(1, m.t + dt / m.dur);
-      const ku = Math.min(1, m.t / 0.6);
-      const kf = Math.max(0, (m.t - 0.3) / 0.7);
-      p.y = m.y0 + (m.y1 - m.y0) * (1 - (1 - ku) * (1 - ku));
-      p.x = m.x0 + (m.x1 - m.x0) * kf * kf * (3 - 2 * kf);
-      p.z = m.z0 + (m.z1 - m.z0) * kf * kf * (3 - 2 * kf);
-      v.set(0, 0, 0);
-      this.grounded = false;
-      if (m.t >= 1) {
-        this.mantle = null;
-        p.y = world.groundHeight(p.x, p.z, p.y + 0.1);
-        this.grounded = true;
-      }
-    } else {
-    // ---- integrate
-    const ox = p.x;
-    const oz = p.z;
-    const oy = p.y;
-    // a floor / ramp already above us (where we stand now) can't be stepped or snapped onto
-    const cap = world.builtAbove(ox, oz, oy);
-    p.x += v.x * dt;
-    p.z += v.z * dt;
-    if (!this.airborneDrop || p.y - groundY < 20) world.resolveCircle(p, this.radius, this.height);
-    const b = world.bounds;
-    p.x = clamp(p.x, b.minX + 2, b.maxX - 2);
-    p.z = clamp(p.z, b.minZ + 2, b.maxZ - 2);
-    // walking into a floor's edge at body height (too high to step onto) blocks like a wall
-    const fa = world.builtAbove(p.x, p.z, oy);
-    if (fa < cap - 0.01 && fa - oy > STEP_UP && fa - FLOOR_UNDER < oy + this.height) {
-      p.x = ox;
-      p.z = oz;
-    } else if (this.grounded && fa < Infinity && (p.x !== ox || p.z !== oz)) {
-      // ground rising under a floor: stop where the head would push into it
-      const ng = world.groundHeight(p.x, p.z, oy, undefined, cap);
-      if (ng > oy + 0.02 && fa - FLOOR_UNDER - ng < this.height * 0.8) {
-        p.x = ox;
-        p.z = oz;
-      }
-    }
-
-    const wasGrounded = this.grounded;
-    const prevVy = v.y;
-    p.y += v.y * dt;
-    const gy = world.groundHeight(p.x, p.z, Math.max(p.y, p.y - v.y * dt), undefined, cap);
-    if (wasGrounded && v.y <= 0 && p.y > gy && p.y - gy < 0.75) p.y = gy; // stick to ramps / steps
-    const ceil = world.ceilingAbove(p.x, p.z, Math.min(oy, p.y));
-    // head bump whenever we rose (jump, ramp snap, step-up), not only while jumping
-    if ((v.y > 0 || p.y > oy) && p.y + this.height > ceil) {
-      p.y = Math.max(Math.min(gy, oy), ceil - this.height);
-      if (v.y > 0) v.y = 0;
-    }
-    if (p.y <= gy) {
-      p.y = gy;
-      if (!wasGrounded) this._land(prevVy, g);
-      v.y = 0;
-      this.grounded = true;
-    } else {
-      this.grounded = false;
-    }
-    }
+    if (this.mantle) this._advanceMantle(world, dt);
+    else this._integrateMovement(world, dt, g);
     this.surface = world.surface;
     // ---- swimming: on the terrain inside a water area (World.inWater)
     const wasSwim = this.swimming;
@@ -445,6 +384,106 @@ export class Player {
       }
     }
     void inv;
+  }
+
+  /** Resolve the whole travelled path, not just the endpoint of a slow frame. */
+  _integrateMovement(world, dt, g) {
+    const p = this.pos;
+    const v = this.vel;
+    const spacing = Math.min(0.2, this.radius * 0.5);
+    const speed = Math.max(Math.hypot(v.x, v.z), Math.abs(v.y), 1);
+    // Bound work during a stalled frame. Excess time is discarded rather than
+    // enlarging steps and allowing a body to jump through thin geometry.
+    const elapsed = Math.min(Math.max(dt, 0), 128 / 60, 128 * spacing / speed);
+    const count = Math.max(1, Math.ceil(Math.max(elapsed * 60, speed * elapsed / spacing)));
+    const stepDt = elapsed / count;
+    for (let i = 0; i < count; i++) this._movementStep(world, stepDt, g);
+  }
+
+  _movementStep(world, dt, g) {
+    const p = this.pos;
+    const v = this.vel;
+    // ---- integrate
+    const ox = p.x;
+    const oz = p.z;
+    const oy = p.y;
+    // a floor / ramp already above us (where we stand now) can't be stepped or snapped onto
+    const cap = world.builtAbove(ox, oz, oy);
+    p.x += v.x * dt;
+    p.z += v.z * dt;
+    world.resolveCircle(p, this.radius, this.height);
+    const b = world.bounds;
+    p.x = clamp(p.x, b.minX + 2, b.maxX - 2);
+    p.z = clamp(p.z, b.minZ + 2, b.maxZ - 2);
+    // walking into a floor's edge at body height (too high to step onto) blocks like a wall
+    const fa = world.builtAbove(p.x, p.z, oy);
+    if (fa < cap - 0.01 && fa - oy > STEP_UP && fa - FLOOR_UNDER < oy + this.height) {
+      p.x = ox;
+      p.z = oz;
+    } else if (this.grounded && fa < Infinity && (p.x !== ox || p.z !== oz)) {
+      // ground rising under a floor: stop where the head would push into it
+      const ng = world.groundHeight(p.x, p.z, oy, undefined, cap);
+      if (ng > oy + 0.02 && fa - FLOOR_UNDER - ng < this.height * 0.8) {
+        p.x = ox;
+        p.z = oz;
+      }
+    }
+
+    const wasGrounded = this.grounded;
+    const prevVy = v.y;
+    p.y += v.y * dt;
+    const gy = world.groundHeight(p.x, p.z, Math.max(p.y, p.y - v.y * dt), undefined, cap);
+    if (wasGrounded && v.y <= 0 && p.y > gy && p.y - gy < 0.75) p.y = gy; // stick to ramps / steps
+    const ceil = world.ceilingAbove(p.x, p.z, Math.min(oy, p.y));
+    // head bump whenever we rose (jump, ramp snap, step-up), not only while jumping
+    if ((v.y > 0 || p.y > oy) && p.y + this.height > ceil) {
+      p.y = Math.max(Math.min(gy, oy), ceil - this.height);
+      if (v.y > 0) v.y = 0;
+    }
+    if (p.y <= gy) {
+      p.y = gy;
+      if (!wasGrounded) this._land(prevVy, g);
+      v.y = 0;
+      this.grounded = true;
+    } else {
+      this.grounded = false;
+    }
+  }
+
+  /** A planned climb must remain clear if a player builds or destroys geometry mid-climb. */
+  _advanceMantle(world, dt) {
+    const m = this.mantle;
+    const end = Math.min(1, m.t + Math.max(0, dt) / m.dur);
+    const count = Math.max(1, Math.ceil((end - m.t) * Math.max(60, Math.hypot(m.x1 - m.x0, m.z1 - m.z0) / 0.05)));
+    const start = m.t;
+    this.vel.set(0, 0, 0);
+    this.grounded = false;
+    for (let i = 1; i <= count; i++) {
+      const t = start + (end - start) * i / count;
+      const ku = Math.min(1, t / 0.6);
+      // Finish lifting before crossing the ledge's vertical face.
+      const kf = Math.max(0, (t - 0.6) / 0.4);
+      const x = m.x0 + (m.x1 - m.x0) * kf * kf * (3 - 2 * kf);
+      const y = m.y0 + (m.y1 - m.y0) * (1 - (1 - ku) * (1 - ku));
+      const z = m.z0 + (m.z1 - m.z0) * kf * kf * (3 - 2 * kf);
+      const ceil = world.ceilingAbove(x, z, Math.min(this.pos.y, y), 0.05);
+      _mv.set(x, y, z);
+      world.resolveCircle(_mv, this.radius, this.height);
+      if (y + this.height > ceil + 0.001 || Math.hypot(_mv.x - x, _mv.z - z) > 0.03) {
+        this.mantle = null;
+        return;
+      }
+      this.pos.copy(_mv);
+      m.t = t;
+    }
+    if (end >= 1) {
+      this.mantle = null;
+      const floor = world.groundHeight(this.pos.x, this.pos.z, this.pos.y + 0.1);
+      if (Math.abs(this.pos.y - floor) < 0.2) {
+        this.pos.y = floor;
+        this.grounded = true;
+      }
+    }
   }
 
   /**

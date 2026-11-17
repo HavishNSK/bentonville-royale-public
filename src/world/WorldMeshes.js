@@ -17,12 +17,12 @@ const CHUNK = 256;
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 const AREA_COLOR = {
-  water: 0x4f97cf,
-  wood: 0x4d8a45,
-  park: 0x84bf5f,
-  grass: 0x8ac464,
-  pitch: 0x6cb257,
-  garden: 0x76b65c,
+  water: 0x527d86,
+  wood: 0x526849,
+  park: 0x75885b,
+  grass: 0x7b8b60,
+  pitch: 0x6c845b,
+  garden: 0x71865e,
   parking: 0x8a8e93,
   busloop: 0x83878c, // a school's bus loop: asphalt with parked school buses (parkSchoolBuses)
 };
@@ -93,7 +93,7 @@ class Buf {
 
 const _c = new THREE.Color();
 
-function addPolygon(buf, pts, y, hex) {
+export function addPolygon(buf, pts, y, hex) {
   if (pts.length < 3) return;
   const contour = pts.map((p) => new THREE.Vector2(p[0], p[1]));
   let tris;
@@ -116,7 +116,21 @@ function addPolygon(buf, pts, y, hex) {
   }
 }
 
-function addRibbon(buf, pts, halfWidth, y, hex) {
+// A road can span hundreds of metres between OSM nodes. Four-metre samples
+// follow the DEM instead of drawing a flat chord through hills and foundations.
+function ribbonSamples(path) {
+  if (path.length < 2) return path;
+  const points = [path[0]];
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1], b = path[i];
+    const count = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 4));
+    for (let k = 1; k <= count; k++) points.push([a[0] + (b[0] - a[0]) * k / count, a[1] + (b[1] - a[1]) * k / count]);
+  }
+  return points;
+}
+
+export function addRibbon(buf, path, halfWidth, y, hex) {
+  const pts = ribbonSamples(path);
   const n = pts.length;
   if (n < 2) return;
   _c.setHex(hex);
@@ -159,9 +173,10 @@ function addRibbon(buf, pts, halfWidth, y, hex) {
     // miter length, clamped so sharp corners do not spike
     const cos = Math.max(0.5, nx * -d1z + nz * d1x);
     const w = halfWidth / cos;
-    const wy = getY(p[0], p[1]);
-    buf.v(p[0] + nx * w, wy, p[1] + nz * w, 0, 1, 0, _c.r, _c.g, _c.b);
-    buf.v(p[0] - nx * w, wy, p[1] - nz * w, 0, 1, 0, _c.r, _c.g, _c.b);
+    const lx = p[0] + nx * w, lz = p[1] + nz * w;
+    const rx = p[0] - nx * w, rz = p[1] - nz * w;
+    buf.v(lx, getY(lx, lz), lz, 0, 1, 0, _c.r, _c.g, _c.b);
+    buf.v(rx, getY(rx, rz), rz, 0, 1, 0, _c.r, _c.g, _c.b);
   }
   for (let i = 0; i < n - 1; i++) {
     const a = base + i * 2;
@@ -234,7 +249,7 @@ function groundTexture() {
     return (l[y0 * n + x0] * (1 - fx) + l[y0 * n + x1] * fx) * (1 - fy) + (l[y1 * n + x0] * (1 - fx) + l[y1 * n + x1] * fx) * fy;
   };
   // earthy palette: deep green, mid green, bright green, yellow-green, tan, bare dirt
-  const pal = [[0x3a,0x56,0x22],[0x52,0x7a,0x34],[0x72,0xa4,0x48],[0x8e,0xa8,0x58],[0xa4,0x94,0x62],[0x96,0x7c,0x50]];
+  const pal = [[0x45,0x50,0x36],[0x5a,0x69,0x43],[0x76,0x83,0x55],[0x8b,0x91,0x64],[0xa0,0x95,0x70],[0x8e,0x7d,0x60]];
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = x / size, v = y / size;
@@ -322,11 +337,27 @@ function buildingMaterial() {
           if (style < 0.5) {
             float l = smoothstep(0.0, 0.1, fract(vWall.y / 0.4));
             diffuseColor.rgb *= mix(1.0, mix(0.9, 1.0, l), near);
+          } else if (style < 1.5) {
+            // Running-bond masonry in metres, antialiased away at distance. A
+            // restrained mortar joint gives brick a scale without new textures.
+            float row = floor(vWall.y / 0.085);
+            vec2 brick = vec2(vWall.x / 0.25 + mod(row, 2.0) * 0.5, vWall.y / 0.085);
+            vec2 bf = fract(brick);
+            vec2 ba = fwidth(brick) + 1e-4;
+            vec2 joint = smoothstep(vec2(0.04) - ba, vec2(0.04) + ba, bf);
+            float mortar = 1.0 - joint.x * joint.y;
+            float detail = 1.0 - smoothstep(0.2, 0.65, max(ba.x, ba.y));
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.82 + vec3(0.035), mortar * detail * 0.55 * (1.0 - m.x * m.y * win));
+          } else {
+            // Industrial metal cladding: narrow vertical panel seams.
+            float seam = abs(fract(vWall.x / 1.2) - 0.5);
+            float edgeAA = fwidth(vWall.x / 1.2) + 1e-4;
+            diffuseColor.rgb *= 1.0 - (1.0 - smoothstep(0.006, 0.006 + edgeAA, seam)) * 0.16 * near;
           }
         }`
       );
   };
-  mat.customProgramCacheKey = () => 'br-building-v2';
+  mat.customProgramCacheKey = () => 'br-building-v3';
   return mat;
 }
 
@@ -390,7 +421,9 @@ function hcap(chunk, pts, tris, y, dir, hex, h, litDir = dir) {
  * door openings, the wall thickness (an inner face), door jambs and lintels, an
  * interior floor and ceiling. Geometry sits on y = 0 like the rest of the map.
  */
-function addBuilding(chunk, b, tint, shell) {
+export function appendBuildingGeometry(chunk, b, tint, collider) {
+  const shell = collider?.shell;
+  const start = chunk.buf.pos.length;
   const pts = b.p;
   const n = pts.length;
   const h = b.h;
@@ -453,6 +486,11 @@ function addBuilding(chunk, b, tint, shell) {
     if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
     else buf.idx.push(base + t[0], base + t[2], base + t[1]);
   }
+  // Interior generators deliberately emit heights relative to shell.floor. Lift the
+  // entire building together, including panels, stairs and furniture, to the very
+  // same foundation used by World collision. Shader facade heights remain local.
+  const baseY = collider?.y0 || 0;
+  for (let i = start + 1; i < buf.pos.length; i += 3) buf.pos[i] += baseY;
 }
 
 /**
@@ -589,20 +627,21 @@ const _s = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
 
-class Scatter {
-  constructor(scene, shadows) {
+export class Scatter {
+  constructor(scene, shadows, surfaceHeight = () => 0) {
     this.scene = scene;
     this.shadows = shadows;
     this.defs = new Map();
     this.buckets = new Map(); // "cx,cz|name" -> records
     this.meshes = [];
+    this.surfaceHeight = surfaceHeight;
   }
 
   define(name, gltf, scale) {
     if (!gltf) return false;
     const flat = flattenModel(gltf.scene);
     if (!flat) return false;
-    this.defs.set(name, { geometry: flat.geometry, material: flat.material, scale });
+    this.defs.set(name, { geometry: flat.geometry, material: flat.material, scale, minY: flat.geometry.boundingBox.min.y });
     return true;
   }
 
@@ -611,13 +650,14 @@ class Scatter {
   }
 
   /** Returns a record you can later pass to hide(). */
-  add(name, x, z, rotY, scaleMul = 1, colorHex = null, y = 0) {
+  add(name, x, z, rotY, scaleMul = 1, colorHex = null, y = this.surfaceHeight(x, z)) {
     const def = this.defs.get(name);
     if (!def) return null;
     const key = Math.floor(x / CHUNK) + ',' + Math.floor(z / CHUNK) + '|' + name;
     let list = this.buckets.get(key);
     if (!list) this.buckets.set(key, (list = []));
-    const rec = { name, x, y, z, rotY, scale: def.scale * scaleMul, color: colorHex, mesh: null, index: list.length };
+    const scale = def.scale * scaleMul;
+    const rec = { name, x, y: y - def.minY * scale, z, rotY, scale, color: colorHex, mesh: null, index: list.length };
     list.push(rec);
     return rec;
   }
@@ -771,7 +811,7 @@ function parkSchoolBuses(world, data, root) {
       // bus-local -z (the front) points along +f; origin sits BUS_MID behind the footprint centre
       const ox = cx - fx * -BUS_MID;
       const oz = cz - fz * -BUS_MID;
-      const gy = world.terrainHeight(cx, cz);
+      const gy = world.surfaceHeight(cx, cz);
       m.makeRotationY(Math.atan2(-fx, -fz)).setPosition(ox, gy + SCHOOL_BUS.groundY, oz);
       for (const part of parts) (byMat[part.mat] ||= []).push(part.geometry.clone().applyMatrix4(m));
       const corners = [
@@ -780,7 +820,7 @@ function parkSchoolBuses(world, data, root) {
         [cx - fx * BUS_HALF_LEN - vx * BUS_HALF_W, cz - fz * BUS_HALF_LEN - vz * BUS_HALF_W],
         [cx - fx * BUS_HALF_LEN + vx * BUS_HALF_W, cz - fz * BUS_HALF_LEN + vz * BUS_HALF_W],
       ];
-      const col = world.addPoly(corners, SCHOOL_BUS.groundY + SCHOOL_BUS.top, 'vehicle', 'metal', []);
+      const col = world.addPoly(corners, SCHOOL_BUS.groundY + SCHOOL_BUS.top, 'vehicle', 'metal', [], { y0: gy });
       col.x = cx;
       col.z = cz;
       n++;
@@ -832,10 +872,10 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
 
   // Natural procedural ground texture (better than satellite photo at walking level)
   const gTex = groundTexture();
-  gTex.repeat.set(gw / 150, gd / 150); // larger tiles = less obvious repetition
+  gTex.repeat.set((b.maxX - b.minX) / 48, (b.maxZ - b.minZ) / 48);
   const groundMat = new THREE.MeshLambertMaterial({ map: gTex });
   // Outer margin (always flat, behind everything — horizon fill)
-  const outerMesh = new THREE.Mesh(new THREE.PlaneGeometry(gw, gd), new THREE.MeshLambertMaterial({ color: 0x526830 }));
+  const outerMesh = new THREE.Mesh(new THREE.PlaneGeometry(gw, gd), new THREE.MeshLambertMaterial({ color: 0x65744e }));
   outerMesh.rotation.x = -Math.PI / 2;
   outerMesh.position.set(cx0, 0, cz0);
   outerMesh.renderOrder = -3;
@@ -846,7 +886,9 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // ---- flat layers: land cover, sidewalks, paths, roads, centre lines (painter's order in one mesh)
   // When terrain is loaded each overlay vertex follows the terrain surface so roads/parks
   // don't float above or sink into hills.
-  const yGround = world.terrain ? (x, z) => world.terrainHeight(x, z) : 0;
+  // Lay out X/Z first. Heights are assigned after foundations and entrance
+  // grading exist, so sidewalks and road approaches share the collision surface.
+  const yGround = 0;
   const flat = new Buf();
   for (const a of data.areas) {
     if (!AREA_COLOR[a.k]) continue;
@@ -867,14 +909,6 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   for (const r of data.roads) {
     for (let i = 0; i + 1 < r.p.length; i++) world.addRoadSegment(r.p[i][0], r.p[i][1], r.p[i + 1][0], r.p[i + 1][1], r.w, r.k);
   }
-  const flatMesh = new THREE.Mesh(
-    flat.geometry(),
-    new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 })
-  );
-  flatMesh.receiveShadow = true;
-  flatMesh.renderOrder = -1;
-  flatMesh.frustumCulled = false;
-  root.add(flatMesh);
   progress(0.15, 'Raising buildings');
   await tick();
 
@@ -921,6 +955,18 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   world.finishBuildings();
   await tick();
 
+  for (let i = 0; i < flat.pos.length; i += 3) flat.pos[i + 1] = world.surfaceHeight(flat.pos[i], flat.pos[i + 2]) + 0.025;
+  const flatGeometry = flat.geometry();
+  flatGeometry.computeVertexNormals();
+  const flatMesh = new THREE.Mesh(
+    flatGeometry,
+    new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 })
+  );
+  flatMesh.receiveShadow = true;
+  flatMesh.renderOrder = -1;
+  flatMesh.frustumCulled = false;
+  root.add(flatMesh);
+
   // ---- terrain displaced mesh (deferred until buildings are registered so we can flatten under them)
   if (world.terrain) {
     const T = world.terrain;
@@ -934,8 +980,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
       const wz = tPos.getZ(i) + cz0;
       // Flatten terrain under building footprints to that building's floor level so walls
       // don't appear to sink into hillsides.
-      const poly = world.polyAt(wx, wz);
-      tPos.setY(i, (poly && poly.kind === 'building') ? poly.y0 : world.terrainHeight(wx, wz));
+      tPos.setY(i, world.surfaceHeight(wx, wz));
     }
     tPos.needsUpdate = true;
     tGeo.computeVertexNormals();
@@ -957,7 +1002,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
 
   for (let i = 0; i < placed.length; i += 3) {
     const bd = placed[i + 1];
-    addBuilding(placed[i], bd, tints.get(bd.id), placed[i + 2].shell || null);
+    appendBuildingGeometry(placed[i], bd, tints.get(bd.id), placed[i + 2]);
     if ((i / 3) % 600 === 599) {
       progress(0.25 + 0.2 * (i / placed.length), 'Raising buildings');
       await tick();
@@ -994,8 +1039,9 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   await tick();
 
   // ---- instanced props
-  const trees = new Scatter(root, true);
-  const props = new Scatter(root, true);
+  const surfaceHeight = (x, z) => world.surfaceHeight(x, z);
+  const trees = new Scatter(root, true, surfaceHeight);
+  const props = new Scatter(root, true, surfaceHeight);
   const scaleOf = (list, file) => (list || []).find((m) => m.file === file)?.suggestedUniformScale || 1;
   const TREE_NAMES = ['tree_a', 'tree_b', 'tree_c', 'tree_d', 'pine_a', 'pine_b'];
   const TREE_H = { tree_a: 9, tree_b: 6.5, tree_c: 7, tree_d: 5.5, pine_a: 10, pine_b: 9 };
@@ -1067,7 +1113,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
           [x - fx * hl - ux * hw, z - fz * hl - uz * hw],
           [x - fx * hl + ux * hw, z - fz * hl + uz * hw],
         ];
-        const col2 = world.addPoly(corners, name === 'truck' ? 2.3 : 1.5, 'vehicle', 'metal', [rec]);
+        const col2 = world.addPoly(corners, name === 'truck' ? 2.3 : 1.5, 'vehicle', 'metal', [rec], { y0: surfaceHeight(x, z) });
         col2.hp = col2.maxHp = 300;
         col2.x = x;
         col2.z = z;

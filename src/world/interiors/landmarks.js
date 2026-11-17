@@ -114,7 +114,7 @@ function nameFromPois(tree, f, re) {
  */
 function landmark(id, L, W, front, build, tol = 2) {
   return (f) => {
-    if (Math.abs(f.L - L) > tol || Math.abs(f.W - W) > tol || f.front !== front) {
+    if (Math.abs(f.L - L) > tol || Math.abs(f.W - W) > tol || (front && f.front !== front)) {
       const fb = LANDMARK_IDS[id] ? LANDMARK_IDS[id].fallback : 'hall';
       return (RECIPES[fb] || RECIPES.hall)(f);
     }
@@ -139,6 +139,9 @@ const def = (id, L, W, front, build, tol) => {
 // lobby side). Moshe Safdie's pavilions around the spring-fed ponds: galleries in a row on both
 // sides of a gallery walk, main lobby by the entrance with the museum store and coffee bar, Eleven
 // in the bridge pavilion by the lobby, the glass-walled Great Hall, library.
+// Public programme rechecked 2026-11-17: https://crystalbridges.org/faq
+// (library, store, glass hall, Eleven in a bridge, coffee near the lobby). Room dimensions
+// and the generated upper floors remain gameplay approximations, not published floor plans.
 // Sources: crystalbridges.org/faq, crystalbridges.org/venue-rentals/venue-info-maps,
 // en.wikipedia.org/wiki/Crystal_Bridges_Museum_of_American_Art, arkansas.com (Crystal Bridges).
 def(8240824, 332.2, 118.1, 'b', () => {
@@ -532,26 +535,30 @@ def(799259121, 26.3, 21.9, 'a', () =>
 
 // Bentonville Community Center (751973534; 104.7 x 86.4 m). Multi-use recreation centre:
 // aquatic center, fitness center, main gymnasium, commons/meeting rooms, administration.
-// Sources: bentonvillear.com/departments/parks/community-center.
-def(751973534, 104.7, 86.4, 'b', () => ({
+// Programme source, checked 2026-11-17: https://www.bentonville.ar.gov/359/Community-Center
+// The city confirms aquatic/fitness/gym spaces, commons, banquet/meeting rooms and offices;
+// exact room geometry and upper-floor allocation below remain playable approximations.
+// Percentage layout adapts to either road-selected frontage rather than silently becoming
+// the generic hall when map/entrance alignment changes.
+def(751973534, 104.7, 86.4, null, (f) => ({
   levels: [
-    cut('a', 0.42,
-      cut('b', 0.5,
+    cut(f.front, '15%', leaf('lobby', 'Welcome Lobby'), cut(f.side, '52%',
+      cut(f.front, '45%',
         leaf('open', 'Aquatic Center'),
         leaf('gym', 'Fitness Center'),
       ),
       leaf('gym', 'Main Gymnasium'),
-    ),
-    cut('b', 0.5,
+    )),
+    cut(f.front, '50%',
       row('a', [[0.25, leaf('lobby', 'Lobby')], [0.75, leaf('hall', 'Commons')]]),
       row('a', [[0.5, leaf('classroom', 'Meeting Room A')], [0.5, leaf('classroom', 'Meeting Room B')]]),
     ),
-    cut('b', 0.5,
+    cut(f.front, '50%',
       leaf('office', 'Administration'),
       leaf('storage', 'Storage'),
     ),
   ],
-  stairs: [{ level: 0, end: 1 }, { level: 1, end: 2 }],
+  stairs: [{ a: f.L / 2, b: f.W / 2, dir: 'a' }],
 }));
 
 // Ids of the landmark buildings and the generic recipe each falls back to.

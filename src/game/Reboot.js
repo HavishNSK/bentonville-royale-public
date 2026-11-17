@@ -86,7 +86,7 @@ export class Reboot {
         col.hp = col.maxHp = Infinity; // can't be harvested or destroyed
         col.rebootVan = true;
       }
-      const y = world.terrainHeight ? world.terrainHeight(spot.x, spot.z) : 0;
+      const y = world.surfaceHeight ? world.surfaceHeight(spot.x, spot.z) : 0;
       const van = {
         i: this.vans.length,
         key: zone.key,

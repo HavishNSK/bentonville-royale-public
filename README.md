@@ -79,6 +79,10 @@ Bentonville Google Workspace blocks unverified apps with `Error 400: admin_polic
 
 Flow: **Log in with Clever** → Clever → Worker callback → one-time `?br_auth=` ticket → game redeems a session. Accounts are keyed by Clever user id (`clever:<id>`), not email. Username/password still works without Clever.
 
+### Developer Chat Access
+
+Developer chat access is granted by the username allowlist in `src/net/devs.js`, including `Rakkart13`. The presence Worker verifies the signed-in account session before granting the red `[DEV]` chat title and `/announce message` command; changing a display nickname does not grant access. Allowlist changes require deploying the Worker (`npm run party:deploy`), then reconnecting or refreshing while signed in to that account.
+
 ### Optional Personal Music
 
 Place a personal track at `local-music/menu.mp3`. The dev/preview middleware serves it locally; the game otherwise uses synthesized music. The folder is ignored by Git and Vercel and is not copied to `dist/`. Do not move personal tracks into `public/`.

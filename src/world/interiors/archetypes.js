@@ -20,9 +20,11 @@ function units(axis, n, kind, label) {
   return row(axis, parts);
 }
 
-/** A 2.2 m corridor along a (centred on the main door's b when the door is on a short end), units on both sides. */
+/** Human-scale circulation: two loaded sides when they fit, otherwise one usable room strip. */
 function corridorPlan(f, kind, label, unitLen, front) {
-  const cw = 2.2;
+  // Existing double-loaded units also reserve stair approaches: preserve their depth.
+  // A single-loaded corridor can use the extra width without stealing both unit strips.
+  const cw = f.W < 8 ? 2.4 : 2.2;
   let cb = f.front === 'a' ? f.door.b : f.W / 2;
   if (cb < cw / 2 + 2.5) cb = cw / 2 + 2.5;
   if (cb > f.W - cw / 2 - 2.5) cb = f.W - cw / 2 - 2.5;
@@ -31,7 +33,7 @@ function corridorPlan(f, kind, label, unitLen, front) {
     const body = units('a', n, kind, label + ' ' + s);
     return front ? cut('a', front.len, leaf(front.kind, front.label), body) : body;
   };
-  if (f.W < cw + 5.5) return cut('b', '50%', units('a', n, kind, label), leaf('corridor', 'Corridor'));
+  if (f.W < cw + 5.5) return cut('b', -cw, units('a', n, kind, label), leaf('corridor', 'Corridor'));
   return cut('b', { abs: cb - cw / 2 }, side('A'), cut('b', cw, leaf('corridor', 'Corridor'), side('B')));
 }
 
@@ -45,16 +47,16 @@ export const RECIPES = {
     if (f.area < 280) {
       return cut(F, '50%', cut(S, '60%', leaf('living', 'Living room'), leaf('kitchen', 'Kitchen')), cut(S, '40%', leaf('bedroom', 'Bedroom'), cut(S, '40%', leaf('bath', 'Bathroom'), leaf('bedroom', 'Bedroom 2'))));
     }
-    return cut(
-      F,
-      '45%',
+    // A shared hall gives every private room its own access. No bathroom/bedroom doubles
+    // as the route to another bedroom. Keep the public rooms on the entrance side.
+    return cut(F, '45%',
       cut(S, '55%', leaf('living', 'Living room'), cut(F, '50%', leaf('dining', 'Dining room'), leaf('kitchen', 'Kitchen'))),
-      row(S, [
+      cut(F, 2.4, leaf('corridor', 'Bedroom hall'), row(S, [
         [1, leaf('bedroom', 'Bedroom')],
         [0.6, leaf('bath', 'Bathroom')],
         [1, leaf('bedroom', 'Bedroom 2')],
         [0.9, leaf('bedroom', 'Bedroom 3')],
-      ])
+      ]))
     );
   },
   apartment(f) {
@@ -112,17 +114,17 @@ export const RECIPES = {
   shelter() {
     return leaf('open', 'Shelter');
   },
-  restaurant: () => cut('b', 0.65,
+  restaurant: (f) => cut(f.front, '65%',
     leaf('dining', 'Dining Room'),
-    cut('a', 0.5, leaf('kitchen', 'Kitchen'), leaf('restroom', 'Restrooms')),
+    cut(f.side, '65%', leaf('kitchen', 'Kitchen'), leaf('restroom', 'Restrooms')),
   ),
-  bike_shop: () => cut('b', 0.6,
+  bike_shop: (f) => cut(f.front, '65%',
     leaf('sales', 'Sales Floor'),
-    cut('a', 0.5, leaf('storage', 'Workshop'), leaf('restroom', 'Restroom')),
+    cut(f.side, '75%', leaf('storage', 'Workshop'), leaf('restroom', 'Restroom')),
   ),
-  brewpub: () => cut('b', 0.55,
+  brewpub: (f) => cut(f.front, '60%',
     leaf('bar', 'Taproom'),
-    cut('a', 0.5, leaf('open', 'Brewhouse'), leaf('storage', 'Cold Room')),
+    cut(f.side, '70%', leaf('brewhouse', 'Brewhouse'), leaf('storage', 'Cold Room')),
   ),
   /** Generic large building: big halls plus a strip of side rooms along the back. */
   hall(f) {

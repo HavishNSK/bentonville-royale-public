@@ -459,9 +459,14 @@ console.log('OK');
   const byId = new Map(w3.buildingInteriors().map((b) => [String(b.collider.ref.id), b.collider]));
   const HUBK = { corridor: 1, hall: 1, lobby: 1, sales: 1, living: 1, open: 1 };
   console.log('\nlandmarks:');
+  const mapIds = new Set(data.buildings.map(b => String(b.id)));
   for (const id of Object.keys(LANDMARK_IDS)) {
     const c = byId.get(id);
     const key = LANDMARK_IDS[id].key;
+    if (!mapIds.has(id)) {
+      console.log(`  ${key} (${id}): authored recipe outside current map data`);
+      continue;
+    }
     if (!c) {
       lfails.push(`landmark ${id} ${key}: not a hollow building`);
       continue;

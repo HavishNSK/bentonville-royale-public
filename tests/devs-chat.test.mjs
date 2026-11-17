@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isDevName, parseDevChat } from '../src/net/devs.js';
 
-test('only the four dev accounts match', () => {
-  for (const n of ['Sumukh', 'havish', 'GECKO', 'Shehryar']) assert.equal(isDevName(n), true);
+test('only allowlisted dev accounts match', () => {
+  for (const n of ['Sumukh', 'havish', 'GECKO', 'Shehryar', 'Rakkart13']) assert.equal(isDevName(n), true);
   assert.equal(isDevName('Havishh'), false);
   assert.equal(isDevName('Player'), false);
 });

@@ -11,6 +11,7 @@ import { createAccount } from './net/Account.js';
 import { createMeta } from './ui/meta.js';
 import { RANKED_NOTE } from './core/config.js';
 import { lookString, parseLook } from './game/Cosmetics.js';
+import { sameWorld } from './net/worldIdentity.js';
 
 // Vercel Web Analytics: anonymous page views / visitors (no cookies). Only reports from the Vercel deployment.
 try {
@@ -294,13 +295,12 @@ async function joinMultiplayer(code, name, match = null) {
         session = new ClientSession(conn, game); // queues match messages until begin()
         await ensureLoaded();
         if (mp !== me) return session.dispose(game);
-        // the host plays a different map file (one of us has a stale build): don't play on it.
-        // Hosts from before this check send no map id: allow.
-        if (msg.map && game.mapId && msg.map !== game.mapId) {
+        // Refuse missing/legacy IDs too: matching map dates do not prove matching terrain.
+        if (!sameWorld(game.mapId, msg.map)) {
           session.dispose(game);
           game.combat.authoritative = true;
           closeMultiplayer();
-          menus.showNotice('Your game files are out of date \u2014 refresh the page.');
+          menus.showNotice('Your map or terrain differs from the host. Both players should refresh and try again.');
           return;
         }
         game.net = session;
