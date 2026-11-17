@@ -21,6 +21,7 @@
 //   menus.partyNotice(text, isError)
 //   menus.showNotice(text)  title screen with a message (host left, room full, ...)
 //   menus.playerName()      saved name (localStorage)
+//   menus.onNeedRename = fn  called when PLAY is blocked because the signed-in account name breaks the rules
 //   menus.setSettings(settings)       // update the shown settings without firing onSettings
 //   menus.showTitle() / showSettings(from) / showLoading(pct, label) / showPause()
 //   menus.showResult({ victory, placement, kills, total, time, killer, difficulty, ranked })
@@ -37,6 +38,7 @@ import {
 import { applyCrosshairStyle } from './hud.js';
 import { createFpsMeter } from './fpsMeter.js';
 import { MATCH, RANKED_NOTE } from '../core/config.js';
+import { nameIsClean } from '../net/chatFilter.js';
 import { TEAM_MODES, MODE_LABELS, teamSize } from '../game/Teams.js';
 
 const MODE_IDS = Object.keys(TEAM_MODES);
@@ -190,6 +192,18 @@ export function createMenus(root, opts = {}) {
     }
   };
   T.name.value = savedName() || 'Player' + Math.floor(100 + Math.random() * 900);
+  // A saved name with a swear word or slur must be replaced before playing (see nameBlocked).
+  let mustRenameGuest = false;
+  if (!nameIsClean(T.name.value)) {
+    mustRenameGuest = true;
+    T.name.value = '';
+    T.name.placeholder = 'New name';
+    try {
+      localStorage.removeItem(NAME_KEY);
+    } catch {
+      /* private mode */
+    }
+  }
   // keep the generated name too: a refresh must not turn you into someone else in your party
   if (!savedName()) {
     try {
@@ -199,6 +213,12 @@ export function createMenus(root, opts = {}) {
     }
   }
   T.name.addEventListener('change', () => {
+    if (!T.name.readOnly && !nameIsClean(T.name.value)) {
+      api.partyNotice('That name is not allowed. Pick one without swear words.', true);
+      return;
+    }
+    if (T.name.value.trim()) mustRenameGuest = false;
+    T.name.classList.remove('is-invalid');
     try {
       localStorage.setItem(NAME_KEY, T.name.value.trim().slice(0, 16));
     } catch {
@@ -584,6 +604,23 @@ export function createMenus(root, opts = {}) {
     if (opts.onClick) opts.onClick();
     fn();
   };
+  /** A reason PLAY is refused because of the name, else ''. Shows it and points at the fix. */
+  function nameBlocked() {
+    const v = T.name.value.trim();
+    if (T.name.readOnly) {
+      if (nameIsClean(v)) return '';
+      api.partyNotice('Your username is not allowed. Choose a new one to keep playing.', true);
+      if (api.onNeedRename) api.onNeedRename();
+      return 'account';
+    }
+    if (nameIsClean(v) && !(mustRenameGuest && !v)) return '';
+    api.partyNotice(mustRenameGuest && !v ? 'Your old name is not allowed. Type a new name to play.' : 'That name is not allowed. Pick one without swear words.', true);
+    T.name.classList.add('is-invalid');
+    T.name.focus();
+    return 'guest';
+  }
+  const NAME_GATED = new Set(['play', 'party-go', 'party-join', 'freebuild', 'host', 'join', 'again']);
+
   wrap.querySelectorAll('[data-act]').forEach((b) => {
     b.addEventListener('mouseenter', () => opts.onHover && opts.onHover());
     const act = b.dataset.act;
@@ -599,6 +636,7 @@ export function createMenus(root, opts = {}) {
           }
           return n;
         };
+        if (NAME_GATED.has(act) && nameBlocked()) return;
         if (act === 'play') opts.onPlay && opts.onPlay();
         else if (act === 'party-go') partyGo();
         else if (act === 'party-copy') {

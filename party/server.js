@@ -24,6 +24,7 @@
 import { Server, routePartykitRequest } from 'partyserver';
 import { MAX_HUMANS } from '../src/net/protocol.js';
 import { handleCleverAuth } from './cleverAuth.js';
+import { nameIsClean } from '../src/net/chatFilter.js';
 
 // The party lobby, matchmaker, accounts and online list run in the same Worker (wrangler.jsonc binds them all).
 export { Party } from './partyRoom.js';
@@ -38,7 +39,7 @@ function cleanName(name) {
     .replace(/[\u0000-\u001f<>]/g, '')
     .trim()
     .slice(0, 16);
-  return s || 'Player';
+  return s && nameIsClean(s) ? s : 'Player'; // names with swear words show as Player
 }
 
 export class Main extends Server {

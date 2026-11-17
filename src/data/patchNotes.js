@@ -7,6 +7,29 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.14.0',
+    date: '2026-11-17',
+    title: 'Full-screen chat and cleaner names',
+    sections: [
+      {
+        heading: 'Global chat',
+        items: ['New Full screen button on the lobby chat: the chat fills the window with bigger text. Press Esc, Exit full screen or click outside it to go back.'],
+      },
+      {
+        heading: 'Names',
+        items: [
+          'Names and usernames with swear words or slurs are no longer allowed.',
+          'If your account username has one, you will be asked to pick a new one before you can play. Your coins, items, stats and friends stay with you.',
+          'Guests with a name like that need to type a new name before playing. Other players see it as "Player" until then.',
+        ],
+      },
+      {
+        heading: 'Fixes',
+        items: ['Clicking into the game, dropping from the Drop Bus or unpausing now switches the game to full screen along with locking the mouse.'],
+      },
+    ],
+  },
+  {
     version: '0.13.0',
     date: '2026-11-17',
     title: 'Global chat, swimming and a pickleball paddle',

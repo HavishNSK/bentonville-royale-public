@@ -37,7 +37,32 @@ function badWord(word) {
   return false;
 }
 
-const LINK = /(https?:\/\/|www\.|discord\.gg|\b[a-z0-9-]{2,}\s*(\.|\(dot\)|\[dot\])\s*(com|net|org|gg|io|xyz|ly|me|co|tv|app|link|site|us|info|dev)\b)/i;
+// Usernames: stems that are also common inside innocent names ("Sexton", "Dickson", "spicy",
+// "raccoon", "grape", "thorny", "Ashton", "scrape"...) only count when a whole name part is the word
+// (optionally plural). Everything else in BLOCKED counts anywhere in the name.
+const NAME_EXACT = new Set(['kys', 'cum', 'spic', 'coon', 'sex', 'dick', 'cock', 'crap', 'damn', 'nude', 'boob', 'tits', 'sht', 'rape', 'horny', 'sexy']);
+const NAME_STEMS = BLOCKED.map((b) => b.replace(/ /g, '')).filter((b) => !NAME_EXACT.has(b));
+
+function badNamePart(part) {
+  const n = norm(part);
+  if (!n) return false;
+  const base = n.replace(/(s|z)$/, '');
+  if (BLOCKED_WORDS.has(n) || BLOCKED_WORDS.has(base) || NAME_EXACT.has(n) || NAME_EXACT.has(base)) return true;
+  return NAME_STEMS.some((b) => n.includes(b));
+}
+
+/**
+ * True when a player / account name has no swear words or slurs. Checks the whole name and its
+ * parts split on spaces, _ - . and camelCase ("xX_Ass_Xx", "BigAss"). Leetspeak is seen through.
+ */
+export function nameIsClean(name) {
+  const s = String(name == null ? '' : name);
+  if (badNamePart(s)) return false;
+  for (const part of s.split(/[\s_.-]+|(?<=[a-z])(?=[A-Z])/)) if (badNamePart(part)) return false;
+  return true;
+}
+
+const LINK =/(https?:\/\/|www\.|discord\.gg|\b[a-z0-9-]{2,}\s*(\.|\(dot\)|\[dot\])\s*(com|net|org|gg|io|xyz|ly|me|co|tv|app|link|site|us|info|dev)\b)/i;
 const EMAIL = /[^\s@]+@[^\s@]+\.[^\s@]+/;
 const PHONE = /(\d[\s.-]?){7,}/;
 

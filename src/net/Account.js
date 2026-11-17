@@ -5,6 +5,7 @@
 //   acct.signedIn, acct.profile = { name, coins, owned, equipped:{skin, emotes}, friends, incoming, outgoing, stats }
 //   await acct.register(name, pw) / acct.login(name, pw) / acct.loginWithGoogle(idToken)
 //   await acct.redeemAuthTicket(ticket) / acct.logout()
+//   await acct.rename(name)                 only while profile.mustRename (name breaks the username rules)
 //   await acct.buy(id) / acct.equip({ skin, pickaxe, backbling, emotes })
 //   await acct.reward({ kills, placement, players, won, ranked }) -> { earned, saved, ranked, guest?, error? }
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
@@ -128,6 +129,10 @@ export function createAccount() {
     get signedIn() {
       return !!token && !acct.profile.guest;
     },
+    /** Account session, for the presence server to verify dev chat. Empty when signed out. */
+    get sessionToken() {
+      return token || '';
+    },
     get friends() {
       return friendsData;
     },
@@ -179,6 +184,14 @@ export function createAccount() {
       setToken(r.token);
       setProfile(r.profile);
       connect();
+      return r.profile;
+    },
+
+    /** Forced rename of a name that breaks the username rules (server refuses otherwise). */
+    async rename(name) {
+      if (!acct.signedIn) throw new Error('Sign in first.');
+      const r = await api('rename', { token, name });
+      setProfile(r.profile);
       return r.profile;
     },
 
