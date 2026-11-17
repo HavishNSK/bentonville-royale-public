@@ -77,7 +77,7 @@ import { storeyCount, addStoreys, FLOOR_THICKNESS } from './interiors/storeys.js
 import { furnishInterior } from './interiors/furnishings.js';
 import { addFloorTiles } from './interiors/floorTiles.js';
 
-export const INTERIOR_VERSION = 5;
+export const INTERIOR_VERSION = 7;
 
 const HUB = { corridor: 1, hall: 1, lobby: 1, sales: 1, living: 1, open: 1 };
 
