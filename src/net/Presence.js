@@ -5,6 +5,7 @@
 //   pr.onUpdate = (snap) => {}          snap: {count, searching:{solo,duo,trio,squad}, inMatch, players:[{name,status,mode}]}
 //   pr.snap                             last snapshot, or null while offline
 //   pr.sendChat(text) -> bool           global chat (false while offline); the server filters it
+//   pr.reportBlocked(category)          our filter stopped a message: the server counts a strike (no text sent)
 //   pr.onChat = (m) => {}               m: {id, name, text, at, dev, announce}; also for each history message
 //   pr.onChatError = (reason) => {}     the server refused our message (rate limit, links, ...)
 //   pr.close()
@@ -49,6 +50,9 @@ export function openPresence({ token, accountToken = '', name, status = 'lobby',
       if (!ws || ws.readyState !== 1) return false;
       ws.send(JSON.stringify({ t: 'chat', text: String(text).slice(0, 300) }));
       return true;
+    },
+    reportBlocked(category) {
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'chatBlocked', c: String(category || '').slice(0, 16) }));
     },
     set(next) {
       const before = JSON.stringify(info);

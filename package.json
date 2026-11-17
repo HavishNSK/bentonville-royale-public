@@ -1,12 +1,13 @@
 {
   "name": "bentonville-royale",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "private": true,
   "type": "module",
   "description": "An original third-person building battle royale set in real Bentonville, Arkansas.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:crazygames": "VITE_PLATFORM=crazygames vite build --base ./ --outDir dist-crazygames && node scripts/zip-crazygames.mjs",
     "preview": "vite preview",
     "fetch-map": "node scripts/fetch-map-data.mjs && node scripts/compose-map.mjs",
     "compose-map": "node scripts/compose-map.mjs",

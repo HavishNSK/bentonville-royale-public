@@ -167,6 +167,11 @@ export function createMeta(menus, account, opts = {}) {
   const bAuth = btn('SIGN IN', 'mn-chip mt-chip mt-chip-sun', 'auth');
   right.append(bOnline, bFriends, coins, who, bAuth);
   bar.append(tabs, right);
+  // portal builds (opts.guestOnly, CrazyGames): no outside sign-in, so no accounts, coins,
+  // friends or buying; the locker keeps the free items
+  if (opts.guestOnly) {
+    for (const el of [bAuth, coins, bFriends, bShop, who]) el.hidden = true;
+  }
   let online = null; // last presence snapshot
   titleEl.appendChild(bar);
   function syncTabs() {
@@ -810,6 +815,20 @@ export function createMeta(menus, account, opts = {}) {
     }
     if (!pending) {
       bar.appendChild(h('span', 'mt-hint', 'Pick an item to try it on. Earn coins in matches: placing well, eliminations and wins.'));
+      // rewarded ad: +coins (opts.adCoins: { can() -> bool, watch() -> Promise<string> })
+      if (opts.adCoins && opts.adCoins.can()) {
+        const ad = btn('WATCH AD +100', 'mn-btn mt-buy-ad');
+        ad.firstChild.prepend(h('i', 'mt-coin'), ' ');
+        ad.addEventListener('click', async () => {
+          click();
+          ad.disabled = true;
+          ad.firstChild.textContent = 'LOADING AD…';
+          const text = await opts.adCoins.watch();
+          say(text);
+          renderBuy();
+        });
+        bar.appendChild(ad);
+      }
       return;
     }
     const c = cosmeticDef(pending);
