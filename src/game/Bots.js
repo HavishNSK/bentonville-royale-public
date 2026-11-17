@@ -128,6 +128,28 @@ const _matItem = { type: 'material', mat: 'wood', count: 0 };
 const _bpos = { x: 0, y: 0, z: 0 }; // synthetic "stand here" point passed to structures.plan
 const _pl = {}; // reused placement
 
+
+/**
+ * Sniper rounds fly (Combat projectiles): aim ahead of a moving target and a little high for the
+ * drop. `rel` = target - muzzle (edited in place); `skill` 0..1 scales the correction, so weaker
+ * bots under-lead and miss more often. Two passes converge for any range a bot shoots at.
+ */
+function leadBallistic(rel, tgt, ballistic, skill) {
+  if (!(skill > 0)) return;
+  const vx = tgt.vel ? tgt.vel.x : 0;
+  const vy = tgt.vel ? tgt.vel.y : 0;
+  const vz = tgt.vel ? tgt.vel.z : 0;
+  const bx = rel.x, by = rel.y, bz = rel.z;
+  let t = Math.hypot(bx, by, bz) / ballistic.speed;
+  for (let k = 0; k < 2; k++) {
+    const px = bx + vx * t, py = by + vy * t, pz = bz + vz * t;
+    t = Math.hypot(px, py, pz) / ballistic.speed;
+  }
+  rel.x = bx + vx * t * skill;
+  rel.y = by + (vy * t + 0.5 * ballistic.gravity * t * t) * skill;
+  rel.z = bz + vz * t * skill;
+}
+
 export class Bots {
   constructor({ scene, world, kits, weaponModels, loot, structures, combat, fx, sfx } = {}) {
     this.scene = scene || null;
@@ -2316,6 +2338,7 @@ export class Bots {
     const err = settle * (1 + tSpeed * 0.6);
     const aimY = tgt.pos.y + (this.rng() < 0.15 ? 1.62 : CHEST);
     _dir.set(tgt.pos.x - _origin.x, aimY - _origin.y, tgt.pos.z - _origin.z);
+    if (w.ballistic) leadBallistic(_dir, tgt, w.ballistic, this.diff.lead ?? 1);
     const len = _dir.length() || 1;
     _dir.multiplyScalar(1 / len);
     const yaw = (b.errYaw + gauss(this.rng) * this.diff.aimError * 0.35) * err;

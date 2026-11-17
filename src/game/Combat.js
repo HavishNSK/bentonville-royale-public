@@ -1,10 +1,11 @@
-// BENTONVILLE ROYALE — hitscan combat, damage and eliminations.
+// BENTONVILLE ROYALE — combat (hitscan guns + ballistic sniper rounds), damage and eliminations.
 //
 //   const combat = new Combat({ world, structures, fx, sfx, view });
 //   combat.register(actor)                  // player and every bot
 //   combat.fireWeapon(shooter, item, origin, dir, spread) -> [{ hitActor?, point, headshot }]
 //   combat.swingPickaxe(shooter, origin, dir) -> { harvested?: { mat, count }, hitActor? }
 //   combat.applyDamage(target, amount, { source, headshot, weapon, storm })
+//   combat.tickProjectiles(dt)              // every frame: ballistic rounds (WEAPONS[id].ballistic)
 //   combat.onDamage = (target, amount, info) => {}      // Game sets these
 //   combat.onEliminate = (victim, killer, info) => {}
 //   combat.onHarvest = (shooter, collider, info) => {}   // extra hook (HUD object bar)
@@ -67,6 +68,8 @@ const _b = new THREE.Vector3();
 
 const HARVEST_SOUND = { wood: 'hit_wood', brick: 'hit_stone', metal: 'hit_metal' };
 const CLAIM_TOL = 1.6; // m: lag allowance for a client's claimed hit (favour the shooter, a little)
+const CLAIM_LATE_MS = 600; // a guest's claim for a round that already landed on the host still counts this long
+const BLEND_M = 8; // m: a round's streak blends from the muzzle onto the true path over this distance
 const SURFACE = { wood: 'wood', brick: 'brick', metal: 'metal' };
 
 /** Ray (o + t d, |d| = 1) vs. an actor's vertical cylinder. Returns t or Infinity. */
@@ -151,6 +154,10 @@ export class Combat {
     this.authoritative = true;
     this.lastDirs = [];
     this._hits = [];
+    this.projectiles = []; // ballistic rounds in flight (tickProjectiles)
+    this._spent = []; // host: guest rounds that landed recently, still claimable
+    this.lastProjectiles = [];
+    this.onProjectileHit = null; // (projectile, actor) when a round reaches someone
   }
 
   register(actor) {
@@ -165,6 +172,7 @@ export class Combat {
   clear() {
     this.actors.length = 0;
     this._burstEpoch++; // cancels pending burst rounds
+    this.clearProjectiles();
   }
 
   /** Puts every destroyed tree / rock / prop / vehicle back (match restart). */
@@ -266,7 +274,6 @@ export class Combat {
    * player, eye for bots); tracers start at the shooter's muzzle when known.
    */
   fireWeapon(shooter, weaponItem, origin, dir, spread = 0, opts = null) {
-    const auth = this.authoritative;
     if (shooter) shooter.shotAt = performance.now() / 1000; // gunfire is heard (bots third-party it)
     const dirs = opts && opts.dirs;
     const claims = opts && opts.claims;
@@ -285,6 +292,7 @@ export class Combat {
     const actorDamage = new Map();
     const pellets = dirs ? dirs.length : w.pellets || 1;
     const used = (this.lastDirs = []);
+    const spawned = (this.lastProjectiles = []);
     for (let p = 0; p < pellets; p++) {
       if (dirs) _dir.copy(dirs[p]).normalize();
       else _dir.copy(dir).normalize();
@@ -297,6 +305,11 @@ export class Combat {
         _dir.applyAxisAngle(_a, ang);
       }
       used.push(_dir.clone());
+      if (w.ballistic) {
+        // sniper rounds fly: travel time + bullet drop, resolved in tickProjectiles()
+        spawned.push(this.spawnProjectile(shooter, w, scale, origin, _dir, _from, opts && opts.shot));
+        continue;
+      }
       let res = this._trace(shooter, origin, _dir, w.range);
       const claim = claims && claims[p];
       if (claim && !res.actor && claim !== shooter && claim.alive && !claim.inBus && !(this.teamMode && sameTeam(claim, shooter))) {
@@ -305,44 +318,7 @@ export class Combat {
       }
       const dist = res.t;
       _pt.set(origin.x + _dir.x * dist, origin.y + _dir.y * dist, origin.z + _dir.z * dist);
-
-      let fall = 1;
-      if (dist > w.falloffStart) fall = dist >= w.falloffEnd ? w.minFalloff : lerp(1, w.minFalloff, (dist - w.falloffStart) / Math.max(1, w.falloffEnd - w.falloffStart));
-      let dmg = w.damage * fall * scale;
-
-      const record = { hitActor: null, point: _pt.clone(), headshot: false, surface: 'none' };
-      if (res.actor) {
-        const a = res.actor;
-        const head = _pt.y > a.pos.y + (a.downed ? a.height * 0.45 : a.crouching ? a.height * 0.7 : a.height) * 0.8;
-        record.hitActor = a;
-        record.headshot = head;
-        record.surface = a.shield > 0 ? 'shield' : 'body';
-        if (head) dmg *= w.headMult;
-        const prev = actorDamage.get(a) || { dmg: 0, head: false, point: record.point };
-        prev.dmg += dmg;
-        prev.head = prev.head || head;
-        actorDamage.set(a, prev);
-        if (this.fx) {
-          _n.copy(_dir).multiplyScalar(-1);
-          this.fx.impact(_pt, _n, a.shield > 0 ? 'shield' : 'body');
-        }
-      } else if (res.hit) {
-        _n.set(res.hit.nx, res.hit.ny, res.hit.nz);
-        record.surface = res.surface;
-        if (this.fx) this.fx.impact(_pt, _n, res.surface);
-        const c = res.hit.collider;
-        if (!auth) {
-          // client: effects only, the host applies damage
-        } else if (c && res.hit.kind === 'piece' && this.structures) {
-          this.structures.damage(c, dmg, _pt);
-        } else if (res.hit.panel) {
-          this.damagePanel(c, res.hit.panel, dmg * BUILDING_WALL.bulletMult, _pt, shooter); // no mats from bullets
-        } else if (this._isHarvestable(c)) {
-          c.hp -= dmg;
-          if (c.hp <= 0) this._destroyCollider(c, _pt);
-        }
-        if (this.sfx && p === 0) this.sfx.play('bullet_impact', { x: _pt.x, y: _pt.y, z: _pt.z, volume: 0.6, surface: impactSound(res.surface) });
-      }
+      const record = this._resolveHit(w, scale, _dir, dist, res, actorDamage, p === 0);
       if (this.fx && (p === 0 || pellets <= 3 || p % 3 === 0)) this.fx.tracer(_from, _pt, { color: w.tracer, width: w.kind === 'sniper' ? 0.08 : 0.05 });
       out.push(record);
     }
@@ -356,14 +332,200 @@ export class Combat {
       const x = _from.x, y = _from.y, z = _from.z;
       setTimeout(() => sfx.play('shotgun_pump', { x, y, z, volume: 0.7 }), 350);
     }
-    if (auth) {
-      for (const [a, d] of actorDamage) {
-        this.applyDamage(a, d.dmg, { source: shooter, headshot: d.head, weapon: w.id, point: d.point });
-      }
-    }
-    if (this.onFire) this.onFire(shooter, w.id, origin, out);
+    this._applyActorDamage(shooter, w, actorDamage);
+    if (this.onFire) this.onFire(shooter, w.id, origin, out, used, !!w.ballistic);
     if (w.burst > 1 && !dirs && !(opts && opts.burstRound)) this._scheduleBurst(shooter, weaponItem, origin, dir, spread, w);
     return out;
+  }
+
+  /**
+   * One pellet / bullet that ended at `_pt` after `dist` m (`res` from _trace). Plays the impact,
+   * damages a built piece or harvestable (authoritative only) and adds actor hits to
+   * `actorDamage`. Returns the shot record.
+   */
+  _resolveHit(w, scale, dir, dist, res, actorDamage, sound) {
+    let fall = 1;
+    if (dist > w.falloffStart) fall = dist >= w.falloffEnd ? w.minFalloff : lerp(1, w.minFalloff, (dist - w.falloffStart) / Math.max(1, w.falloffEnd - w.falloffStart));
+    let dmg = w.damage * fall * scale;
+
+    const record = { hitActor: null, point: _pt.clone(), headshot: false, surface: 'none' };
+    if (res.actor) {
+      const a = res.actor;
+      const head = _pt.y > a.pos.y + (a.downed ? a.height * 0.45 : a.crouching ? a.height * 0.7 : a.height) * 0.8;
+      record.hitActor = a;
+      record.headshot = head;
+      record.surface = a.shield > 0 ? 'shield' : 'body';
+      if (head) dmg *= w.headMult;
+      const prev = actorDamage.get(a) || { dmg: 0, head: false, point: record.point };
+      prev.dmg += dmg;
+      prev.head = prev.head || head;
+      actorDamage.set(a, prev);
+      if (this.fx) {
+        _n.copy(dir).multiplyScalar(-1);
+        this.fx.impact(_pt, _n, a.shield > 0 ? 'shield' : 'body');
+      }
+    } else if (res.hit) {
+      _n.set(res.hit.nx, res.hit.ny, res.hit.nz);
+      record.surface = res.surface;
+      if (this.fx) this.fx.impact(_pt, _n, res.surface);
+      const c = res.hit.collider;
+      if (!this.authoritative) {
+        // client: effects only, the host applies damage
+      } else if (c && res.hit.kind === 'piece' && this.structures) {
+        this.structures.damage(c, dmg, _pt);
+      } else if (res.hit.panel) {
+        this.damagePanel(c, res.hit.panel, dmg * BUILDING_WALL.bulletMult, _pt); // no mats from bullets
+      } else if (this._isHarvestable(c)) {
+        c.hp -= dmg;
+        if (c.hp <= 0) this._destroyCollider(c, _pt);
+      }
+      if (this.sfx && sound) this.sfx.play('bullet_impact', { x: _pt.x, y: _pt.y, z: _pt.z, volume: 0.6, surface: impactSound(res.surface) });
+    }
+    return record;
+  }
+
+  _applyActorDamage(shooter, w, actorDamage) {
+    if (!this.authoritative) return;
+    for (const [a, d] of actorDamage) {
+      this.applyDamage(a, d.dmg, { source: shooter, headshot: d.head, weapon: w.id, point: d.point });
+    }
+  }
+
+  // ---------------------------------------------------------------- projectiles (ballistic guns)
+  //
+  // A ballistic round starts at the aim origin with velocity dir * speed and falls with its own
+  // gravity. Each frame tickProjectiles() traces the segment it covers (world + actors) and
+  // resolves the first hit exactly like a hitscan pellet. The visible streak starts at the
+  // muzzle and blends onto the true path over the first BLEND_M metres.
+  //
+  // Multiplayer: `netSeq` tags a guest's round on both ends. The guest's own (visual) round
+  // calls onProjectileHit(pj, actor) when it reaches someone; the host then calls
+  // claimProjectile(shooter, netSeq, actor), accepted only when the host round's path passed
+  // within CLAIM_TOL of that actor (the same lag allowance hitscan claims get).
+
+  /** Starts one round. `from` = muzzle for the streak. Returns the projectile. */
+  spawnProjectile(shooter, w, scale, origin, dir, from, netSeq) {
+    const b = w.ballistic;
+    const pj = {
+      shooter: shooter || null,
+      w,
+      scale,
+      pos: origin.clone(),
+      vel: dir.clone().normalize().multiplyScalar(b.speed),
+      travelled: 0,
+      off: (from || origin).clone().sub(origin),
+      vis: (from || origin).clone(),
+      netSeq: netSeq || 0,
+      claim: null,
+      path: netSeq ? [origin.clone()] : null,
+    };
+    this.projectiles.push(pj);
+    return pj;
+  }
+
+  /** Advances every round in flight; call once per frame (host, solo and clients). */
+  tickProjectiles(dt) {
+    if (this._spent.length) {
+      const now = performance.now();
+      this._spent = this._spent.filter((s) => s.until > now);
+    }
+    if (!this.projectiles.length || !(dt > 0)) return;
+    dt = Math.min(dt, 0.1);
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const pj = this.projectiles[i];
+      const g = pj.w.ballistic.gravity;
+      _a.copy(pj.pos);
+      _b.set(pj.pos.x + pj.vel.x * dt, pj.pos.y + pj.vel.y * dt - 0.5 * g * dt * dt, pj.pos.z + pj.vel.z * dt);
+      pj.vel.y -= g * dt;
+      _dir.subVectors(_b, _a);
+      let seg = _dir.length();
+      if (seg < 1e-6) continue;
+      _dir.multiplyScalar(1 / seg);
+      seg = Math.min(seg, Math.max(0.01, pj.w.range - pj.travelled));
+      let res = this._trace(pj.shooter, _a, _dir, seg);
+      if (!res.actor && pj.claim && this._claimable(pj.claim, pj.shooter)) {
+        const t = this._claimT(_a, _dir, pj.claim, res.hit ? res.t : seg);
+        if (t != null && t <= seg) res = { t, actor: pj.claim, hit: null };
+      }
+      const ended = !!(res.actor || res.hit);
+      const t = ended ? res.t : seg;
+      _pt.copy(_a).addScaledVector(_dir, t);
+      // streak: muzzle offset fades out over the first metres
+      const k = Math.max(0, 1 - (pj.travelled + t) / BLEND_M);
+      _tmp.copy(_pt).addScaledVector(pj.off, k);
+      if (this.fx) this.fx.tracer(pj.vis, _tmp, { color: pj.w.tracer, width: 0.08, speed: pj.w.ballistic.speed });
+      pj.vis.copy(_tmp);
+      pj.travelled += t;
+      if (pj.path) pj.path.push(_pt.clone());
+      if (ended) {
+        const actorDamage = new Map();
+        const record = this._resolveHit(pj.w, pj.scale, _dir, pj.travelled, res, actorDamage, true);
+        if (this.sfx && actorDamage.size) this.sfx.play('bullet_impact', { x: _pt.x, y: _pt.y, z: _pt.z, volume: 0.6, surface: 'body' });
+        this._applyActorDamage(pj.shooter, pj.w, actorDamage);
+        if (record.hitActor && this.onProjectileHit) this.onProjectileHit(pj, record.hitActor);
+        this._endProjectile(i, pj, !!record.hitActor);
+      } else if (pj.travelled >= pj.w.range - 0.01) {
+        this._endProjectile(i, pj, false);
+      } else {
+        pj.pos.copy(_b);
+      }
+    }
+  }
+
+  _endProjectile(i, pj, hitActor) {
+    this.projectiles.splice(i, 1);
+    // host: a guest's round that missed here may still be claimed for a short while
+    if (this.authoritative && pj.netSeq && !hitActor && !pj.claimed) {
+      this._spent.push({ shooter: pj.shooter, netSeq: pj.netSeq, w: pj.w, scale: pj.scale, path: pj.path, until: performance.now() + CLAIM_LATE_MS });
+    }
+  }
+
+  _claimable(a, shooter) {
+    return !!a && a !== shooter && a.alive && !a.inBus && !(this.teamMode && sameTeam(a, shooter));
+  }
+
+  /**
+   * Host: a guest says its round `netSeq` hit `actor`. In flight -> the round now also counts
+   * passing near that actor; already landed -> checked against the recorded path. Each round
+   * can be claimed once.
+   */
+  claimProjectile(shooter, netSeq, actor) {
+    if (!this.authoritative || !netSeq || !this._claimable(actor, shooter)) return false;
+    const live = this.projectiles.find((p) => p.shooter === shooter && p.netSeq === netSeq);
+    if (live) {
+      if (live.claimed) return false;
+      live.claimed = true;
+      live.claim = actor;
+      return true;
+    }
+    const k = this._spent.findIndex((s) => s.shooter === shooter && s.netSeq === netSeq);
+    if (k < 0) return false;
+    const sp = this._spent[k];
+    this._spent.splice(k, 1);
+    let travelled = 0;
+    for (let j = 1; j < sp.path.length; j++) {
+      const a = sp.path[j - 1];
+      _dir.subVectors(sp.path[j], a);
+      const len = _dir.length();
+      if (len < 1e-6) continue;
+      _dir.multiplyScalar(1 / len);
+      const t = this._claimT(a, _dir, actor, len);
+      if (t != null && t <= len) {
+        _pt.copy(a).addScaledVector(_dir, t);
+        const actorDamage = new Map();
+        this._resolveHit(sp.w, sp.scale, _dir, travelled + t, { t, actor, hit: null }, actorDamage, true);
+        this._applyActorDamage(shooter, sp.w, actorDamage);
+        return true;
+      }
+      travelled += len;
+    }
+    return false;
+  }
+
+  /** Drops every round in flight (match end / restart). */
+  clearProjectiles() {
+    this.projectiles.length = 0;
+    this._spent.length = 0;
   }
 
   /**

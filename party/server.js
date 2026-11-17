@@ -25,10 +25,11 @@ import { Server, routePartykitRequest } from 'partyserver';
 import { MAX_HUMANS } from '../src/net/protocol.js';
 import { handleCleverAuth } from './cleverAuth.js';
 
-// The party lobby and matchmaker run in the same Worker (wrangler.jsonc binds all three).
+// The party lobby, matchmaker, accounts and online list run in the same Worker (wrangler.jsonc binds them all).
 export { Party } from './partyRoom.js';
 export { Matchmaker } from './matchmaker.js';
 export { Accounts } from './accounts.js';
+export { Presence } from './presence.js';
 
 const BROADCAST = 255;
 

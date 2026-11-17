@@ -261,8 +261,14 @@ export class HostSession {
     for (const k of ['place', 'damage', '_destroy', 'edit', 'setDoor']) keep(game.structures, k);
     const ev = (e) => this.started && !this._spawning && this.events.push(e);
     const combat = game.combat;
-    combat.onFire = (shooter, wid, origin, records) => {
+    combat.onFire = (shooter, wid, origin, records, dirs, ballistic) => {
       if (!this.started) return;
+      if (ballistic) {
+        // sniper rounds: clients fly their own copy from the origin and direction
+        const d = (dirs || []).slice(0, 1).map((v) => [rnd(v.x, 5), rnd(v.y, 5), rnd(v.z, 5)]);
+        ev({ e: 'sh', a: shooter ? shooter.id : -1, w: wid, o: [rnd(origin.x, 3), rnd(origin.y, 3), rnd(origin.z, 3)], d, b: 1, p: [], k: [] });
+        return;
+      }
       const p = [];
       const k = [];
       for (const r of records) {
@@ -694,7 +700,16 @@ export class HostSession {
         if (newPull) a.lastFire = this.time;
         it.mag--;
         if (a.character) a.character.fire();
-        g.combat.fireWeapon(a, it, _o, dirs[0], 0, { dirs, claims });
+        g.combat.fireWeapon(a, it, _o, dirs[0], 0, { dirs, claims, shot: m.seq });
+        return;
+      }
+      case 'ph': {
+        // a guest's sniper round reached someone on its screen: Combat checks it against our path
+        const n = Number(m.n);
+        const v = Number(m.v);
+        if (!Number.isInteger(n) || n <= 0 || !Number.isInteger(v) || v === a.id) return;
+        const victim = g.combat.actors.find((x) => x.id === v);
+        if (victim) g.combat.claimProjectile(a, n, victim);
         return;
       }
       case 'sw': {
