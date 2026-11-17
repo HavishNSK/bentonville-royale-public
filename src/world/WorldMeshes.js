@@ -104,7 +104,8 @@ function addPolygon(buf, pts, y, hex) {
   }
   _c.setHex(hex);
   const base = buf.n;
-  for (const p of pts) buf.v(p[0], y, p[1], 0, 1, 0, _c.r, _c.g, _c.b);
+  const getY = typeof y === 'function' ? y : () => y;
+  for (const p of pts) buf.v(p[0], getY(p[0], p[1]), p[1], 0, 1, 0, _c.r, _c.g, _c.b);
   for (const t of tris) {
     const a = pts[t[0]];
     const c = pts[t[1]];
@@ -120,6 +121,7 @@ function addRibbon(buf, pts, halfWidth, y, hex) {
   if (n < 2) return;
   _c.setHex(hex);
   const base = buf.n;
+  const getY = typeof y === 'function' ? y : () => y;
   for (let i = 0; i < n; i++) {
     const p = pts[i];
     const a = pts[Math.max(0, i - 1)];
@@ -157,8 +159,9 @@ function addRibbon(buf, pts, halfWidth, y, hex) {
     // miter length, clamped so sharp corners do not spike
     const cos = Math.max(0.5, nx * -d1z + nz * d1x);
     const w = halfWidth / cos;
-    buf.v(p[0] + nx * w, y, p[1] + nz * w, 0, 1, 0, _c.r, _c.g, _c.b);
-    buf.v(p[0] - nx * w, y, p[1] - nz * w, 0, 1, 0, _c.r, _c.g, _c.b);
+    const wy = getY(p[0], p[1]);
+    buf.v(p[0] + nx * w, wy, p[1] + nz * w, 0, 1, 0, _c.r, _c.g, _c.b);
+    buf.v(p[0] - nx * w, wy, p[1] - nz * w, 0, 1, 0, _c.r, _c.g, _c.b);
   }
   for (let i = 0; i < n - 1; i++) {
     const a = base + i * 2;
@@ -212,6 +215,48 @@ function noiseTexture(size, base, spread) {
   return tex;
 }
 
+function groundTexture() {
+  // Multi-color natural ground: dark green → mid green → yellow-green → tan → dirt
+  const size = 512;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const rng = makeRng(8831);
+  const lattice = (n) => { const a = new Float32Array(n * n); for (let i = 0; i < a.length; i++) a[i] = rng(); return a; };
+  const l1 = lattice(4), l2 = lattice(16), l3 = lattice(64);
+  const sample = (l, n, u, v) => {
+    const x = u * n, y = v * n;
+    const x0 = Math.floor(x) % n, y0 = Math.floor(y) % n;
+    const x1 = (x0 + 1) % n, y1 = (y0 + 1) % n;
+    let fx = x - Math.floor(x), fy = y - Math.floor(y);
+    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+    return (l[y0 * n + x0] * (1 - fx) + l[y0 * n + x1] * fx) * (1 - fy) + (l[y1 * n + x0] * (1 - fx) + l[y1 * n + x1] * fx) * fy;
+  };
+  // earthy palette: deep green, mid green, bright green, yellow-green, tan, bare dirt
+  const pal = [[0x3a,0x56,0x22],[0x52,0x7a,0x34],[0x72,0xa4,0x48],[0x8e,0xa8,0x58],[0xa4,0x94,0x62],[0x96,0x7c,0x50]];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size, v = y / size;
+      const n = sample(l1, 4, u, v) * 0.50 + sample(l2, 16, u, v) * 0.30 + sample(l3, 64, u, v) * 0.20;
+      const t = Math.max(0, Math.min(1, n + (rng() - 0.5) * 0.07)) * (pal.length - 1);
+      const idx = Math.min(pal.length - 2, Math.floor(t));
+      const f = t - idx;
+      const r = Math.round(pal[idx][0] * (1 - f) + pal[idx + 1][0] * f);
+      const g = Math.round(pal[idx][1] * (1 - f) + pal[idx + 1][1] * f);
+      const b = Math.round(pal[idx][2] * (1 - f) + pal[idx + 1][2] * f);
+      const i = (y * size + x) * 4;
+      img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
 // ------------------------------------------------------------------ buildings
 
 function buildingMaterial() {
@@ -253,21 +298,20 @@ function buildingMaterial() {
           // sill under each window
           float sill = (1.0 - smoothstep(0.0, aa.y + 0.02, abs(f.y - (lo.y - fr.y - 0.03)))) * step(lo.x - fr.x, f.x) * step(f.x, hi.x + fr.x);
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.18, sill * win);
-          // plinth at the base
-          diffuseColor.rgb *= mix(0.72, 1.0, smoothstep(0.55, 0.62, vWall.y));
-          // slab line between floors (brick / metal)
-          if (style > 0.5) {
-            float fl = fract(vWall.y / fh);
-            float band = smoothstep(0.0, 0.015 + aa.y, fl) * (1.0 - smoothstep(0.06 - aa.y, 0.06, fl));
-            diffuseColor.rgb *= 1.0 - 0.12 * band * near * step(1.0, vWall.y);
-          }
-          // parapet / cornice cap: a lighter band with a dark shadow line beneath it
+          // plinth at the base (taller, darker — visible from street level)
+          diffuseColor.rgb *= mix(0.65, 1.0, smoothstep(0.70, 0.90, vWall.y));
+          // slab line between floors — wider and stronger for all material styles
+          float fl = fract(vWall.y / fh);
+          float band = smoothstep(0.0, 0.02 + aa.y, fl) * (1.0 - smoothstep(0.10 - aa.y, 0.10, fl));
+          float bandStr = style < 0.5 ? 0.08 : 0.18;
+          diffuseColor.rgb *= 1.0 - bandStr * band * near * step(1.0, vWall.y);
+          // parapet / cornice cap: more pronounced lighter band with deeper shadow beneath
           float top = vH - vWall.y;
-          diffuseColor.rgb *= mix(1.0, 1.14, 1.0 - smoothstep(0.42, 0.46, top));
-          diffuseColor.rgb *= 1.0 - 0.28 * smoothstep(0.42, 0.46, top) * (1.0 - smoothstep(0.58, 0.64, top));
-          // corners: darker pilaster at each end of the wall so building edges read up close
+          diffuseColor.rgb *= mix(1.0, 1.22, 1.0 - smoothstep(0.38, 0.44, top));
+          diffuseColor.rgb *= 1.0 - 0.38 * smoothstep(0.38, 0.44, top) * (1.0 - smoothstep(0.60, 0.70, top));
+          // corners: wider, darker pilasters so building edges read clearly
           float edge = vWall.w * 0.5 - abs(vWall.x);
-          diffuseColor.rgb *= mix(0.8, 1.0, smoothstep(0.32, 0.4, edge));
+          diffuseColor.rgb *= mix(0.68, 1.0, smoothstep(0.18, 0.46, edge));
           // low-frequency grime so a large wall is not one flat colour
           float gx = floor(vWall.x / 1.3);
           float gz = floor(vWall.y / 1.1);
@@ -786,74 +830,40 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const cx0 = (b.minX + b.maxX) / 2;
   const cz0 = (b.minZ + b.maxZ) / 2;
 
-  let groundMat;
-  if (groundImage) {
-    const naipTex = new THREE.Texture(groundImage);
-    naipTex.needsUpdate = true;
-    naipTex.colorSpace = THREE.SRGBColorSpace;
-    groundMat = new THREE.MeshLambertMaterial({ map: naipTex });
-  } else {
-    const noiseTex = noiseTexture(256, 0.92, 0.22);
-    noiseTex.repeat.set(gw / 70, gd / 70);
-    groundMat = new THREE.MeshLambertMaterial({ color: 0x7daf58, map: noiseTex });
-  }
-
-  if (world.terrain) {
-    const T = world.terrain;
-    const tCols = Math.ceil((b.maxX - b.minX) / T.cell) + 2;
-    const tRows = Math.ceil((b.maxZ - b.minZ) / T.cell) + 2;
-    const tGeo = new THREE.PlaneGeometry(b.maxX - b.minX, b.maxZ - b.minZ, tCols - 1, tRows - 1);
-    tGeo.rotateX(-Math.PI / 2);
-    const pos = tGeo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const wx = pos.getX(i) + cx0;
-      const wz = pos.getZ(i) + cz0;
-      pos.setY(i, world.terrainHeight(wx, wz));
-    }
-    pos.needsUpdate = true;
-    tGeo.computeVertexNormals();
-    const terrainMesh = new THREE.Mesh(tGeo, groundMat);
-    terrainMesh.position.set(cx0, 0, cz0);
-    terrainMesh.receiveShadow = true;
-    terrainMesh.renderOrder = -2;
-    root.add(terrainMesh);
-    // Flat margin plane for the outer area (keeps the horizon filled)
-    const flatMat = new THREE.MeshLambertMaterial({ color: 0x7daf58 });
-    const flatGeo = new THREE.PlaneGeometry(gw, gd);
-    const flatMesh = new THREE.Mesh(flatGeo, flatMat);
-    flatMesh.rotation.x = -Math.PI / 2;
-    flatMesh.position.set(cx0, 0, cz0);
-    flatMesh.renderOrder = -3;
-    root.add(flatMesh);
-  } else {
-    const groundTex = noiseTexture(256, 0.92, 0.22);
-    groundTex.repeat.set(gw / 70, gd / 70);
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(gw, gd), new THREE.MeshLambertMaterial({ color: 0x7daf58, map: groundTex }));
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.set(cx0, 0, cz0);
-    ground.receiveShadow = true;
-    ground.renderOrder = -2;
-    root.add(ground);
-  }
+  // Natural procedural ground texture (better than satellite photo at walking level)
+  const gTex = groundTexture();
+  gTex.repeat.set(gw / 150, gd / 150); // larger tiles = less obvious repetition
+  const groundMat = new THREE.MeshLambertMaterial({ map: gTex });
+  // Outer margin (always flat, behind everything — horizon fill)
+  const outerMesh = new THREE.Mesh(new THREE.PlaneGeometry(gw, gd), new THREE.MeshLambertMaterial({ color: 0x526830 }));
+  outerMesh.rotation.x = -Math.PI / 2;
+  outerMesh.position.set(cx0, 0, cz0);
+  outerMesh.renderOrder = -3;
+  root.add(outerMesh);
+  // The displaced terrain mesh is created after buildings are registered so building
+  // footprints can be flattened to their floor level (prevents terrain from piercing walls).
 
   // ---- flat layers: land cover, sidewalks, paths, roads, centre lines (painter's order in one mesh)
+  // When terrain is loaded each overlay vertex follows the terrain surface so roads/parks
+  // don't float above or sink into hills.
+  const yGround = world.terrain ? (x, z) => world.terrainHeight(x, z) : 0;
   const flat = new Buf();
   for (const a of data.areas) {
     if (!AREA_COLOR[a.k]) continue;
-    addPolygon(flat, a.p, 0, AREA_COLOR[a.k]);
+    addPolygon(flat, a.p, yGround, AREA_COLOR[a.k]);
     world.addArea(a.p, a.k);
   }
-  for (const w of data.waterways || []) addRibbon(flat, w.p, w.k === 'river' ? 5 : 1.6, 0, AREA_COLOR.water);
+  for (const w of data.waterways || []) addRibbon(flat, w.p, w.k === 'river' ? 5 : 1.6, yGround, AREA_COLOR.water);
   await tick();
-  for (const r of data.roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2 + 1.7, 0, 0xb7b3a8);
+  for (const r of data.roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2 + 1.7, yGround, 0xb7b3a8);
   for (const r of data.roads) {
     if (!PATHS.has(r.k)) continue;
     const hex = r.k === 'path' || r.k === 'track' ? 0xb7a27a : r.k === 'pedestrian' ? 0xd9d1bd : r.k === 'cycleway' ? 0xc4bda8 : 0xcdc5b0;
-    addRibbon(flat, r.p, r.w / 2, 0, hex);
+    addRibbon(flat, r.p, r.w / 2, yGround, hex);
   }
-  for (const r of data.roads) if (r.k === 'service') addRibbon(flat, r.p, r.w / 2, 0, 0x64686d);
-  for (const r of data.roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2, 0, MAJOR.has(r.k) ? 0x484c52 : 0x53575c);
-  for (const r of data.roads) if (MAJOR.has(r.k)) addRibbon(flat, r.p, 0.14, 0, 0xe3c545);
+  for (const r of data.roads) if (r.k === 'service') addRibbon(flat, r.p, r.w / 2, yGround, 0x64686d);
+  for (const r of data.roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2, yGround, MAJOR.has(r.k) ? 0x484c52 : 0x53575c);
+  for (const r of data.roads) if (MAJOR.has(r.k)) addRibbon(flat, r.p, 0.14, yGround, 0xe3c545);
   for (const r of data.roads) {
     for (let i = 0; i + 1 < r.p.length; i++) world.addRoadSegment(r.p[i][0], r.p[i][1], r.p[i + 1][0], r.p[i + 1][1], r.w, r.k);
   }
@@ -910,6 +920,41 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // doors need every building and road registered first (road-facing, not into a neighbour)
   world.finishBuildings();
   await tick();
+
+  // ---- terrain displaced mesh (deferred until buildings are registered so we can flatten under them)
+  if (world.terrain) {
+    const T = world.terrain;
+    const tCols = Math.ceil((b.maxX - b.minX) / T.cell) + 2;
+    const tRows = Math.ceil((b.maxZ - b.minZ) / T.cell) + 2;
+    const tGeo = new THREE.PlaneGeometry(b.maxX - b.minX, b.maxZ - b.minZ, tCols - 1, tRows - 1);
+    tGeo.rotateX(-Math.PI / 2);
+    const tPos = tGeo.attributes.position;
+    for (let i = 0; i < tPos.count; i++) {
+      const wx = tPos.getX(i) + cx0;
+      const wz = tPos.getZ(i) + cz0;
+      // Flatten terrain under building footprints to that building's floor level so walls
+      // don't appear to sink into hillsides.
+      const poly = world.polyAt(wx, wz);
+      tPos.setY(i, (poly && poly.kind === 'building') ? poly.y0 : world.terrainHeight(wx, wz));
+    }
+    tPos.needsUpdate = true;
+    tGeo.computeVertexNormals();
+    const tMesh = new THREE.Mesh(tGeo, groundMat);
+    tMesh.position.set(cx0, 0, cz0);
+    tMesh.receiveShadow = true;
+    tMesh.renderOrder = -2;
+    root.add(tMesh);
+  } else {
+    // No terrain data — simple flat ground
+    const fGeo = new THREE.PlaneGeometry(b.maxX - b.minX, b.maxZ - b.minZ);
+    const fMesh = new THREE.Mesh(fGeo, groundMat);
+    fMesh.rotation.x = -Math.PI / 2;
+    fMesh.position.set(cx0, 0, cz0);
+    fMesh.receiveShadow = true;
+    fMesh.renderOrder = -2;
+    root.add(fMesh);
+  }
+
   for (let i = 0; i < placed.length; i += 3) {
     const bd = placed[i + 1];
     addBuilding(placed[i], bd, tints.get(bd.id), placed[i + 2].shell || null);
