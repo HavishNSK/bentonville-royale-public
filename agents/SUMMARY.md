@@ -1,52 +1,59 @@
 # Agents
 
-Snapshot at about 3:23pm America/Chicago on 2026-11-14, when this session hit its usage limit again (resets 5:20pm). Reports from agents that finished a writeup are in `agents/reports/`.
+Snapshot **2026-11-16 ~9:40pm America/Chicago**. Branch: `feat/interior-overhaul` (uncommitted Crystal Bridges restyle + spectator POV work). Root `AGENTS.md` still applies. Older wave reports under `agents/reports/` are historical; do not treat them as current product truth (multiplayer, accounts, interiors phase 1–2, and ranks already shipped on `main`).
 
-The match plays. Three agents were killed before they could finish: real-world map data, weapon audio and models, and P2P multiplayer.
+The Claude Code session that owned this restyle hit the **5-hour usage limit** (resets **1:10am America/Chicago**). One background agent finished; the follow-up polish agent died mid-fix.
 
-## Killed at 3:23pm
+## Failed / incomplete this session
 
-| Agent | On disk | Left unfinished |
-| --- | --- | --- |
-| Wave 1 A: real-world map data | Terrain, building heights, and (at 3:24pm, after the agent died) the imagery outputs. `public/data/bentonville-terrain.bin` + `.json` (USGS 3DEP, 4 m grid, relief about 79 m). OSM JSON extended: Overture heights on 4,034 of 4,712 buildings, roof fields, bridge/tunnel/layer, `buildingParts`. `public/data/bentonville-trees.json` (36,226 canopy points from USDA NAIP) and `public/data/bentonville-ground.webp` (1489×2048). Scripts: `scripts/fetch-terrain.mjs`, `scripts/fetch-overture.py`, `scripts/fetch-imagery.mjs`, updates in `scripts/fetch-map-data.mjs`. Report `agents/reports/wave1-a-map-data.md` still says imagery was running. | The game does not load any of it. `Game.js` still loads only `bentonville-osm.json`. No `terrainHeight` in `src/world/`. |
-| Wave 1 D: weapon audio and models | Quaternius Ultimate Guns (CC0) plus a CircuitZ pickaxe replaced the Kenney stand-ins in `public/assets/weapons/`. 45 CC0 Freesound MP3s in `public/assets/sfx/` (~420 KB). `src/audio/Sfx.js` fetches and decodes them. Credits: `credits/weapons-loot.md`, `credits/audio.md`. Shots: `agents/reports/wave1-d-shots/`. | The report `agents/reports/wave1-d-weapons-audio.md` is only the opening findings. The agent died before writing the rest. |
-| Build P2P multiplayer mode | Nothing. No multiplayer module, no networking code, no report. | The whole task. |
+| Agent | Status | What landed | Left unfinished |
+| --- | --- | --- | --- |
+| **Agent E** — Gallery hanging engine and dressing | **Done** | Hang engine, `wall_label`, `art`/`artStyle`/`frame` plan fields, Crystal Bridges gallery hang (19–38 works + labels, 3 m spine), Bridge Galleries with no art. Cross-check: Main Lobby + Great Hall `kit: false`, mixed large cadence `i % 3 === 2`, lobby desk moved. Files: `furnishings.js`, `landmarkDressing.js`, related tests. `npm test` 58/58. | Nothing blocking for E. |
+| **Agent F** — Gallery materials and original art render | **Main pass done; polish failed (rate limit / HTTP 429)** | `landmarkStyle.js`, style overrides + beams + thresholds in `InteriorMeshes.js`, procedural `painting`/`painting_large` + `wall_label` in `InteriorFurnishings.js`, `tests/interior-style.test.mjs` + render tests. First SubagentHandback was delivered. | **Visual polish from screenshots / owner notes (the resume that died):** (1) ceiling between timber beams reads blue-grey / sky-like instead of warm cream `#e9e4d8`; (2) Bridge Gallery beams appear to run past a wall into open air. Do **not** re-do Main Lobby / Great Hall kit or large-painting cadence — Agent E already fixed those. Gallery Walk benches under paintings: leave as-is (owner choice). |
 
-## Finished after the 2:03pm snapshot
+Contract / scratch (local to that Claude session, may vanish after reboot):  
+`/private/tmp/claude-501/-Users-havishkunchanapalli-bentonville-royale/f4b5495f-d29c-4815-8611-924e00096a7f/scratchpad/INTERIOR_CONTRACT.md`  
+Screenshots: `…/scratchpad/cb-shots2/` (esp. Bridge Gallery + gallery spines).  
+Cursor gallery review: `…/scratchpad/cursor-review-gallery.txt`.
 
-These agents wrote a report and the files they name are in the tree.
+Known pre-existing `check:interiors` fails (ignore unless asked):  
+`sam_walton_hall` and `eighth_and_plate` “not a hollow building”.
 
-| Agent | What landed |
-| --- | --- |
-| Build storm | `src/game/Storm.js`. Pure logic, 402 s timeline, circles stay inside the map. `agents/reports/build-storm.md`. |
-| Build structures | `src/game/Structures.js`. 4 m grid, walls, floors, ramps, cones, ghost, collapse. `agents/reports/build-structures.md`. |
-| Build loot and inventory | `src/game/Inventory.js`, `src/game/Loot.js`. Hotbar data and instanced pickups. `agents/reports/build-loot-inventory.md`. |
-| Build bots | `src/game/Bots.js`. Drop, loot, rotate, engage, build. `agents/reports/build-bots.md`. |
-| Build game integration | `index.html`, `src/main.js`, `src/game/Game.js`, `src/game/Player.js`, `src/game/Combat.js`, `src/ui/menus.js`, `src/ui/menus.css`, `credits/fonts.md`, `src/audio/README.md`. Title, load, drop, play, victory or defeat. Headless QA: 0 page errors, 60 FPS with 31 bots. `agents/reports/build-game-integration.md`. |
-| Fix pass: rendering, collision, drop | Building facades, piece collision, ramp and cone sides, structural collapse. `agents/reports/fix-pass-rendering-collision.md`. |
-| Wave 1 C: cartoon art pass | `src/render/Toon.js`, `src/render/Post.js`, and the sky and material changes that go with them. Cel shading, ink, bloom, FXAA. `agents/reports/wave1-c-art-pass.md`. |
-| Wave 1 E: Google 3D tiles | `src/render/GoogleTiles.js`. Off unless `VITE_GOOGLE_MAPS_API_KEY` is set in `.env.local` (see `.env.example`). `agents/reports/wave1-e-google-tiles.md`. |
+## Also on this dirty tree (same branch, not Crystal Bridges)
 
-`agents/CONTRACTS.md` is the wave 3 interface those game-loop agents coded against.
+Spectator mode (Cursor session): POV follow-cam of the watched player + LMB/RMB cycle + HUD banner (`Game.js`, `hud.js`, `hud.css`). Unrelated to Agent F; keep unless the next agent is told to leave UI alone.
 
-## Wave 2 — files through 1:57pm, summary at 2:03pm
+## What to tell the next Claude agent
 
-One report that wave: the OSM pipeline (`agents/reports/build-osm-map-data-pipeline.md`). The other modules landed without a handoff and are still in the tree: `src/core/{config,assets,input}.js`, `src/world/{World,WorldMeshes}.js`, `src/ui/{hud,hud.css,icons,Minimap}.js`, `src/audio/Sfx.js`, `src/render/{Atmosphere,Effects}.js`, `src/game/Character.js`. The five `// placeholder` game files from that wave were replaced by wave 3.
+Paste the block under **Handoff prompt** below into a new Claude Code session after the limit resets (or on another account). Prefer **one** agent owning `InteriorMeshes.js` / `landmarkStyle.js` only for the two visual bugs; do not relaunch the full Agent E/F parallel restyle.
 
-## Wave 1 — cut off at about 1:27pm
+---
 
-Seven agents finished and wrote a report. Six were relaunched later.
+### Handoff prompt (copy/paste)
 
-| Agent | What landed |
-| --- | --- |
-| Download nature and city assets | 34 CC0 models in `public/assets/nature/`, `vehicles/`, and `props/`, plus `credits/environment.md`. |
-| Download weapon and loot assets | Loot models in `public/assets/loot/` are still the Kenney CC0 files in `credits/weapons-loot.md`. The guns and pickaxe were replaced in the 3:23pm wave. |
-| Download character assets | KayKit Adventurers (CC0): `player.glb`, `bot_a.glb`, `bot_b.glb`, `bot_c.glb`. Notes in `credits/characters.md`. |
-| Build Playwright QA harness | `tools/qa/smoke.mjs`. Headless Chromium with Metal WebGL. |
-| Evaluate `devriescoapps/Fortnite` | Could not clone. No LICENSE file. Not used as a base. |
-| Evaluate `cass-agency/fortnite-clone` | Could not clone. MIT, Vite. Not used as a base. |
-| Evaluate `nickypeakin/firtnite` | Public API 404. Skip. |
+```text
+Continue Bentonville Royale on branch feat/interior-overhaul at /Users/havishkunchanapalli/bentonville_royale.
 
-## What this means for the game
+FIRST: read AGENTS.md (binding), agents/SUMMARY.md (this handoff), and if still present /private/tmp/claude-501/-Users-havishkunchanapalli-bentonville-royale/f4b5495f-d29c-4815-8611-924e00096a7f/scratchpad/INTERIOR_CONTRACT.md (ADDENDUM v2). Inspect current src/world/InteriorMeshes.js, src/world/interiors/landmarkStyle.js, and screenshots in that scratchpad’s cb-shots2/ if they exist.
 
-A solo match can boot from `index.html`: menus, drop, shooting, building, storm, bots. Map JSON, terrain, canopy trees, and a ground texture are on disk, and the running game still uses the flat OSM map. Multiplayer was not started. The three candidate base repos from wave 1 were not usable from this machine, so the project is still a clean Three.js and Vite tree.
+Context: Crystal Bridges (building id 8240824) AskRosie-style restyle is mostly done. Agent E (placement) finished. Agent F (rendering) finished the main pass then died on a rate limit while fixing screenshot issues. Do NOT redo hang/dressing. Do NOT copy real Crystal Bridges / AskRosie artwork, titles, or artists — materials + procedural art only.
+
+Your job — only these visual fixes:
+1) Ceiling between timber beams looks blue-grey / sky-like. Styled ceilings must read warm cream #e9e4d8 (see landmarkStyle CEILING). Likely causes: wrong ceiling hex (CEILING_HEX vs style.ceiling), hemisphere/sky light bleeding through missing ceiling fill between beams, or beams without a proper ceiling plane behind them on single-storey rooms. Fix so gallery ceilings match AskRosie cream, not outdoor sky.
+2) Bridge Gallery: timber beams appear to run past a wall into open air. Clip/cut beams so they stay inside the Bridge Gallery(/Upper) room volume / inner poly; do not let them pierce adjacent volumes or exterior.
+
+Own/edit only as needed: src/world/InteriorMeshes.js, src/world/interiors/landmarkStyle.js, tests/interior-style.test.mjs (and interior-render.test.mjs only if required). Do NOT edit furnishings.js / landmarkDressing.js / Game.js / hud* unless a one-line import is required. No commits unless I ask. No package installs.
+
+Verify: node --test tests/interior-style.test.mjs tests/interior-render.test.mjs; npm test; npm run build. Ignore the two pre-existing check:interiors hollow-building fails for sam_walton_hall / eighth_and_plate. If you can, re-capture Bridge Gallery + one gallery spine screenshots and compare.
+
+Report: root cause of each bug, files changed, commands + results, remaining risks. Read AGENTS.md confirmation in the report.
+```
+
+## Finished earlier (still true on main / this branch base)
+
+- Interiors phase 1–2 merged via PRs (stairs, furnishings, breakable walls, landmark layouts). Report: `agents/reports/building-interiors-phase2.md`.
+- Multiplayer / accounts / ranks / presence / patch notes: on `main` (see recent git history). Do not restart those from old “killed agent” rows below.
+
+## Historical (2026-11-14) — do not restart blindly
+
+The 3:23pm table (map data wiring, weapon-audio report, early P2P) is obsolete as a work queue for networking (P2P/PartyServer shipped later). Terrain/imagery still may not be consumed at runtime; confirm in current `Game.js` / `World.js` before claiming map-data work is needed.

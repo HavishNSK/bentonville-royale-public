@@ -21,20 +21,26 @@ function crosses(A, B, box) {
 
 /** World-space walking waypoints, including the destination, clear of the stair footprint. */
 export function stairWalk(plan, x, z, gx, gz) {
-  const s = plan.stairs[0];
-  if (!s) return [[gx, gz]];
-  const box = { a0: s.a0 - CLEARANCE, b0: s.b0 - CLEARANCE, a1: s.a1 + CLEARANCE, b1: s.b1 + CLEARANCE };
+  if (!plan.stairs || !plan.stairs.length) return [[gx, gz]];
+  // one keep-out box per shaft (every storey's flight in a shaft shares its footprint)
+  const boxes = [];
+  for (const s of plan.stairs) {
+    if (boxes.some((b) => b.s.a0 === s.a0 && b.s.b0 === s.b0 && b.s.a1 === s.a1 && b.s.b1 === s.b1)) continue;
+    boxes.push({ s, a0: s.a0 - CLEARANCE, b0: s.b0 - CLEARANCE, a1: s.a1 + CLEARANCE, b1: s.b1 + CLEARANCE });
+  }
   const start = toLocal(plan.frame, x, z), end = toLocal(plan.frame, gx, gz);
-  // Authored doorway points may fall in a partition removed for the shaft. Move them to
+  // Authored doorway points may fall in a partition removed for a shaft. Move them to
   // its reserved side aisle. Flight endpoints never pass through this walking helper.
   const project = (p, near) => {
-    if (!inside(p, box)) return p;
-    if (s.axis === 'a') return [p[0], Math.abs(near[1] - box.b0) <= Math.abs(near[1] - box.b1) ? box.b0 : box.b1];
+    const box = boxes.find((b) => inside(p, b));
+    if (!box) return p;
+    if (box.s.axis === 'a') return [p[0], Math.abs(near[1] - box.b0) <= Math.abs(near[1] - box.b1) ? box.b0 : box.b1];
     return [Math.abs(near[0] - box.a0) <= Math.abs(near[0] - box.a1) ? box.a0 : box.a1, p[1]];
   };
   const target = project(end, start);
   const source = project(start, target);
-  const points = [source, target, [box.a0, box.b0], [box.a1, box.b0], [box.a1, box.b1], [box.a0, box.b1]];
+  const points = [source, target];
+  for (const box of boxes) points.push([box.a0, box.b0], [box.a1, box.b0], [box.a1, box.b1], [box.a0, box.b1]);
   const dist = points.map(() => Infinity), prev = points.map(() => -1), seen = new Set();
   dist[0] = 0;
   for (let pass = 0; pass < points.length; pass++) {
@@ -43,7 +49,7 @@ export function stairWalk(plan, x, z, gx, gz) {
     if (i < 0 || !Number.isFinite(dist[i]) || i === 1) break;
     seen.add(i);
     for (let j = 0; j < points.length; j++) {
-      if (i === j || crosses(points[i], points[j], box)) continue;
+      if (i === j || boxes.some((box) => crosses(points[i], points[j], box))) continue;
       const dx = points[i][0] - points[j][0], dz = points[i][1] - points[j][1];
       const d = dist[i] + Math.sqrt(dx * dx + dz * dz);
       if (d < dist[j] - 1e-9) { dist[j] = d; prev[j] = i; }

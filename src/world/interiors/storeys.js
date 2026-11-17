@@ -36,8 +36,20 @@ function localPolygon(plan, shell) {
   return poly;
 }
 
-/** Find a flight, approach pads and a side aisle inside one ground-floor room. */
-function shaft(plan, shell, rise, hints) {
+// Extra stair shafts on big footprints: one more per SHAFT_AREA m^2 of footprint (MAX_SHAFTS in
+// all), each at least SHAFT_SPACING m (centre to centre) from every other, so a long building
+// has a way up near every part of it instead of one flight at the lobby.
+const MAX_SHAFTS = 4;
+const SHAFT_AREA = 1800;
+const SHAFT_SPACING = 30;
+const ALONG_STEP = 4; // m between candidate flight positions slid along a long room
+
+/**
+ * Every place a flight (plus approach pads and a side aisle) fits inside one ground-floor room,
+ * sorted by score (circulation rooms first, then nearest the authored hint). `centred` marks
+ * the room-centred positions (the only ones the first shaft is chosen from).
+ */
+function shaftCandidates(plan, shell, rise, hints) {
   const run = q(Math.max(5, rise * 1.5)), w = 1.4;
   const poly = localPolygon(plan, shell), candidates = [];
   for (const r of plan.levels[0].rooms) for (const axis of ['a', 'b']) {
@@ -45,8 +57,9 @@ function shaft(plan, shell, rise, hints) {
     const slo = axis === 'a' ? r.b0 : r.a0, shi = axis === 'a' ? r.b1 : r.a1;
     if (hi - lo < run + 2.9 || shi - slo < w + 2.4) continue;
     const mid = q((slo + shi) / 2);
-    for (const shift of [0, -0.25, 0.25, -0.5, 0.5]) {
-      const start = q((lo + hi - run) / 2 + shift);
+    const starts = [0, -0.25, 0.25, -0.5, 0.5].map((shift) => [q((lo + hi - run) / 2 + shift), true]);
+    for (let s = lo + 1.5; s + run + 1.5 <= hi; s += ALONG_STEP) starts.push([q(s), false]);
+    for (const [start, centred] of starts) {
       const a0 = q(axis === 'a' ? start : mid - w / 2), b0 = q(axis === 'a' ? mid - w / 2 : start);
       const a1 = q(axis === 'a' ? start + run : mid + w / 2), b1 = q(axis === 'a' ? mid + w / 2 : start + run);
       const points = axis === 'a'
@@ -63,38 +76,68 @@ function shaft(plan, shell, rise, hints) {
       if (!fits) continue;
       const hint = hints?.[0];
       const distance = hint ? (hint.a - (a0 + a1) / 2) ** 2 + (hint.b - (b0 + b1) / 2) ** 2 : 0;
-      candidates.push({ a0, b0, a1, b1, axis, w, score: (/corridor|hall|lobby/.test(r.kind) ? 0 : 100000) + distance });
+      const pref = /corridor|hall|lobby/.test(r.kind);
+      candidates.push({ a0, b0, a1, b1, axis, w, centred, pref, score: (pref ? 0 : 100000) + distance });
     }
   }
   candidates.sort((a, b) => a.score - b.score);
-  return candidates[0] || null;
+  return candidates;
 }
 
-/** Remove upper partitions crossing the reserved stair circulation band, including panels. */
-function upperLevel(plan, upper, H, i, panels) {
+/**
+ * The stair shafts of a building: the best room-centred candidate (exactly the single shaft
+ * earlier versions picked), then on big footprints extra ones by farthest-point: each next
+ * shaft is the candidate farthest from every chosen one (circulation rooms first), at least
+ * SHAFT_SPACING m away. Squared distances only (deterministic across clients).
+ */
+function pickShafts(candidates, area) {
+  const first = candidates.find((c) => c.centred);
+  if (!first) return [];
+  const chosen = [first];
+  const maxN = Math.min(MAX_SHAFTS, 1 + Math.floor(area / SHAFT_AREA));
+  const ca = (c) => (c.a0 + c.a1) / 2, cb = (c) => (c.b0 + c.b1) / 2;
+  while (chosen.length < maxN) {
+    let best = null, bestD2 = -1;
+    for (const c of candidates) {
+      let d2 = Infinity;
+      for (const h of chosen) d2 = Math.min(d2, (ca(c) - ca(h)) ** 2 + (cb(c) - cb(h)) ** 2);
+      if (d2 < SHAFT_SPACING * SHAFT_SPACING) continue;
+      if (!best || (c.pref && !best.pref) || (c.pref === best.pref && d2 > bestD2)) { best = c; bestD2 = d2; }
+    }
+    if (!best) break;
+    chosen.push(best);
+  }
+  return chosen.map(({ a0, b0, a1, b1, axis, w, score }) => ({ a0, b0, a1, b1, axis, w, score }));
+}
+
+/** Remove upper partitions crossing any reserved stair circulation band, including panels. */
+function upperLevel(plan, upper, Hs, i, panels) {
   const src = upper.levels[0], walls = [], wallMeta = [];
   for (let k = 0; k < src.wallMeta.length; k++) {
     const W = src.walls, m = src.wallMeta[k];
     const A = toLocal(plan.frame, W[k * 7], W[k * 7 + 1]);
     const B = toLocal(plan.frame, W[k * 7 + 2], W[k * 7 + 3]);
-    if (Math.max(A[0], B[0]) >= H.a0 - SHAFT_AISLE && Math.min(A[0], B[0]) <= H.a1 + SHAFT_AISLE &&
-        Math.max(A[1], B[1]) >= H.b0 - SHAFT_AISLE && Math.min(A[1], B[1]) <= H.b1 + SHAFT_AISLE) continue;
+    if (Hs.some((H) => Math.max(A[0], B[0]) >= H.a0 - SHAFT_AISLE && Math.min(A[0], B[0]) <= H.a1 + SHAFT_AISLE &&
+        Math.max(A[1], B[1]) >= H.b0 - SHAFT_AISLE && Math.min(A[1], B[1]) <= H.b1 + SHAFT_AISLE)) continue;
     const id = m.panel >= 0 ? panels.length : -1;
     if (id >= 0) panels.push({ ...upper.panels[m.panel], id, wall: walls.length / 7, level: i });
     wallMeta.push({ ...m, panel: id });
     walls.push(...W.slice(k * 7, k * 7 + 7));
   }
-  return { ...src, i, holes: [{ a0: H.a0, b0: H.b0, a1: H.a1, b1: H.b1 }], walls: new Float32Array(walls), wallMeta,
-    floorArea: q(Math.max(0, src.floorArea - (H.a1 - H.a0) * (H.b1 - H.b0))) };
+  let holeArea = 0;
+  for (const H of Hs) holeArea += (H.a1 - H.a0) * (H.b1 - H.b0);
+  return { ...src, i, holes: Hs.map((H) => ({ a0: H.a0, b0: H.b0, a1: H.a1, b1: H.b1 })), walls: new Float32Array(walls), wallMeta,
+    floorArea: q(Math.max(0, src.floorArea - holeArea)) };
 }
 
-/** Keep room centres/loot on a flat supported floor, outside the entire flight footprint. */
-function flatRooms(plan, shell, L, H) {
+/** Keep room centres/loot on a flat supported floor, outside every flight footprint. */
+function flatRooms(plan, shell, L, Hs) {
   const polygon = localPolygon(plan, shell);
-  const inShaft = (a, b) => a > H.a0 - 0.65 && a < H.a1 + 0.65 && b > H.b0 - 0.65 && b < H.b1 + 0.65;
+  const shaftAt = (a, b) => Hs.find((H) => a > H.a0 - 0.65 && a < H.a1 + 0.65 && b > H.b0 - 0.65 && b < H.b1 + 0.65);
   return L.rooms.map(r => {
     const [a, b] = toLocal(plan.frame, r.cx, r.cz);
-    if (!inShaft(a, b)) return r;
+    const H = shaftAt(a, b);
+    if (!H) return r;
     const rects = [
       { ...r, a1: Math.min(r.a1, H.a0 - 0.65) }, { ...r, a0: Math.max(r.a0, H.a1 + 0.65) },
       { ...r, b1: Math.min(r.b1, H.b0 - 0.65) }, { ...r, b0: Math.max(r.b0, H.b1 + 0.65) },
@@ -103,7 +146,7 @@ function flatRooms(plan, shell, L, H) {
     for (const R of rects) {
       if (R.a1 - R.a0 < 1.3 || R.b1 - R.b0 < 1.3) continue;
       const [ca, cb, clear] = roomPoint(R, polygon);
-      if (clear < 0.6) continue;
+      if (clear < 0.6 || shaftAt(ca, cb)) continue;
       const [cx, cz] = toWorld(plan.frame, ca, cb);
       let blocked = false;
       for (let k = 0; k < L.walls.length; k += 7) {
@@ -120,17 +163,20 @@ function flatRooms(plan, shell, L, H) {
 
 export function addStoreys(plan, bd, shell, count, trees, hints, makeLevel) {
   if (count < 2) return plan;
-  const rise = q(shell.ceil - shell.floor + FLOOR_THICKNESS), H = shaft(plan, shell, rise, hints);
-  if (!H) return plan; // Never expose unreachable upper floors on small/irregular footprints.
+  const rise = q(shell.ceil - shell.floor + FLOOR_THICKNESS);
+  const area = Number.isFinite(shell.area) ? shell.area : plan.frame.L * plan.frame.W;
+  const Hs = pickShafts(shaftCandidates(plan, shell, rise, hints), area);
+  if (!Hs.length) return plan; // Never expose unreachable upper floors on small/irregular footprints.
   const levels = [plan.levels[0]], panels = [...plan.panels];
   for (let i = 1; i < count; i++) {
     const y = q(shell.floor + rise * i), ceil = q(y + rise - FLOOR_THICKNESS);
     const upper = makeLevel({ ...shell, floor: y, ceil }, trees?.[i] || trees?.[0]);
-    levels.push(upperLevel(plan, upper, H, i, panels));
+    levels.push(upperLevel(plan, upper, Hs, i, panels));
   }
-  const flatLevels = levels.map(L => ({ ...L, rooms: flatRooms(plan, shell, L, H) }));
+  const flatLevels = levels.map(L => ({ ...L, rooms: flatRooms(plan, shell, L, Hs) }));
+  // stairs grouped by level (shaft 0 first on each), one flight per shaft per storey
   const stairs = [];
-  for (let i = 0; i < levels.length - 1; i++) {
+  for (let i = 0; i < levels.length - 1; i++) for (const H of Hs) {
     const a0 = H.axis === 'a' ? H.a0 : (H.a0 + H.a1) / 2, b0 = H.axis === 'a' ? (H.b0 + H.b1) / 2 : H.b0;
     const a1 = H.axis === 'a' ? H.a1 : a0, b1 = H.axis === 'a' ? b0 : H.b1;
     const [x0, z0] = toWorld(plan.frame, a0, b0), [x1, z1] = toWorld(plan.frame, a1, b1);
@@ -141,7 +187,7 @@ export function addStoreys(plan, bd, shell, count, trees, hints, makeLevel) {
   const lootSpots = [];
   for (const L of flatLevels) for (const r of L.rooms) {
     const [a, b] = toLocal(plan.frame, r.cx, r.cz);
-    if (a > H.a0 - 0.6 && a < H.a1 + 0.6 && b > H.b0 - 0.6 && b < H.b1 + 0.6) continue;
+    if (Hs.some((H) => a > H.a0 - 0.6 && a < H.a1 + 0.6 && b > H.b0 - 0.6 && b < H.b1 + 0.6)) continue;
     lootSpots.push({ x: r.cx, y: L.y, z: r.cz, level: L.i, room: r.id });
   }
   let hash = plan.hash;

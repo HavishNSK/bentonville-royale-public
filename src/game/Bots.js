@@ -1907,11 +1907,18 @@ export class Bots {
     while (lv !== glv) {
       const up = glv > lv;
       const sl = up ? lv : lv - 1;
+      // the flight between these storeys with the shortest walk: to its foot (or top) from here,
+      // plus from its other end to the goal (big buildings have several, see interiors/storeys.js)
       let s = null;
+      let sBest = Infinity;
       for (let i = 0; i < stairs.length; i++) {
-        if (stairs[i].level === sl) {
-          s = stairs[i];
-          break;
+        const t = stairs[i];
+        if (t.level !== sl) continue;
+        const ex = up ? t.x0 : t.x1, ez = up ? t.z0 : t.z1, lx = up ? t.x1 : t.x0, lz = up ? t.z1 : t.z0;
+        const cost = Math.hypot(ex - cursorX, ez - cursorZ) + Math.hypot(gx - lx, gz - lz);
+        if (cost < sBest) {
+          sBest = cost;
+          s = t;
         }
       }
       if (!s) break; // no way between these storeys: walk the rooms of this one

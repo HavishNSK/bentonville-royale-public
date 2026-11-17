@@ -232,6 +232,9 @@ export class World {
     this.pushX = 0;
     this.pushZ = 0;
     this._hit = { t: 0, x: 0, y: 0, z: 0, nx: 0, ny: 1, nz: 0, collider: null, kind: 'none', edge: -1, u: 0, panel: null };
+    this._pnx = 0; // normal of the last _rayProps() hit
+    this._pny = 0;
+    this._pnz = 0;
     this.interiorHash = null; // set by finishBuildings(): FNV-1a over every interior plan
     this.onPanelChange = null; // (collider, panel, alive) after breakPanel / restorePanel
     this.counts = { polys: 0, circles: 0 };
@@ -616,7 +619,11 @@ export class World {
     return false;
   }
 
-  /** Push a circle out of the interior partitions of shell c (capsules with a y-range). */
+  /**
+   * Push a circle out of the interior partitions of shell c (capsules with a y-range) and out of
+   * its solid furniture (levels[i].props, same capsule format; optional). A capsule whose top is
+   * within `step` of the feet is stepped over (groundHeight lifts the feet onto it).
+   */
   _wallsPush(c, pos, r, feet, head, step) {
     const s = c.shell;
     let moved = false;
@@ -626,40 +633,54 @@ export class World {
       const on = s.wallOn[li];
       for (let k = 0, w = 0; k < W.length; k += 7, w++) {
         if (!on[w] || feet >= W[k + 6] - step || head <= W[k + 5] + 0.05) continue;
-        const ax = W[k];
-        const az = W[k + 1];
-        const ex = W[k + 2] - ax;
-        const ez = W[k + 3] - az;
-        const l2 = ex * ex + ez * ez;
-        let t = l2 > 0 ? ((pos.x - ax) * ex + (pos.z - az) * ez) / l2 : 0;
-        t = t < 0 ? 0 : t > 1 ? 1 : t;
-        const dx = pos.x - (ax + ex * t);
-        const dz = pos.z - (az + ez * t);
-        const lim = r + W[k + 4];
-        const d2 = dx * dx + dz * dz;
-        if (d2 >= lim * lim) continue;
-        const d = Math.sqrt(d2);
-        let nx;
-        let nz;
-        if (d > 1e-5) {
-          nx = dx / d;
-          nz = dz / d;
-        } else {
-          const l = Math.sqrt(l2) || 1;
-          nx = ez / l;
-          nz = -ex / l;
-        }
-        pos.x += nx * (lim - d);
-        pos.z += nz * (lim - d);
-        this.pushX += nx;
-        this.pushZ += nz;
-        moved = true;
+        if (this._capsulePush(W, k, pos, r)) moved = true;
+      }
+      const P = levels[li].props;
+      if (!P) continue;
+      for (let k = 0; k < P.length; k += 7) {
+        if (feet >= P[k + 6] - step || head <= P[k + 5] + 0.05) continue;
+        if (this._capsulePush(P, k, pos, r)) moved = true;
       }
     }
     return moved;
   }
 
-  /** Does a circle (x, z, r) on the ground storey overlap a solid interior partition of shell c? */
+  /** Push circle (pos.x, pos.z, r) out of capsule k of W (stride 7); adds to pushX / pushZ. */
+  _capsulePush(W, k, pos, r) {
+    const ax = W[k];
+    const az = W[k + 1];
+    const ex = W[k + 2] - ax;
+    const ez = W[k + 3] - az;
+    const l2 = ex * ex + ez * ez;
+    let t = l2 > 0 ? ((pos.x - ax) * ex + (pos.z - az) * ez) / l2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const dx = pos.x - (ax + ex * t);
+    const dz = pos.z - (az + ez * t);
+    const lim = r + W[k + 4];
+    const d2 = dx * dx + dz * dz;
+    if (d2 >= lim * lim) return false;
+    const d = Math.sqrt(d2);
+    let nx;
+    let nz;
+    if (d > 1e-5) {
+      nx = dx / d;
+      nz = dz / d;
+    } else {
+      const l = Math.sqrt(l2) || 1;
+      nx = ez / l;
+      nz = -ex / l;
+    }
+    pos.x += nx * (lim - d);
+    pos.z += nz * (lim - d);
+    this.pushX += nx;
+    this.pushZ += nz;
+    return true;
+  }
+
+  /**
+   * Does a circle (x, z, r) overlap a solid interior partition or solid furniture capsule of
+   * shell c on the storey holding feetY (default: the ground storey)?
+   */
   _wallsNear(c, x, z, r, feetY = c.shell.floor) {
     const s = c.shell;
     if (!s.plan) return false;
@@ -674,6 +695,15 @@ export class World {
       if (!on[w] || W[k + 5] > band || W[k + 6] <= feetY + 0.1) continue;
       const lim = r + W[k + 4];
       if (this._segD2(W, k, x, z) < lim * lim) return true;
+    }
+    // solid furniture on that storey (spawn / loot / build placement keep off it)
+    const P = L.props;
+    if (P) {
+      for (let k = 0; k < P.length; k += 7) {
+        if (P[k + 5] > band || P[k + 6] <= feetY + 0.1) continue;
+        const lim = r + P[k + 4];
+        if (this._segD2(P, k, x, z) < lim * lim) return true;
+      }
     }
     return false;
   }
@@ -1426,7 +1456,7 @@ export class World {
       if (x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
       if (pointInPoly(c.p, c.n, x, z)) {
         const top = c.planes ? c.eave + roofRise(c.planes, x, z) : c.h;
-        if (top > y && top <= lim) {
+        if (top > y && top <= lim && top < cap) {
           y = top;
           this.surface = c.kind === 'vehicle' ? 'vehicle' : 'roof';
         } else if (c.shell && top > lim && c.shell.floor > y && c.shell.floor <= lim) {
@@ -1438,14 +1468,28 @@ export class World {
       if (c.shell?.plan && pointInPoly(c.p, c.n, x, z)) {
         const plan = c.shell.plan;
         for (const L of plan.levels) {
-          if (L.y > y && L.y <= lim && !inHole(plan, L, x, z)) {
+          if (L.y > y && L.y <= lim && L.y < cap && !inHole(plan, L, x, z)) {
             y = L.y;
             this.surface = 'floor';
           }
         }
         for (const s of plan.stairs) {
           const sy = stairHeight(s, x, z);
-          if (sy > y && sy <= lim) { y = sy; this.surface = 'floor'; }
+          if (sy > y && sy <= lim && sy < cap) { y = sy; this.surface = 'floor'; }
+        }
+        // the top of solid furniture (stepped onto when low, landed on from a jump)
+        for (const L of plan.levels) {
+          const P = L.props;
+          if (!P) continue;
+          for (let k = 0; k < P.length; k += 7) {
+            const top = P[k + 6];
+            if (top <= y || top > lim || top >= cap) continue;
+            const pr = P[k + 4];
+            if (this._segD2(P, k, x, z) < pr * pr) {
+              y = top;
+              this.surface = 'floor';
+            }
+          }
         }
       }
     }
@@ -1545,6 +1589,23 @@ export class World {
     let y = Infinity;
     const cell = this.cellAt(x, z);
     if (!cell) return y;
+    // an enterable building's own ceilings count too: the upper storey's floor over our head
+    // (outside its stair holes), else the roof slab over the top storey. Returned as a "top"
+    // FLOOR_THICK above the underside, like a built floor, so callers' underside maths holds.
+    const polys = cell.polys;
+    for (let i = 0; i < polys.length; i++) {
+      const c = polys[i];
+      const s = c.shell;
+      if (!s || feetY >= s.ceil - 0.05 || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
+      if (!pointInPoly(c.p, c.n, x, z)) continue;
+      let top = s.ceil + FLOOR_THICK;
+      if (s.plan) {
+        for (const L of s.plan.levels) {
+          if (L.i > 0 && L.y - FLOOR_THICKNESS > feetY + 0.05 && L.y < top && !inHole(s.plan, L, x, z)) top = L.y;
+        }
+      }
+      if (top < y) y = top;
+    }
     const dyn = cell.dyn;
     for (let i = 0; i < dyn.length; i++) {
       const d = dyn[i];
@@ -2015,6 +2076,20 @@ export class World {
                     out.kind = c.kind;
                   }
                 }
+                // furniture that stops bullets / sight (never a breakable panel)
+                const P = levels[li].props;
+                if (P) {
+                  const t = this._rayProps(P, levels[li].propBlock, ox, oy, oz, dx, dy, dz, best);
+                  if (t > 0) {
+                    best = t;
+                    found = true;
+                    out.nx = this._pnx;
+                    out.ny = this._pny;
+                    out.nz = this._pnz;
+                    out.collider = c;
+                    out.kind = c.kind;
+                  }
+                }
               }
             }
           }
@@ -2233,6 +2308,114 @@ export class World {
       out.panel = this.panelAt(out.collider, edgeE, edgeU, out.y);
     } else if (best === wallT) out.panel = wallPanel;
     return out;
+  }
+
+  /**
+   * Nearest hit (t in (1e-4, best)) of a ray with the blocking furniture capsules P (stride 7),
+   * each treated as its box: spine a->b extended by r at both ends, half-width r, y0..y1.
+   * Sides and the top / bottom faces count. Returns t (normal in this._pnx/_pny/_pnz) or -1.
+   * block: Uint8Array per capsule (1 = stops rays), or missing (every capsule blocks).
+   */
+  _rayProps(P, block, ox, oy, oz, dx, dy, dz, best) {
+    let hitT = -1;
+    for (let k = 0, i = 0; k < P.length; k += 7, i++) {
+      if (block && block[i] === 0) continue; // only an explicit 0 lets rays pass (short/missing entries block)
+      const ax = P[k];
+      const az = P[k + 1];
+      let ex = P[k + 2] - ax;
+      let ez = P[k + 3] - az;
+      const l = Math.sqrt(ex * ex + ez * ez);
+      const r = P[k + 4];
+      if (l > 1e-6) {
+        ex /= l;
+        ez /= l;
+      } else {
+        ex = 1;
+        ez = 0;
+      }
+      // ray in the box frame: s along the spine (from a), n across it
+      const rx = ox - ax;
+      const rz = oz - az;
+      const os = rx * ex + rz * ez;
+      const on = rz * ex - rx * ez;
+      const ds = dx * ex + dz * ez;
+      const dn = dz * ex - dx * ez;
+      // slab s in [-r, l + r], slab n in [-r, r]; sS / sN: sign of the entered face's normal
+      let sIn = -Infinity;
+      let sOut = Infinity;
+      let sS = 0;
+      if (ds > -1e-12 && ds < 1e-12) {
+        if (os < -r || os > l + r) continue;
+      } else if (ds > 0) {
+        sIn = (-r - os) / ds;
+        sOut = (l + r - os) / ds;
+        sS = -1;
+      } else {
+        sIn = (l + r - os) / ds;
+        sOut = (-r - os) / ds;
+        sS = 1;
+      }
+      let nIn = -Infinity;
+      let nOut = Infinity;
+      let sN = 0;
+      if (dn > -1e-12 && dn < 1e-12) {
+        if (on < -r || on > r) continue;
+      } else if (dn > 0) {
+        nIn = (-r - on) / dn;
+        nOut = (r - on) / dn;
+        sN = -1;
+      } else {
+        nIn = (r - on) / dn;
+        nOut = (-r - on) / dn;
+        sN = 1;
+      }
+      const tOut = sOut < nOut ? (sOut < best ? sOut : best) : nOut < best ? nOut : best;
+      let tIn = sIn > nIn ? sIn : nIn;
+      if (tOut <= 1e-4 || tIn >= tOut) continue;
+      const y0 = P[k + 5];
+      const y1 = P[k + 6];
+      let t = -1;
+      let nx = 0;
+      let ny = 0;
+      let nz = 0;
+      if (tIn > 1e-4) {
+        const yIn = oy + dy * tIn;
+        if (yIn >= y0 && yIn <= y1) {
+          t = tIn;
+          if (sIn > nIn) {
+            nx = ex * sS;
+            nz = ez * sS;
+          } else {
+            nx = -ez * sN;
+            nz = ex * sN;
+          }
+        }
+      } else tIn = 0; // origin above / below the box: only its top / bottom face
+      if (t < 0) {
+        const yIn = oy + dy * tIn;
+        if (dy < -1e-9 && yIn > y1) {
+          const tt = (y1 - oy) / dy; // down onto the top face
+          if (tt > tIn && tt < tOut) {
+            t = tt;
+            ny = 1;
+          }
+        } else if (dy > 1e-9 && yIn < y0) {
+          const tt = (y0 - oy) / dy; // up into the underside
+          if (tt > tIn && tt < tOut) {
+            t = tt;
+            ny = -1;
+          }
+        }
+      }
+      if (t > 1e-4 && t < best) {
+        best = t;
+        hitT = t;
+        this._pnx = nx;
+        this._pny = ny;
+        this._pnz = nz;
+      }
+    }
+    return hitT;
   }
 
   /** True when nothing solid lies on the straight segment between two points. */

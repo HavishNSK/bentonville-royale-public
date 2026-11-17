@@ -288,15 +288,22 @@ function buildingMaterial() {
 
 const INTERIOR_WALL = { wood: 0xe9e1cf, brick: 0xd8d2c6, metal: 0xc9ccce };
 const FLOOR_COLOR = { wood: 0x9b7a55, brick: 0x8d8780, metal: 0x7b8086 };
-const CEILING_COLOR = 0xeceae4;
+const CEILING_COLOR = 0xe2dccf; // lit as up-facing, so a touch darker to avoid glare
 
-/** Push a quad a-b-c-d (each [x, y, z]) facing normal (nx, ny, nz); winding picked from the normal. */
-function quad(chunk, a, b, c, d, nx, ny, nz, r, g, bl, wallAttr, h) {
+/**
+ * Push a quad a-b-c-d (each [x, y, z]) facing normal (nx, ny, nz); winding picked from the normal.
+ * Optional lightNormal ([x, y, z]) is stored as the vertex normal instead, so a face can be wound
+ * one way but lit as if it faced another (an interior ceiling light panel faces down, lit as up).
+ */
+function quad(chunk, a, b, c, d, nx, ny, nz, r, g, bl, wallAttr, h, lightNormal) {
   const buf = chunk.buf;
-  const i0 = buf.v(a[0], a[1], a[2], nx, ny, nz, r, g, bl);
-  buf.v(b[0], b[1], b[2], nx, ny, nz, r, g, bl);
-  buf.v(c[0], c[1], c[2], nx, ny, nz, r, g, bl);
-  buf.v(d[0], d[1], d[2], nx, ny, nz, r, g, bl);
+  const lx = lightNormal ? lightNormal[0] : nx;
+  const ly = lightNormal ? lightNormal[1] : ny;
+  const lz = lightNormal ? lightNormal[2] : nz;
+  const i0 = buf.v(a[0], a[1], a[2], lx, ly, lz, r, g, bl);
+  buf.v(b[0], b[1], b[2], lx, ly, lz, r, g, bl);
+  buf.v(c[0], c[1], c[2], lx, ly, lz, r, g, bl);
+  buf.v(d[0], d[1], d[2], lx, ly, lz, r, g, bl);
   for (let k = 0; k < 4; k++) chunk.wall.push(...(wallAttr ? wallAttr[k] : NO_WALL));
   chunk.bh.push(h, h, h, h);
   // (b - a) x (c - a) against the wanted normal
@@ -315,13 +322,13 @@ function quad(chunk, a, b, c, d, nx, ny, nz, r, g, bl, wallAttr, h) {
 const NO_WALL = [0, 0, -1, 0];
 
 /** Horizontal polygon (flat [x, z, ...] or [[x, z], ...]) at height y facing up (dir 1) or down (-1), with precomputed triangles. */
-function hcap(chunk, pts, tris, y, dir, hex, h) {
+function hcap(chunk, pts, tris, y, dir, hex, h, litDir = dir) {
   const buf = chunk.buf;
   _c.setHex(hex);
   const base = buf.n;
   const n = pts.length / 2;
   for (let i = 0; i < n; i++) {
-    buf.v(pts[i * 2], y, pts[i * 2 + 1], 0, dir, 0, _c.r, _c.g, _c.b);
+    buf.v(pts[i * 2], y, pts[i * 2 + 1], 0, litDir, 0, _c.r, _c.g, _c.b);
     chunk.wall.push(0, y, -1, 0);
     chunk.bh.push(h);
   }
@@ -507,13 +514,15 @@ function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris) {
   // interior floor (just above the ground layers) and ceiling; the inner ring has the
   // footprint's vertex order, so the footprint triangulation is reused
   hcap(chunk, inner, tris, 0.03, 1, FLOOR_COLOR[b.mat] || FLOOR_COLOR.brick, h);
-  hcap(chunk, inner, tris, shell.ceil-shell.floor, -1, CEILING_COLOR, h);
+  // the ceiling is wound to face down but lit with an up normal, so it reads as a bright
+  // painted ceiling instead of picking up the dim ground hemisphere colour
+  hcap(chunk, inner, tris, shell.ceil-shell.floor, -1, CEILING_COLOR, h, 1);
   // interior partitions + room floors (InteriorMeshes.js)
   if (shell.plan) addInteriorGeometry(chunk, shell, h, { quad, hcapFlat });
 }
 
 /** Horizontal polygon (flat [x, z, ...]) facing up, triangulated here (room floor overlays). */
-function hcapFlat(chunk, pts, y, hex, h, facing = 1) {
+function hcapFlat(chunk, pts, y, hex, h, facing = 1, litDir = facing) {
   const n = pts.length / 2;
   if (n < 3) return;
   const contour = [];
@@ -524,7 +533,7 @@ function hcapFlat(chunk, pts, y, hex, h, facing = 1) {
   } catch (err) {
     return;
   }
-  hcap(chunk, pts, tris, y, facing, hex, h);
+  hcap(chunk, pts, tris, y, facing, hex, h, litDir);
 }
 
 // ------------------------------------------------------------- instanced sets

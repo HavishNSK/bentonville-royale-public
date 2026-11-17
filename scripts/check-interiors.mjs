@@ -138,6 +138,12 @@ for (const c of shells) {
   if (!plan) continue;
   const inner = plan.panels.find((p) => p.kind === 'inner' && Math.hypot(p.bx - p.ax, p.bz - p.az) > 2); // wide enough to walk into, not around
   if (!inner) continue;
+  // this section checks partition panels on their own: furniture standing against the wall
+  // (a bookcase, a counter) correctly catches the ray first, and prop ray/push behaviour has
+  // its own coverage in tests/interior-props-collision.test.mjs, so set level-0 props aside
+  const L0 = plan.levels[0];
+  const heldProps = L0.props;
+  L0.props = null;
   const W = plan.levels[0].walls;
   const k = inner.wall * 7;
   const mx = (W[k] + W[k + 2]) / 2;
@@ -168,6 +174,7 @@ for (const c of shells) {
   if (side < R + W[k + 4] - 0.02) fail(`building ${c.ref.id}: walked into / through inner panel ${inner.id} (side ${side.toFixed(3)})`);
   const h3 = world.raycast(ox, y, oz, -nxx, 0, -nzz, 5);
   if (!h3 || world.panelHit(h3) !== inner) fail(`building ${c.ref.id}: restored inner panel not hit`);
+  L0.props = heldProps;
   rayChecked++;
 }
 
