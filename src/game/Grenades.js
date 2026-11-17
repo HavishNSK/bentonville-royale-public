@@ -16,7 +16,7 @@
 // and characters, and explodes when its fuse (started at the throw) runs out. The blast
 // deals GRENADE.damage to every character within GRENADE.radius that it has a clear line
 // to (the thrower included; walls give cover), and GRENADE.structureDamage to built
-// pieces, trees, rocks and props in range.
+// pieces, building wall and floor panels, trees, rocks and props in range.
 //
 // Multiplayer: the host simulates and explodes them (onThrow / onExplode feed its event
 // stream). A client (`combat.authoritative === false`) draws the same flight from
@@ -531,6 +531,29 @@ export class Grenades {
         st._center(piece, _v);
         if (_v.distanceToSquared(c) > (R + 1.5) * (R + 1.5)) continue;
         st.damage(piece, structureDamage, _v);
+      }
+    }
+
+    // ---- map buildings: a hole in each wall or floor panel the blast reaches
+    if (combat.damagePanel) {
+      const buildings = new Set();
+      this.world._each(c.x - R, c.z - R, c.x + R, c.z + R, false, (cell) => {
+        for (const k of cell.polys) {
+          if (!k.shell || !k.shell.panels || buildings.has(k)) continue;
+          if (c.x < k.minX - R || c.x > k.maxX + R || c.z < k.minZ - R || c.z > k.maxZ + R) continue;
+          buildings.add(k);
+        }
+      });
+      const reach2 = (R + 0.6) * (R + 0.6);
+      for (const bld of buildings) {
+        for (const pn of bld.shell.panels) {
+          if (!pn.alive) continue;
+          const yGap = c.y < pn.y0 ? pn.y0 - c.y : c.y > pn.y1 ? c.y - pn.y1 : 0;
+          const dx = pn.x - c.x;
+          const dz = pn.z - c.z;
+          if (dx * dx + dz * dz + yGap * yGap > reach2) continue;
+          combat.damagePanel(bld, pn, structureDamage, new THREE.Vector3(pn.x, (pn.y0 + pn.y1) * 0.5, pn.z), g.owner);
+        }
       }
     }
 

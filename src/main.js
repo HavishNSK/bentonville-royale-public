@@ -440,7 +440,7 @@ function presenceStatus() {
 }
 
 function syncPresence() {
-  if (presence) presence.set({ name: menus.playerName(), status: presenceStatus(), mode: partyMode(), accountToken: account.sessionToken() });
+  if (presence) presence.set({ name: menus.playerName(), status: presenceStatus(), mode: partyMode(), accountToken: account.sessionToken });
   if (chat) {
     chat.setMe(menus.playerName());
     chat.setMode(presenceInMatch ? 'match' : 'lobby');
@@ -459,11 +459,12 @@ function othersSearching() {
 async function startPresence() {
   try {
     const [{ partyToken }, { openPresence }, { createChat }] = await Promise.all([import('./net/Party.js'), import('./net/Presence.js'), import('./ui/chat.js')]);
-    presence = openPresence({ token: partyToken(), accountToken: account.sessionToken(), name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
     chat = createChat({
-      onSend: (text) => presence.sendChat(text),
+      onSend: (text) => presence && presence.sendChat(text),
+      onBlocked: (category) => presence && presence.reportBlocked && presence.reportBlocked(category),
       onTypingChange: (on) => game && game.setChatTyping && game.setChatTyping(on),
     });
+    presence = openPresence({ token: partyToken(), accountToken: account.sessionToken, name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
     chat.setMe(menus.playerName());
     chat.setMode(presenceInMatch ? 'match' : 'lobby');
     presence.onChat = (m) => chat.add(m);

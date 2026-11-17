@@ -278,7 +278,7 @@ export const CONSUMABLES = {
 export const GRENADE = {
   damage: 75, // flat, to every character within `radius` that the blast can see (the thrower too)
   radius: 5.5, // m
-  structureDamage: 375, // to built pieces, trees, rocks and props in the blast
+  structureDamage: 600, // one blast breaks a build, a wall panel, a tree or a prop in range
   fuse: 2.2, // s
   speed: 20, // m/s along the aim direction
   lift: 4, // m/s added straight up
@@ -298,7 +298,7 @@ export const ROCKET = {
   radius: 4.5, // m
   cleanRadius: 1.3, // m
   minDamage: 40,
-  structureDamage: 300, // to built pieces, trees, rocks and props in the blast
+  structureDamage: 600, // one blast breaks a build, a wall panel, a tree or a prop in range
   size: 0.15, // collision radius (m)
 };
 
