@@ -28,6 +28,8 @@
 
 import { planInterior } from './Interiors.js';
 import { inHole, stairHeight, FLOOR_THICKNESS } from './interiors/storeys.js';
+import { tileIdAt } from './interiors/floorTiles.js';
+import { toLocal as planLocal } from './interiors/layout.js';
 
 const CELL = 32;
 const STEP = 0.62;
@@ -604,8 +606,30 @@ export class World {
     const s = c.shell;
     s.dead += pn.alive ? -1 : 1;
     if (pn.kind === 'outer') this._rebuildShellSegs(c);
+    else if (pn.kind === 'floor') s.deadFloors = (s.deadFloors || 0) + (pn.alive ? -1 : 1);
     else s.wallOn[pn.level][pn.wall] = pn.alive ? 1 : 0;
     if (this.onPanelChange) this.onPanelChange(c, pn, pn.alive);
+  }
+
+  /**
+   * Is the slab of level L (its floor, i.e. the ceiling of the storey below) open at (x, z):
+   * a stairwell hole, or a broken floor tile (interiors/floorTiles.js)?
+   */
+  _slabOpen(s, L, x, z) {
+    if (inHole(s.plan, L, x, z)) return true;
+    if (!s.deadFloors) return false;
+    const [a, b] = planLocal(s.plan.frame, x, z);
+    const id = tileIdAt(L, a, b);
+    return id >= 0 && !s.panels[id].alive;
+  }
+
+  /** The alive floor tile of level L at (x, z), or null. */
+  _tileAt(s, L, x, z) {
+    if (!L.tiles || !L.tiles.length) return null;
+    const [a, b] = planLocal(s.plan.frame, x, z);
+    const id = tileIdAt(L, a, b);
+    const pn = id >= 0 ? s.panels[id] : null;
+    return pn && pn.alive ? pn : null;
   }
 
   /** Is fraction u of outer edge e at height y inside a broken panel? */
@@ -1468,7 +1492,7 @@ export class World {
       if (c.shell?.plan && pointInPoly(c.p, c.n, x, z)) {
         const plan = c.shell.plan;
         for (const L of plan.levels) {
-          if (L.y > y && L.y <= lim && L.y < cap && !inHole(plan, L, x, z)) {
+          if (L.y > y && L.y <= lim && L.y < cap && !this._slabOpen(c.shell, L, x, z)) {
             y = L.y;
             this.surface = 'floor';
           }
@@ -1544,7 +1568,7 @@ export class World {
         // interior door lintels (and any partition span that starts above the floor)
         for (const L of s.plan.levels) {
           const underside = L.y - FLOOR_THICKNESS;
-          if (L.i > 0 && underside > lim && !inHole(s.plan, L, x, z) && pointInPoly(c.p, c.n, x, z)) cy = Math.min(cy, underside);
+          if (L.i > 0 && underside > lim && !this._slabOpen(s, L, x, z) && pointInPoly(c.p, c.n, x, z)) cy = Math.min(cy, underside);
           const W = L.walls;
           for (let k = 0, wi = 0; k < W.length; k += 7, wi++) {
             if (!s.wallOn[L.i][wi] || W[k + 5] <= L.y + 0.5 || feetY >= W[k + 5]) continue;
@@ -1601,7 +1625,7 @@ export class World {
       let top = s.ceil + FLOOR_THICK;
       if (s.plan) {
         for (const L of s.plan.levels) {
-          if (L.i > 0 && L.y - FLOOR_THICKNESS > feetY + 0.05 && L.y < top && !inHole(s.plan, L, x, z)) top = L.y;
+          if (L.i > 0 && L.y - FLOOR_THICKNESS > feetY + 0.05 && L.y < top && !this._slabOpen(s, L, x, z)) top = L.y;
         }
       }
       if (top < y) y = top;
@@ -1837,6 +1861,8 @@ export class World {
     let edgeU = 0;
     let wallT = -1;
     let wallPanel = null;
+    let slabT = -1; // upper-floor slab hit (top or underside) and its floor tile, if breakable
+    let slabPanel = null;
     const T = this.terrain;
     // Terrain: marched cell by cell below. Exactly level rays (dy === 0: bot steering
     // feelers) skip it, because every slope is walkable. A ray that starts under the
@@ -2104,7 +2130,7 @@ export class World {
               if (!L.i) continue;
               for (const sy of [L.y,L.y-FLOOR_THICKNESS]) {
                 const t=(sy-oy)/dy,x=ox+dx*t,z=oz+dz*t;
-                if (pointInPoly(c.shell.inner,c.n,x,z)&&!inHole(plan,L,x,z)) surfaceHit(t,0,dy<0?1:-1,0);
+                if (pointInPoly(c.shell.inner,c.n,x,z)&&!this._slabOpen(c.shell,L,x,z)) { const was=best; surfaceHit(t,0,dy<0?1:-1,0); if (best!==was) { slabT=best; slabPanel=this._tileAt(c.shell,L,x,z); } }
               }
             }
             for (const stair of plan.stairs) {
@@ -2307,6 +2333,7 @@ export class World {
       out.u = edgeU;
       out.panel = this.panelAt(out.collider, edgeE, edgeU, out.y);
     } else if (best === wallT) out.panel = wallPanel;
+    else if (best === slabT) out.panel = slabPanel;
     return out;
   }
 

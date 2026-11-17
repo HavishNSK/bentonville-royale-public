@@ -266,7 +266,8 @@ export const PICKAXE = {
 // Breakable building wall panels (see World.breakPanel / Interiors.js): outer walls use the
 // building's material, interior partitions are wood. Panels are at most panelW m wide and one
 // storey tall; bullets do bulletMult of their damage to a panel (and grant no mats).
-export const BUILDING_WALL = { hp: { wood: 300, brick: 450, metal: 600 }, innerHp: 150, panelW: 4, bulletMult: 0.5 };
+// floorHp: each breakable floor / ceiling tile between storeys (interiors/floorTiles.js).
+export const BUILDING_WALL = { hp: { wood: 300, brick: 450, metal: 600 }, innerHp: 150, floorHp: 200, panelW: 4, bulletMult: 0.5 };
 
 export const MATERIALS = ['wood', 'brick', 'metal'];
 export const MATERIAL_COLOR = { wood: 0xb9803f, brick: 0xb5533c, metal: 0x8d99a6 };
@@ -361,6 +362,11 @@ export const REBOOT = {
 // boxFight = odds a close fight is taken from a full 1x1 box with edit peeks (window / door
 // edited into the wall facing the enemy, shoot, reset the edit); peekOpen / peekClosed =
 // seconds the edit stays open / closed.
+// Only matches against HARD bots count toward the RANKS boards (wins + eliminations).
+export const RANKED_DIFFICULTY = 'hard';
+export const isRankedDifficulty = (d) => d === RANKED_DIFFICULTY;
+export const RANKED_NOTE = 'Only matches on HARD bot difficulty count toward the ranks (wins and eliminations).';
+
 export const DIFFICULTY = {
   easy: { lead: 0.5, aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.35, buildPieces: 2, buildCooldown: 6, buildRate: 0.45, sight: 80, damageScale: 0.6, wallOnHit: 0.25, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0.3 },
   normal: {

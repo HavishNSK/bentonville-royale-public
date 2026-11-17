@@ -19,7 +19,8 @@
 //   leaderboard {}                                        -> {online, wins:[{name,wins,kills}], kills:[...]}
 //   me {token}  logout {token}
 //   buy {token, item}   equip {token, skin?, emotes?}
-//   reward {token, kills, placement, players, won}       -> {profile, earned}
+//   reward {token, kills, placement, players, won, ranked} -> {profile, earned, ranked}
+//     (wins/kills reach the boards only when ranked === true: a HARD bot-difficulty match)
 //   friendAdd {token, name}  friendAccept {token, name}  friendDecline {token, name}  friendRemove {token, name}
 //   invite {token, name, code}                            (delivered over the socket)
 // Suggestion / bug board (no account needed; signed-in posts carry the account name):
@@ -35,6 +36,7 @@
 import { Server } from 'partyserver';
 import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS } from '../src/game/Cosmetics.js';
 import { verifyGoogleIdToken } from './googleIdToken.js';
+import { applyMatchStats } from './matchStats.js';
 
 const START_COINS = 1500;
 const SESSION_DAYS = 30;
@@ -482,11 +484,11 @@ export class Accounts extends Server {
           acc.coins += earned;
           acc.lastReward = now;
         }
-        acc.stats.matches++;
-        acc.stats.kills += kills;
-        if (won) acc.stats.wins++;
+        // Leaderboard stats only for HARD bot-difficulty matches (client-reported, like kills).
+        const ranked = m.ranked === true;
+        acc.stats = applyMatchStats(acc.stats, { kills, won, ranked });
         await this._save(acc);
-        return json({ profile: profileOf(acc), earned, rateLimited });
+        return json({ profile: profileOf(acc), earned, rateLimited, ranked });
       }
       case 'friendAdd': {
         const to = String(m.name || '').trim().toLowerCase();

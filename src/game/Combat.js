@@ -250,7 +250,10 @@ export class Combat {
     if (!c || !pn || !this.world.breakPanel(c, pn.id)) return false;
     const y = (pn.y0 + pn.y1) / 2;
     const at = point ? point.clone() : new THREE.Vector3(pn.x, y, pn.z);
-    if (this.fx) {
+    if (this.fx && pn.kind === 'floor') {
+      // a floor / ceiling tile: a burst of slab debris at the tile (it falls to the storey below)
+      this.fx.debris(new THREE.Vector3(pn.x, y, pn.z), SURFACE[pn.mat] || 'wood', { count: 22, size: 0.45, spread: 2.2 });
+    } else if (this.fx) {
       const ends = panelEnds(c, pn);
       if (this.fx.wallBreak) this.fx.wallBreak(ends, pn.y0, pn.y1, pn.mat);
       else this.fx.debris(at, SURFACE[pn.mat] || 'wood', { count: 18, size: 0.4, spread: 2.4 });

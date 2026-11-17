@@ -21,7 +21,7 @@
 // storm, bots, storm damage and the win check are left to the host.
 
 import * as THREE from 'three';
-import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, STORM, MATERIALS, KNOCK, REBOOT, makeRng, clamp, damp, TAU } from '../core/config.js';
+import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, STORM, MATERIALS, KNOCK, REBOOT, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
 import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
 import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
@@ -379,6 +379,8 @@ export class Game {
     // free build is a solo sandbox; a multiplayer host never gets it
     const freeBuild = !!opts.freeBuild && !(this.net && this.net.isHost);
     this.freeBuild = freeBuild;
+    // bot difficulty this match was played on; only 'hard' matches count toward the ranks
+    this.matchDifficulty = freeBuild ? null : this.settings.difficulty;
     this.seed = seed;
     const rng = makeRng(seed);
     this.rng = rng;
@@ -581,6 +583,8 @@ export class Game {
     if (!this.loaded) throw new Error('load() first');
     this._applySkin();
     const net = this.net;
+    // the host's bots set the difficulty (sent in the start message)
+    this.matchDifficulty = typeof start.diff === 'string' ? start.diff : null;
     this.seed = start.seed;
     this.rng = makeRng(start.seed);
     this.matchTime = 0;
@@ -931,6 +935,8 @@ export class Game {
       killer: this.player.lastKillerName || null,
       mode: this.mode,
       teams: this.totalTeams || this.totalActors,
+      difficulty: this.matchDifficulty || null,
+      ranked: isRankedDifficulty(this.matchDifficulty),
     };
     if (this.net) {
       this.result.mp = true;

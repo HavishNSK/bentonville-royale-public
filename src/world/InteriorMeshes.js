@@ -12,7 +12,7 @@ import * as THREE from 'three';
 import { FLOOR_THICKNESS } from './interiors/storeys.js';
 import { addStairGeometry } from './InteriorStairs.js';
 import { addFurnishingGeometry, addLightGeometry } from './InteriorFurnishings.js';
-import { clipRect, toLocal, toWorld } from './interiors/layout.js';
+import { clipRect, q, toLocal, toWorld } from './interiors/layout.js';
 import { LANDMARK_STYLE, styleFor } from './interiors/landmarkStyle.js';
 
 // [wall, floor] per room kind
@@ -235,6 +235,72 @@ function addStyledCeiling(chunk, quad, F, P, r, hex, y, holes, h) {
   }
 }
 
+const UP_LIT = [0, 1, 0];
+const SLAB_EDGE_HEX = tone(CEILING_HEX, 0.72); // the cut face of a slab around a broken tile
+
+/**
+ * Room r of level L split into its solid floor pieces (rim, cells that must stay solid) and its
+ * breakable floor tiles (interiors/floorTiles.js), plus the tile grid itself (or null).
+ */
+function slabSplit(plan, L, r) {
+  const room = { a0: r.a0, b0: r.b0, a1: r.a1, b1: r.b1 };
+  const g = (L.tiles || []).find((t) => t.room === r.id);
+  if (!g) return { solid: [room], tiles: [], g: null };
+  const solid = cutHoles([room], [g]);
+  const tiles = [];
+  for (let i = 0; i < g.na; i++) for (let j = 0; j < g.nb; j++) {
+    const id = g.ids[i * g.nb + j];
+    if (id >= 0) { tiles.push({ pn: plan.panels[id], i, j }); continue; }
+    solid.push({ a0: q(g.a0 + ((g.a1 - g.a0) * i) / g.na), a1: q(g.a0 + ((g.a1 - g.a0) * (i + 1)) / g.na),
+      b0: q(g.b0 + ((g.b1 - g.b0) * j) / g.nb), b1: q(g.b0 + ((g.b1 - g.b0) * (j + 1)) / g.nb) });
+  }
+  return { solid, tiles, g };
+}
+
+/**
+ * One breakable floor tile of level L (> 0): its floor top, the ceiling of the storey below
+ * under it (that room's style, lit like the rest of its ceiling) and side faces toward
+ * neighbouring tiles, all in the tile's panel range (hidden when it breaks). Where it borders
+ * solid floor, an always-drawn face looks into the tile instead (enclosed in the slab while the
+ * tile stands, the clean cut edge once it breaks).
+ */
+function addFloorTile(chunk, quad, F, plan, shell, styles, L, below, t, g, floorHex, h) {
+  const { pn, i, j } = t;
+  const { a0, b0, a1, b1 } = pn;
+  const base = L.y - shell.floor;
+  const yT = base + 0.05, yU = base - FLOOR_THICKNESS;
+  const W = (a, b, y) => { const [x, z] = toWorld(F, a, b); return [x, y, z]; };
+  const i0 = chunk.buf.idx.length;
+  quad(chunk, W(a0, b0, yT), W(a1, b0, yT), W(a1, b1, yT), W(a0, b1, yT), 0, 1, 0, ...rgb(floorHex), null, h);
+  for (const lr of below ? below.rooms : []) {
+    const c0 = Math.max(a0, lr.a0), c1 = Math.min(a1, lr.a1), d0 = Math.max(b0, lr.b0), d1 = Math.min(b1, lr.b1);
+    if (c1 - c0 < 0.01 || d1 - d0 < 0.01) continue;
+    const lst = styleFor(plan.id, lr, styles);
+    const styled = lst && lst.ceiling !== undefined;
+    const y = styled ? below.ceil - shell.floor - STYLED_CEIL_GAP : yU;
+    quad(chunk, W(c0, d0, y), W(c1, d0, y), W(c1, d1, y), W(c0, d1, y), 0, -1, 0,
+      ...rgb(styled ? lst.ceiling : CEILING_HEX), null, h, styled ? NEUTRAL_LIT : UP_LIT);
+  }
+  const edge = rgb(SLAB_EDGE_HEX);
+  const isTile = (ii, jj) => ii >= 0 && jj >= 0 && ii < g.na && jj < g.nb && g.ids[ii * g.nb + jj] >= 0;
+  // [neighbour cell, edge corners, outward normal (local axis, sign)]
+  const sides = [
+    [i - 1, j, [a0, b0], [a0, b1], [F.ux, F.uz], -1],
+    [i + 1, j, [a1, b0], [a1, b1], [F.ux, F.uz], 1],
+    [i, j - 1, [a0, b0], [a1, b0], [F.vx, F.vz], -1],
+    [i, j + 1, [a0, b1], [a1, b1], [F.vx, F.vz], 1],
+  ];
+  const solidSides = [];
+  for (const [ni, nj, A, B, n, sg] of sides) {
+    if (!isTile(ni, nj)) { solidSides.push([A, B, n, -sg]); continue; }
+    quad(chunk, W(A[0], A[1], yU), W(B[0], B[1], yU), W(B[0], B[1], yT), W(A[0], A[1], yT), n[0] * sg, 0, n[1] * sg, ...edge, null, h);
+  }
+  chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
+  for (const [A, B, n, sg] of solidSides) {
+    quad(chunk, W(A[0], A[1], yU), W(B[0], B[1], yU), W(B[0], B[1], yT), W(A[0], A[1], yT), n[0] * sg, 0, n[1] * sg, ...edge, null, h);
+  }
+}
+
 /**
  * shell: World collider.shell with .plan; h: building height (aH attribute);
  * api: { quad, hcapFlat } from WorldMeshes.
@@ -260,11 +326,16 @@ export function addInteriorGeometry(chunk, shell, h, api, styles = LANDMARK_STYL
     const above = plan.levels.find((l) => l.i === L.i + 1);
     const styledBelow = below ? below.rooms.filter((q) => styleFor(plan.id, q, styles)?.ceiling !== undefined) : [];
 
-    // ---- room floors (+0.02 over the interior floor)
+    // breakable floor tiles of the storey above (its slab is this storey's ceiling)
+    const aboveTiles = above ? plan.panels.filter((p) => p.kind === 'floor' && p.level === above.i) : [];
+
+    // ---- room floors (+0.02 over the interior floor); breakable tiles drawn on their own
     for (const r of L.rooms) {
       const st = styleFor(plan.id, r, styles);
       const floorHex = roomFloor(r, st);
-      const rects = cutHoles([{a0:r.a0,b0:r.b0,a1:r.a1,b1:r.b1}], L.holes);
+      const split = slabSplit(plan, L, r);
+      for (const t of split.tiles) addFloorTile(chunk, quad, F, plan, shell, styles, L, below, t, split.g, floorHex, h);
+      const rects = cutHoles(split.solid, L.holes);
       for(const R of rects) {
         const poly=clipRect(P,R.a0,R.b0,R.a1,R.b1);
         if(poly.length<6)continue;
@@ -301,7 +372,8 @@ export function addInteriorGeometry(chunk, shell, h, api, styles = LANDMARK_STYL
       }
       // styled ceiling plane (covers the shell ceiling on the top storey, replaces the upper floor's underside below)
       if (st && st.ceiling !== undefined && Number.isFinite(L.ceil)) {
-        addStyledCeiling(chunk, quad, F, P, r, st.ceiling, L.ceil - shell.floor - STYLED_CEIL_GAP, above ? above.holes : [], h);
+        const over = aboveTiles.filter((p) => p.a0 < r.a1 && p.a1 > r.a0 && p.b0 < r.b1 && p.b1 > r.b0);
+        addStyledCeiling(chunk, quad, F, P, r, st.ceiling, L.ceil - shell.floor - STYLED_CEIL_GAP, [...(above ? above.holes : []), ...over], h);
       }
       // timber ceiling beams (styled landmarks only)
       if (st && st.beams && Number.isFinite(L.ceil)) {
