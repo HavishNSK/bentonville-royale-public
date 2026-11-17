@@ -71,6 +71,15 @@ const PLACE = {
 };
 
 const WEAPON_KEYS = Object.keys(WEAPONS);
+const MIN_ROOM_AREA = 4; // m^2: interior rooms smaller than this (slivers, closets) get no loot spots
+
+/** Walkable floor area (m^2) of a buildingInteriors() entry: every storey of its plan, at least its footprint area. */
+function floorAreaOf(b) {
+  const plan = b.collider && b.collider.shell && b.collider.shell.plan;
+  let a = 0;
+  if (plan && plan.levels) for (const L of plan.levels) a += L.floorArea || 0;
+  return Math.max(a, b.area || 0);
+}
 const AMMO_KINDS = Object.keys(AMMO);
 const CAP = { chest: MATCH.chests + 16, ammo: MATCH.ammoBoxes + 16, weapon: 120 + MATCH.floorLoot, consumable: 120 + MATCH.floorLoot, crate: 200 + MATCH.floorLoot * 2 };
 
@@ -649,7 +658,7 @@ export class Loot {
     const wts = this._wBuf;
     wts.length = 0;
     for (const b of near) {
-      const v = (used.get(b) || 0) >= this._cap(kind, b) ? 0 : Math.sqrt(b.area);
+      const v = (used.get(b) || 0) >= this._cap(kind, b) ? 0 : Math.sqrt(floorAreaOf(b));
       wts.push(v);
       tot += v;
     }
@@ -663,19 +672,102 @@ export class Loot {
       }
     }
     const c = b.collider;
+    const plan = c.shell && c.shell.plan;
+    if (plan && plan.lootSpots && plan.lootSpots.length) {
+      const s = this._spotCandidate(rng, b, plan, clearance);
+      if (s) return s;
+    }
     for (let k = 0; k < 10; k++) {
       const x = c.minX + rng() * (c.maxX - c.minX);
       const z = c.minZ + rng() * (c.maxZ - c.minZ);
       if (w.interiorAt(x, z) !== c) continue;
       if (w.blockedAt(x, z, clearance, true)) continue;
-      return { x, z, y: Math.max(b.floorY, w.terrainHeight(x, z)), yaw: rng() * TAU, b };
+      return { x, z, y: Math.max(b.floorY, w.terrainHeight(x, z)), yaw: rng() * TAU, b, level: 0 };
     }
     return null;
   }
 
-  /** Most spots of `kind` one building may hold. */
+  /**
+   * A spot from the building's interior plan (plan.lootSpots { x, y, z, level, room }): a storey
+   * picked by floor area (among storeys with spots), then one of its spots, jittered inside the
+   * spot's room on the ground storey (clear of partitions; blockedAt samples that storey only).
+   * Upper-storey spots are used as given and sit at their own y. -> candidate or null.
+   */
+  _spotCandidate(rng, b, plan, clearance) {
+    const w = this.world;
+    const c = b.collider;
+    const spots = plan.lootSpots;
+    const levels = plan.levels || [];
+    // storey pick: weight = floorArea of every storey that has a spot
+    let tot = 0;
+    const lw = this._lvBuf || (this._lvBuf = []);
+    lw.length = 0;
+    for (let k = 0; k < levels.length; k++) {
+      let has = false;
+      for (let i = 0; i < spots.length && !has; i++) if ((spots[i].level | 0) === k) has = true;
+      const v = has ? Math.max(1, levels[k].floorArea || 0) : 0;
+      lw.push(v);
+      tot += v;
+    }
+    if (tot <= 0) return null;
+    let pick = rng() * tot;
+    let lv = 0;
+    for (let k = 0; k < lw.length; k++) {
+      pick -= lw[k];
+      if (pick < 0) {
+        lv = k;
+        break;
+      }
+    }
+    // spot pick on that storey: weight sqrt(room area) (a hall holds more than a closet; a
+    // room with several spots shares its weight), rooms under MIN_ROOM_AREA m^2 skipped
+    const L = levels[lv];
+    const rooms = (L && L.rooms) || [];
+    const per = this._perRoom || (this._perRoom = new Map());
+    per.clear();
+    for (let i = 0; i < spots.length; i++) if ((spots[i].level | 0) === lv) per.set(spots[i].room, (per.get(spots[i].room) || 0) + 1);
+    const sw = (q) => {
+      const r = rooms[q.room];
+      const a = r ? r.area : MIN_ROOM_AREA;
+      return a < MIN_ROOM_AREA ? 0 : Math.sqrt(a) / (per.get(q.room) || 1);
+    };
+    let stot = 0;
+    for (let i = 0; i < spots.length; i++) if ((spots[i].level | 0) === lv) stot += sw(spots[i]);
+    if (stot <= 0) return null;
+    let sp = null;
+    let spick = rng() * stot;
+    for (let i = 0; i < spots.length; i++) {
+      if ((spots[i].level | 0) !== lv) continue;
+      const v = sw(spots[i]);
+      if (v <= 0) continue;
+      spick -= v;
+      sp = spots[i];
+      if (spick < 0) break;
+    }
+    if (!sp) return null;
+    const yaw = rng() * TAU;
+    if (lv > 0) return { x: sp.x, z: sp.z, y: sp.y ?? (L ? L.y : b.floorY), yaw, b, level: lv };
+    // ground storey: somewhere in the spot's room (frame-local rect, shrunk by a margin)
+    const room = L && L.rooms && L.rooms[sp.room];
+    const F = plan.frame;
+    const m = clearance + 0.4;
+    if (room && F && room.a1 - room.a0 > 2 * m && room.b1 - room.b0 > 2 * m) {
+      for (let k = 0; k < 3; k++) {
+        const la = room.a0 + m + rng() * (room.a1 - room.a0 - 2 * m);
+        const lb = room.b0 + m + rng() * (room.b1 - room.b0 - 2 * m);
+        const x = F.ox + la * F.ux + lb * F.vx;
+        const z = F.oz + la * F.uz + lb * F.vz;
+        if (w.interiorAt(x, z) !== c || w.blockedAt(x, z, clearance, true)) continue;
+        return { x, z, y: Math.max(L.y, w.terrainHeight(x, z)), yaw, b, level: 0 };
+      }
+    }
+    if (w.interiorAt(sp.x, sp.z) !== c || w.blockedAt(sp.x, sp.z, clearance, true)) return null;
+    return { x: sp.x, z: sp.z, y: Math.max(L ? L.y : b.floorY, w.terrainHeight(sp.x, sp.z)), yaw, b, level: 0 };
+  }
+
+  /** Most spots of `kind` one building may hold (by its walkable floor area over every storey). */
   _cap(kind, b) {
-    const a = b.area;
+    const a = floorAreaOf(b);
     // small houses 1, mid-size 2, big halls 3-6 (schools / Community Center)
     if (kind === 'chest') return a < 800 ? 1 : a < 5000 ? 2 : a < 15000 ? 3 : 4 + Math.min(2, Math.floor(a / 30000));
     if (kind === 'ammoBox') return a < 3000 ? 1 : a < 15000 ? 2 : 3;
@@ -700,7 +792,7 @@ export class Loot {
         const s = wantIn ? this._indoorCandidate(rng, p, kind, clr) : this._outdoorCandidate(rng, p, clr);
         if (!s) continue;
         if (disk && (s.x - disk.x) ** 2 + (s.z - disk.z) ** 2 > disk.r * disk.r) continue;
-        if (!this._spaced(s.x, s.z, spacing)) continue;
+        if (!this._spaced(s.x, s.z, spacing, s.b ? s.level | 0 : -1)) continue;
         const wt = s.b ? this._weight(s.x, s.z) : p.wt;
         if (wt <= 0) continue;
         const score = (this._nearestSame(kind, s.x, s.z) * Math.sqrt(wt)) / this._poiFactor(s.x, s.z);
@@ -710,7 +802,7 @@ export class Loot {
         }
       }
       if (best) {
-        this._mark(best.x, best.z, spacing);
+        this._mark(best.x, best.z, spacing, best.b ? best.level | 0 : -1);
         this._markKind(kind, best.x, best.z);
         if (best.b) this._used[kind].set(best.b, (this._used[kind].get(best.b) || 0) + 1);
         return best;
@@ -719,7 +811,12 @@ export class Loot {
     return null;
   }
 
-  _spaced(x, z, d) {
+  /**
+   * Is (x, z) at least d (or the marked spot's own spacing) from every marked spot? lv = storey
+   * of an indoor spot (-1 outdoors): spots on different storeys of a building (3 m apart
+   * vertically) are not neighbours.
+   */
+  _spaced(x, z, d, lv = -1) {
     const key = (cx, cz) => cx * 73856093 ^ cz * 19349663;
     const C = 16;
     const gx = Math.floor(x / C), gz = Math.floor(z / C);
@@ -728,18 +825,21 @@ export class Loot {
       for (let iz = gz - r; iz <= gz + r; iz++) {
         const cell = this._grid.get(key(ix, iz));
         if (!cell) continue;
-        for (const p of cell) if ((p.x - x) ** 2 + (p.z - z) ** 2 < (p.d > d ? p.d : d) ** 2) return false;
+        for (const p of cell) {
+          if (lv >= 0 && p.lv >= 0 && p.lv !== lv) continue;
+          if ((p.x - x) ** 2 + (p.z - z) ** 2 < (p.d > d ? p.d : d) ** 2) return false;
+        }
       }
     }
     return true;
   }
 
-  _mark(x, z, d) {
+  _mark(x, z, d, lv = -1) {
     const C = 16;
     const k = Math.floor(x / C) * 73856093 ^ Math.floor(z / C) * 19349663;
     let cell = this._grid.get(k);
     if (!cell) this._grid.set(k, (cell = []));
-    cell.push({ x, z, d });
+    cell.push({ x, z, d, lv });
   }
 
   /**
@@ -802,7 +902,7 @@ export class Loot {
             ? w.interiorAt(ax, az) === s.b.collider && !w.blockedAt(ax, az, 0.3, true)
             : !w.blockedAt(ax, az, 0.3);
           const px = ok ? ax : s.x, pz = ok ? az : s.z;
-          const py = s.b ? Math.max(s.b.floorY, w.terrainHeight(px, pz)) : w.groundHeight(px, pz, 0.3);
+          const py = s.b ? (s.level > 0 ? s.y : Math.max(s.b.floorY, w.terrainHeight(px, pz))) : w.groundHeight(px, pz, 0.3);
           this._add('item', px, py, pz, s.yaw, ammoFor(item.id));
         }
       }
@@ -833,7 +933,14 @@ export class Loot {
       toX = fromX;
       toZ = fromZ;
     }
-    const y = w.groundHeight(toX, toZ, hintY + 0.6);
+    // the floor under the landing point at the source's height (hintY): an upper storey keeps
+    // its loot; a landing point over a stairwell / void (floor far below) falls back to the source
+    let y = w.groundHeight(toX, toZ, hintY + 0.6);
+    if (inside && hintY - y > 1 && (toX !== fromX || toZ !== fromZ)) {
+      toX = fromX;
+      toZ = fromZ;
+      y = w.groundHeight(toX, toZ, hintY + 0.6);
+    }
     const rec = this._add('item', toX, y, toZ, this._rng() * TAU, item);
     rec.spill = { fx: fromX, fy: fromY, fz: fromZ, t: 0 };
     rec.info.position.set(toX, y, toZ);

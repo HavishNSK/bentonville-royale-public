@@ -45,6 +45,7 @@ Set `VITE_GOOGLE_MAPS_API_KEY` only if using the optional Google view, restart V
 
 | Variable | Required | Scope | Purpose and configuration |
 | --- | --- | --- | --- |
+| `VITE_PARTYKIT_HOST` | No | Public browser bundle | Optional relay host:port, supplied in `.env.local` or the hosting build environment; defaults to `localhost:1999`. |
 | `VITE_GOOGLE_MAPS_API_KEY` | No | Public browser bundle | Optional Google Map Tiles API key, supplied through `.env.local` locally or the build environment on hosting. Restrict to intended referrers and the Map Tiles API. |
 | `VITE_GOOGLE_CLIENT_ID` | No | Public browser bundle | OAuth Web client ID for Continue with Google (GIS). Authorize JS origins for local and production. Must match Worker `GOOGLE_CLIENT_ID`. |
 | `GOOGLE_CLIENT_ID` | No | Cloudflare Worker (`wrangler` vars/secret) | Same OAuth Web client ID; used as JWT `aud` when verifying Google ID tokens. Empty disables Google login on the server. |
@@ -116,14 +117,20 @@ Click into gameplay to capture the pointer. Settings include sensitivity, invert
 | `npm run build` | Build static output in `dist/` |
 | `npm run preview` | Serve the production build locally |
 | `npm run fetch-map` | Regenerate map JSON and credits; optional maintenance with external downloads |
+| `npm test` | Run focused Node interior regression tests |
+| `npm run test:coverage` | Measure Node test coverage (not browser coverage) |
+| `npm run check:interiors` | Map-wide rooms, doors, loot, combat and multiplayer wall-event checks |
+| `npm run check:stairs` | Map-wide stair collision, headroom and bot ascent/descent checks |
+| `npm run party:dev` | Start the optional local lobby/party relay |
 | `npm audit` | Inspect root dependency advisories |
 
-There are no configured root lint, format, TypeScript, unit-test, integration-test, or coverage commands. The project has not established 80% test coverage. Do not treat a successful build as gameplay verification.
+There are no configured root lint, format or TypeScript commands. Node tests cover the interior changes; the project has not established 80% overall test coverage. Do not treat a successful build as gameplay verification.
 
 The existing Playwright WebGL smoke harness has separate dependencies and a Chromium installation. Follow [tools/qa/README.md](tools/qa/README.md) for setup, then start the app and run:
 
 ```bash
 node tools/qa/smoke.mjs --url http://localhost:5173
+node tools/qa/smoke.mjs --url http://localhost:5173 --script tools/qa/interiors.mjs
 ```
 
 Inspect the final JSON and screenshots. The harness can return success while reporting console errors, failed requests, or a blank canvas. It does not verify audible output or full pointer-lock behavior. `npm test` in the QA package is a failing placeholder, not the smoke-test entry point.
@@ -162,14 +169,26 @@ Vite serves one browser application at `/`; there is no application API backend.
 ```text
 Static map + asset files -> Game/World -> Three.js canvas + DOM HUD
 Browser input -> local simulation (solo/host) -> match state
-Guest input/state -> WebRTC -> host simulation -> snapshots -> guest view
+Guest input/state -> WebSocket relay -> host simulation -> snapshots -> guest view
 Settings + display name <-> browser localStorage
 Optional Google key + enabled setting -> Google tiles -> visual layer
 ```
 
-Friend matches use a public PeerJS signaling broker and Google STUN servers. No TURN relay is configured, so NAT/firewall conditions may prevent connections. The host runs the simulation, while guests transmit input and movement state. This is a prototype trust model: there is no dedicated trusted server, verified identity, anti-cheat guarantee, or comprehensive packet-validation guarantee. Room codes are joining conveniences, not account authentication. Host departure ends the hosted session; there is no host-migration mechanism.
+Friend matches use the WebSocket relay in `party/`. Its address is the `?party=host:port` URL override, then public `VITE_PARTYKIT_HOST`, then `localhost:1999`. Run `npm run party:dev` for local lobbies; solo/free build remains usable without it. The default local relay being offline can produce a lobby connection warning. The host runs the simulation, while guests transmit input and movement state. This is a prototype trust model: there is no dedicated trusted server, verified identity, anti-cheat guarantee, or comprehensive packet-validation guarantee. Room codes are joining conveniences, not account authentication. Host departure ends the hosted session; there is no host-migration mechanism.
 
 Settings are stored under `bentonville-royale.settings.v1`, and the player name under `bentonville-royale.playerName`. Remove those keys in browser storage to reset them. Match state is in memory; there is no persistent match database.
+
+## Building Interiors
+
+Enterable buildings have deterministic room plans, partition doors and room loot spots. Sixteen Bentonville landmarks have authored gameplay layouts; these are interpretations, not verified real interior plans. Interior version and plan hashes are included in the multiplayer map identity to reject mismatched clients.
+
+Buildings with sufficient height, metadata and clear space receive up to four storeys. A flight needs approach pads, headroom and a side aisle; smaller or irregular buildings safely retain a single floor. Upper floor slabs have stairwell openings, collision and ray blocking. Stairs use continuous movement surfaces beneath visible treads. Bots route through rooms and stairs, and loot spawns on supported floors. The current checked-in map generates 20 flights across 15 buildings.
+
+Room-specific beds, desks, counters, shelves and other low-poly props are decorative and nonblocking. Plain room-label plaques and props share building chunk distance/frustum culling, with caps of 96 props and 32 signs per building. Circulation and stair rooms are kept clear.
+
+Pickaxes and bullets damage wall panels; broken panels open matching visual, movement and raycast gaps. Upper partitions are breakable; floor slabs, stairs, roofs and the exterior wall band above the ground storey remain intact. Host wall events replicate damage and breaks, and match reset restores panels. Joining an already-started match is rejected; no late-join snapshot or dedicated authoritative game server is implemented.
+
+The strict browser interiors script starts free build and exercises Player movement through a door and stairs, Combat pickaxe destruction, upper-floor loot interaction and bot stair movement through the development inspection API. It avoids headless pointer-lock limitations; audible output and real multi-browser relay play still need manual checks.
 
 ## Map and Asset Maintenance
 

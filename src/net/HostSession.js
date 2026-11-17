@@ -206,6 +206,7 @@ export class HostSession {
     this._spawning = false;
     this._pendingLoot.length = 0;
     this.events.length = 0;
+    if (this._wdPending) this._wdPending.clear();
     this.ended = false;
     this.started = true;
     this.room.started = true;
@@ -253,6 +254,8 @@ export class HostSession {
     const keep = (obj, k) => obj && saved.push([obj, k, Object.prototype.hasOwnProperty.call(obj, k), obj[k]]);
     keep(game.combat, 'onFire');
     keep(game.combat, 'onColliderDestroyed');
+    keep(game.combat, 'onPanelDamage');
+    keep(game.combat, 'onPanelBreak');
     keep(game.combat, 'swingPickaxe');
     for (const k of ['_add', 'take', 'open']) keep(game.loot, k);
     for (const k of ['place', 'damage', '_destroy', 'edit', 'setDoor']) keep(game.structures, k);
@@ -271,6 +274,27 @@ export class HostSession {
     combat.onColliderDestroyed = (c) => {
       if (c.type === 'poly') ev({ e: 'cx', ty: 'p', x: c.minX, z: c.minZ });
       else ev({ e: 'cx', ty: 'c', x: c.x, z: c.z });
+    };
+    // building wall panels (keyed by building map id + panel index; never the `cx` event, which
+    // is keyed by x, z and would delete the whole building on clients). Damage to one panel is
+    // coalesced to one `wd` per flush.
+    const wd = (this._wdPending = new Map());
+    combat.onPanelDamage = (c, pn) => {
+      const b = c.ref && c.ref.id;
+      if (b == null || !this.started || this._spawning) return;
+      const k = b + ':' + pn.id;
+      const hp = Math.max(1, Math.round(pn.hp));
+      const prev = wd.get(k);
+      if (prev) prev.hp = hp;
+      else {
+        const e = { e: 'wd', b, p: pn.id, hp };
+        wd.set(k, e);
+        ev(e);
+      }
+    };
+    combat.onPanelBreak = (c, pn) => {
+      const b = c.ref && c.ref.id;
+      if (b != null) ev({ e: 'wx', b, p: pn.id });
     };
     const swing = combat.swingPickaxe.bind(combat);
     combat.swingPickaxe = (shooter, origin, dir) => {
@@ -430,6 +454,7 @@ export class HostSession {
     if (!adds.length && !this.events.length) return;
     const msg = { t: 'ev', l: adds.concat(this.events) };
     this.events = [];
+    if (this._wdPending) this._wdPending.clear();
     this.stats.evBytes += this.room.broadcast(msg);
   }
 

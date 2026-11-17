@@ -31,6 +31,16 @@
 //   onBurstShot(shooter, item, origin, dirs, records) after each follow-up round of a
 //   burst gun (a multiplayer client forwards it to the host like a trigger pull).
 //
+// Building wall panels (World.panelHit / breakPanel, src/world/Interiors.js):
+// - a pickaxe swing that hits a panel damages it by PICKAXE.harvest and yields
+//   PICKAXE.yield[panel.mat] exactly like a tree; bullets do BUILDING_WALL.bulletMult x
+//   damage and yield nothing. Only panels break (floors, slabs, stairs, roofs never do),
+//   and the building collider itself is never removed.
+// - `damagePanel` is authoritative-only; `breakPanel(c, panel, point)` hides the panel and
+//   plays the break effect (a multiplayer client calls it for the host's `wx` event).
+// - Hooks: onPanelDamage(c, panel, info) while hp > 0, onPanelBreak(c, panel, info) on
+//   break (info = { source, point }). restoreWorld() also restores every panel.
+//
 // Teams (src/game/Teams.js; `combat.teamMode` true in Duos / Trios / Squads):
 // - no friendly fire: bullets and swings pass through teammates, applyDamage ignores them.
 // - lethal damage knocks (actor.downed, actor.downHp) instead of eliminating while the team
@@ -44,7 +54,7 @@
 //   takes one round from item.mag and stops if the shooter dies, reloads or swaps.
 
 import * as THREE from 'three';
-import { WEAPONS, PICKAXE, PLAYER, KNOCK, SIPHON, ASSIST_DAMAGE, lerp, weaponStats } from '../core/config.js';
+import { WEAPONS, PICKAXE, PLAYER, KNOCK, SIPHON, ASSIST_DAMAGE, BUILDING_WALL, lerp, weaponStats } from '../core/config.js';
 import { sameTeam, teamStanding, aliveTeamCount } from './Teams.js';
 
 const _dir = new THREE.Vector3();
@@ -98,6 +108,21 @@ function rayActor(ox, oy, oz, dx, dy, dz, actor, maxT) {
   return Infinity;
 }
 
+/** World-space centre-line ends of wall panel `pn` of building collider `c`: { ax, az, bx, bz }. */
+function panelEnds(c, pn) {
+  if (pn.kind !== 'outer') return { ax: pn.ax, az: pn.az, bx: pn.bx, bz: pn.bz };
+  const mid = c.shell && c.shell.mid;
+  const n = c.n;
+  if (!mid || !n) return { ax: pn.x, az: pn.z, bx: pn.x, bz: pn.z };
+  const i = pn.e;
+  const k = (i + 1) % n;
+  const ax = mid[i * 2];
+  const az = mid[i * 2 + 1];
+  const ex = mid[k * 2] - ax;
+  const ez = mid[k * 2 + 1] - az;
+  return { ax: ax + ex * pn.f0, az: az + ez * pn.f0, bx: ax + ex * pn.f1, bz: az + ez * pn.f1 };
+}
+
 export class Combat {
   constructor({ world, structures, fx, sfx, view }) {
     this.world = world;
@@ -117,6 +142,8 @@ export class Combat {
     this.onRevive = null;
     this.onCarry = null;
     this.onSiphon = null;
+    this.onPanelDamage = null; // (building collider, panel, { source, point }) panel hp dropped, still standing
+    this.onPanelBreak = null; // (building collider, panel, { source, point }) panel broken
     this.onAssist = null; // (assister, victim) when someone helped with an elimination
     this.onStats = null; // (actor) when kills / assists / damage changed (net sync) // (killer, { hp, shield }) after an elimination heals the killer // (carrier, victim | null) when someone picks up / puts down a teammate
     this.teamMode = false;
@@ -147,6 +174,7 @@ export class Combat {
       if (this.view && this.view.showCollider) this.view.showCollider(c);
     }
     this.destroyed.length = 0;
+    if (this.world.restoreAllPanels) this.world.restoreAllPanels(); // broken / damaged wall panels
   }
 
   get aliveCount() {
@@ -180,11 +208,48 @@ export class Combat {
     if (!hit) return 'dirt';
     if (hit.kind === 'ground') return 'dirt';
     if (hit.kind === 'piece') return SURFACE[hit.collider && hit.collider.mat] || 'wood';
+    if (hit.panel) return SURFACE[hit.panel.mat] || 'brick';
     return SURFACE[hit.collider && hit.collider.mat] || 'brick';
   }
 
   _isHarvestable(c) {
     return !!c && c.type !== 'piece' && Number.isFinite(c.hp) && c.hp > 0 && Array.isArray(c.ref);
+  }
+
+  /** The alive breakable wall panel a world.raycast() result hit, or null (resolve before the next raycast). */
+  _panelOf(hit) {
+    if (!hit || hit.kind !== 'building' || !this.world.panelHit) return null;
+    const pn = this.world.panelHit(hit);
+    return pn && pn.alive ? pn : null;
+  }
+
+  /**
+   * Authoritative: take `amount` hp off wall panel `pn` of building collider `c`; breaks it
+   * at 0. Returns true when it broke.
+   */
+  damagePanel(c, pn, amount, point, source = null) {
+    if (!this.authoritative || !c || !pn || !pn.alive || !(amount > 0)) return false;
+    pn.hp = Math.max(0, pn.hp - amount);
+    if (pn.hp > 0) {
+      if (this.onPanelDamage) this.onPanelDamage(c, pn, { source, point });
+      return false;
+    }
+    return this.breakPanel(c, pn, point, source);
+  }
+
+  /** Break panel `pn` of building `c` (world + mesh via onPanelChange) and play the break effect. */
+  breakPanel(c, pn, point = null, source = null) {
+    if (!c || !pn || !this.world.breakPanel(c, pn.id)) return false;
+    const y = (pn.y0 + pn.y1) / 2;
+    const at = point ? point.clone() : new THREE.Vector3(pn.x, y, pn.z);
+    if (this.fx) {
+      const ends = panelEnds(c, pn);
+      if (this.fx.wallBreak) this.fx.wallBreak(ends, pn.y0, pn.y1, pn.mat);
+      else this.fx.debris(at, SURFACE[pn.mat] || 'wood', { count: 18, size: 0.4, spread: 2.4 });
+    }
+    if (this.sfx) this.sfx.play('building_collapse', { x: pn.x, y, z: pn.z, volume: 0.55 });
+    if (this.onPanelBreak) this.onPanelBreak(c, pn, { source, point: at });
+    return true;
   }
 
   _destroyCollider(c, point) {
@@ -270,6 +335,8 @@ export class Combat {
           // client: effects only, the host applies damage
         } else if (c && res.hit.kind === 'piece' && this.structures) {
           this.structures.damage(c, dmg, _pt);
+        } else if (res.hit.panel) {
+          this.damagePanel(c, res.hit.panel, dmg * BUILDING_WALL.bulletMult, _pt, shooter); // no mats from bullets
         } else if (this._isHarvestable(c)) {
           c.hp -= dmg;
           if (c.hp <= 0) this._destroyCollider(c, _pt);
@@ -354,7 +421,7 @@ export class Combat {
   _trace(shooter, origin, dir, range) {
     const hit = this.world.raycast(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, range, null);
     let t = hit ? hit.t : range;
-    const copy = hit ? { t: hit.t, nx: hit.nx, ny: hit.ny, nz: hit.nz, collider: hit.collider, kind: hit.kind } : null;
+    const copy = hit ? { t: hit.t, nx: hit.nx, ny: hit.ny, nz: hit.nz, collider: hit.collider, kind: hit.kind, panel: this._panelOf(hit) } : null;
     const ah = this.rayActors(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, t, shooter);
     if (ah) return { t: ah.t, actor: ah.actor, hit: null };
     return { t, actor: null, hit: copy, surface: this._surfaceOf(copy) };
@@ -372,7 +439,7 @@ export class Combat {
 
     const hit = this.world.raycast(origin.x, origin.y, origin.z, _dir.x, _dir.y, _dir.z, range, null);
     const tWorld = hit ? hit.t : range;
-    const hitCopy = hit ? { t: hit.t, x: hit.x, y: hit.y, z: hit.z, nx: hit.nx, ny: hit.ny, nz: hit.nz, collider: hit.collider, kind: hit.kind } : null;
+    const hitCopy = hit ? { t: hit.t, x: hit.x, y: hit.y, z: hit.z, nx: hit.nx, ny: hit.ny, nz: hit.nz, collider: hit.collider, kind: hit.kind, panel: this._panelOf(hit) } : null;
     const ah = this.rayActors(origin.x, origin.y, origin.z, _dir.x, _dir.y, _dir.z, tWorld, shooter);
     if (ah) {
       _pt.copy(origin).addScaledVector(_dir, ah.t);
@@ -391,6 +458,7 @@ export class Combat {
       out.piece = c;
       return out;
     }
+    if (hitCopy && hitCopy.panel) return this._swingPanel(shooter, c, hitCopy.panel, point, out);
     if (!this._isHarvestable(c)) {
       // forgiving probe for trees / rocks / props near the swing
       const probe = this.world.probeCircle(origin.x, origin.z, _dir.x, _dir.z, PICKAXE.range, 0.6);
@@ -429,6 +497,25 @@ export class Combat {
       this._destroyCollider(c, point);
     }
     if (this.onHarvest) this.onHarvest(shooter, c, out);
+    return out;
+  }
+
+  /** Pickaxe hit on a building wall panel: harvested like a tree (PICKAXE.harvest hp, PICKAXE.yield mats). */
+  _swingPanel(shooter, c, pn, point, out) {
+    const mat = pn.mat === 'brick' || pn.mat === 'metal' ? pn.mat : 'wood';
+    out.harvested = { mat, count: PICKAXE.yield[mat] };
+    out.collider = pn; // { hp, maxHp, alive }: what the HUD object bar reads
+    out.building = c;
+    out.panel = pn;
+    out.point = point.clone();
+    if (this.fx) this.fx.harvestHit(point, mat, false);
+    if (this.sfx) this.sfx.play(HARVEST_SOUND[mat], { x: point.x, y: point.y, z: point.z });
+    if (!this.authoritative) {
+      out.predicted = true; // client: feedback only; the host owns panel hp and mats
+      return out;
+    }
+    if (this.damagePanel(c, pn, PICKAXE.harvest, point, shooter)) out.destroyed = true;
+    if (this.onHarvest) this.onHarvest(shooter, pn, out);
     return out;
   }
 

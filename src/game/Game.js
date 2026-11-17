@@ -27,6 +27,7 @@ import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
 import { World } from '../world/World.js';
 import { buildWorldMeshes } from '../world/WorldMeshes.js';
+import { INTERIOR_VERSION } from '../world/Interiors.js';
 import { Atmosphere } from '../render/Atmosphere.js';
 import { Effects } from '../render/Effects.js';
 import { Post } from '../render/Post.js';
@@ -185,6 +186,8 @@ export class Game {
       manifests: { nature, props, vehicles },
       onProgress: (v, label) => P(0.5 + v * 0.4, label || 'Building Bentonville'),
     });
+    // a broken / restored building wall panel shows / hides its triangles
+    this.world.onPanelChange = (c, panel, alive) => (alive ? this.view.showPanel(c, panel) : this.view.hidePanel(c, panel));
 
     P(0.92, 'Gearing up');
     this.fx = new Effects({ scene: this.scene, camera: this.camera, quality: graphicsQuality(this.settings) });
@@ -433,12 +436,15 @@ export class Game {
   get mapId() {
     const meta = this.mapData && this.mapData.meta;
     if (!meta) return null;
-    if (meta.generated) return String(meta.generated);
+    // '+i<version>.<hash>': building interiors are generated on every client, so their version
+    // and plan hash are part of the map (catches stale builds and any nondeterministic layout)
+    const iv = '+i' + INTERIOR_VERSION + (this.world && this.world.interiorHash ? '.' + this.world.interiorHash : '');
+    if (meta.generated) return String(meta.generated) + iv;
     if (!meta.composition) return null;
     const str = JSON.stringify(meta.composition);
     let h = 0x811c9dc5;
     for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
-    return 'c' + (h >>> 0).toString(16);
+    return 'c' + (h >>> 0).toString(16) + iv;
   }
 
   /** Puts the local player aboard the Drop Bus flying `route`. */
@@ -1758,6 +1764,26 @@ export class Game {
           if (!w.polyAt(pt.x, pt.z) && !w.blockedAt(pt.x, pt.z, 6)) return debug.teleport(pt.x, pt.z);
         }
         return null;
+      },
+      /** Interior plan of building `id` (map OSM id), or null. */
+      interior(id) {
+        const c = game.world.buildingById(id);
+        return c ? c.shell.plan : null;
+      },
+      /** Teleport into room i on `level` of building `id` (the room's centre point). */
+      tpRoom(id, level = 0, i = 0) {
+        const plan = debug.interior(id);
+        const L = plan && plan.levels[level];
+        const r = L && L.rooms[i];
+        if (!r) return null;
+        return { room: r.label || r.kind, ...debug.teleport(r.cx, r.cz, L.y) };
+      },
+      /** Break panel `idx` of building `id` (World.breakPanel; the mesh hides via onPanelChange). */
+      breakPanel(id, idx) {
+        return game.world.breakPanel(id, idx);
+      },
+      restorePanels() {
+        return game.world.restoreAllPanels();
       },
       /** Nearest harvestable cylinder (tree / rock / prop) within r metres. */
       nearestHarvestable(r = 150) {

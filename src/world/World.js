@@ -26,6 +26,9 @@
 // floors above stay a solid block). Loot / spawn helpers: buildingInteriors(),
 // randomInteriorPoint(), interiorAt(), blockedAt(x, z, r, true).
 
+import { planInterior } from './Interiors.js';
+import { inHole, stairHeight, FLOOR_THICKNESS } from './interiors/storeys.js';
+
 const CELL = 32;
 const STEP = 0.62;
 // A wedge piece (ramp / cone) appearing around an actor lifts it at most this far.
@@ -226,7 +229,9 @@ export class World {
     // result of the last resolveCircle(): summed push direction (not normalised)
     this.pushX = 0;
     this.pushZ = 0;
-    this._hit = { t: 0, x: 0, y: 0, z: 0, nx: 0, ny: 1, nz: 0, collider: null, kind: 'none' };
+    this._hit = { t: 0, x: 0, y: 0, z: 0, nx: 0, ny: 1, nz: 0, collider: null, kind: 'none', edge: -1, u: 0, panel: null };
+    this.interiorHash = null; // set by finishBuildings(): FNV-1a over every interior plan
+    this.onPanelChange = null; // (collider, panel, alive) after breakPanel / restorePanel
     this.counts = { polys: 0, circles: 0 };
     this.terrain = null;
     this.terrainMin = 0;
@@ -437,14 +442,278 @@ export class World {
     this._shellQueue = null;
     this._interiors = null;
     if (!this._shells) this._shells = [];
+    const ctx = { pois: (this.data && this.data.pois) || [] };
     for (const c of q) {
       const s = this._planShell(c);
       if (!s) continue;
       c.shell = s;
+      this._installInterior(c, ctx);
       this._shells.push(c);
     }
     this.counts.hollow = this._shells.length;
+    // FNV-1a over every plan's hash (building order): equal on every client with the same map
+    let h = 0x811c9dc5;
+    for (const c of this._shells) h = Math.imul(h ^ (c.shell.plan ? c.shell.plan.hash : 0), 0x01000193) >>> 0;
+    this.interiorHash = h.toString(16).padStart(8, '0');
     return this._shells.length;
+  }
+
+  // ------------------------------------------------- interiors + wall panels
+
+  /** Plan shell c's interior (Interiors.planInterior) and install its walls and panels. */
+  _installInterior(c, ctx) {
+    const s = c.shell;
+    let plan = null;
+    try {
+      plan = planInterior(c.ref || {}, s, ctx);
+    } catch (err) {
+      console.warn('[world] interior plan failed for building', c.ref && c.ref.id, err);
+    }
+    s.plan = plan;
+    s.groundCeil = plan ? plan.levels[0].ceil : s.ceil;
+    if (plan) s.ceil = plan.levels[plan.levels.length - 1].ceil;
+    s.panels = plan ? plan.panels : [];
+    s.dead = 0; // number of broken panels
+    s.edgePanels = [];
+    for (const pn of s.panels) {
+      if (pn.kind !== 'outer') continue;
+      (s.edgePanels[pn.e] || (s.edgePanels[pn.e] = [])).push(pn);
+    }
+    // per level: 1 = wall entry solid (lintels always 1, a wall entry follows its panel)
+    s.wallOn = plan ? plan.levels.map((L) => new Uint8Array(L.walls.length / 7).fill(1)) : [];
+    if (plan) this._rebuildShellSegs(c);
+    if (!this._shellById) this._shellById = new Map();
+    if (c.ref && c.ref.id != null) this._shellById.set(c.ref.id, c);
+  }
+
+  /**
+   * Outer-wall collision capsules from the alive outer panels (the same capsules _planShell
+   * builds, split at panel boundaries; a broken panel leaves an opening like a door).
+   */
+  _rebuildShellSegs(c) {
+    const s = c.shell;
+    const mid = s.mid;
+    const n = c.n;
+    const R = s.t / 2;
+    const segs = [];
+    const over = []; // broken panels: the wall band above them still blocks a head above the ceiling
+    for (const pn of s.panels) {
+      if (pn.kind !== 'outer') continue;
+      if (!pn.alive) {
+        const i = pn.e;
+        const k = (i + 1) % n;
+        const ax = mid[i * 2];
+        const az = mid[i * 2 + 1];
+        const ex = mid[k * 2] - ax;
+        const ez = mid[k * 2 + 1] - az;
+        over.push(ax + ex * pn.f0, az + ez * pn.f0, ax + ex * pn.f1, az + ez * pn.f1);
+        continue;
+      }
+      const i = pn.e;
+      const k = (i + 1) % n;
+      const ax = mid[i * 2];
+      const az = mid[i * 2 + 1];
+      const bx = mid[k * 2];
+      const bz = mid[k * 2 + 1];
+      const lm = Math.hypot(bx - ax, bz - az);
+      if (lm < 1e-4) continue;
+      const cap = R / lm; // capsule end caps reach R past a segment end: stop short of a door
+      let f0 = pn.f0;
+      let f1 = pn.f1;
+      for (const d of s.doors) {
+        if (d.e !== i) continue;
+        if (d.f1 === pn.f0) f0 += cap;
+        if (d.f0 === pn.f1) f1 -= cap;
+      }
+      if (f1 <= f0) continue;
+      segs.push(ax + (bx - ax) * f0, az + (bz - az) * f0, ax + (bx - ax) * f1, az + (bz - az) * f1);
+    }
+    s.segs = new Float32Array(segs);
+    s.overHoles = new Float32Array(over);
+  }
+
+  /** The hollow-building collider with map id `id` (or c itself when given a collider). */
+  buildingById(id) {
+    if (id && typeof id === 'object') return id.shell ? id : null;
+    return (this._shellById && this._shellById.get(id)) || null;
+  }
+
+  /** The outer panel of building c covering fraction u of edge `edge` at height y, or null. */
+  panelAt(c, edge, u, y) {
+    c = this.buildingById(c);
+    const list = c && c.shell.edgePanels[edge];
+    if (!list) return null;
+    for (let i = 0; i < list.length; i++) {
+      const pn = list[i];
+      if (u >= pn.f0 && u <= pn.f1 && y >= pn.y0 - 1e-3 && y <= pn.y1 + 1e-3) return pn;
+    }
+    return null;
+  }
+
+  /** The panel a raycast() result hit (hit.panel, else resolved from hit.edge / hit.u), or null. */
+  panelHit(hit) {
+    if (!hit || !hit.collider || !hit.collider.shell) return null;
+    if (hit.panel) return hit.panel;
+    if (hit.edge >= 0) return this.panelAt(hit.collider, hit.edge, hit.u, hit.y);
+    return null;
+  }
+
+  /** Break panel `id` of building c (collider or building id). Never removes the collider. */
+  breakPanel(c, id) {
+    c = this.buildingById(c);
+    const pn = c && c.shell.panels[id];
+    if (!pn || !pn.alive) return false;
+    pn.alive = false;
+    pn.hp = 0;
+    this._panelState(c, pn);
+    return true;
+  }
+
+  /** Put panel `id` of building c back at full health. */
+  restorePanel(c, id) {
+    c = this.buildingById(c);
+    const pn = c && c.shell.panels[id];
+    if (!pn) return false;
+    pn.hp = pn.maxHp;
+    if (pn.alive) return false;
+    pn.alive = true;
+    this._panelState(c, pn);
+    return true;
+  }
+
+  /** Every panel of every building back at full health (match restart). Returns the number rebuilt. */
+  restoreAllPanels() {
+    let k = 0;
+    for (const c of this._shells || []) {
+      for (const pn of c.shell.panels) {
+        if (!pn.alive) {
+          this.restorePanel(c, pn.id);
+          k++;
+        } else pn.hp = pn.maxHp;
+      }
+    }
+    return k;
+  }
+
+  _panelState(c, pn) {
+    const s = c.shell;
+    s.dead += pn.alive ? -1 : 1;
+    if (pn.kind === 'outer') this._rebuildShellSegs(c);
+    else s.wallOn[pn.level][pn.wall] = pn.alive ? 1 : 0;
+    if (this.onPanelChange) this.onPanelChange(c, pn, pn.alive);
+  }
+
+  /** Is fraction u of outer edge e at height y inside a broken panel? */
+  _deadAt(s, e, u, y) {
+    const list = s.edgePanels[e];
+    if (!list) return false;
+    for (let i = 0; i < list.length; i++) {
+      const pn = list[i];
+      if (!pn.alive && u >= pn.f0 && u <= pn.f1 && y >= pn.y0 && y <= pn.y1) return true;
+    }
+    return false;
+  }
+
+  /** Push a circle out of the interior partitions of shell c (capsules with a y-range). */
+  _wallsPush(c, pos, r, feet, head, step) {
+    const s = c.shell;
+    let moved = false;
+    const levels = s.plan.levels;
+    for (let li = 0; li < levels.length; li++) {
+      const W = levels[li].walls;
+      const on = s.wallOn[li];
+      for (let k = 0, w = 0; k < W.length; k += 7, w++) {
+        if (!on[w] || feet >= W[k + 6] - step || head <= W[k + 5] + 0.05) continue;
+        const ax = W[k];
+        const az = W[k + 1];
+        const ex = W[k + 2] - ax;
+        const ez = W[k + 3] - az;
+        const l2 = ex * ex + ez * ez;
+        let t = l2 > 0 ? ((pos.x - ax) * ex + (pos.z - az) * ez) / l2 : 0;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const dx = pos.x - (ax + ex * t);
+        const dz = pos.z - (az + ez * t);
+        const lim = r + W[k + 4];
+        const d2 = dx * dx + dz * dz;
+        if (d2 >= lim * lim) continue;
+        const d = Math.sqrt(d2);
+        let nx;
+        let nz;
+        if (d > 1e-5) {
+          nx = dx / d;
+          nz = dz / d;
+        } else {
+          const l = Math.sqrt(l2) || 1;
+          nx = ez / l;
+          nz = -ex / l;
+        }
+        pos.x += nx * (lim - d);
+        pos.z += nz * (lim - d);
+        this.pushX += nx;
+        this.pushZ += nz;
+        moved = true;
+      }
+    }
+    return moved;
+  }
+
+  /** Does a circle (x, z, r) on the ground storey overlap a solid interior partition of shell c? */
+  _wallsNear(c, x, z, r, feetY = c.shell.floor) {
+    const s = c.shell;
+    if (!s.plan) return false;
+    const levels = s.plan.levels;
+    let li = 0;
+    for (let i = 1; i < levels.length; i++) if (levels[i].y <= feetY + 0.15) li = i;
+    const L = levels[li];
+    const W = L.walls;
+    const on = s.wallOn[li];
+    const band = feetY + 0.5;
+    for (let k = 0, w = 0; k < W.length; k += 7, w++) {
+      if (!on[w] || W[k + 5] > band || W[k + 6] <= feetY + 0.1) continue;
+      const lim = r + W[k + 4];
+      if (this._segD2(W, k, x, z) < lim * lim) return true;
+    }
+    return false;
+  }
+
+  _segD2(W, k, x, z) {
+    const ax = W[k];
+    const az = W[k + 1];
+    const ex = W[k + 2] - ax;
+    const ez = W[k + 3] - az;
+    const l2 = ex * ex + ez * ez;
+    let t = l2 > 0 ? ((x - ax) * ex + (z - az) * ez) / l2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const dx = x - (ax + ex * t);
+    const dz = z - (az + ez * t);
+    return dx * dx + dz * dz;
+  }
+
+  /** Does the ray's (x, z) shadow, for t in [0, best], cross collider c's bounding box? */
+  _rayBox(c, ox, oz, dx, dz, best) {
+    let t0 = 0;
+    let t1 = best;
+    if (dx > -1e-12 && dx < 1e-12) {
+      if (ox < c.minX || ox > c.maxX) return false;
+    } else {
+      let a = (c.minX - ox) / dx;
+      let b = (c.maxX - ox) / dx;
+      if (a > b) [a, b] = [b, a];
+      if (a > t0) t0 = a;
+      if (b < t1) t1 = b;
+      if (t0 > t1) return false;
+    }
+    if (dz > -1e-12 && dz < 1e-12) {
+      if (oz < c.minZ || oz > c.maxZ) return false;
+    } else {
+      let a = (c.minZ - oz) / dz;
+      let b = (c.maxZ - oz) / dz;
+      if (a > b) [a, b] = [b, a];
+      if (a > t0) t0 = a;
+      if (b < t1) t1 = b;
+      if (t0 > t1) return false;
+    }
+    return true;
   }
 
   /** Nearest road point within R of (x, z): { x, z, d, k } (shared object) or null. */
@@ -507,7 +776,10 @@ export class World {
    *   segs        Float32Array [ax, az, bx, bz, ...] solid wall centre lines (capsules of radius t/2)
    *   lintels     Float32Array, same layout: the wall above each door (blocks only above doorTop)
    *   inner       Float32Array [x, z, ...] interior face polygon (footprint offset inward by t)
+   *   mid         Float32Array [x, z, ...] wall centre-line polygon (offset inward by t / 2)
    *   area        footprint area (m^2)
+   * finishBuildings() then adds (see _installInterior): plan (Interiors.planInterior), panels,
+   * edgePanels, wallOn, dead; segs is rebuilt from the alive outer panels.
    * }
    */
   _planShell(c) {
@@ -633,11 +905,12 @@ export class World {
       chosen.push(best);
     }
 
-    const doors = chosen.map((d) => {
+    const doors = chosen.map((d, k) => {
       const l = L[d.e];
       const u0 = d.u - DOOR_W / 2;
       const u1 = d.u + DOOR_W / 2;
-      return { e: d.e, u0, u1, f0: u0 / l, f1: u1 / l, x: d.x, z: d.z, nx: d.ox, nz: d.oz };
+      // main: the best-scoring (road-facing) door; interiors put the front rooms behind it
+      return { e: d.e, u0, u1, f0: u0 / l, f1: u1 / l, x: d.x, z: d.z, nx: d.ox, nz: d.oz, main: k === 0 };
     });
     doors.sort((a, b) => a.e - b.e || a.f0 - b.f0);
     const doorF = new Float32Array(doors.length * 3);
@@ -684,6 +957,7 @@ export class World {
       segs: new Float32Array(segs),
       lintels: new Float32Array(lintels),
       inner,
+      mid,
       area,
     };
   }
@@ -720,9 +994,10 @@ export class World {
     const lim = r + s.t * 0.5;
     const lim2 = lim * lim;
     let moved = false;
-    for (let pass = 0; pass < 2; pass++) {
-      if (pass === 1 && head <= s.doorTop + 0.02) break;
-      const A = pass === 0 ? s.segs : s.lintels;
+    for (let pass = 0; pass < 3; pass++) {
+      if (pass === 1 && head <= s.doorTop + 0.02) continue;
+      if (pass === 2 && (!s.overHoles || head <= (s.groundCeil ?? s.ceil) + 0.02)) continue;
+      const A = pass === 0 ? s.segs : pass === 1 ? s.lintels : s.overHoles;
       for (let k = 0; k < A.length; k += 4) {
         const ax = A[k];
         const az = A[k + 1];
@@ -760,14 +1035,15 @@ export class World {
    * The hollow building whose interior contains (x, z) (inside the footprint and
    * clear of the wall band), or null. The collider's .shell has floor / ceil / doors.
    */
-  interiorAt(x, z) {
+  interiorAt(x, z, feetY = null) {
     const cell = this.cellAt(x, z);
     if (!cell) return null;
     const polys = cell.polys;
     for (let i = 0; i < polys.length; i++) {
       const c = polys[i];
       if (!c.shell || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
-      if (this._onInteriorFloor(c, x, z, 0)) return c;
+      if (feetY != null && (feetY < c.shell.floor - 0.5 || feetY >= c.shell.ceil)) continue;
+      if (this._onInteriorFloor(c, x, z, 0, feetY ?? c.shell.floor)) return c;
     }
     return null;
   }
@@ -779,12 +1055,16 @@ export class World {
    * and the player's wall collision, so interiorAt(x, z) === c implies
    * !blockedAt(x, z, 0, true) as far as c's walls go, and the loot / spawn checks agree.
    */
-  _onInteriorFloor(c, x, z, r) {
+  _onInteriorFloor(c, x, z, r, feetY = c.shell.floor) {
     const s = c.shell;
     if (!pointInPoly(c.p, c.n, x, z)) return false;
     const lim = r + s.t * 0.5;
     const lim2 = lim * lim;
-    return this._segsDist2(s.segs, x, z) >= lim2 && (!s.lintels.length || this._segsDist2(s.lintels, x, z) >= lim2);
+    return (
+      this._segsDist2(s.segs, x, z) >= lim2 &&
+      (!s.lintels.length || this._segsDist2(s.lintels, x, z) >= lim2) &&
+      !(s.plan && this._wallsNear(c, x, z, r, feetY))
+    );
   }
 
   /**
@@ -1054,7 +1334,7 @@ export class World {
         if (x < c.minX - r || x > c.maxX + r || z < c.minZ - r || z > c.maxZ + r) continue;
         if (interiors && c.shell) {
           const lim = r + c.shell.t * 0.5;
-          if (this._segsDist2(c.shell.segs, x, z) < lim * lim) hit = true;
+          if (this._segsDist2(c.shell.segs, x, z) < lim * lim || (c.shell.plan && this._wallsNear(c, x, z, r))) hit = true;
           continue;
         }
         if (pointInPoly(c.p, c.n, x, z) || this._polyDist2(c, x, z) < r * r) hit = true;
@@ -1153,6 +1433,19 @@ export class World {
           this.surface = 'floor';
         }
       }
+      if (c.shell?.plan && pointInPoly(c.p, c.n, x, z)) {
+        const plan = c.shell.plan;
+        for (const L of plan.levels) {
+          if (L.y > y && L.y <= lim && !inHole(plan, L, x, z)) {
+            y = L.y;
+            this.surface = 'floor';
+          }
+        }
+        for (const s of plan.stairs) {
+          const sy = stairHeight(s, x, z);
+          if (sy > y && sy <= lim) { y = sy; this.surface = 'floor'; }
+        }
+      }
     }
     const decks = cell.decks;
     for (let i = 0; i < decks.length; i++) {
@@ -1200,6 +1493,23 @@ export class World {
       if (feetY < s.doorTop && s.lintels.length) {
         const ll = s.t * 0.5 + 0.3;
         if (this._segsDist2(s.lintels, x, z) < ll * ll) cy = Math.min(cy, s.doorTop);
+      }
+      if (s.plan) {
+        // interior door lintels (and any partition span that starts above the floor)
+        for (const L of s.plan.levels) {
+          const underside = L.y - FLOOR_THICKNESS;
+          if (L.i > 0 && underside > lim && !inHole(s.plan, L, x, z) && pointInPoly(c.p, c.n, x, z)) cy = Math.min(cy, underside);
+          const W = L.walls;
+          for (let k = 0, wi = 0; k < W.length; k += 7, wi++) {
+            if (!s.wallOn[L.i][wi] || W[k + 5] <= L.y + 0.5 || feetY >= W[k + 5]) continue;
+            const ll = W[k + 4] + 0.3;
+            if (this._segD2(W, k, x, z) < ll * ll && W[k + 5] < cy) cy = W[k + 5];
+          }
+        }
+        for (const stair of s.plan.stairs) {
+          const underside = stairHeight(stair,x,z) - FLOOR_THICKNESS;
+          if (underside > lim) cy = Math.min(cy, underside);
+        }
       }
       if (cy > lim && cy < y) y = cy;
     }
@@ -1261,6 +1571,7 @@ export class World {
               // a wall. The solid prism only applies above the ceiling: a tall building's
               // solid upper floors, and the roof (stepped onto via the check above).
               if (head > c.y0 && this._shellPush(c, pos, r, head)) moved = touched = true;
+              if (c.shell.plan && this._wallsPush(c, pos, r, feet, head, step)) moved = touched = true;
               continue;
             }
             const d2 = this._polyDist2(c, x, z);
@@ -1428,6 +1739,12 @@ export class World {
     let best = maxT;
     let found = false;
     out.collider = null;
+    // building wall hits: which edge / fraction (outer face or inner ring) or interior panel
+    let edgeT = -1;
+    let edgeE = -1;
+    let edgeU = 0;
+    let wallT = -1;
+    let wallPanel = null;
     const T = this.terrain;
     // Terrain: marched cell by cell below. Exactly level rays (dy === 0: bot steering
     // feelers) skip it, because every slope is walkable. A ray that starts under the
@@ -1559,8 +1876,14 @@ export class World {
             const y = oy + dy * t;
             if (y < c.y0 || y > (planes ? c.eave + roofRise(planes, ox + dx * t, oz + dz * t) : c.h)) continue;
             if (c.shell && y < c.shell.doorTop && this._inDoor(c.shell, b, u)) continue; // through a door
+            if (c.shell && c.shell.dead && this._deadAt(c.shell, b, u, y)) continue; // through a broken panel
             best = t;
             found = true;
+            if (c.shell) {
+              edgeT = t;
+              edgeE = b;
+              edgeU = u;
+            }
             const l = Math.hypot(ex, ez) || 1;
             let nx = ez / l;
             let nz = -ex / l;
@@ -1573,6 +1896,123 @@ export class World {
             out.nz = nz;
             out.collider = c;
             out.kind = c.kind;
+          }
+          if (c.shell && !flat && this._rayBox(c, ox, oz, dx, dz, best)) {
+            // hollow building: the inner face of the outer wall (so shots from inside hit the
+            // visible face) and the interior partitions
+            const s = c.shell;
+            const I = s.inner;
+            for (let a = 0, b = n - 1; a < n; b = a++) {
+              const ax = I[b * 2];
+              const az = I[b * 2 + 1];
+              const ex = I[a * 2] - ax;
+              const ez = I[a * 2 + 1] - az;
+              const den = dx * ez - dz * ex;
+              if (den > -1e-9 && den < 1e-9) continue;
+              const wx = ax - ox;
+              const wz = az - oz;
+              const t = (wx * ez - wz * ex) / den;
+              if (t <= 1e-4 || t >= best) continue;
+              const u = (wx * dz - wz * dx) / den;
+              if (u < 0 || u > 1) continue;
+              const y = oy + dy * t;
+              if (y < s.floor || y > s.ceil) continue;
+              if (y < s.doorTop && this._inDoor(s, b, u)) continue;
+              if (s.dead && this._deadAt(s, b, u, y)) continue;
+              best = t;
+              found = true;
+              edgeT = t;
+              edgeE = b;
+              edgeU = u;
+              const l = Math.hypot(ex, ez) || 1;
+              let nx = ez / l;
+              let nz = -ex / l;
+              if (nx * dx + nz * dz > 0) {
+                nx = -nx;
+                nz = -nz;
+              }
+              out.nx = nx;
+              out.ny = 0;
+              out.nz = nz;
+              out.collider = c;
+              out.kind = c.kind;
+            }
+            if (s.plan) {
+              const levels = s.plan.levels;
+              for (let li = 0; li < levels.length; li++) {
+                const W = levels[li].walls;
+                const meta = levels[li].wallMeta;
+                const on = s.wallOn[li];
+                for (let k = 0, w = 0; k < W.length; k += 7, w++) {
+                  if (!on[w]) continue;
+                  const ax = W[k];
+                  const az = W[k + 1];
+                  const ex = W[k + 2] - ax;
+                  const ez = W[k + 3] - az;
+                  const den = dx * ez - dz * ex;
+                  if (den > -1e-9 && den < 1e-9) continue;
+                  const l = Math.sqrt(ex * ex + ez * ez);
+                  if (l < 1e-6) continue;
+                  const r = W[k + 4];
+                  const pnx = -ez / l;
+                  const pnz = ex / l;
+                  // solid runs are drawn r past their ends (the capsule's reach); lintels exactly span the door
+                  const m = meta[w].kind === 'wall' ? r / l : 0;
+                  for (let side = -1; side <= 1; side += 2) {
+                    const wx = ax + pnx * r * side - ox;
+                    const wz = az + pnz * r * side - oz;
+                    const t = (wx * ez - wz * ex) / den;
+                    if (t <= 1e-4 || t >= best) continue;
+                    const u = (wx * dz - wz * dx) / den;
+                    if (u < -m || u > 1 + m) continue;
+                    const y = oy + dy * t;
+                    if (y < W[k + 5] || y > W[k + 6]) continue;
+                    best = t;
+                    found = true;
+                    wallT = t;
+                    wallPanel = meta[w].panel >= 0 ? s.panels[meta[w].panel] : null;
+                    let nx = pnx;
+                    let nz = pnz;
+                    if (nx * dx + nz * dz > 0) {
+                      nx = -nx;
+                      nz = -nz;
+                    }
+                    out.nx = nx;
+                    out.ny = 0;
+                    out.nz = nz;
+                    out.collider = c;
+                    out.kind = c.kind;
+                  }
+                }
+              }
+            }
+          }
+          if (c.shell?.plan) {
+            const plan = c.shell.plan;
+            const surfaceHit = (t, nx, ny, nz) => {
+              if (!(t > 1e-4 && t < best)) return;
+              best = t; found = true;
+              out.nx=nx; out.ny=ny; out.nz=nz; out.collider=c; out.kind=c.kind;
+            };
+            if (Math.abs(dy)>1e-9) for (const L of plan.levels) {
+              if (!L.i) continue;
+              for (const sy of [L.y,L.y-FLOOR_THICKNESS]) {
+                const t=(sy-oy)/dy,x=ox+dx*t,z=oz+dz*t;
+                if (pointInPoly(c.shell.inner,c.n,x,z)&&!inHole(plan,L,x,z)) surfaceHit(t,0,dy<0?1:-1,0);
+              }
+            }
+            for (const stair of plan.stairs) {
+              const ex=stair.x1-stair.x0,ez=stair.z1-stair.z0,len2=ex*ex+ez*ez;
+              const rise=stair.y1-stair.y0,gx=rise*ex/len2,gz=rise*ez/len2;
+              const den=dy-gx*dx-gz*dz;
+              if(Math.abs(den)<1e-9)continue;
+              for(const thickness of [0,FLOOR_THICKNESS]) {
+                const t=(stair.y0-thickness-oy+gx*(ox-stair.x0)+gz*(oz-stair.z0))/den;
+                if(!Number.isFinite(stairHeight(stair,ox+dx*t,oz+dz*t)))continue;
+                const len=Math.hypot(gx,1,gz),side=den<0?1:-1;
+                surfaceHit(t,-gx/len*side,1/len*side,-gz/len*side);
+              }
+            }
           }
           if (planes) {
             // pitched roof: each plane where it is the lowest one (the visible roof face)
@@ -1752,6 +2192,15 @@ export class World {
     out.x = ox + dx * best;
     out.y = oy + dy * best;
     out.z = oz + dz * best;
+    // building wall hit: edge / fraction (outer face or inner ring) and the panel, for Combat
+    out.edge = -1;
+    out.u = 0;
+    out.panel = null;
+    if (best === edgeT) {
+      out.edge = edgeE;
+      out.u = edgeU;
+      out.panel = this.panelAt(out.collider, edgeE, edgeU, out.y);
+    } else if (best === wallT) out.panel = wallPanel;
     return out;
   }
 

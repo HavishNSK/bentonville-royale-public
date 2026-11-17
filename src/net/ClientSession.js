@@ -19,7 +19,7 @@ import { SKINS, EMOTES } from '../game/Cosmetics.js';
 import { itemLabel } from '../game/Player.js';
 import { impactSound, placeOnShoulder } from '../game/Combat.js';
 import {
-  STATE_HZ, INTERP_DELAY, FLAG, XFLAG, EQUIP, SURF, decodeSnapshot, encodeState, seqNewer, rnd,
+  STATE_HZ, INTERP_DELAY, FLAG, XFLAG, EQUIP, SURF, decodeSnapshot, encodeState, seqNewer, rnd, resolvePanelEvent,
 } from './protocol.js';
 
 const _v = new THREE.Vector3();
@@ -510,6 +510,9 @@ export class ClientSession {
       }
       case 'cx':
         return this._colliderGone(e);
+      case 'wd':
+      case 'wx':
+        return this._panelEvent(e);
       case 'left':
         return;
       case 'end':
@@ -643,6 +646,15 @@ export class ClientSession {
       victim.health = 0;
       victim.shield = 0;
     }
+  }
+
+  /** Host's building wall panel damage / break (validated: peer messages are untrusted). */
+  _panelEvent(e) {
+    const g = this.game;
+    const r = resolvePanelEvent(g.world, e);
+    if (!r || !r.pn.alive) return;
+    if (e.e === 'wx') g.combat.breakPanel(r.c, r.pn);
+    else r.pn.hp = r.hp;
   }
 
   _colliderGone(e) {
