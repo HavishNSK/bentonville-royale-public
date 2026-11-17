@@ -333,6 +333,11 @@ export const KNOCK = {
   botReviveClear: 40, // m: bots only revive with no enemy this close
 };
 
+// Swimming: on the terrain inside a map water area (World.inWater) you swim: slower, no
+// sprint / jump / aim, and no shooting, building or healing until you are out. The body sinks
+// to the chest (Character.setSwim).
+export const SWIM = { speed: 0.6, sink: 0.75, strokeT: 0.55 };
+
 // Reboot vans (team modes): an eliminated player drops a reboot card; a teammate picks it up
 // and holds interact at one of Catfish Ken's reboot vans (one per DROP_ZONES POI) to bring
 // them back next to the van with REBOOT.loadout. See game/Reboot.js.

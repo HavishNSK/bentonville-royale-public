@@ -4,6 +4,9 @@
 //   pr.set({ name?, status?, mode? })   status: 'lobby' | 'queued' | 'match'
 //   pr.onUpdate = (snap) => {}          snap: {count, searching:{solo,duo,trio,squad}, inMatch, players:[{name,status,mode}]}
 //   pr.snap                             last snapshot, or null while offline
+//   pr.sendChat(text) -> bool           global chat (false while offline); the server filters it
+//   pr.onChat = (m) => {}               m: {id, name, text, at}; also for each history message
+//   pr.onChatError = (reason) => {}     the server refused our message (rate limit, links, ...)
 //   pr.close()
 //
 // Reconnects on its own with backoff. Everything it receives is untrusted display text.
@@ -39,6 +42,14 @@ export function openPresence({ token, name, status = 'lobby', mode = 'solo' }) {
   const api = {
     snap: null,
     onUpdate: null,
+    onChat: null,
+    onChatError: null,
+    online: false,
+    sendChat(text) {
+      if (!ws || ws.readyState !== 1) return false;
+      ws.send(JSON.stringify({ t: 'chat', text: String(text).slice(0, 300) }));
+      return true;
+    },
     set(next) {
       const before = JSON.stringify(info);
       if (next.name != null) info.name = cleanName(next.name);
@@ -61,6 +72,16 @@ export function openPresence({ token, name, status = 'lobby', mode = 'solo' }) {
     },
   };
 
+  // untrusted: shape-checked here, rendered as text (never HTML) by the chat UI
+  const seen = new Set();
+  const chat = (m) => {
+    const key = m && m.id + ':' + m.at; // ids restart when the server room restarts
+    if (!m || !Number.isFinite(m.id) || seen.has(key) || !api.onChat) return;
+    seen.add(key);
+    if (seen.size > 500) seen.delete(seen.values().next().value);
+    api.onChat({ id: m.id, name: cleanName(m.name), text: String(m.text || '').slice(0, 200), at: Number(m.at) || Date.now() });
+  };
+
   const emit = (snap) => {
     api.snap = snap;
     if (api.onUpdate) api.onUpdate(snap);
@@ -75,6 +96,7 @@ export function openPresence({ token, name, status = 'lobby', mode = 'solo' }) {
     }
     ws.onopen = () => {
       retry = RETRY_MIN;
+      api.online = true;
     };
     ws.onmessage = (ev) => {
       if (typeof ev.data !== 'string' || ev.data.length > 20000) return;
@@ -85,9 +107,13 @@ export function openPresence({ token, name, status = 'lobby', mode = 'solo' }) {
         return;
       }
       if (msg && msg.t === 'online') emit(cleanSnap(msg));
+      else if (msg && msg.t === 'chat') chat(msg.m);
+      else if (msg && msg.t === 'chatHistory' && Array.isArray(msg.list)) msg.list.slice(-50).forEach(chat);
+      else if (msg && msg.t === 'chatError' && api.onChatError) api.onChatError(String(msg.reason || 'Message not sent.').slice(0, 120));
     };
     ws.onclose = (ev) => {
       ws = null;
+      api.online = false;
       if (api.snap) emit(null);
       if (ev && ev.code === 4004) return; // replaced by this tab's newer socket
       schedule();

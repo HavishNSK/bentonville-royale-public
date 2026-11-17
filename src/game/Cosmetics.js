@@ -47,6 +47,7 @@ export const PICKAXES = {
   pick_staff: { name: 'Crystal Staff', src: ['bot_c', '2H_Staff'], tint: null, swing: ['2H_Melee_Attack_Stab', '2H_Melee_Attack_Slice'], rarity: 'epic', price: 1200 },
   pick_greatsword: { name: 'Crystal Bridge Greatsword', src: ['bot_a', '2H_Sword'], tint: 0xffe08a, swing: ['2H_Melee_Attack_Slice', '2H_Melee_Attack_Spin', '2H_Melee_Attack_Stab'], rarity: 'legendary', price: 1800 },
   pick_shadow: { name: 'Shadow Reaper', src: ['bot_b', '2H_Axe'], tint: 0x8a78c8, swing: ['2H_Melee_Attack_Spin', '2H_Melee_Attack_Chop'], rarity: 'legendary', price: 1800 },
+  pick_paddle: { name: 'Pickleball Paddle', src: null, proc: 'paddle', tint: null, swing: ['1H_Melee_Attack_Slice_Horizontal', '1H_Melee_Attack_Slice_Diagonal'], rarity: 'rare', price: 700 },
   pick_mug: { name: 'Root Beer Float', src: ['bot_b', 'Mug'], tint: null, swing: ['Unarmed_Melee_Attack_Punch_A', 'Unarmed_Melee_Attack_Punch_B'], rarity: 'legendary', price: 1500 },
 };
 

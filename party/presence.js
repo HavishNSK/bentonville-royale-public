@@ -8,9 +8,19 @@
 // Client -> server (JSON):  {t:'status', status:'lobby'|'queued'|'match', mode, name}
 // Server -> client (JSON):  {t:'online', count, searching:{solo,duo,trio,squad}, inMatch,
 //                            players:[{name, status, mode}]}   (tokens are never sent out)
+//
+// Global chat (everyone connected, in a lobby or in a match):
+//   client -> server  {t:'chat', text}
+//   server -> client  {t:'chat', m:{id, name, text, at}}       one new message (to everyone)
+//                     {t:'chatHistory', list:[m...]}           the last CHAT_KEEP, on connect
+//                     {t:'chatError', reason}                  to the sender only
+// The server is the authority: text goes through cleanChat (src/net/chatFilter.js: length,
+// no links / e-mails / phone numbers, swear words masked) and is rate limited per player.
+// History lives in memory only (it is gone when the room sleeps).
 
 import { Server } from 'partyserver';
 import { validMode } from './modes.js';
+import { cleanChat } from '../src/net/chatFilter.js';
 
 export const ROOM = 'global';
 const MAX_CONNECTIONS = 2000; // well past what a prototype sees; refuses floods
@@ -19,6 +29,11 @@ const BROADCAST_MS = 1000; // at most one list update per second
 const MIN_MSG_MS = 250; // status updates faster than this are dropped
 const STATUSES = new Set(['lobby', 'queued', 'match']);
 const ORDER = { queued: 0, lobby: 1, match: 2 };
+const CHAT_KEEP = 30; // recent messages sent to new connections
+const CHAT_GAP_MS = 1500; // at least this between one player's messages
+const CHAT_BURST = 6; // ...and at most this many per CHAT_WINDOW_MS
+const CHAT_WINDOW_MS = 30000;
+const CHAT_MUTE_MS = 60000; // going over the burst limit mutes for this long
 
 function cleanName(name) {
   const s = String(name || '')
@@ -64,6 +79,9 @@ export class Presence extends Server {
     super(ctx, env);
     this.players = new Map(); // connection id -> {token, name, status, mode, since, last}
     this.timer = null;
+    this.chat = []; // recent messages, oldest first
+    this.chatSeq = 0;
+    this.chatBy = new Map(); // token -> {last, times:[ms], mutedUntil, lastText} (survives reconnects)
   }
 
   onConnect(conn, ctx) {
@@ -100,24 +118,58 @@ export class Presence extends Server {
     });
     try {
       conn.send(JSON.stringify(snapshot(this.players.values())));
+      if (this.chat.length) conn.send(JSON.stringify({ t: 'chatHistory', list: this.chat }));
     } catch {
       /* gone */
     }
     this._schedule();
   }
 
+  /** One chat message from `p` (rate limited, filtered), broadcast to everyone. */
+  _chat(conn, p, raw) {
+    const now = Date.now();
+    const lim = this.chatBy.get(p.token) || { last: 0, times: [], mutedUntil: 0, lastText: '' };
+    this.chatBy.set(p.token, lim);
+    if (this.chatBy.size > 5000) this.chatBy.delete(this.chatBy.keys().next().value);
+    const fail = (reason) => {
+      try {
+        conn.send(JSON.stringify({ t: 'chatError', reason }));
+      } catch {
+        /* gone */
+      }
+    };
+    if (now < lim.mutedUntil) return fail(`Slow down: you can chat again in ${Math.ceil((lim.mutedUntil - now) / 1000)} s.`);
+    if (now - lim.last < CHAT_GAP_MS) return fail('Slow down a little.');
+    lim.times = lim.times.filter((t) => now - t < CHAT_WINDOW_MS);
+    if (lim.times.length >= CHAT_BURST) {
+      lim.mutedUntil = now + CHAT_MUTE_MS;
+      return fail('Too many messages: chat paused for a minute.');
+    }
+    const r = cleanChat(raw);
+    if (!r.ok) return r.reason === 'empty' ? undefined : fail(r.reason);
+    if (r.text.toLowerCase() === lim.lastText) return fail('You just said that.');
+    lim.last = now;
+    lim.times.push(now);
+    lim.lastText = r.text.toLowerCase();
+    const m = { id: ++this.chatSeq, name: p.name, text: r.text, at: now };
+    this.chat.push(m);
+    if (this.chat.length > CHAT_KEEP) this.chat.shift();
+    this.broadcast(JSON.stringify({ t: 'chat', m }));
+  }
+
   onMessage(sender, message) {
     const p = this.players.get(sender.id);
-    if (!p || typeof message !== 'string' || message.length > 300) return;
-    const now = Date.now();
-    if (now - p.last < MIN_MSG_MS) return;
-    p.last = now;
+    if (!p || typeof message !== 'string' || message.length > 600) return;
     let msg;
     try {
       msg = JSON.parse(message);
     } catch {
       return;
     }
+    if (msg && msg.t === 'chat') return this._chat(sender, p, msg.text); // own rate limit
+    const now = Date.now();
+    if (now - p.last < MIN_MSG_MS) return;
+    p.last = now;
     if (!msg || msg.t !== 'status') return;
     p.status = cleanStatus(msg.status);
     p.mode = cleanMode(msg.mode);

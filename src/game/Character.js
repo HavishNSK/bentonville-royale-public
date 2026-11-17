@@ -6,9 +6,10 @@
 
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { damp, clamp, WEAPONS } from '../core/config.js';
+import { damp, clamp, WEAPONS, SWIM } from '../core/config.js';
 import { toToon } from '../render/Toon.js';
 import { emoteClips, emoteDef, pickaxeDef, backblingDef, swingClips } from './Cosmetics.js';
+import { buildPaddle } from '../render/Paddle.js';
 
 // Characters and their weapons are cel-shaded; colours get a small saturation lift.
 const TOON_CHAR = { saturate: 1.2 };
@@ -124,6 +125,7 @@ export function cosmeticMesh(id, pickSrc) {
   const def = pk || bb;
   if (!def) return null;
   if (def.src) return accessory(def.src[0], def.src[1], def.tint);
+  if (pk && pk.proc) return proceduralPickaxe(pk.proc);
   if (pk && pickSrc) {
     const g = pickSrc.clone(true);
     g.traverse((o) => {
@@ -137,6 +139,12 @@ export function cosmeticMesh(id, pickSrc) {
   return null;
 }
 const PICKAXES_ID = /^pick_/;
+
+/** Pickaxes built in code (Cosmetics PICKAXES[id].proc), toon-shaded like the kit meshes. */
+function proceduralPickaxe(kind) {
+  if (kind !== 'paddle') return null;
+  return buildPaddle((color) => toToon(new THREE.MeshStandardMaterial({ color, roughness: 0.6 }), TOON_CHAR));
+}
 
 // a hand item moved onto the back (chest bone frame: +Y up the spine, +Z forward)
 const BACK_POSE = {
@@ -260,6 +268,8 @@ export class Character {
     this.downRing = ring;
     this.downed = false;
     this._down = 0; // 0..1 blend into the prone pose
+    this.swimming = false; // setSwim(): sunk to the chest, hands (and what they hold) hidden
+    this._swim = 0;
     this._downClock = 0;
 
     this.heading = 0;
@@ -279,7 +289,7 @@ export class Character {
     // several guns share one mesh (WEAPONS[id].model), e.g. burst rifle -> rifle
     this.gunKey = WEAPONS[id] && this.guns[WEAPONS[id].model] ? WEAPONS[id].model : id;
     for (const k in this.guns) this.guns[k].visible = k === this.gunKey;
-    if (this.pickaxe) this.pickaxe.visible = id === 'pickaxe';
+    if (this.pickaxe) this.pickaxe.visible = id === 'pickaxe' && this._swim < 0.5;
   }
 
   _oneShot(key, speed = 1) {
@@ -341,6 +351,11 @@ export class Character {
     if (on) this.cancelOneShot();
   }
 
+  /** Swimming: the body sinks to the chest and the held item is hidden. Idempotent. */
+  setSwim(on) {
+    this.swimming = !!on;
+  }
+
   die() {
     if (this.mode === 'dead') return;
     if (this._emA) {
@@ -376,6 +391,7 @@ export class Character {
       const def = pickaxeDef(pickaxe);
       let g = null;
       if (def.src) g = accessory(def.src[0], def.src[1], def.tint);
+      else if (def.proc) g = proceduralPickaxe(def.proc);
       else if (this._pickSrc) {
         g = this._pickSrc.clone(true);
         g.traverse((o) => {
@@ -535,6 +551,16 @@ export class Character {
       this._downClock += dt;
       this.downRing.visible = this.downed;
       if (this.downed) this.downRing.material.opacity = 0.35 + 0.3 * (0.5 + 0.5 * Math.sin(this._downClock * 6));
+    }
+    // swim sink (also runs when the skeleton is not animated this frame)
+    const swimT = this.swimming && this.mode !== 'dead' && !this.downed ? 1 : 0;
+    if (this._swim !== swimT) {
+      this._swim = damp(this._swim, swimT, 7, dt);
+      if (Math.abs(this._swim - swimT) < 0.002) this._swim = swimT;
+      this.model.position.y = this._modelPos.y + this._down * 0.22 - this._swim * SWIM.sink;
+      const dry = this._swim < 0.5;
+      this.gunPivot.visible = dry;
+      if (this.pickaxe) this.pickaxe.visible = dry && this.equipped === 'pickaxe' && this.mode !== 'emote';
     }
     if (!this.animate) return;
 

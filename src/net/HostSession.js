@@ -493,6 +493,8 @@ export class HostSession {
     c.root.position.copy(a.drawPos);
     c.root.visible = !a.inBus;
     c.setDowned(!!a.downed);
+    const w = this.game.world;
+    c.setSwim(a.alive && !a.downed && a.mode === 'ground' && !!w.inWater && w.inWater(a.drawPos.x, a.drawPos.z, a.drawPos.y));
     if (!a.alive) {
       c.update(dt, { fwd: 0, side: 0, speed: 0, grounded: true, gliding: false, heading: a.heading, pitch: 0 });
       return;

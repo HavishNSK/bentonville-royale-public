@@ -1521,9 +1521,10 @@ export class Game {
     }
     if (this.pings) this.pings.blips(blips);
     // Catfish Ken's reboot vans (team modes), and our team's reboot cards on the ground
-    if (this.teamMode && this.reboot && this.state === 'play') {
+    // (vans: every mode, from the bus on, so drops can be planned around them; cards: team modes)
+    if (this.reboot && (this.state === 'play' || this.state === 'drop')) {
       for (const v of this.reboot.vans) blips.push({ x: v.x, z: v.z, kind: this.reboot.vanReady(v) ? 'van' : 'vanCd' });
-      for (const c of this.reboot.cards.values()) if (c.holder == null && c.team === p.team) blips.push({ x: c.x, z: c.z, kind: 'card' });
+      if (this.teamMode) for (const c of this.reboot.cards.values()) if (c.holder == null && c.team === p.team) blips.push({ x: c.x, z: c.z, kind: 'card' });
     }
     if (this.teamMode && this.mates && this.mates.length && this.state === 'play') {
       for (const m of this.mates) {
@@ -1644,7 +1645,25 @@ export class Game {
       this._wasLocked = true;
       if (this.inventoryOpen) this.closeInventory(false); // something re-grabbed the pointer
       if (this.fullMapOpen) this.toggleFullMap(false);
-    } else if (this._wasLocked && (this.state === 'play' || this.state === 'drop') && !this.paused && !this.inventoryOpen && !this.fullMapOpen) this.pause(true);
+    } else if (this._wasLocked && (this.state === 'play' || this.state === 'drop') && !this.paused && !this.inventoryOpen && !this.fullMapOpen && !this.chatOpen) this.pause(true);
+  }
+
+  /**
+   * Global chat box open in a match (src/ui/chat.js): the game lets go of the keyboard and the
+   * mouse (no pause menu) until it closes, then grabs the mouse again.
+   */
+  setChatTyping(on) {
+    this.chatOpen = !!on;
+    const input = this.input;
+    if (on) {
+      input.keys.clear();
+      input.pressed.clear();
+      input.enabled = false;
+      input.unlock();
+    } else {
+      input.enabled = true;
+      if ((this.state === 'play' || this.state === 'drop') && !this.paused) input.lock();
+    }
   }
 
   // ---------------------------------------------------------------- inventory screen

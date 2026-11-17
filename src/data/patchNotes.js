@@ -7,6 +7,36 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.12.0',
+    date: '2026-11-17',
+    title: 'Global chat, swimming and a pickleball paddle',
+    sections: [
+      {
+        heading: 'Global chat',
+        items: [
+          'Chat with everyone who is online, in the lobby or in a match, wherever they are.',
+          'In a match, press Enter to chat and Enter again to send (Esc closes). Messages fade after a few seconds.',
+          'Keep it friendly: swear words are hidden, links, e-mails and phone numbers are blocked, and spamming pauses your chat for a minute.',
+          'Hide the chat any time with the Hide button.',
+        ],
+      },
+      {
+        heading: 'Swimming',
+        items: [
+          "Walk into ponds and lakes to swim. You're slower in the water and can't shoot, build or heal until you climb out.",
+        ],
+      },
+      {
+        heading: 'Item Shop',
+        items: ['New pickaxe: the Pickleball Paddle.'],
+      },
+      {
+        heading: 'Map',
+        items: ["Catfish Ken's reboot vans now show on the minimap and the full map in every mode, from the Drop Bus on, with a bigger icon."],
+      },
+    ],
+  },
+  {
     version: '0.11.0',
     date: '2026-11-17',
     title: "Catfish Ken's reboot vans",

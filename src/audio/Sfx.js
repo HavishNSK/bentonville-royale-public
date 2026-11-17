@@ -637,6 +637,13 @@ def('footstep', { vol: 0.45, ref: 3, max: 32, vary: 0.09, pri: 0.6 }, (v, o) => 
   }
 });
 
+// Swimming: entering the water (louder) and each stroke: sfx.play('splash', { x, y, z, volume })
+def('splash', { vol: 0.5, ref: 3, max: 30, vary: 0.12, pri: 0.6 }, (v) => {
+  v.noise({ type: 'pink', dur: 0.32, g: 0.6, a: 0.01, flt: { type: 'bandpass', f: 850, q: 0.7 } });
+  v.noise({ dur: 0.2, g: 0.22, a: 0.02, flt: { type: 'highpass', f: 2600 } });
+  thump(v, 0, 90, 60, 0.08, 0.25);
+});
+
 def('jump', { vol: 0.45, ref: 3, max: 25, vary: 0.05 }, (v) => {
   v.tone({ f: 260, f2: 520, ft: 0.12, dur: 0.16, g: 0.3, a: 0.01 });
   v.noise({ dur: 0.13, g: 0.14, env: [[0.05, 1], [0.13, 0]], flt: { type: 'bandpass', f: 900, f2: 2400, q: 1 } });
