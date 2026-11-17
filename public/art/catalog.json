@@ -1,0 +1,216 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "scripts/fetch-cb-art.mjs",
+  "works": {
+    "durand-kindred-spirits": {
+      "title": "Kindred Spirits",
+      "artist": "Asher B. Durand",
+      "year": "1849",
+      "room": "early-american"
+    },
+    "church-home-by-the-lake": {
+      "title": "Home by the Lake",
+      "artist": "Frederic Edwin Church",
+      "year": "1852",
+      "room": "early-american"
+    },
+    "cole-landscape-with-indian": {
+      "title": "Landscape with Indian",
+      "artist": "Thomas Cole",
+      "year": "1826–28",
+      "room": "early-american"
+    },
+    "cole-mount-etna": {
+      "title": "View of Mount Etna",
+      "artist": "Thomas Cole",
+      "year": "1842",
+      "room": "early-american"
+    },
+    "cole-good-shepherd": {
+      "title": "The Good Shepherd",
+      "artist": "Thomas Cole",
+      "year": "1848",
+      "room": "early-american"
+    },
+    "cropsey-backwoods": {
+      "title": "The Backwoods of America",
+      "artist": "Jasper Francis Cropsey",
+      "year": "1858",
+      "room": "early-american"
+    },
+    "lane-camden-mountains": {
+      "title": "View of Camden Mountains from Penobscot Bay",
+      "artist": "Fitz Henry Lane",
+      "year": "1852",
+      "room": "early-american"
+    },
+    "kensett-mount-washington": {
+      "title": "View of Mount Washington",
+      "artist": "John Frederick Kensett",
+      "year": "1851",
+      "room": "early-american"
+    },
+    "vanderlyn-niagara": {
+      "title": "Niagara and the Rapids",
+      "artist": "John Vanderlyn",
+      "year": "c. 1801–02",
+      "room": "early-american"
+    },
+    "guy-winter-brooklyn": {
+      "title": "Winter Scene in Brooklyn",
+      "artist": "Francis Guy",
+      "year": "c. 1819–20",
+      "room": "early-american"
+    },
+    "duncanson-landscape": {
+      "title": "Landscape",
+      "artist": "Robert Seldon Duncanson",
+      "year": "1853",
+      "room": "early-american"
+    },
+    "woodville-war-news": {
+      "title": "War News from Mexico",
+      "artist": "Richard Caton Woodville",
+      "year": "1848",
+      "room": "early-american"
+    },
+    "bierstadt-indian-encampment": {
+      "title": "Indian Encampment",
+      "artist": "Albert Bierstadt",
+      "year": "c. 1862",
+      "room": "nineteenth"
+    },
+    "bierstadt-wharf-scene": {
+      "title": "Wharf Scene with Ship at Dock",
+      "artist": "Albert Bierstadt",
+      "year": "c. 1863",
+      "room": "nineteenth"
+    },
+    "moran-catawissa": {
+      "title": "Valley of the Catawissa in Autumn",
+      "artist": "Thomas Moran",
+      "year": "1862",
+      "room": "nineteenth"
+    },
+    "moran-lake-superior": {
+      "title": "The Shores of Lake Superior",
+      "artist": "Thomas Moran",
+      "year": "1873",
+      "room": "nineteenth"
+    },
+    "hill-yosemite-falls": {
+      "title": "Yosemite Falls",
+      "artist": "Thomas Hill",
+      "year": "1865",
+      "room": "nineteenth"
+    },
+    "keith-sentinel-rock": {
+      "title": "Sentinel Rock, Yosemite",
+      "artist": "William Keith",
+      "year": "1872",
+      "room": "nineteenth"
+    },
+    "inness-old-roadway": {
+      "title": "An Old Roadway",
+      "artist": "George Inness",
+      "year": "c. 1880",
+      "room": "nineteenth"
+    },
+    "inness-sunset-river": {
+      "title": "Sunset on the River",
+      "artist": "George Inness",
+      "year": "1867",
+      "room": "nineteenth"
+    },
+    "johnson-cranberry-pickers": {
+      "title": "Cranberry Pickers, Nantucket",
+      "artist": "Eastman Johnson",
+      "year": "c. 1879",
+      "room": "nineteenth"
+    },
+    "tait-tight-fix": {
+      "title": "A Tight Fix—Bear Hunting, Early Winter",
+      "artist": "Arthur Fitzwilliam Tait",
+      "year": "1856",
+      "room": "nineteenth"
+    },
+    "tanner-good-shepherd": {
+      "title": "The Good Shepherd",
+      "artist": "Henry Ossawa Tanner",
+      "year": "c. 1902–03",
+      "room": "nineteenth"
+    },
+    "sargent-stevenson": {
+      "title": "Robert Louis Stevenson and His Wife",
+      "artist": "John Singer Sargent",
+      "year": "1885",
+      "room": "bridge-gallery"
+    },
+    "hassam-paris-twilight": {
+      "title": "Paris at Twilight",
+      "artist": "Childe Hassam",
+      "year": "1888",
+      "room": "bridge-gallery"
+    },
+    "chase-seaside-flowers": {
+      "title": "Seaside Flowers",
+      "artist": "William Merritt Chase",
+      "year": "c. 1890s",
+      "room": "bridge-gallery"
+    },
+    "cassatt-reader": {
+      "title": "The Reader",
+      "artist": "Mary Cassatt",
+      "year": "1877",
+      "room": "bridge-gallery"
+    },
+    "robinson-columbian": {
+      "title": "World's Columbian Exposition",
+      "artist": "Theodore Robinson",
+      "year": "1894",
+      "room": "bridge-gallery"
+    },
+    "twachtman-september": {
+      "title": "September Sunshine",
+      "artist": "John Henry Twachtman",
+      "year": "c. 1895",
+      "room": "bridge-gallery"
+    },
+    "ryder-misty-moonlight": {
+      "title": "Misty Moonlight",
+      "artist": "Albert Pinkham Ryder",
+      "year": "c. 1890",
+      "room": "bridge-gallery"
+    },
+    "bellows-excavation": {
+      "title": "Excavation at Night",
+      "artist": "George Wesley Bellows",
+      "year": "1908",
+      "room": "early-twentieth"
+    },
+    "sloan-bleecker": {
+      "title": "Bleecker Street, Saturday Night",
+      "artist": "John Sloan",
+      "year": "1918",
+      "room": "early-twentieth"
+    },
+    "hartley-mountain-king": {
+      "title": "Hall of the Mountain King",
+      "artist": "Marsden Hartley",
+      "year": "1908–09",
+      "room": "early-twentieth"
+    },
+    "remington-cowpuncher": {
+      "title": "Cowpuncher's Lullaby",
+      "artist": "Frederic Remington",
+      "year": "1906",
+      "room": "early-twentieth"
+    },
+    "bluemner-montville": {
+      "title": "Motive of Space and Form—A New Jersey Village (Montville)",
+      "artist": "Oscar Bluemner",
+      "year": "1916–18",
+      "room": "early-twentieth"
+    }
+  }
+}

@@ -228,8 +228,18 @@ async function writeManifest(m) {
   await rename(tmp, MANIFEST);
 }
 
+/** public/art/catalog.json: title / artist / year / room for every listed work (labels work before images download). */
+async function writeCatalog() {
+  const works = Object.fromEntries(WORKS.map(([id, , , , info]) => [id, info]));
+  const out = path.join(ROOT, 'public', 'art', 'catalog.json');
+  await mkdir(path.dirname(out), { recursive: true });
+  await writeFile(out, JSON.stringify({ schemaVersion: 1, generatedBy: 'scripts/fetch-cb-art.mjs', works }, null, 2) + '\n');
+}
+
 async function main() {
   const args = process.argv.slice(2);
+  await writeCatalog();
+  if (args.includes('--catalog-only')) return;
   const only = new Set();
   for (let i = 0; i < args.length; i++) if (args[i] === '--only') only.add(args[++i]);
   const metadataOnly = args.includes('--metadata-only');

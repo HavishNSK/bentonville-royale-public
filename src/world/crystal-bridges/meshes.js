@@ -178,22 +178,27 @@ function tileTexture(base, line, n = 4) {
 /** Copper weathered to deep brown, with blue-green runoff streaks; standing seams every 0.6 m. */
 function copperTexture() {
   return canvasTex(256, (ctx, S) => {
-    ctx.fillStyle = '#7a4a2f';
+    ctx.fillStyle = '#5e4a3c'; // aged copper: deep bronze-brown (2011 orange has long weathered)
     ctx.fillRect(0, 0, S, S);
     for (let i = 0; i < 40; i++) {
-      ctx.fillStyle = `rgba(${130 + Math.random() * 40},${70 + Math.random() * 30},${40},${0.15 + Math.random() * 0.2})`;
+      ctx.fillStyle = `rgba(${105 + Math.random() * 40},${80 + Math.random() * 25},${60},${0.04 + Math.random() * 0.06})`;
       ctx.fillRect(Math.random() * S, Math.random() * S, 20 + Math.random() * 60, 6 + Math.random() * 20);
     }
     for (let i = 0; i < 9; i++) {
       const x = Math.random() * S;
       const g = ctx.createLinearGradient(0, 0, 0, S);
       g.addColorStop(0, 'rgba(90,160,140,0)');
-      g.addColorStop(1, 'rgba(90,165,140,0.55)');
+      g.addColorStop(1, 'rgba(90,165,140,0.35)');
       ctx.fillStyle = g;
       ctx.fillRect(x, S * 0.4, 3 + Math.random() * 6, S * 0.6);
     }
-    ctx.fillStyle = 'rgba(40,22,12,0.45)';
-    for (let x = 0; x < S; x += S / 4) ctx.fillRect(x, 0, 2, S);
+    // standing seams: pale ridges catching the light, as in the aerial photos
+    for (let x = 0; x < S; x += S / 4) {
+      ctx.fillStyle = 'rgba(205,190,165,0.75)';
+      ctx.fillRect(x, 0, 3, S);
+      ctx.fillStyle = 'rgba(30,20,12,0.5)';
+      ctx.fillRect(x + 3, 0, 2, S);
+    }
   });
 }
 
@@ -247,7 +252,7 @@ function makeMaterials() {
   const quartz = tileTexture('#5f8a70', 'rgba(25,50,35,0.4)');
   quartz.repeat.set(1 / 2.4, 1 / 2.4);
   const copper = copperTexture();
-  copper.repeat.set(1 / 6, 1 / 6);
+  copper.repeat.set(1 / 3.2, 1 / 3.2); // a seam every 0.8 m
   const steel = steelTexture();
   steel.repeat.set(1 / 2.4, 1 / 2.4);
   const grass = grassTexture();
@@ -282,16 +287,20 @@ const FLOOR_MAT = { oak: 'oak', stone: 'stone', quartzite: 'quartzite', concrete
 function addRoof(pv, roofBufs, soffitBuf) {
   const mat = (pv.roof && pv.roof.mat) || 'concrete';
   const buf = roofBufs[mat] || roofBufs.concrete;
-  const bx0 = pv.x0 - ((pv.bow && pv.bow.w) || 0);
-  const bx1 = pv.x1 + ((pv.bow && pv.bow.e) || 0);
-  const bz0 = pv.z0 - ((pv.bow && pv.bow.n) || 0);
-  const bz1 = pv.z1 + ((pv.bow && pv.bow.s) || 0);
+  // the hull roofs of the bridges overhang their glass walls by ~1.6 m (eaves follow the arch down)
+  const hull = pv.roof && pv.roof.type === 'convex';
+  const longX = pv.x1 - pv.x0 >= pv.z1 - pv.z0;
+  const eave = hull ? 1.6 : 0;
+  const bx0 = pv.x0 - ((pv.bow && pv.bow.w) || 0) - (hull && !longX ? eave : 0);
+  const bx1 = pv.x1 + ((pv.bow && pv.bow.e) || 0) + (hull && !longX ? eave : 0);
+  const bz0 = pv.z0 - ((pv.bow && pv.bow.n) || 0) - (hull && longX ? eave : 0);
+  const bz1 = pv.z1 + ((pv.bow && pv.bow.s) || 0) + (hull && longX ? eave : 0);
   const nx = Math.max(2, Math.ceil((bx1 - bx0) / 2));
   const nz = Math.max(2, Math.ceil((bz1 - bz0) / 2));
   const P = (i, k, top) => {
     const x = bx0 + ((bx1 - bx0) * i) / nx;
     const z = bz0 + ((bz1 - bz0) * k) / nz;
-    const y = roofUnder(pv, x, z) + (top ? ROOF_T : 0);
+    const y = roofUnder(pv, x, z, hull) + (top ? ROOF_T : 0);
     return [x, y, z];
   };
   const holes = (pv.roof && pv.roof.holes) || [];

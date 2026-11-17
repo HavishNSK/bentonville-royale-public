@@ -81,6 +81,17 @@ const menus = createMenus(uiRoot, {
       menus.showTitle();
     }
   },
+  onMuseum: async () => {
+    try {
+      closeMultiplayer();
+      await ensureLoaded();
+      game.startMatch(undefined, { freeBuild: true, museum: true });
+    } catch (err) {
+      console.error(err);
+      showError('Could not open the museum: ' + (err && err.message ? err.message : err));
+      menus.showTitle();
+    }
+  },
   onPlayAgain: () => playLocal(lastLocal.mode, lastLocal.fill),
   onResume: () => game && game.pause(false),
   onLeave: () => {

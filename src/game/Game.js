@@ -394,6 +394,8 @@ export class Game {
     // free build is a solo sandbox; a multiplayer host never gets it
     const freeBuild = !!opts.freeBuild && !(this.net && this.net.isHost);
     this.freeBuild = freeBuild;
+    // Museum Mode: a free-build session that starts in the Crystal Bridges lobby (no bots, no storm)
+    this.museumMode = freeBuild && !!opts.museum && !!(this.cbGallery || (this.view && this.view.crystalBridges));
     // bot difficulty this match was played on; only 'hard' matches count toward the ranks
     this.matchDifficulty = freeBuild ? null : this.settings.difficulty;
     this.seed = seed;
@@ -561,6 +563,25 @@ export class Game {
     if (this.dropBus) this.dropBus.root.visible = false;
     let x = lm.x;
     let z = lm.z;
+    if (this.museumMode) {
+      // the Garrison Lobby, facing the Early American galleries
+      p.pos.set(26, this.world.groundHeight(26, -258, -6.5), -258);
+      p.heading = 0;
+      p.vel.set(0, 0, 0);
+      p.mode = 'ground';
+      p.grounded = true;
+      if (p.character) p.character.root.visible = true;
+      this.state = 'play';
+      this.hud.setVisible(true);
+      this.hud.showFullMap(false);
+      this._setFullMapInteractive(false);
+      this.menus.hideAll();
+      this.menus.showDropBanner(false);
+      this.hud.announce('CRYSTAL BRIDGES', 'Museum mode: [E] views a painting, walk into a portal painting to travel. Esc > Leave to exit', 5000);
+      sfx.stopMusic();
+      this.input.lock();
+      return;
+    }
     for (let i = 0; i < 40; i++) {
       const pt = this.world.randomOpenPoint(this.rng, lm.x, lm.z, 40, 6);
       if (!this.world.polyAt(pt.x, pt.z) && !this.world.blockedAt(pt.x, pt.z, 6)) {

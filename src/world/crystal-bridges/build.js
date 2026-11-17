@@ -25,18 +25,23 @@ export const GLASS_HP = 70;
 const PROP_HP = 120;
 
 /** Roof underside (interior ceiling) of pavilion pv at (x, z). */
-export function roofUnder(pv, x, z) {
+export function roofUnder(pv, x, z, unclamped = false) {
   const ceil = pv.floor + pv.height;
   const r = pv.roof || {};
   const rise = r.rise || 0;
   const u = (x - pv.x0) / (pv.x1 - pv.x0);
   const v = (z - pv.z0) / (pv.z1 - pv.z0);
-  const cu = Math.min(1, Math.max(0, u));
-  const cv = Math.min(1, Math.max(0, v));
+  const cu = unclamped ? u : Math.min(1, Math.max(0, u));
+  const cv = unclamped ? v : Math.min(1, Math.max(0, v));
   switch (r.type) {
     case 'convex': {
-      const s = r.along === 'z' ? cv : cu;
-      return ceil + rise * (1 - (2 * s - 1) ** 2);
+      // the bridges' cable-hung copper roofs: a hull that arches ACROSS the span (short axis),
+      // easing down a little toward both ends (aerial photos, crystalbridges.org/architecture)
+      const across = r.along === 'z' ? cu : cv;
+      const along = r.along === 'z' ? cv : cu;
+      const a = 1 - (2 * across - 1) ** 2;
+      const b = 1 - (2 * Math.min(1, Math.max(0, along)) - 1) ** 2;
+      return ceil + rise * a * (0.72 + 0.28 * b);
     }
     case 'vault':
       return ceil + rise * (1 - (2 * cv - 1) ** 2);
@@ -64,8 +69,8 @@ function roofVaries(pv) {
   const r = pv.roof || {};
   const t = r.type;
   return {
-    x: (t === 'convex' && r.along !== 'z') || t === 'dome' || (t === 'concave' && (r.high === 'e' || r.high === 'w')),
-    z: (t === 'convex' && r.along === 'z') || t === 'vault' || t === 'dome' || t === 'sawtooth' || (t === 'concave' && (r.high === 'n' || r.high === 's')),
+    x: t === 'convex' || t === 'dome' || (t === 'concave' && (r.high === 'e' || r.high === 'w')),
+    z: t === 'convex' || t === 'vault' || t === 'dome' || t === 'sawtooth' || (t === 'concave' && (r.high === 'n' || r.high === 's')),
   };
 }
 
@@ -302,6 +307,20 @@ export function buildSite(world, mapData) {
         const ux = alongX ? 0.6 : 0;
         const uz = alongX ? 0 : 0.6;
         hangLines.push({ type: 'line', pv: pv.id, wing: pv.wing, ax: ax + ux + nx * 0.15, az: az + uz + nz * 0.15, bx: bx - ux + nx * 0.15, bz: bz - uz + nz * 0.15, nx, nz, floor: pv.floor, top: pv.floor + h });
+      }
+    }
+
+    // ---- concrete abutments at the bridges' ends (the cable anchors, standing above the roof)
+    if (pv.bridge && pv.roof && pv.roof.type === 'convex') {
+      const top = pv.floor + pv.height + (pv.roof.rise || 0) + 1.2;
+      const long = pv.x1 - pv.x0 >= pv.z1 - pv.z0;
+      const ends = long ? [pv.x0, pv.x1] : [pv.z0, pv.z1];
+      for (const e of ends) {
+        for (const side of long ? [pv.z0, pv.z1] : [pv.x0, pv.x1]) {
+          const out = side === (long ? pv.z0 : pv.x0) ? -1 : 1;
+          if (long) rect(e - 1.3, e + 1.3, side + (out < 0 ? -1.6 : 0), side + (out > 0 ? 1.6 : 0), pv.floor - 0.02, top, 'concrete', 'arch', { abutment: true });
+          else rect(side + (out < 0 ? -1.6 : 0), side + (out > 0 ? 1.6 : 0), e - 1.3, e + 1.3, pv.floor - 0.02, top, 'concrete', 'arch', { abutment: true });
+        }
       }
     }
 

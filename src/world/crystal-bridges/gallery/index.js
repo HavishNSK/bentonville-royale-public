@@ -38,8 +38,13 @@ export async function createGallery({ game, site, sfx = null }) {
   const ui = createGalleryUI(game.uiRoot || document.body);
   let cfg;
   let manifest;
+  let catalog = { works: {} };
   try {
-    [cfg, manifest] = await Promise.all([getJSON(configUrl()), getJSON('/art/sources.json').catch(() => ({ files: {} }))]);
+    [cfg, manifest, catalog] = await Promise.all([
+      getJSON(configUrl()),
+      getJSON('/art/sources.json').catch(() => ({ files: {} })),
+      getJSON('/art/catalog.json').catch(() => ({ works: {} })),
+    ]);
   } catch (err) {
     console.warn('Crystal Bridges gallery config unavailable:', err.message);
     cfg = { wings: [] };
@@ -89,9 +94,11 @@ export async function createGallery({ game, site, sfx = null }) {
     pool.position.set(0, 0.25, 0.02);
     g.add(pool);
     group.add(g);
-    const title = isArt ? entry.title : work.title || (entry && entry.title) || 'Untitled';
-    const artist = isArt ? entry.artist : work.artist || (entry && entry.artist) || '';
-    const year = isArt ? entry.year : work.year || (entry && entry.year) || '';
+    const cat = (work.art && catalog.works && catalog.works[work.art]) || {};
+    const str = (v) => (typeof v === 'string' ? v.slice(0, 120) : '');
+    const title = isArt ? entry.title : work.title || str(cat.title) || 'Untitled';
+    const artist = isArt ? entry.artist : work.artist || str(cat.artist);
+    const year = isArt ? entry.year : work.year || str(cat.year);
     const note = isArt ? '' : work.standIn ? 'Stand-in: the real work is in copyright' : work.art ? 'Image not downloaded' : 'In copyright: not reproduced';
     const plq = buildPlaque({ title, artist, year }, wing.accent, { note });
     plq.mesh.position.set(pl.plaque.x + pl.plaque.nx * 0.24, pl.plaque.y, pl.plaque.z + pl.plaque.nz * 0.24);
