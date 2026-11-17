@@ -987,3 +987,14 @@
 .mt-panel-body > * {
   flex-shrink: 0;
 }
+
+/* CrazyGames portal build (html.is-crazygames, src/main.js): guests only, so no sign-in,
+   coins, friends or shop anywhere in the menus */
+.is-crazygames .mt-bar [data-act='auth'],
+.is-crazygames .mt-bar [data-act='friends'],
+.is-crazygames .mt-bar [data-act='shop'],
+.is-crazygames .mt-coins,
+.is-crazygames .mt-who,
+.is-crazygames .mt-more {
+  display: none !important;
+}
