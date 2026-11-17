@@ -7,6 +7,21 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.16.0',
+    date: '2026-11-17',
+    title: 'Supporting the game',
+    sections: [
+      {
+        heading: 'Ads',
+        items: [
+          'Short ads can play between matches, when you leave the results screen. Never during a match, and at most one every few minutes.',
+          'Signed in? Watch an ad on the results screen or in the Item Shop for +100 coins, up to 5 times a day.',
+          'Only child-safe, non-personalized ads are shown. See the Privacy link at the bottom of the title screen.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.15.1',
     date: '2026-11-17',
     title: 'Safer global chat',

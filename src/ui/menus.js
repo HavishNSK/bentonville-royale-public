@@ -175,7 +175,7 @@ export function createMenus(root, opts = {}) {
        <span><kbd class="br-key" data-bind="pickaxe">F</kbd>pickaxe</span><span><kbd class="br-key" data-bind="map">M</kbd>map</span>
      </div>
      </div>
-     <div class="mn-foot">Map data &copy; OpenStreetMap contributors &middot; An original fan-made game, not affiliated with any other battle royale</div>`
+     <div class="mn-foot">Map data &copy; OpenStreetMap contributors &middot; An original fan-made game, not affiliated with any other battle royale &middot; <a href="privacy.html" target="_blank" rel="noopener">Privacy</a></div>`
   );
   wrap.appendChild(title);
   const T = {};
@@ -391,6 +391,7 @@ export function createMenus(root, opts = {}) {
        <div class="mn-stack mn-stack-row">
          <button class="mn-btn mn-btn-hero" data-act="again">${icon('replay')}<span>PLAY AGAIN</span></button>
          <button class="mn-btn" data-act="menu">${icon('home')}<span>MAIN MENU</span></button>
+         <button class="mn-btn mn-btn-ad" data-act="adcoins" data-ref="adBtn" hidden><i class="mt-coin" aria-hidden="true"></i><span data-ref="adText">WATCH AD +100</span></button>
        </div>
      </div>`
   );
@@ -691,6 +692,7 @@ export function createMenus(root, opts = {}) {
         else if (act === 'leave') opts.onLeave && opts.onLeave();
         else if (act === 'again') opts.onPlayAgain && opts.onPlayAgain();
         else if (act === 'menu') opts.onLeave && opts.onLeave();
+        else if (act === 'adcoins') opts.onAdReward && opts.onAdReward();
       })
     );
   });
@@ -1046,6 +1048,12 @@ export function createMenus(root, opts = {}) {
       show(result, false);
     },
     /** Coins the match paid out (after the server confirms): counts up on the result screen. */
+    /** Results screen "watch an ad for coins" button: { show, text, disabled }. */
+    setAdReward({ show = false, text = 'WATCH AD +100', disabled = false } = {}) {
+      R.adBtn.hidden = !show;
+      R.adText.textContent = text;
+      R.adBtn.disabled = !!disabled;
+    },
     showReward(n) {
       if (!(n > 0) || !result.classList.contains('is-reveal')) return;
       R.coinStat.hidden = false;

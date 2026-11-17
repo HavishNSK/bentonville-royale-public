@@ -18,3 +18,7 @@ local-music/
 # PartyKit local dev state
 .partykit
 .wrangler
+
+# CrazyGames portal build (npm run build:crazygames)
+dist-crazygames
+bentonville-royale-crazygames.zip

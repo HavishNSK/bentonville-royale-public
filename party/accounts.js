@@ -21,6 +21,7 @@
 //   rename {token, name}  only while profile.mustRename (the current name has a swear word / slur)
 //   buy {token, item}   equip {token, skin?, emotes?}
 //   reward {token, kills, placement, players, won, ranked} -> {profile, earned, ranked}
+//   adReward {token}                                      -> {profile, earned}  (rewarded ad; AD_REWARD_DAILY a day)
 //     (wins/kills reach the boards only when ranked === true: a HARD bot-difficulty match)
 //   friendAdd {token, name}  friendAccept {token, name}  friendDecline {token, name}  friendRemove {token, name}
 //   invite {token, name, code}                            (delivered over the socket)
@@ -45,6 +46,17 @@ const SESSION_DAYS = 30;
 const PBKDF2_ROUNDS = 100000;
 const MAX_FRIENDS = 100;
 const REWARD_GAP_MS = 60 * 1000; // at most one match reward per minute per account
+// Rewarded ads (src/net/Ads.js): coins for watching an ad to the end. The server can't see the
+// ad itself, so it caps how often the client may claim: AD_REWARD_DAILY per UTC day, one per gap.
+export const AD_REWARD_COINS = 100;
+export const AD_REWARD_DAILY = 5;
+const AD_REWARD_GAP_MS = 20 * 1000;
+
+/** Rewarded-ad claims left today for `acc` (resets at UTC midnight). */
+function adRewardsLeft(acc, now = Date.now()) {
+  const day = new Date(now).toISOString().slice(0, 10);
+  return acc.adDay === day ? Math.max(0, AD_REWARD_DAILY - (acc.adCount | 0)) : AD_REWARD_DAILY;
+}
 const LEADERBOARD_TOP = 25;
 // Display pad for "players online" (real signed-in sockets + this). Product request for traction.
 const ONLINE_DISPLAY_PAD = 5;
@@ -115,6 +127,7 @@ function profileOf(acc) {
     incoming: acc.incoming.slice(),
     outgoing: acc.outgoing.slice(),
     stats: acc.stats,
+    adRewardsLeft: adRewardsLeft(acc),
     // a name made before the username filter: the client blocks play until it is renamed
     mustRename: !nameIsClean(acc.name),
   };
@@ -510,6 +523,23 @@ export class Accounts extends Server {
         acc.stats = applyMatchStats(acc.stats, { kills, won, ranked });
         await this._save(acc);
         return json({ profile: profileOf(acc), earned, rateLimited, ranked });
+      }
+      case 'adReward': {
+        // watched a rewarded ad to the end (client-reported; capped per day, see AD_REWARD_*)
+        const now = Date.now();
+        const day = new Date(now).toISOString().slice(0, 10);
+        if (acc.adDay !== day) {
+          acc.adDay = day;
+          acc.adCount = 0;
+        }
+        if ((acc.adCount | 0) >= AD_REWARD_DAILY) return err(`That's all ${AD_REWARD_DAILY} ad rewards for today. Come back tomorrow!`, 429);
+        if (now - (acc.lastAdReward || 0) < AD_REWARD_GAP_MS) return err('One ad reward at a time: try again in a few seconds.', 429);
+        acc.adCount = (acc.adCount | 0) + 1;
+        acc.lastAdReward = now;
+        acc.coins += AD_REWARD_COINS;
+        await this._save(acc);
+        this._push(lower, { t: 'profile', profile: profileOf(acc) });
+        return json({ profile: profileOf(acc), earned: AD_REWARD_COINS });
       }
       case 'friendAdd': {
         const to = String(m.name || '').trim().toLowerCase();
