@@ -942,6 +942,7 @@ export function createMeta(menus, account, opts = {}) {
     if (open === 'friends') render();
   });
   account.on('change', () => {
+    boardCache = null; // refresh RANKS after match rewards update stats
     renderBar();
     lineUp();
     renderEmoteBar();
@@ -975,8 +976,9 @@ export function createMeta(menus, account, opts = {}) {
       showcase.setActive(on);
       if (!on && open) closePanel();
     },
-    matchReward(n) {
+    matchReward(n, note) {
       if (n > 0) toast(`+${n} coins for that match`, [['SHOP', () => openPanel('shop'), 'mt-chip-sun']]);
+      else if (note) toast(note, account.signedIn ? [] : [['SIGN IN', () => openPanel('auth'), 'mt-chip-sun']]);
     },
     openPanel,
     setOnline(snap) {

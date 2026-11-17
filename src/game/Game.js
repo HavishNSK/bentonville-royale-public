@@ -348,6 +348,7 @@ export class Game {
     this.rng = rng;
     this.matchTime = 0;
     this.result = null;
+    this._matchEndPosted = false;
     this.paused = false;
     this._endTimer = 0;
     this._stormTick = 0;
@@ -545,6 +546,7 @@ export class Game {
     this.rng = makeRng(start.seed);
     this.matchTime = 0;
     this.result = null;
+    this._matchEndPosted = false;
     this.paused = false;
     this._endTimer = 0;
     this._stormTick = 0;
@@ -738,6 +740,10 @@ export class Game {
 
   /** Back to the main menu. */
   leave() {
+    // Leaving while dead / after a win still counts the match (rewards + leaderboard).
+    if (this.state === 'play' && this.player && (!this.player.alive || this._winPending)) {
+      this._postMatchEnd(!!this._winPending);
+    }
     if (this.net) {
       this.net.dispose(this);
       this.net = null;
@@ -761,15 +767,15 @@ export class Game {
     this.menus.showTitle();
   }
 
-  _endMatch(victory) {
-    if (this.state === 'over') return;
-    this.closeInventory(false);
-    this.state = 'over';
+  /** Build the result payload and notify account rewards once per match. */
+  _postMatchEnd(victory) {
+    if (this._matchEndPosted || !this.player) return this.result;
+    this._matchEndPosted = true;
     const placement = victory ? 1 : this._deathPlacement || (this.teamMode ? this.combat.aliveTeams + 1 : this.combat.aliveCount + 1);
     this.result = {
       victory,
       placement,
-      kills: this.player.kills,
+      kills: this.player.kills | 0,
       total: this.totalActors,
       time: this.matchTime,
       killer: this.player.lastKillerName || null,
@@ -781,6 +787,21 @@ export class Game {
       // the host keeps simulating for everyone until it leaves
       this.result.hostNote = this.net.isHost && !this.net.ended ? 'You are hosting: leaving ends the match for everyone still playing.' : null;
     }
+    if (this.onMatchEnd) {
+      try {
+        this.onMatchEnd(this.result);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    return this.result;
+  }
+
+  _endMatch(victory) {
+    if (this.state === 'over') return;
+    this.closeInventory(false);
+    this.state = 'over';
+    this._postMatchEnd(victory);
     this.input.unlock();
     sfx.stopLoop('storm_wind');
     sfx.stopLoop('glide_wind');
@@ -789,13 +810,6 @@ export class Game {
     this.hud.setRevive(null);
     this.hud.setDowned(null);
     this.menus.showResult(this.result);
-    if (this.onMatchEnd) {
-      try {
-        this.onMatchEnd(this.result);
-      } catch (err) {
-        console.error(err);
-      }
-    }
   }
 
   // ---------------------------------------------------------------- events

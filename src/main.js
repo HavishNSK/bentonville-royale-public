@@ -668,11 +668,15 @@ try {
   } else {
     account.init().then(afterAuth);
   }
-  // coins for every finished match
+  // coins + leaderboard stats for every finished match
   game.onMatchEnd = async (r) => {
     const players = r.mode && r.mode !== 'solo' ? r.teams : r.total;
-    const earned = await account.reward({ kills: r.kills | 0, placement: r.placement | 0, players: players | 0, won: !!r.victory });
-    if (earned > 0 && meta) meta.matchReward(earned);
+    const out = await account.reward({ kills: r.kills | 0, placement: r.placement | 0, players: players | 0, won: !!r.victory });
+    if (!meta) return;
+    if (out.guest) meta.matchReward(0, 'Sign in to save eliminations and coins.');
+    else if (out.saved && out.earned > 0) meta.matchReward(out.earned);
+    else if (out.saved && (r.kills | 0) > 0) meta.matchReward(0, `Saved ${r.kills | 0} elim${(r.kills | 0) === 1 ? '' : 's'} to the ranks.`);
+    else if (!out.saved && out.error) meta.matchReward(0, out.error);
   };
   menus.showTitle();
   // share links look like ?room=ABCD: prefill the private-match join code
