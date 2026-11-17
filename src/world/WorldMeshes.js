@@ -8,7 +8,7 @@
 import * as THREE from 'three';
 import { makeRng } from '../core/config.js';
 import { flattenModel } from '../core/assets.js';
-import { pointInPoly } from './World.js';
+import { pointInPoly, loadTerrainData } from './World.js';
 import { addInteriorGeometry } from './InteriorMeshes.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { schoolBusParts, schoolBusMaterials, SCHOOL_BUS } from '../render/SchoolBus.js';
@@ -773,19 +773,68 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   root.name = 'world';
   scene.add(root);
 
+  progress(0.01, 'Loading terrain');
+  const terrainExtras = await loadTerrainData('/data/').catch(() => ({ terrain: null, trees: null, groundImage: null }));
+  if (terrainExtras.terrain) world.setTerrain(terrainExtras.terrain.meta, terrainExtras.terrain.heights);
+  const groundImage = terrainExtras.groundImage;
+
   // ---- ground
   progress(0.02, 'Laying out the ground');
   const margin = 2600;
   const gw = b.maxX - b.minX + margin * 2;
   const gd = b.maxZ - b.minZ + margin * 2;
-  const groundTex = noiseTexture(256, 0.92, 0.22);
-  groundTex.repeat.set(gw / 70, gd / 70);
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(gw, gd), new THREE.MeshLambertMaterial({ color: 0x7daf58, map: groundTex }));
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.set((b.minX + b.maxX) / 2, 0, (b.minZ + b.maxZ) / 2);
-  ground.receiveShadow = true;
-  ground.renderOrder = -2;
-  root.add(ground);
+  const cx0 = (b.minX + b.maxX) / 2;
+  const cz0 = (b.minZ + b.maxZ) / 2;
+
+  let groundMat;
+  if (groundImage) {
+    const naipTex = new THREE.Texture(groundImage);
+    naipTex.needsUpdate = true;
+    naipTex.colorSpace = THREE.SRGBColorSpace;
+    groundMat = new THREE.MeshLambertMaterial({ map: naipTex });
+  } else {
+    const noiseTex = noiseTexture(256, 0.92, 0.22);
+    noiseTex.repeat.set(gw / 70, gd / 70);
+    groundMat = new THREE.MeshLambertMaterial({ color: 0x7daf58, map: noiseTex });
+  }
+
+  if (world.terrain) {
+    const T = world.terrain;
+    const tCols = Math.ceil((b.maxX - b.minX) / T.cell) + 2;
+    const tRows = Math.ceil((b.maxZ - b.minZ) / T.cell) + 2;
+    const tGeo = new THREE.PlaneGeometry(b.maxX - b.minX, b.maxZ - b.minZ, tCols - 1, tRows - 1);
+    tGeo.rotateX(-Math.PI / 2);
+    const pos = tGeo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const wx = pos.getX(i) + cx0;
+      const wz = pos.getZ(i) + cz0;
+      pos.setY(i, world.terrainHeight(wx, wz));
+    }
+    pos.needsUpdate = true;
+    tGeo.computeVertexNormals();
+    const terrainMesh = new THREE.Mesh(tGeo, groundMat);
+    terrainMesh.position.set(cx0, 0, cz0);
+    terrainMesh.receiveShadow = true;
+    terrainMesh.renderOrder = -2;
+    root.add(terrainMesh);
+    // Flat margin plane for the outer area (keeps the horizon filled)
+    const flatMat = new THREE.MeshLambertMaterial({ color: 0x7daf58 });
+    const flatGeo = new THREE.PlaneGeometry(gw, gd);
+    const flatMesh = new THREE.Mesh(flatGeo, flatMat);
+    flatMesh.rotation.x = -Math.PI / 2;
+    flatMesh.position.set(cx0, 0, cz0);
+    flatMesh.renderOrder = -3;
+    root.add(flatMesh);
+  } else {
+    const groundTex = noiseTexture(256, 0.92, 0.22);
+    groundTex.repeat.set(gw / 70, gd / 70);
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(gw, gd), new THREE.MeshLambertMaterial({ color: 0x7daf58, map: groundTex }));
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.set(cx0, 0, cz0);
+    ground.receiveShadow = true;
+    ground.renderOrder = -2;
+    root.add(ground);
+  }
 
   // ---- flat layers: land cover, sidewalks, paths, roads, centre lines (painter's order in one mesh)
   const flat = new Buf();
@@ -831,6 +880,12 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   tintIds('momentary', { wall: 0xd9dde0, roof: 0xe2574c });
   // 8th Street Market is a converted plant: warm industrial grey, not a sky-blue slab
   tintIds('market_8th', { wall: 0xbdb3a1, roof: 0x6f7376 });
+  tintIds('compton_gardens',   { wall: 0xd6cebc, roof: 0x8a8070 });
+  tintIds('bentonville_high',  { wall: 0xb04030, roof: 0x6b4a3a });
+  tintIds('bentonville_west',  { wall: 0xd4cfc6, roof: 0x556678 });
+  tintIds('community_center',  { wall: 0xa8b2bc, roof: 0x7a8a96 });
+  tints.set(912841351, { wall: 0xd6cebc, roof: 0x8a8070 });
+  tints.set(912841368, { wall: 0xc8c0ae, roof: 0x857c6e });
 
   const chunks = new Map();
   const placed = []; // [chunk, map record, collider] triples
