@@ -369,6 +369,9 @@ export class Game {
     this._endTimer = 0;
     this._stormTick = 0;
     this.spectating = null;
+    this._specH = null;
+    this._specP = null;
+    this._specDist = null;
     this._deathPlacement = 0;
     this._winPending = false;
     const net0 = this.net && this.net.isHost ? this.net : null;
@@ -567,6 +570,9 @@ export class Game {
     this._endTimer = 0;
     this._stormTick = 0;
     this.spectating = null;
+    this._specH = null;
+    this._specP = null;
+    this._specDist = null;
     this._deathPlacement = 0;
     this._winPending = false;
     this._setMode(start.mode);
@@ -644,6 +650,61 @@ export class Game {
     return null;
   }
 
+  /** Alive actors you can watch: teammates first while any remain, else everyone else. */
+  _spectatePool() {
+    const p = this.player;
+    const actors = this.combat && this.combat.actors ? this.combat.actors : [];
+    const alive = actors.filter((a) => a && a.alive && a !== p);
+    if (!alive.length) return [];
+    if (this.teamMode) {
+      const mates = alive.filter((a) => sameTeam(a, p));
+      if (mates.length) return mates;
+    }
+    return alive;
+  }
+
+  /** Start / retarget spectating. Snaps the camera look to their heading. */
+  _setSpectating(actor) {
+    this.spectating = actor && actor.alive ? actor : null;
+    if (this.spectating) {
+      this._specH = this.spectating.heading || 0;
+      this._specP = this.spectating.pitch || 0;
+      this._specDist = CAMERA.distance;
+    }
+  }
+
+  /** Cycle to the next (+) or previous (−) alive spectate target. */
+  _cycleSpectate(dir = 1) {
+    const pool = this._spectatePool();
+    if (!pool.length) {
+      this._setSpectating(null);
+      return;
+    }
+    let i = pool.indexOf(this.spectating);
+    if (i < 0) i = dir > 0 ? -1 : 0;
+    const next = pool[(i + dir + pool.length * 8) % pool.length];
+    this._setSpectating(next);
+  }
+
+  /** Keep a valid target, or pick a default (mate → killer → anyone). */
+  _ensureSpectating(preferred) {
+    if (this.spectating && this.spectating.alive) {
+      const pool = this._spectatePool();
+      if (pool.includes(this.spectating)) return;
+    }
+    const pool = this._spectatePool();
+    if (preferred && preferred.alive && pool.includes(preferred)) {
+      this._setSpectating(preferred);
+      return;
+    }
+    const mate = this._mateAlive();
+    if (mate && pool.includes(mate)) {
+      this._setSpectating(mate);
+      return;
+    }
+    this._setSpectating(pool[0] || null);
+  }
+
   /** Drop Bus clock: the host's match clock on a client (once snapshots arrive), else local. */
   _tickBusClock(dt) {
     const net = this.net;
@@ -676,9 +737,15 @@ export class Game {
     this.fx.elimination(p.pos, 0xa66bff);
     p.downed = false;
     if (placement) this._deathPlacement = placement;
-    this.spectating = this._mateAlive() || killer || null;
+    this._ensureSpectating(killer && killer.alive ? killer : null);
     this._endTimer = DEATH_SCREEN_DELAY;
-    this.hud.announce('ELIMINATED', killerName ? `by ${killerName}` : '', 3000);
+    this.hud.announce(
+      'ELIMINATED',
+      killerName
+        ? `by ${killerName} · [LMB]/[RMB] switch player`
+        : '[LMB]/[RMB] switch player',
+      3200,
+    );
     sfx.stopLoop('glide_wind');
   }
 
@@ -882,9 +949,17 @@ export class Game {
     if (victim === p) {
       p.lastKillerName = killer ? killer.name : info.storm ? 'the storm' : null;
       if (!this.teamMode) this._deathPlacement = this.combat.aliveCount + 1;
-      this.spectating = this._mateAlive() || (killer && killer.alive ? killer : null);
+      this._ensureSpectating(killer && killer.alive ? killer : null);
       this._endTimer = DEATH_SCREEN_DELAY;
-      this.hud.announce('ELIMINATED', killer ? `by ${killer.name}` : info.storm ? 'by the storm' : '', 3000);
+      this.hud.announce(
+        'ELIMINATED',
+        killer
+          ? `by ${killer.name} · [LMB]/[RMB] switch player`
+          : info.storm
+            ? 'by the storm · [LMB]/[RMB] switch player'
+            : '[LMB]/[RMB] switch player',
+        3200,
+      );
       sfx.stopLoop('glide_wind');
     }
     // team modes: our place is fixed when the last of us goes
@@ -1072,12 +1147,17 @@ export class Game {
         : this.teamMode
           ? this.totalTeams > 1 && this.combat.aliveTeams <= 1
           : this.totalActors > 1 && this.combat.aliveCount <= 1;
+      if (!p.alive && !this.paused) {
+        // LMB / RMB (or A/D) cycle who you're watching from their POV
+        if (input.actionHit('fire') || input.actionHit('moveRight') || input.hit('Digit2')) this._cycleSpectate(1);
+        else if (input.actionHit('aim') || input.actionHit('moveLeft') || input.hit('Digit1')) this._cycleSpectate(-1);
+        this._ensureSpectating();
+      }
       if (!p.alive && !mate) {
         this._endTimer -= dt;
-        if (this.spectating && !this.spectating.alive) this.spectating = this.combat.actors.find((a) => a.alive) || null;
         if (this._endTimer <= 0) this._endMatch(false);
       } else if (won) {
-        if (!p.alive) this.spectating = mate;
+        if (!p.alive) this._ensureSpectating(mate);
         if (!this._winPending) {
           this._winPending = true;
           this._endTimer = WIN_SCREEN_DELAY;
@@ -1089,8 +1169,6 @@ export class Game {
           this._winPending = false;
           this._endMatch(true);
         }
-      } else if (!p.alive && (!this.spectating || !this.spectating.alive || !sameTeam(this.spectating, p))) {
-        this.spectating = mate; // eliminated, team still in it: watch a teammate
       }
     }
   }
@@ -1119,15 +1197,33 @@ export class Game {
       _v.set(p.pos.x, p.pos.y + 6, p.pos.z);
       placeOrbitCamera(cam, null, _v, p.heading, p.pitch, BUS_CAM_DIST, 0, 0);
     } else if (inMatch) {
-      if (!p.alive && this.spectating) {
+      if (!p.alive && this.spectating && this.spectating.alive) {
+        // POV follow: over-the-shoulder behind the watched player, looking where they look
         const t = this.spectating;
-        _v.set(t.pos.x, t.pos.y + CAMERA.pivotHeight, t.pos.z);
-        this._specYaw = (this._specYaw || t.heading || 0) + dt * 0.25;
-        placeOrbitCamera(cam, this.world, _v, this._specYaw, -0.25, 6, 0);
+        const wantH = t.heading || 0;
+        const wantP = clamp(t.pitch || 0, CAMERA.minPitch, CAMERA.maxPitch);
+        if (this._specH == null) this._specH = wantH;
+        if (this._specP == null) this._specP = wantP;
+        // shortest-path ease toward their look (avoids spinning the long way)
+        let dh = wantH - this._specH;
+        while (dh > Math.PI) dh -= TAU;
+        while (dh < -Math.PI) dh += TAU;
+        const k = 1 - Math.exp(-14 * dt);
+        this._specH += dh * k;
+        this._specP += (wantP - this._specP) * k;
+        this._specDist = damp(this._specDist == null ? CAMERA.distance : this._specDist, CAMERA.distance, 10, dt);
+        const crouchDrop = t.crouching ? 0.45 : 0;
+        _v.set(t.pos.x, t.pos.y + CAMERA.pivotHeight - crouchDrop, t.pos.z);
+        placeOrbitCamera(cam, this.world, _v, this._specH, this._specP, this._specDist, CAMERA.shoulder);
+        const baseFov = this.settings.fov || CAMERA.fov;
+        if (Math.abs(cam.fov - baseFov) > 0.01) {
+          cam.fov = baseFov;
+          cam.updateProjectionMatrix();
+        }
       } else if (!p.alive) {
-        _v.set(p.pos.x, p.pos.y + 1, p.pos.z);
-        this._specYaw = (this._specYaw || p.heading) + dt * 0.2;
-        placeOrbitCamera(cam, this.world, _v, this._specYaw, -0.5, 8, 0);
+        _v.set(p.pos.x, p.pos.y + 1.2, p.pos.z);
+        this._specH = (this._specH == null ? p.heading : this._specH) + dt * 0.15;
+        placeOrbitCamera(cam, this.world, _v, this._specH, -0.35, 7, 0);
       } else p.updateCamera(cam, dt, this.world, this.settings.fov || CAMERA.fov);
     }
 
@@ -1142,7 +1238,7 @@ export class Game {
     }
 
     const s = this.storm;
-    const focus = inMatch ? p.pos : cam.position;
+    const focus = inMatch ? (this.spectating && this.spectating.alive ? this.spectating.pos : p.pos) : cam.position;
     const stormOn = inMatch && this.state !== 'drop';
     const intensity = stormOn ? s.intensityAt(focus.x, focus.z) : 0;
     // no wall while the opening storm is dormant (harmless, up to STORM.openMaxRadius wide) or in free build
@@ -1166,23 +1262,40 @@ export class Game {
     const hud = this.hud;
     const p = this.player;
     const inv = p.inventory;
-    hud.setHealth(p.health, PLAYER.maxHealth);
-    hud.setShield(p.shield, PLAYER.maxShield);
+    const watching =
+      this.state === 'play' && !p.alive && this.spectating && this.spectating.alive ? this.spectating : null;
+    const vitals = watching || p;
+    hud.setHealth(vitals.health || 0, PLAYER.maxHealth);
+    hud.setShield(vitals.shield || 0, PLAYER.maxShield);
     hud.setMaterials(inv.mats, p.buildMat);
     hud.setHotbar(inv.hotbar(), p.buildPiece ? -1 : inv.selected);
     if (this.inventoryOpen) this._updateInventoryPanel();
-    hud.setBuildMode(p.buildPiece);
+    hud.setBuildMode(watching ? null : p.buildPiece);
     const rl = p.reloadT > 0 ? 1 - p.reloadT / p.reloadTotal : 0;
-    hud.setWeapon(p.buildPiece ? null : inv.weaponHud ? inv.weaponHud(rl) : null);
+    hud.setWeapon(watching || p.buildPiece ? null : inv.weaponHud ? inv.weaponHud(rl) : null);
     const cur = inv.current();
     const curW = cur && cur.type === 'weapon' ? WEAPONS[cur.id] : null;
     const kind = p.buildPiece ? 'build' : curW ? (curW.kind === 'shotgun' ? 'shotgun' : 'gun') : 'pickaxe';
     const spreadNow = p.computeSpread();
     // true on-screen pellet cone: its radius as a fraction of half the viewport height at the current fov
     const spreadFrac = Math.tan(spreadNow) / Math.tan((this.camera.fov * Math.PI) / 360);
-    hud.setCrosshair({ spread01: clamp(spreadNow / 0.06, 0, 1), spreadFrac, hit: false, kind });
+    hud.setCrosshair(watching ? null : { spread01: clamp(spreadNow / 0.06, 0, 1), spreadFrac, hit: false, kind });
     hud.el.classList.toggle('is-onbus', this.state === 'drop'); // no aiming UI while riding the Drop Bus
     hud.el.classList.toggle('is-scoped', this.state === 'play' && p.alive && p.scopeView); // sniper scope overlay
+    hud.el.classList.toggle('is-spectating', !!watching);
+    const pool = watching ? this._spectatePool() : [];
+    const idx = watching ? pool.indexOf(watching) : -1;
+    hud.setSpectating(
+      watching
+        ? {
+            name: watching.name || 'Player',
+            index: idx >= 0 ? idx + 1 : 1,
+            total: Math.max(1, pool.length),
+            kills: watching.kills | 0,
+            teammate: this.teamMode && sameTeam(watching, p),
+          }
+        : null,
+    );
     const netAlive = this.net && this.net.aliveCount;
     let teamElims = null;
     if (this.teamMode) {
@@ -1191,7 +1304,8 @@ export class Game {
     }
     hud.setCounts({ alive: netAlive != null ? netAlive : this.combat.aliveCount, eliminations: p.kills, teams: this.teamMode ? this.combat.aliveTeams : null, teamEliminations: teamElims });
     if (this.teamMode) this._updateTeamHud(dt);
-    hud.setCompass(((p.heading * 180) / Math.PI + 360) % 360);
+    const heading = watching ? watching.heading || 0 : p.heading;
+    hud.setCompass(((heading * 180) / Math.PI + 360) % 360);
     const s = this.storm;
     if (!this.freeBuild) {
       // also during the drop: the storm is frozen at phase 1's full wait there, and without
