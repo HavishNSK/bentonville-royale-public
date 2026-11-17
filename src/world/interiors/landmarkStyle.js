@@ -25,6 +25,14 @@ const LIMESTONE = Object.freeze({ wall: CONCRETE, floor: 0xc5c0b5, ceiling: CEIL
 const BRIDGE = Object.freeze({ ...GALLERY, wall: 0xbecac0 });
 
 export const LANDMARK_STYLE = Object.freeze({
+  751973534: Object.freeze({
+    kinds: Object.freeze({
+      gym:       Object.freeze({ wall: 0xd0ccca, floor: 0xc8a84a, ceiling: 0xe4e0dc }),
+      lobby:     Object.freeze({ wall: 0xe0dcd8, floor: 0xb0a898, ceiling: 0xeae6e2 }),
+      classroom: Object.freeze({ wall: 0xe8e4e0, floor: 0x9a9490, ceiling: 0xeeedea }),
+      open:      Object.freeze({ wall: 0xcce4f0, floor: 0x8ab0c0, ceiling: 0xe0eef4 }),
+    }),
+  }),
   8240824: Object.freeze({
     kinds: Object.freeze({ gallery: GALLERY, lobby: LIMESTONE, hall: LIMESTONE, corridor: LIMESTONE, open: LIMESTONE }),
     labels: Object.freeze({
