@@ -1,5 +1,11 @@
 # Patch Notes
 
+## [2026-11-17] — v0.15.1: much stricter, kid-friendly global chat
+- `src/net/chatFilter.js` rewritten: a message that breaks a rule is refused (not masked with ****) and the sender sees which rule. Categories: profanity (including acronyms like stfu, gtfo, kys, fml), slurs and hate phrases, bullying ("ur so gay"), sexual talk, real-world threats, self-harm, drugs, and personal-info / off-app requests ("whats ur snap", "how old r u", "where do u live").
+- Sees through leetspeak, look-alike letters from other alphabets, fancy/fullwidth/circled letters, accents, stretched letters, symbols inside words, spaced-out letters, words split in two and some reversed spellings. Normal game talk ("i will kill you", "clap them", "45s left", "sus") still goes through.
+- Server (`party/presence.js`) stays the authority and now pauses a player's chat for 5 minutes after 3 rule breaks in 10 minutes. The client's filter reports only the rule category it stopped (never the text) so it counts too.
+- Word-list filter, not a human or AI reviewer: new slang can still slip through and some innocent messages may be blocked. Tests in `tests/chat-filter.test.mjs`.
+
 ## [2026-11-17] — v0.15.0: developer announcements, full-screen chat, username filter
 - Signed-in accounts named Sumukh, Havish, Gecko, or Shehryar show a red [DEV] chat name. They can type `/announce` followed by a message and everyone online sees it as an announcement. The account server confirms the name; typing one of those names as a guest does not count.
 - Global chat (lobby) has a Full screen button: the chat fills the window with larger text; Esc, the button or a click outside exits. Not available mid-match so it can't cover gameplay.

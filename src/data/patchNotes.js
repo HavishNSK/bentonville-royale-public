@@ -7,6 +7,22 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.15.1',
+    date: '2026-11-17',
+    title: 'Safer global chat',
+    sections: [
+      {
+        heading: 'Global chat',
+        items: [
+          'Chat is much stricter so it stays kid-friendly. A message that breaks the rules is not sent at all, and you see why.',
+          'Blocked: swearing and its abbreviations, slurs and hate speech, bullying, sexual talk, threats, talk about hurting yourself or others, drugs, and asking for or sharing personal info like ages, schools, addresses or other apps.',
+          'Tricks like s.p.a.c.i.n.g, symbols, numbers for letters, fancy fonts and stretched letters no longer get around the filter.',
+          'Breaking the chat rules 3 times in 10 minutes pauses your chat for 5 minutes.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.15.0',
     date: '2026-11-17',
     title: 'Developer announcements and cleaner names',
