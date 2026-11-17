@@ -205,6 +205,14 @@ export function createAccount() {
       if (t) api('logout', { token: t }).catch(() => {});
     },
 
+    /** Rewarded ad watched to the end: +coins (the server caps it per day). */
+    async adReward() {
+      if (!acct.signedIn) throw new Error('Sign in to earn coins.');
+      const r = await api('adReward', { token });
+      setProfile(r.profile);
+      return r.earned || 0;
+    },
+
     async buy(id) {
       if (!acct.signedIn) throw new Error('Sign in to earn coins and buy outfits.');
       const r = await api('buy', { token, item: id });

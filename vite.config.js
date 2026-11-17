@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -45,8 +45,27 @@ function localMusic() {
   };
 }
 
-export default defineConfig({
-  plugins: [localMusic()],
-  server: { port: 5173, host: true },
-  build: { target: 'es2022', chunkSizeWarningLimit: 2500 },
+// AdSense: ads.txt at the site root lists who may sell ads on it. Emitted only when the build
+// has a real publisher id (VITE_ADSENSE_CLIENT=ca-pub-1234...), never with a placeholder, and
+// never in the CrazyGames portal build (CrazyGames runs its own ads).
+function adsTxt(env) {
+  return {
+    name: 'ads-txt',
+    generateBundle() {
+      const client = String(env.VITE_ADSENSE_CLIENT || '');
+      const m = /^ca-(pub-\d+)$/.exec(client);
+      if (!m || env.VITE_PLATFORM === 'crazygames') return;
+      this.emitFile({ type: 'asset', fileName: 'ads.txt', source: `google.com, ${m[1]}, DIRECT, f08c47fec0942fa0\n` });
+    },
+  };
+}
+
+export default defineConfig(({ mode }) => {
+  // .env / .env.local VITE_* values plus the shell's (the shell wins, like Vite itself)
+  const env = { ...loadEnv(mode, process.cwd(), 'VITE_'), ...process.env };
+  return {
+    plugins: [localMusic(), adsTxt(env)],
+    server: { port: 5173, host: true },
+    build: { target: 'es2022', chunkSizeWarningLimit: 2500 },
+  };
 });
