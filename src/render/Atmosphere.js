@@ -61,6 +61,7 @@ import * as THREE from 'three';
 const TAU = Math.PI * 2;
 
 const QUALITY = {
+  performance: { shadows: false, shadowMapSize: 512, shadowExtent: 60, clouds: 0, wallDetail: 0 },
   low: { shadows: false, shadowMapSize: 1024, shadowExtent: 90, clouds: 12, wallDetail: 0 },
   medium: { shadows: true, shadowMapSize: 2048, shadowExtent: 90, clouds: 30, wallDetail: 1 },
   high: { shadows: true, shadowMapSize: 4096, shadowExtent: 130, clouds: 48, wallDetail: 1 },

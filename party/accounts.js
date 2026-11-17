@@ -1,32 +1,49 @@
-// BENTONVILLE ROYALE — account server. One PartyKit room ("global") holds every account.
+// BENTONVILLE ROYALE — account server (PartyServer on Cloudflare Workers, bound as `Accounts`
+// in wrangler.jsonc). One Durable Object room ("global") holds every account.
 //
 // Accounts live in the room's durable storage:
-//   user:<lowercase name>  -> { name, salt, hash, coins, owned:[ids], equipped:{skin, emotes:[6]},
+//   user:<lowercase name>  -> { name, salt?, hash?, googleSub?, coins, owned:[ids], equipped:{skin, emotes:[6]},
 //                               friends:[lower], incoming:[lower], outgoing:[lower],
 //                               stats:{matches, wins, kills}, created, lastReward }
+//   google:<sub>           -> lowercase username (Google GIS identity index; never reuse email as id)
+//   clever:<id>            -> lowercase username (Clever user id index)
+//   ticket:<id>            -> { token, exp } short-lived OAuth return ticket
 //   sess:<token>           -> { u: lower, exp }
-// Passwords are PBKDF2-SHA256 hashed (100k rounds, random 16-byte salt).
+// Passwords are PBKDF2-SHA256 hashed (100k rounds, random 16-byte salt). OAuth accounts may omit salt/hash.
 //
 // HTTP:  POST /parties/accounts/global  {op, ...}  -> JSON
 //   register {name, password} / login {name, password}   -> {token, profile}
+//   googleLogin {idToken}                                 -> {token, profile}
+//   cleverLogin {cleverId, internal} / putAuthTicket {ticket, token, exp, internal}  (Worker-only)
+//   redeemAuthTicket {ticket}                             -> {token, profile}
+//   leaderboard {}                                        -> {online, wins:[{name,wins,kills}], kills:[...]}
 //   me {token}  logout {token}
 //   buy {token, item}   equip {token, skin?, emotes?}
 //   reward {token, kills, placement, players, won}       -> {profile, earned}
 //   friendAdd {token, name}  friendAccept {token, name}  friendDecline {token, name}  friendRemove {token, name}
 //   invite {token, name, code}                            (delivered over the socket)
+// Suggestion / bug board (no account needed; signed-in posts carry the account name):
+//   feedback {kind: 'idea'|'bug', text, token?, anon?}   -> {item}   (one post per IP per 30 s)
+//   feedbackList {}                                       -> {items: newest first, max 60}
+//   feedbackVote {id, token?, anon}                       -> {item}   (one vote per voter)
 // WebSocket: /parties/accounts/global?token=   presence + live friend updates
 //   client -> server  {t:'status', s:'lobby'|'match', party?:CODE, skin?}
 //   server -> client  {t:'friends', list:[{name, online, status, skin}], incoming:[names], outgoing:[names]}
 //                     {t:'invite', from, code}  {t:'request', from}  {t:'profile', profile}
 // The shop catalog's prices are mirrored here (PRICES) so a client cannot buy for free.
 
+import { Server } from 'partyserver';
 import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS } from '../src/game/Cosmetics.js';
+import { verifyGoogleIdToken } from './googleIdToken.js';
 
 const START_COINS = 1500;
 const SESSION_DAYS = 30;
 const PBKDF2_ROUNDS = 100000;
 const MAX_FRIENDS = 100;
 const REWARD_GAP_MS = 60 * 1000; // at most one match reward per minute per account
+const LEADERBOARD_TOP = 25;
+// Display pad for "players online" (real signed-in sockets + this). Product request for traction.
+const ONLINE_DISPLAY_PAD = 5;
 
 const enc = new TextEncoder();
 const hex = (buf) => Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -82,9 +99,9 @@ function profileOf(acc) {
   };
 }
 
-export default class AccountServer {
-  constructor(room) {
-    this.room = room;
+export class Accounts extends Server {
+  constructor(ctx, env) {
+    super(ctx, env);
     this.online = new Map(); // lower name -> Set(connection id)
     this.status = new Map(); // lower name -> { s, party, skin }
   }
@@ -92,24 +109,188 @@ export default class AccountServer {
   // ---------------------------------------------------------------- storage
 
   async _acc(lower) {
-    return lower ? (await this.room.storage.get('user:' + lower)) || null : null;
+    return lower ? (await this.ctx.storage.get('user:' + lower)) || null : null;
   }
 
   async _save(acc) {
-    await this.room.storage.put('user:' + acc.name.toLowerCase(), acc);
+    await this.ctx.storage.put('user:' + acc.name.toLowerCase(), acc);
   }
 
   async _session(token) {
     if (typeof token !== 'string' || !/^[a-f0-9]{48}$/.test(token)) return null;
-    const s = await this.room.storage.get('sess:' + token);
+    const s = await this.ctx.storage.get('sess:' + token);
     if (!s || s.exp < Date.now()) return null;
     return this._acc(s.u);
   }
 
   async _newSession(acc) {
     const token = randHex(24);
-    await this.room.storage.put('sess:' + token, { u: acc.name.toLowerCase(), exp: Date.now() + SESSION_DAYS * 864e5 });
+    await this.ctx.storage.put('sess:' + token, { u: acc.name.toLowerCase(), exp: Date.now() + SESSION_DAYS * 864e5 });
     return token;
+  }
+
+  /** Pick a free username from a Google display name / email local-part. */
+  async _uniqueGoogleName(claims) {
+    const raw = String(claims.given_name || claims.name || (claims.email && claims.email.split('@')[0]) || 'Player');
+    let base = raw.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 12);
+    if (!validName(base)) base = 'Player';
+    if (!(await this._acc(base.toLowerCase()))) return base;
+    for (let i = 0; i < 8; i++) {
+      const cand = (base.slice(0, 12) + randHex(2)).slice(0, 16);
+      if (validName(cand) && !(await this._acc(cand.toLowerCase()))) return cand;
+    }
+    const fallback = ('Player' + randHex(4)).slice(0, 16);
+    return validName(fallback) ? fallback : 'Player' + randHex(3).slice(0, 3);
+  }
+
+  _googleRateOk() {
+    const now = Date.now();
+    if (!this._googleHits) this._googleHits = [];
+    this._googleHits = this._googleHits.filter((t) => now - t < 60_000);
+    if (this._googleHits.length >= 30) return false;
+    this._googleHits.push(now);
+    return true;
+  }
+
+  async _googleLogin(m) {
+    const clientId = this.env && this.env.GOOGLE_CLIENT_ID;
+    if (!clientId) return err('Google sign-in is not configured on the server.', 503);
+    if (!this._googleRateOk()) return err('Too many Google sign-in attempts. Wait a minute.', 429);
+    let claims;
+    try {
+      claims = await verifyGoogleIdToken(String(m.idToken || ''), clientId);
+    } catch {
+      return err('Google sign-in failed. Try again.', 401);
+    }
+    // Only treat Google as authoritative when email is verified (or absent — still bind on sub).
+    if (claims.email && claims.email_verified !== true) {
+      return err('Verify your Google email, then try again.', 401);
+    }
+    const gKey = 'google:' + claims.sub;
+    const linked = await this.ctx.storage.get(gKey);
+    let acc = linked ? await this._acc(linked) : null;
+    if (linked && !acc) {
+      await this.ctx.storage.delete(gKey);
+    }
+    if (!acc) {
+      const name = await this._uniqueGoogleName(claims);
+      if (!validName(name)) return err('Could not create a username from your Google account.', 500);
+      acc = {
+        name,
+        salt: null,
+        hash: null,
+        googleSub: claims.sub,
+        coins: START_COINS,
+        owned: DEFAULT_OWNED.slice(),
+        equipped: { skin: DEFAULT_EQUIPPED.skin, emotes: DEFAULT_EQUIPPED.emotes.slice() },
+        friends: [],
+        incoming: [],
+        outgoing: [],
+        stats: { matches: 0, wins: 0, kills: 0 },
+        created: Date.now(),
+        lastReward: 0,
+      };
+      await this._save(acc);
+      await this.ctx.storage.put(gKey, acc.name.toLowerCase());
+    } else if (acc.googleSub && acc.googleSub !== claims.sub) {
+      return err('Google sign-in failed. Try again.', 401);
+    } else if (!acc.googleSub) {
+      // Index pointed at a password account without googleSub — refuse auto-link (takeover risk).
+      await this.ctx.storage.delete(gKey);
+      return err('Google sign-in failed. Try again.', 401);
+    }
+    return json({ token: await this._newSession(acc), profile: profileOf(acc) });
+  }
+
+  _workerOnly(m) {
+    const secret = this.env && this.env.CLEVER_CLIENT_SECRET;
+    return !!(secret && m && m.internal === secret);
+  }
+
+  async _cleverLogin(m) {
+    // Worker-only: Clever user id is trusted only after OAuth code exchange in party/cleverAuth.js.
+    if (!this._workerOnly(m)) return err('Forbidden.', 403);
+    const cleverId = String(m.cleverId || '').trim();
+    if (!/^[A-Za-z0-9_-]{6,64}$/.test(cleverId)) return err('Invalid Clever user.', 400);
+    const cKey = 'clever:' + cleverId;
+    const linked = await this.ctx.storage.get(cKey);
+    let acc = linked ? await this._acc(linked) : null;
+    if (linked && !acc) await this.ctx.storage.delete(cKey);
+    if (!acc) {
+      const name = await this._uniqueGoogleName({ given_name: m.nameHint || 'Clever', name: m.nameHint || 'Player' });
+      if (!validName(name)) return err('Could not create a username from your Clever account.', 500);
+      acc = {
+        name,
+        salt: null,
+        hash: null,
+        cleverId,
+        coins: START_COINS,
+        owned: DEFAULT_OWNED.slice(),
+        equipped: { skin: DEFAULT_EQUIPPED.skin, emotes: DEFAULT_EQUIPPED.emotes.slice() },
+        friends: [],
+        incoming: [],
+        outgoing: [],
+        stats: { matches: 0, wins: 0, kills: 0 },
+        created: Date.now(),
+        lastReward: 0,
+      };
+      await this._save(acc);
+      await this.ctx.storage.put(cKey, acc.name.toLowerCase());
+    } else if (acc.cleverId && acc.cleverId !== cleverId) {
+      return err('Clever sign-in failed.', 401);
+    } else if (!acc.cleverId) {
+      await this.ctx.storage.delete(cKey);
+      return err('Clever sign-in failed.', 401);
+    }
+    return json({ token: await this._newSession(acc), profile: profileOf(acc) });
+  }
+
+  async _putAuthTicket(m) {
+    if (!this._workerOnly(m)) return err('Forbidden.', 403);
+    const ticket = String(m.ticket || '');
+    const token = String(m.token || '');
+    const exp = Number(m.exp) || 0;
+    if (!/^[a-f0-9]{24,48}$/.test(ticket) || !/^[a-f0-9]{48}$/.test(token) || exp < Date.now()) {
+      return err('Bad ticket.', 400);
+    }
+    await this.ctx.storage.put('ticket:' + ticket, { token, exp });
+    return json({ ok: true });
+  }
+
+  async _redeemAuthTicket(m) {
+    const ticket = String(m.ticket || '');
+    if (!/^[a-f0-9]{24,48}$/.test(ticket)) return err('Signed out. Please sign in again.', 401);
+    const row = await this.ctx.storage.get('ticket:' + ticket);
+    await this.ctx.storage.delete('ticket:' + ticket);
+    if (!row || row.exp < Date.now() || !row.token) return err('Sign-in expired. Try Clever again.', 401);
+    const acc = await this._session(row.token);
+    if (!acc) return err('Signed out. Please sign in again.', 401);
+    return json({ token: row.token, profile: profileOf(acc) });
+  }
+
+  /** Public boards for signed-in accounts only (guests never appear). */
+  async _leaderboard() {
+    const listed = await this.ctx.storage.list({ prefix: 'user:' });
+    const rows = [];
+    for (const acc of listed.values()) {
+      if (!acc || typeof acc !== 'object' || !acc.name || !acc.stats) continue;
+      const wins = Math.max(0, acc.stats.wins | 0);
+      const kills = Math.max(0, acc.stats.kills | 0);
+      rows.push({ name: String(acc.name).slice(0, 16), wins, kills });
+    }
+    const byWins = rows
+      .slice()
+      .sort((a, b) => b.wins - a.wins || b.kills - a.kills || a.name.localeCompare(b.name))
+      .slice(0, LEADERBOARD_TOP);
+    const byKills = rows
+      .slice()
+      .sort((a, b) => b.kills - a.kills || b.wins - a.wins || a.name.localeCompare(b.name))
+      .slice(0, LEADERBOARD_TOP);
+    return json({
+      online: this.online.size + ONLINE_DISPLAY_PAD,
+      wins: byWins,
+      kills: byKills,
+    });
   }
 
   // ---------------------------------------------------------------- HTTP API
@@ -124,11 +305,59 @@ export default class AccountServer {
       return err('Bad request.');
     }
     try {
+      if (m && typeof m.op === 'string' && m.op.startsWith('feedback')) return await this._feedback(m, req);
       return await this._op(m || {});
     } catch (e) {
       console.error(e);
       return err('Server error.', 500);
     }
+  }
+
+  // ---------------------------------------------------------------- suggestions / bugs board
+
+  async _feedback(m, req) {
+    const voterOf = async () => {
+      const acc = m.token ? await this._session(m.token) : null;
+      if (acc) return { id: 'u:' + acc.name.toLowerCase(), name: acc.name };
+      const anon = String(m.anon || '').replace(/[^a-z0-9]/gi, '').slice(0, 32);
+      return anon.length >= 8 ? { id: 'a:' + anon, name: null } : null;
+    };
+    if (m.op === 'feedbackList') {
+      const rows = await this.ctx.storage.list({ prefix: 'fb:', reverse: true, limit: 60 });
+      const items = [...rows.values()].map(({ voters, ip, ...pub }) => pub); // voters / IPs stay private
+      return json({ items });
+    }
+    if (m.op === 'feedback') {
+      const text = String(m.text || '').replace(/[\u0000-\u0008\u000b-\u001f<>]/g, '').trim().slice(0, 500);
+      if (text.length < 4) return err('Write a few words first.');
+      const kind = m.kind === 'bug' ? 'bug' : 'idea';
+      const ip = (req.headers.get('cf-connecting-ip') || 'local').slice(0, 64);
+      const last = (await this.ctx.storage.get('fbip:' + ip)) || 0;
+      if (Date.now() - last < 30000) return err('Thanks! Give it 30 seconds before posting again.', 429);
+      await this.ctx.storage.put('fbip:' + ip, Date.now());
+      const who = await voterOf();
+      const at = Date.now();
+      const id = String(at).padStart(14, '0') + Math.random().toString(36).slice(2, 6);
+      const item = { id, kind, text, by: who && who.name ? who.name : 'Guest', at, votes: 1, voters: who ? [who.id] : [] };
+      await this.ctx.storage.put('fb:' + id, item);
+      const { voters, ...pub } = item;
+      return json({ item: pub });
+    }
+    if (m.op === 'feedbackVote') {
+      const id = String(m.id || '').replace(/[^a-z0-9]/gi, '').slice(0, 24);
+      const item = await this.ctx.storage.get('fb:' + id);
+      if (!item) return err('That post is gone.', 404);
+      const who = await voterOf();
+      if (!who) return err('Could not count that vote.');
+      if (!item.voters.includes(who.id)) {
+        if (item.voters.length < 5000) item.voters.push(who.id);
+        item.votes = item.voters.length;
+        await this.ctx.storage.put('fb:' + id, item);
+      }
+      const { voters, ...pub } = item;
+      return json({ item: pub });
+    }
+    return err('Unknown request.');
   }
 
   async _op(m) {
@@ -160,10 +389,20 @@ export default class AccountServer {
       }
       case 'login': {
         const acc = await this._acc(String(m.name || '').trim().toLowerCase());
-        const ok = acc && same(await hashPassword(String(m.password || ''), acc.salt), acc.hash);
+        const ok = acc && acc.salt && acc.hash && same(await hashPassword(String(m.password || ''), acc.salt), acc.hash);
         if (!ok) return err('Wrong username or password.', 401);
         return json({ token: await this._newSession(acc), profile: profileOf(acc) });
       }
+      case 'googleLogin':
+        return this._googleLogin(m);
+      case 'cleverLogin':
+        return this._cleverLogin(m);
+      case 'putAuthTicket':
+        return this._putAuthTicket(m);
+      case 'redeemAuthTicket':
+        return this._redeemAuthTicket(m);
+      case 'leaderboard':
+        return this._leaderboard();
     }
 
     // everything else needs a session
@@ -175,7 +414,7 @@ export default class AccountServer {
       case 'me':
         return json({ profile: profileOf(acc) });
       case 'logout':
-        await this.room.storage.delete('sess:' + m.token);
+        await this.ctx.storage.delete('sess:' + m.token);
         return json({ ok: true });
       case 'buy': {
         const id = String(m.item || '');
@@ -318,7 +557,7 @@ export default class AccountServer {
     if (!wasOnline) this._sendFriendsOf(lower);
   }
 
-  async onMessage(raw, conn) {
+  async onMessage(conn, raw) {
     const u = conn.state && conn.state.u;
     if (!u || typeof raw !== 'string' || raw.length > 512) return;
     let m;
@@ -357,7 +596,7 @@ export default class AccountServer {
     if (!set) return;
     const s = JSON.stringify(msg);
     for (const id of set) {
-      const c = this.room.getConnection(id);
+      const c = this.getConnection(id);
       if (c) c.send(s);
     }
   }

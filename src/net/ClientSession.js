@@ -368,7 +368,7 @@ export class ClientSession {
         return this._elim(e);
       case 'kn':
         return this._knock(e);
-      case 'sp':
+      case 'sph':
         if (e.a === this.id && g.showSiphon) g.showSiphon(e.h, e.s);
         return;
       case 'pg': {
@@ -718,7 +718,7 @@ export class ClientSession {
     let k = b.time > a.time ? (t - a.time) / (b.time - a.time) : 1;
     k = Math.max(0, Math.min(1, k));
     const viewer = g.camera ? g.camera.position : null;
-    const q = QUALITY[g.settings.quality] || QUALITY.medium;
+    const q = QUALITY[g.settings.performanceMode ? 'performance' : g.settings.quality] || QUALITY.medium;
     const cd2 = (q.charDist || 160) ** 2;
     for (const pup of this.puppets.values()) {
       const ra = a.byId.get(pup.id);

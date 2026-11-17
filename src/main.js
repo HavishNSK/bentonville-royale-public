@@ -101,10 +101,11 @@ const menus = createMenus(uiRoot, {
     menus.showTitle();
   },
   googleTilesAvailable: hasGoogleTilesKey(),
+  // menus.js settings → onSettings; sole boot-path googleTiles wiring; reads settings.performanceMode/googleTiles; user: Chromebook performance mode
   onSettings: (s) => {
     settings = s;
     saveSettings(s);
-    googleTiles.setEnabled(s.googleTiles);
+    googleTiles.setEnabled(!!s.googleTiles && !s.performanceMode);
     if (game) game.applySettings(s);
     else {
       // no Game yet (WebGL failed): still honour the audio sliders, as Game.applySettings does
@@ -389,7 +390,26 @@ function renderParty() {
 const account = createAccount();
 let meta = null;
 
-async function joinParty(code = null) {
+// The party this tab is in survives a page refresh: rejoined with the same tab token, the
+// party server hands back our old slot (party/partyRoom.js keeps it ~20 s).
+const PARTY_CODE_KEY = 'bentonville-royale.partyCode';
+function savedPartyCode() {
+  try {
+    return sessionStorage.getItem(PARTY_CODE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+function savePartyCode(code) {
+  try {
+    if (code) sessionStorage.setItem(PARTY_CODE_KEY, code);
+    else sessionStorage.removeItem(PARTY_CODE_KEY);
+  } catch {
+    /* private mode */
+  }
+}
+
+async function joinParty(code = null, quiet = false) {
   const gen = ++partyGen;
   const prev = party;
   party = null;
@@ -402,6 +422,11 @@ async function joinParty(code = null) {
     if (gen !== partyGen) return p.leave();
     partyConnecting = false;
     party = p;
+    savePartyCode(p.code);
+    // the account may have loaded while we were connecting: make sure the party shows our
+    // real name and outfit, not what we had when the connection started
+    p.setName(menus.playerName());
+    if (p.setSkin) p.setSkin(account.profile.equipped.skin);
     p.onState = (st) => {
       if (party !== p) return;
       lastLocal.mode = st.mode;
@@ -426,7 +451,8 @@ async function joinParty(code = null) {
     if (gen !== partyGen) return;
     partyConnecting = false;
     if (code) {
-      menus.partyNotice(errText(err, 'Could not join that party.'), true);
+      // a refresh into a party that has since ended just starts a new one, no error
+      if (!quiet) menus.partyNotice(errText(err, 'Could not join that party.'), true);
       return joinParty(null);
     }
     console.warn('[party]', errText(err, err));
@@ -567,15 +593,36 @@ try {
   account.on('change', (p) => {
     if (p.guest) menus.setAccountName(null);
   });
+  // QA (dev builds): the party as this tab sees it
+  if (import.meta.env && import.meta.env.DEV) window.__party = () => (party && party.party ? JSON.parse(JSON.stringify(party.party)) : null);
   menus.onScreen = (s) => {
     meta.setActive(s === 'title');
     const code = party && party.party ? party.party.code : null;
     if (s === 'title') account.setStatus('lobby', code);
     else if (s === null) account.setStatus('match', code); // the HUD took over: in a match
   };
-  account.init().then((p) => {
+  // Clever OAuth returns ?br_auth=<ticket>; redeem once then strip from the URL.
+  const authTicket = new URLSearchParams(location.search).get('br_auth');
+  const afterAuth = (p) => {
     if (!p.guest) menus.setAccountName(p.name);
-  });
+  };
+  if (authTicket) {
+    account
+      .redeemAuthTicket(authTicket)
+      .then((p) => {
+        afterAuth(p);
+        try {
+          const u = new URL(location.href);
+          u.searchParams.delete('br_auth');
+          history.replaceState({}, '', u.pathname + u.search + u.hash);
+        } catch {
+          /* ignore */
+        }
+      })
+      .catch(() => account.init().then(afterAuth));
+  } else {
+    account.init().then(afterAuth);
+  }
   // coins for every finished match
   game.onMatchEnd = async (r) => {
     const players = r.mode && r.mode !== 'solo' ? r.teams : r.total;
@@ -591,7 +638,9 @@ try {
     const q = new URLSearchParams(location.search);
     return (q.get('p') || q.get('invite') || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
   })();
-  joinParty(invite.length === 4 ? invite : null);
+  const rejoin = savedPartyCode();
+  if (invite.length === 4) joinParty(invite);
+  else joinParty(/^[A-Z]{4}$/.test(rejoin) ? rejoin : null, true);
   sfx.playMusic('menu');
   googleTiles.setEnabled(settings.googleTiles);
 } catch (err) {

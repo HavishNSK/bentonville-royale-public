@@ -7,6 +7,9 @@
 //
 //   node scripts/fetch-map-data.mjs            # cache-first: no network if all tiles are cached
 //   node scripts/fetch-map-data.mjs --refresh  # discard the cache and download again
+//   node scripts/fetch-map-data.mjs --bbox S,W,N,E --raw data-raw/patch --out data-raw/patch.json
+//       # just one small area (same ORIGIN / processing; no credits rewrite), e.g. a tile
+//       # swapped into the composed map by scripts/swap-tile.mjs
 //
 // Map data usage notes:
 //   - `npm run fetch-map` runs this and then compose-map. A full download is ~75 requests
@@ -34,13 +37,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const RAW_DIR = path.join(ROOT, 'data-raw');
+const argOf = (name) => {
+  const i = process.argv.indexOf(name);
+  return i > 0 ? process.argv[i + 1] : null;
+};
+// --bbox / --raw / --out: fetch one small area instead of the whole map (see the header)
+const PATCH = !!argOf('--bbox');
+const RAW_DIR = argOf('--raw') ? path.resolve(ROOT, argOf('--raw')) : path.join(ROOT, 'data-raw');
 const TILE_DIR = path.join(RAW_DIR, 'tiles');
 const REL_DIR = path.join(RAW_DIR, 'relations');
 const RAW_META = path.join(RAW_DIR, 'fetch-meta.json');
 // Full real-geography map (gitignored). scripts/compose-map.mjs turns it into the
 // compact game map public/data/bentonville-osm.json (downtown + moved school islands).
-const OUT_FILE = path.join(ROOT, 'data-raw', 'bentonville-osm-full.json');
+const OUT_FILE = argOf('--out') ? path.resolve(ROOT, argOf('--out')) : path.join(ROOT, 'data-raw', 'bentonville-osm-full.json');
 const CREDITS_FILE = path.join(ROOT, 'credits', 'map-data.md');
 
 // south, west, north, east. Phase 2 expansion: the original downtown box
@@ -50,7 +59,9 @@ const CREDITS_FILE = path.join(ROOT, 'credits', 'map-data.md');
 // grid so the old cached tiles in data-raw/tiles are reused as-is.
 // ORIGIN stays at the Square: every existing coordinate is unchanged, and the
 // far west edge (~ -10.8 km) is well inside float32 millimetre precision.
-const BBOX = [36.346, -94.31, 36.4, -94.19];
+// Grown two more tile rows south (to 36.328) for the Bentonville Community Center
+// (1101 SW Citizens Circle, ~36.3313 -94.2254), which replaced the Walmart Home Office tile.
+const BBOX = PATCH ? argOf('--bbox').split(',').map(Number) : [36.328, -94.31, 36.4, -94.19];
 const ORIGIN = { lat: 36.3729, lon: -94.2088 };
 const USER_AGENT = 'osm-game-map-fetch/1.0';
 const API = 'https://api.openstreetmap.org/api/0.6';
@@ -64,7 +75,7 @@ const PAUSE_MS = 1100; // pause between requests
 const BACKOFF_MS = [15000, 45000]; // on 429 / 509 / 5xx
 const MAX_RELATION_FETCHES = 12;
 
-const LANDMARK_NAME_RE = /Walmart|Walton|Home Office|Slaughter Pen|Crystal Bridges|Momentary|Compton|Memorial Park|8th Street Market|Razorback|Courthouse|Square|High School/i;
+const LANDMARK_NAME_RE = /Walmart|Walton|Home Office|Slaughter Pen|Crystal Bridges|Momentary|Compton|Memorial Park|8th Street Market|Razorback|Courthouse|Square|High School|Community Cent/i;
 const POI_KEYS = ['tourism', 'historic', 'amenity', 'shop', 'leisure', 'office'];
 
 // ---------------------------------------------------------------- fetch/cache
@@ -703,6 +714,8 @@ const LANDMARKS = [
   { key: 'crystal_bridges', n: 'Crystal Bridges Museum of American Art', pats: [/^crystal bridges museum of american art$/i, /crystal bridges museum/i, /^crystal bridges$/i], est: { lat: 36.3822, lon: -94.2028, r: 180 } },
   { key: 'momentary', n: 'The Momentary', pats: [/^the momentary$/i, /momentary/i], est: { lat: 36.3639, lon: -94.2062, r: 80 } },
   { key: 'home_office', n: 'Walmart Home Office', pats: [/walmart (new )?home office/i, /walmart.*(campus|headquarters)/i, /home office/i], est: { lat: 36.3605, lon: -94.1945, r: 450 } },
+  // 1101 SW Citizens Circle (OSM way 751973534): 80,000 sq ft recreation centre in Citizens Park
+  { key: 'community_center', n: 'Bentonville Community Center', pats: [/^bentonville community cent(er|re)$/i, /bentonville community cent(er|re)/i], est: { lat: 36.3309, lon: -94.2256, r: 120 } },
   { key: 'market_8th', n: '8th Street Market', pats: [/(8th|eighth) st(reet|\.)? market/i], est: { lat: 36.3637, lon: -94.2019, r: 60 } },
   { key: 'slaughter_pen', n: 'Slaughter Pen Trails', line: true, pats: [/slaughter ?pen/i], est: { lat: 36.3905, lon: -94.2125, r: 500 } },
   { key: 'compton_gardens', n: 'Compton Gardens', pats: [/^compton gardens( (and|&) (arboretum|conference center))?$/i, /compton gardens/i], est: { lat: 36.3777, lon: -94.2117, r: 110 } },
@@ -1216,6 +1229,10 @@ async function main() {
   // write-then-rename so a dev server or another process never reads a half-written file
   await writeFile(OUT_FILE + '.tmp', json + '\n');
   await rename(OUT_FILE + '.tmp', OUT_FILE);
+  if (PATCH) {
+    console.log(`Wrote ${path.relative(ROOT, OUT_FILE)} (patch area ${BBOX.join(',')}; credits untouched)`);
+    return;
+  }
   // credits are regenerated from the same metadata so the date/bbox never drift
   await mkdir(path.dirname(CREDITS_FILE), { recursive: true });
   const rawDate = (f, k = 'fetchedAt') => {

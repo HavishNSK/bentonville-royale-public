@@ -204,6 +204,82 @@
   font-weight: 700;
   opacity: 0.85;
 }
+/* meta.js .mt-or / .mt-google (Continue with Google); styles only; user: google auth */
+.mt-or {
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.55;
+}
+.mt-google {
+  display: flex;
+  justify-content: center;
+  min-height: calc(var(--u) * 44);
+}
+.mt-clever {
+  width: 100%;
+}
+.mt-signout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 10);
+  margin-top: calc(var(--u) * 12);
+}
+.mt-signout-actions .mn-btn {
+  flex: 1 1 auto;
+  min-width: calc(var(--u) * 120);
+}
+.mt-signout-confirm {
+  background: var(--br-coral);
+}
+.mt-online {
+  margin: 0 0 calc(var(--u) * 8);
+  font-size: calc(var(--u) * 18);
+}
+.mt-boards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: calc(var(--u) * 14);
+}
+.mt-board-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 4);
+}
+.mt-board-row {
+  display: grid;
+  grid-template-columns: calc(var(--u) * 28) 1fr auto;
+  gap: calc(var(--u) * 8);
+  align-items: center;
+  padding: calc(var(--u) * 6) calc(var(--u) * 8);
+  border-radius: calc(var(--u) * 10);
+  background: rgba(21, 16, 58, 0.45);
+  font-size: calc(var(--u) * 13);
+  font-weight: 800;
+}
+.mt-board-row.is-you {
+  outline: 2px solid var(--br-sun);
+  background: rgba(255, 194, 31, 0.12);
+}
+.mt-board-rank {
+  color: var(--br-sun);
+}
+.mt-board-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mt-board-stat {
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 720px) {
+  .mt-boards {
+    grid-template-columns: 1fr;
+  }
+}
 .mt-sub {
   margin-top: calc(var(--u) * 6);
 }
@@ -505,4 +581,119 @@
     grid-row: 1 / 3;
     margin-right: calc(var(--u) * 240);
   }
+}
+
+/* ---- patch notes + ideas / bugs board ------------------------------------------- */
+.mt-badge-new {
+  min-width: 0;
+  padding: 0 calc(var(--u) * 5);
+  background: var(--br-leaf);
+  font-size: calc(var(--u) * 9);
+  letter-spacing: 0.06em;
+}
+.mt-note {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 4);
+  padding: calc(var(--u) * 10) calc(var(--u) * 12);
+  border-radius: calc(var(--u) * 12);
+  background: rgba(255, 246, 220, 0.06);
+}
+.mt-note.is-latest {
+  background: rgba(255, 194, 31, 0.12);
+  outline: calc(var(--u) * 2) solid rgba(255, 194, 31, 0.5);
+}
+.mt-note-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 8);
+}
+.mt-note-ver {
+  color: var(--br-sun);
+  font-size: calc(var(--u) * 18);
+}
+.mt-note-title {
+  flex: 1 1 auto;
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 16);
+}
+.mt-note-date {
+  font-size: calc(var(--u) * 11);
+  opacity: 0.7;
+}
+.mt-note-h {
+  margin-top: calc(var(--u) * 4);
+  font-size: calc(var(--u) * 11);
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: var(--br-sky-hi);
+}
+.mt-note-list {
+  margin: 0;
+  padding-left: calc(var(--u) * 18);
+  font-size: calc(var(--u) * 13);
+  font-weight: 700;
+  line-height: 1.35;
+}
+.mt-note-list li + li {
+  margin-top: calc(var(--u) * 3);
+}
+.mt-board-text {
+  min-height: calc(var(--u) * 70);
+  resize: vertical;
+  font-family: var(--br-body);
+  font-weight: 700;
+  line-height: 1.3;
+}
+.mt-posts {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 6);
+}
+.mt-post {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(var(--u) * 10);
+  padding: calc(var(--u) * 8) calc(var(--u) * 10);
+  border-radius: calc(var(--u) * 12);
+  background: rgba(255, 246, 220, 0.07);
+}
+.mt-post .mt-vote {
+  flex: none;
+  min-width: calc(var(--u) * 52);
+}
+.mt-post-body {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 2);
+  min-width: 0;
+}
+.mt-post-kind {
+  align-self: flex-start;
+  padding: 0 calc(var(--u) * 6);
+  border-radius: 999px;
+  background: var(--br-sky);
+  color: #fff;
+  font-size: calc(var(--u) * 9.5);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+}
+.mt-post[data-kind='bug'] .mt-post-kind {
+  background: var(--br-coral);
+}
+.mt-post-text {
+  margin: 0;
+  font-size: calc(var(--u) * 13);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.mt-post-body small {
+  font-size: calc(var(--u) * 10.5);
+  opacity: 0.7;
+}
+/* panel content scrolls; nothing in it may shrink (tab bars collapsed to zero height) */
+.mt-panel-body > * {
+  flex-shrink: 0;
 }

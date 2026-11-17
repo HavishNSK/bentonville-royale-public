@@ -31,7 +31,7 @@ import pyarrow.fs as fs
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 OUT_DIR = os.path.join(ROOT, 'data-raw', 'overture')
 OUT = os.path.join(OUT_DIR, 'buildings.json')
-BBOX = (36.346, -94.31, 36.40, -94.19)  # south, west, north, east (keep in sync with fetch-map-data.mjs)
+BBOX = (36.328, -94.31, 36.40, -94.19)  # south, west, north, east (keep in sync with fetch-map-data.mjs)
 BUCKET = 'overturemaps-us-west-2'
 
 

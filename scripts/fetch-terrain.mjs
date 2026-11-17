@@ -34,7 +34,7 @@ const MAP_JSON = path.join(ROOT, 'data-raw', 'bentonville-osm-full.json'); // re
 const OUT_BIN = path.join(ROOT, 'public', 'data', 'bentonville-terrain.bin');
 const OUT_JSON = path.join(ROOT, 'public', 'data', 'bentonville-terrain.json');
 
-const BBOX = [36.346, -94.31, 36.4, -94.19]; // south, west, north, east (keep in sync with fetch-map-data.mjs)
+const BBOX = [36.328, -94.31, 36.4, -94.19]; // south, west, north, east (keep in sync with fetch-map-data.mjs)
 const ORIGIN = { lat: 36.3729, lon: -94.2088 };
 const COS0 = Math.cos((ORIGIN.lat * Math.PI) / 180);
 const MX = 111320 * COS0;

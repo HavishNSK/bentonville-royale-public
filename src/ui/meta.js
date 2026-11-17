@@ -20,6 +20,54 @@
 import './meta.css';
 import { SKINS, EMOTES, EMOTE_SLOTS, PRICES, featuredToday, skinDef, emoteDef } from '../game/Cosmetics.js';
 import { createShowcase } from './Showcase.js';
+import { PATCH_NOTES, LATEST_VERSION } from '../data/patchNotes.js';
+
+const SEEN_KEY = 'bentonville-royale.seenPatch';
+const seenPatch = () => {
+  try {
+    return localStorage.getItem(SEEN_KEY) || '';
+  } catch {
+    return '';
+  }
+};
+
+import { partyHost, isLocal } from '../net/Net.js';
+
+// GIS / Clever buttons in renderAuth(); Account.loginWithGoogle / Clever OAuth redirect.
+const GOOGLE_CLIENT_ID =
+  typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GOOGLE_CLIENT_ID
+    ? String(import.meta.env.VITE_GOOGLE_CLIENT_ID).trim()
+    : '';
+const CLEVER_ENABLED =
+  typeof import.meta !== 'undefined' &&
+  import.meta.env &&
+  (import.meta.env.VITE_CLEVER_AUTH === '1' || !!String(import.meta.env.VITE_CLEVER_CLIENT_ID || '').trim());
+
+function cleverStartUrl() {
+  const host = partyHost();
+  const scheme = isLocal(host) ? 'http' : 'https';
+  return `${scheme}://${host}/auth/clever?return=${encodeURIComponent(location.origin)}`;
+}
+
+let gisLoad = null;
+function loadGoogleGis() {
+  if (typeof window === 'undefined') return Promise.reject(new Error('no-window'));
+  if (window.google && window.google.accounts && window.google.accounts.id) return Promise.resolve();
+  if (gisLoad) return gisLoad;
+  gisLoad = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true;
+    s.defer = true;
+    s.onload = () => resolve();
+    s.onerror = () => {
+      gisLoad = null;
+      reject(new Error('Google sign-in failed to load.'));
+    };
+    document.head.appendChild(s);
+  });
+  return gisLoad;
+}
 
 function h(tag, cls, text) {
   const e = document.createElement(tag);
@@ -83,16 +131,21 @@ export function createMeta(menus, account, opts = {}) {
   const whoSub = h('small');
   who.append(whoName, whoSub);
   const coins = h('div', 'mt-coins');
-  coins.title = 'Coins: earn them in matches, spend them in the shop';
+  coins.title = 'Coins: sign in to earn them in matches and spend them in the shop';
   const coinsNum = h('b', 'br-ol', '0');
   coins.append(h('i', 'mt-coin', ''), coinsNum);
+  const bNews = btn('PATCH NOTES', 'mn-chip mt-chip', 'news');
+  const newBadge = h('em', 'mt-badge mt-badge-new', 'NEW');
+  newBadge.hidden = seenPatch() === LATEST_VERSION;
+  bNews.appendChild(newBadge);
   const bShop = btn('SHOP', 'mn-chip mt-chip', 'shop');
   const bLocker = btn('LOCKER', 'mn-chip mt-chip', 'locker');
+  const bBoard = btn('RANKS', 'mn-chip mt-chip', 'leaderboard');
   const bFriends = btn('FRIENDS', 'mn-chip mt-chip', 'friends');
   const badge = h('em', 'mt-badge');
   bFriends.appendChild(badge);
   const bAuth = btn('SIGN IN', 'mn-chip mt-chip mt-chip-sun', 'auth');
-  bar.append(who, coins, bShop, bLocker, bFriends, bAuth);
+  bar.append(who, coins, bNews, bShop, bLocker, bBoard, bFriends, bAuth);
   titleEl.appendChild(bar);
 
   // ---------------------------------------------------------------- panel shell
@@ -150,9 +203,10 @@ export function createMeta(menus, account, opts = {}) {
     if (!b) return;
     click();
     const act = b.dataset.act;
+    // Signed-in SIGN OUT opens a confirm panel (no one-click logout).
     if (act === 'auth' && account.signedIn) {
-      account.logout();
-      closePanel();
+      if (open === 'signout') closePanel();
+      else openPanel('signout');
       return;
     }
     if (open === act) closePanel();
@@ -162,10 +216,229 @@ export function createMeta(menus, account, opts = {}) {
   // ---------------------------------------------------------------- renderers
   function render() {
     panelBody.replaceChildren();
-    if (open === 'auth') renderAuth();
+    if (open === 'news') renderNews();
+    else if (open === 'auth') renderAuth();
+    else if (open === 'signout') renderSignOut();
     else if (open === 'shop') renderShop();
     else if (open === 'locker') renderLocker();
+    else if (open === 'leaderboard') renderLeaderboard();
     else if (open === 'friends') renderFriends();
+  }
+
+  // ---------------------------------------------------------------- patch notes + board
+  let newsTab = 'notes';
+  let board = null; // last loaded posts
+  let boardKind = 'idea';
+  function renderNews() {
+    panelTitle.textContent = newsTab === 'notes' ? 'PATCH NOTES' : 'IDEAS & BUGS';
+    try {
+      localStorage.setItem(SEEN_KEY, LATEST_VERSION);
+    } catch {
+      /* private mode */
+    }
+    newBadge.hidden = true;
+    const tabs = h('div', 'mn-seg');
+    for (const [id, label] of [
+      ['notes', 'PATCH NOTES'],
+      ['board', 'SUGGEST / REPORT A BUG'],
+    ]) {
+      const t = h('button', newsTab === id ? 'is-on' : '', label);
+      t.type = 'button';
+      t.setAttribute('aria-pressed', String(newsTab === id));
+      t.addEventListener('click', () => {
+        click();
+        newsTab = id;
+        say('');
+        render();
+      });
+      tabs.appendChild(t);
+    }
+    panelBody.appendChild(tabs);
+    if (newsTab === 'notes') {
+      for (const n of PATCH_NOTES) {
+        const sec = h('section', 'mt-note' + (n.version === LATEST_VERSION ? ' is-latest' : ''));
+        const head = h('div', 'mt-note-head');
+        head.append(h('b', 'mt-note-ver', 'v' + n.version), h('span', 'mt-note-title', n.title), h('small', 'mt-note-date', n.date));
+        sec.appendChild(head);
+        for (const g of n.sections) {
+          sec.appendChild(h('div', 'mt-note-h', g.heading));
+          const ul = h('ul', 'mt-note-list');
+          for (const it of g.items) ul.appendChild(h('li', null, it));
+          sec.appendChild(ul);
+        }
+        panelBody.appendChild(sec);
+      }
+      return;
+    }
+    // board: post form + recent posts
+    const form = h('form', 'mt-form mt-board-form');
+    const kinds = h('div', 'mn-seg');
+    for (const [id, label] of [
+      ['idea', 'SUGGESTION'],
+      ['bug', 'BUG REPORT'],
+    ]) {
+      const t = h('button', boardKind === id ? 'is-on' : '', label);
+      t.type = 'button';
+      t.setAttribute('aria-pressed', String(boardKind === id));
+      t.addEventListener('click', () => {
+        click();
+        boardKind = id;
+        kinds.querySelectorAll('button').forEach((b) => {
+          b.classList.toggle('is-on', b === t);
+          b.setAttribute('aria-pressed', String(b === t));
+        });
+        text.placeholder = id === 'bug' ? 'What went wrong, and what were you doing when it happened?' : 'What should we add or change?';
+      });
+      kinds.appendChild(t);
+    }
+    const text = h('textarea', 'mn-field mt-board-text');
+    text.maxLength = 500;
+    text.rows = 3;
+    text.placeholder = boardKind === 'bug' ? 'What went wrong, and what were you doing when it happened?' : 'What should we add or change?';
+    text.setAttribute('aria-label', 'Your suggestion or bug report');
+    const send = btn('POST', 'mn-btn');
+    send.type = 'submit';
+    form.append(kinds, text, send);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      click();
+      send.disabled = true;
+      try {
+        const item = await account.feedback(boardKind, text.value);
+        text.value = '';
+        board = [item, ...(board || []).filter((x) => x.id !== item.id)];
+        say('Posted. Thanks for helping make the game better!');
+        renderBoard(list);
+      } catch (err) {
+        say(err.offline ? 'Could not reach the server. Try again in a moment.' : err.message, true);
+      }
+      send.disabled = false;
+    });
+    panelBody.appendChild(form);
+    panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'FROM PLAYERS (UPVOTE WHAT YOU WANT MOST)'));
+    const list = h('div', 'mt-posts');
+    panelBody.appendChild(list);
+    renderBoard(list);
+    account
+      .feedbackList()
+      .then((items) => {
+        board = items;
+        if (open === 'news' && newsTab === 'board') renderBoard(list);
+      })
+      .catch(() => {
+        if (!board) {
+          list.replaceChildren(h('p', 'mt-hint', 'Could not load posts right now.'));
+        }
+      });
+  }
+
+  function renderBoard(list) {
+    list.replaceChildren();
+    if (!board) {
+      list.appendChild(h('p', 'mt-hint', 'Loading…'));
+      return;
+    }
+    if (!board.length) {
+      list.appendChild(h('p', 'mt-hint', 'No posts yet. Be the first!'));
+      return;
+    }
+    const items = board.slice().sort((a, b) => b.votes - a.votes || b.at - a.at);
+    for (const it of items) {
+      const row = h('div', 'mt-post');
+      row.dataset.kind = it.kind;
+      const vote = btn('▲ ' + it.votes, 'mn-chip mt-vote');
+      vote.setAttribute('aria-label', `Upvote (${it.votes} votes)`);
+      vote.addEventListener('click', async () => {
+        click();
+        try {
+          const up = await account.feedbackVote(it.id);
+          board = board.map((x) => (x.id === up.id ? up : x));
+          renderBoard(list);
+        } catch (err) {
+          say(err.message, true);
+        }
+      });
+      const body = h('div', 'mt-post-body');
+      body.append(h('span', 'mt-post-kind', it.kind === 'bug' ? 'BUG' : 'IDEA'), h('p', 'mt-post-text', it.text), h('small', null, `${it.by} · ${new Date(it.at).toLocaleDateString()}`));
+      row.append(vote, body);
+      list.appendChild(row);
+    }
+  }
+
+  let boardCache = null;
+  let boardLoading = false;
+  async function renderLeaderboard() {
+    panelTitle.textContent = 'RANKS';
+    const onlineEl = h('p', 'mt-online br-ol', boardCache ? `${boardCache.online} PLAYERS ONLINE` : 'Loading…');
+    panelBody.appendChild(onlineEl);
+    panelBody.appendChild(h('p', 'mt-hint', 'Signed-in players only. Guests do not appear on the boards.'));
+
+    const paint = (data) => {
+      boardCache = data;
+      onlineEl.textContent = `${data.online} PLAYERS ONLINE`;
+      const wrap = h('div', 'mt-boards');
+      wrap.appendChild(boardColumn('MOST WINS', data.wins || [], 'wins'));
+      wrap.appendChild(boardColumn('MOST ELIMS', data.kills || [], 'kills'));
+      const old = panelBody.querySelector('.mt-boards');
+      if (old) old.replaceWith(wrap);
+      else panelBody.appendChild(wrap);
+    };
+
+    if (boardCache) paint(boardCache);
+    if (boardLoading) return;
+    boardLoading = true;
+    try {
+      const data = await account.leaderboard();
+      if (open === 'leaderboard') paint(data);
+    } catch (err) {
+      if (open === 'leaderboard') say(err.offline ? 'Could not reach the account server.' : err.message, true);
+    } finally {
+      boardLoading = false;
+    }
+  }
+
+  function boardColumn(title, rows, key) {
+    const col = h('div', 'mt-board');
+    col.appendChild(h('div', 'mn-party-label mt-sub', title));
+    if (!rows.length) {
+      col.appendChild(h('p', 'mt-hint', 'No ranked players yet. Sign in and play matches.'));
+      return col;
+    }
+    const list = h('ol', 'mt-board-list');
+    rows.forEach((row, i) => {
+      const li = h('li', 'mt-board-row');
+      li.append(
+        h('span', 'mt-board-rank', String(i + 1)),
+        h('span', 'mt-board-name', row.name),
+        h('span', 'mt-board-stat', String(row[key] | 0))
+      );
+      if (account.signedIn && account.profile.name === row.name) li.classList.add('is-you');
+      list.appendChild(li);
+    });
+    col.appendChild(list);
+    return col;
+  }
+
+  function renderSignOut() {
+    panelTitle.textContent = 'SIGN OUT';
+    const name = account.profile && account.profile.name ? account.profile.name : 'your account';
+    panelBody.appendChild(h('p', 'mt-hint', `Sign out of ${name}? You’ll keep playing as a guest on this device until you sign in again.`));
+    const row = h('div', 'mt-signout-actions');
+    const cancel = btn('CANCEL', 'mn-btn mn-btn-small');
+    cancel.type = 'button';
+    cancel.addEventListener('click', () => {
+      click();
+      closePanel();
+    });
+    const confirm = btn('SIGN OUT', 'mn-btn mn-btn-hero mt-signout-confirm');
+    confirm.type = 'button';
+    confirm.addEventListener('click', () => {
+      click();
+      account.logout();
+      closePanel();
+    });
+    row.append(cancel, confirm);
+    panelBody.appendChild(row);
   }
 
   let authTab = 'login';
@@ -226,8 +499,61 @@ export function createMeta(menus, account, opts = {}) {
         go.disabled = false;
       }
     });
-    const guest = h('p', 'mt-hint', 'Playing as a guest keeps your coins and items on this device only.');
+    const guest = h('p', 'mt-hint', 'Guests can play with free defaults. Sign in to earn coins, unlock outfits, and keep progress on any device.');
     panelBody.append(tabs, form, guest);
+
+    // Clever first: Bentonville Google Workspace blocks unverified 3rd-party apps (admin_policy_enforced).
+    if (CLEVER_ENABLED) {
+      const divider = h('p', 'mt-hint mt-or', 'or');
+      const cleverBtn = btn('LOG IN WITH CLEVER', 'mn-btn mn-btn-hero mt-clever');
+      cleverBtn.type = 'button';
+      cleverBtn.addEventListener('click', () => {
+        click();
+        window.location.assign(cleverStartUrl());
+      });
+      const cleverHint = h('p', 'mt-hint', 'Best on school Chromebooks — uses Clever instead of Google.');
+      panelBody.append(divider, cleverBtn, cleverHint);
+    }
+
+    if (GOOGLE_CLIENT_ID && !CLEVER_ENABLED) {
+      const divider = h('p', 'mt-hint mt-or', 'or');
+      const googleWrap = h('div', 'mt-google');
+      googleWrap.setAttribute('aria-label', 'Continue with Google');
+      panelBody.append(divider, googleWrap);
+      loadGoogleGis()
+        .then(() => {
+          if (open !== 'auth' || !window.google?.accounts?.id) return;
+          window.google.accounts.id.initialize({
+            client_id: GOOGLE_CLIENT_ID,
+            callback: async (resp) => {
+              if (!resp || !resp.credential) {
+                say('Google sign-in was cancelled.', true);
+                return;
+              }
+              say('Signing in with Google…');
+              try {
+                await account.loginWithGoogle(resp.credential);
+                closePanel();
+              } catch (err) {
+                say(err.offline ? 'Could not reach the account server. You can keep playing as a guest.' : err.message, true);
+              }
+            },
+            auto_select: false,
+            cancel_on_tap_outside: true,
+          });
+          googleWrap.replaceChildren();
+          window.google.accounts.id.renderButton(googleWrap, {
+            theme: 'filled_black',
+            size: 'large',
+            text: 'continue_with',
+            shape: 'pill',
+            width: 280,
+          });
+        })
+        .catch(() => {
+          say('Google sign-in is unavailable right now. Use username and password, or play as a guest.', true);
+        });
+    }
   }
 
   function itemCard(id, { owned, equipped, onClick, action }) {
@@ -299,6 +625,16 @@ export function createMeta(menus, account, opts = {}) {
     const bar = panelBody.querySelector('[data-ref=buy]');
     if (!bar) return;
     bar.replaceChildren();
+    if (!account.signedIn) {
+      bar.appendChild(h('span', 'mt-hint', 'Sign in to earn coins from matches and unlock outfits & emotes.'));
+      const sign = btn('SIGN IN', 'mn-btn mn-btn-hero');
+      sign.addEventListener('click', () => {
+        click();
+        openPanel('auth');
+      });
+      bar.appendChild(sign);
+      return;
+    }
     if (!pending) {
       bar.appendChild(h('span', 'mt-hint', 'Pick an item to try it on. Earn coins in matches: placing well, eliminations and wins.'));
       return;
@@ -570,7 +906,7 @@ export function createMeta(menus, account, opts = {}) {
   function renderBar() {
     const p = account.profile;
     whoName.textContent = p.guest ? 'GUEST' : p.name;
-    whoSub.textContent = p.guest ? 'Not signed in' : `${p.stats.wins} wins · ${p.stats.kills} elims`;
+    whoSub.textContent = p.guest ? 'Sign in for coins & skins' : `${p.stats.wins} wins · ${p.stats.kills} elims`;
     coinsNum.textContent = p.coins.toLocaleString();
     bAuth.querySelector('span').textContent = account.signedIn ? 'SIGN OUT' : 'SIGN IN';
     bAuth.classList.toggle('mt-chip-sun', !account.signedIn);

@@ -47,6 +47,7 @@ import * as InvMod from './Inventory.js';
 import * as StructMod from './Structures.js';
 import * as BotsMod from './Bots.js';
 import { createFpsMeter } from '../ui/fpsMeter.js';
+import { graphicsQuality } from '../ui/settings.js';
 import { planBusRoute, makeRoute, routeWire, busPosAt, planBotTargets, DropBusMesh } from './DropBus.js';
 
 const BUS_CAM_DIST = 34; // third-person distance behind the Drop Bus
@@ -128,7 +129,7 @@ export class Game {
     this.camera.position.set(0, 120, 200);
     this.camera.lookAt(0, 0, 0);
     // post chain (ink outlines + bloom + tone mapping); plain render when the preset disables both
-    const q0 = QUALITY[this.settings.quality] || QUALITY.medium;
+    const q0 = QUALITY[graphicsQuality(this.settings)] || QUALITY.medium;
     this.post = new Post(this.renderer, this.scene, this.camera, { outline: q0.outline, bloom: q0.bloom, msaa: q0.msaa });
     this._applyPixelRatio();
 
@@ -177,7 +178,7 @@ export class Game {
 
     P(0.5, 'Building Bentonville');
     this.world = new World(mapData);
-    this.atmosphere = new Atmosphere({ scene: this.scene, renderer: this.renderer, camera: this.camera, quality: this.settings.quality });
+    this.atmosphere = new Atmosphere({ scene: this.scene, renderer: this.renderer, camera: this.camera, quality: graphicsQuality(this.settings) });
     this.view = await buildWorldMeshes({
       world: this.world,
       scene: this.scene,
@@ -189,7 +190,7 @@ export class Game {
     this.world.onPanelChange = (c, panel, alive) => (alive ? this.view.showPanel(c, panel) : this.view.hidePanel(c, panel));
 
     P(0.92, 'Gearing up');
-    this.fx = new Effects({ scene: this.scene, camera: this.camera, quality: this.settings.quality });
+    this.fx = new Effects({ scene: this.scene, camera: this.camera, quality: graphicsQuality(this.settings) });
     this.hud = buildHud(this.uiRoot);
     this.hud.setVisible(false);
     const mb = mapData && mapData.meta && mapData.meta.bounds;
@@ -899,7 +900,7 @@ export class Game {
   }
 
   _onSiphon(killer, out) {
-    if (this.net && this.net.isHost && this.net.events && this.net.started) this.net.events.push({ e: 'sp', a: killer.id, h: Math.round(out.hp), s: Math.round(out.shield) });
+    if (this.net && this.net.isHost && this.net.events && this.net.started) this.net.events.push({ e: 'sph', a: killer.id, h: Math.round(out.hp), s: Math.round(out.shield) });
     if (killer === this.player) this.showSiphon(out.hp, out.shield);
   }
 
@@ -1105,7 +1106,7 @@ export class Game {
     this._cullT = (this._cullT || 0) - dt;
     if (this._cullT <= 0 && this.view) {
       this._cullT = 0.25;
-      this.view.update(cam.position, QUALITY[this.settings.quality] || QUALITY.medium);
+      this.view.update(cam.position, QUALITY[graphicsQuality(this.settings)] || QUALITY.medium);
     }
 
     const s = this.storm;
@@ -1319,16 +1320,17 @@ export class Game {
     if (this.input) this.input.setBindings(this.settings.bindings);
     if (this.hud && this.hud.setKeyLabels && this.input) this.hud.setKeyLabels((a) => this.input.label(a));
     if (this.invPanel && this.input) this.invPanel.setKeyLabels((a) => this.input.label(a));
+    const qKey = graphicsQuality(this.settings);
     this._applyPixelRatio();
-    if (this.atmosphere && this.atmosphere.quality !== this.settings.quality) this.atmosphere.setQuality(this.settings.quality);
-    if (this.fx && this.fx.quality !== this.settings.quality) this.fx.setQuality(this.settings.quality);
-    if (this.loot && this.loot.setQuality) this.loot.setQuality(this.settings.quality);
-    if (this.bots && this.bots.setQuality) this.bots.setQuality(this.settings.quality);
+    if (this.atmosphere && this.atmosphere.quality !== qKey) this.atmosphere.setQuality(qKey);
+    if (this.fx && this.fx.quality !== qKey) this.fx.setQuality(qKey);
+    if (this.loot && this.loot.setQuality) this.loot.setQuality(qKey);
+    if (this.bots && this.bots.setQuality) this.bots.setQuality(qKey);
     this._cullT = 0;
   }
 
   _applyPixelRatio() {
-    const q = QUALITY[this.settings.quality] || QUALITY.medium;
+    const q = QUALITY[graphicsQuality(this.settings)] || QUALITY.medium;
     const pr = Math.min(window.devicePixelRatio || 1, q.pixelRatio) * (q.renderScale || 1);
     this.renderer.setPixelRatio(pr);
     if (this.post) {

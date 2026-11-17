@@ -298,7 +298,7 @@ export const STORM = {
 // Loot totals for the ~0.7 km2 of tiles: denser per m2 than the old 8 km2 map (which had
 // 320 / 180 / 450) because 100 players still need ~1 chest each.
 export const MATCH = {
-  bots: 74, // solo = 75 players (a crowded ~0.9 km tile map); in multiplayer remote humans take slots first
+  bots: 99, // solo = 100 players, landing spread over the whole map (DropBus.planBotTargets); in multiplayer remote humans take slots first
   chests: 200,
   floorLoot: 630,
   ammoBoxes: 270,
@@ -332,15 +332,23 @@ export const KNOCK = {
 // at whoever just shot them; boxHeal = odds of boxing up before healing after a fight;
 // pushWeak = odds of pushing a target whose shield is cracked / that is healing;
 // thirdParty = odds of moving in on gunfire they hear; rotateEarly = extra slack on rotations.
+// boxFight = odds a close fight is taken from a full 1x1 box with edit peeks (window / door
+// edited into the wall facing the enemy, shoot, reset the edit); peekOpen / peekClosed =
+// seconds the edit stays open / closed.
 export const DIFFICULTY = {
   easy: { aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.15, buildPieces: 1, buildCooldown: 10, buildRate: 0.6, sight: 80, damageScale: 0.6, wallOnHit: 0, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0 },
   normal: { aimError: 0.05, reaction: 0.55, burst: 0.7, buildChance: 0.4, buildPieces: 3, buildCooldown: 5, buildRate: 0.3, sight: 100, damageScale: 0.8, wallOnHit: 0.4, boxHeal: 0.35, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.3 },
-  hard: { aimError: 0.028, reaction: 0.3, burst: 0.85, buildChance: 0.8, buildPieces: 8, buildCooldown: 2, buildRate: 0.12, sight: 125, damageScale: 1, wallOnHit: 0.9, boxHeal: 0.9, pushWeak: 0.9, thirdParty: 0.6, rotateEarly: 0.8 },
+  hard: {
+    aimError: 0.017, reaction: 0.18, burst: 0.92, buildChance: 0.9, buildPieces: 8, buildCooldown: 1.2, buildRate: 0.07, sight: 150, damageScale: 1,
+    wallOnHit: 1, boxHeal: 1, pushWeak: 0.95, thirdParty: 0.7, rotateEarly: 0.8, boxFight: 0.9, peekOpen: 0.9, peekClosed: 0.55,
+  },
 };
 
 // outline / bloom: post passes (render/Post.js); both off = plain render (cheapest).
 // renderScale multiplies the device pixel ratio (internal resolution).
 export const QUALITY = {
+  // Chromebook / weak GPU: half-res, no post, short draw distances.
+  performance: { pixelRatio: 1, renderScale: 0.5, outline: false, bloom: false, msaa: false, buildingDist: 420, treeDist: 160, propDist: 70, charDist: 80 },
   low: { pixelRatio: 1, renderScale: 1, outline: false, bloom: false, buildingDist: 1100, treeDist: 380, propDist: 160, charDist: 160 },
   medium: { pixelRatio: 1.5, renderScale: 1, outline: true, bloom: true, buildingDist: 1700, treeDist: 620, propDist: 260, charDist: 240 },
   high: { pixelRatio: 2, renderScale: 1, outline: true, bloom: true, buildingDist: 2400, treeDist: 950, propDist: 380, charDist: 320 },
@@ -354,7 +362,7 @@ export const DROP_ZONES = [
   { key: 'bentonville_west', label: 'Bentonville West' },
   { key: 'bentonville_high', label: 'Bentonville High' },
   { key: 'square', label: 'Downtown Square' },
-  { key: 'home_office', label: 'Walmart Home Office' },
+  { key: 'community_center', label: 'Community Center' },
   { key: 'crystal_bridges', label: 'Crystal Bridges' },
   { key: 'memorial_park', label: 'Memorial Park' },
 ];
