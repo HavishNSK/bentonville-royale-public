@@ -361,6 +361,14 @@ function finishRing(pts) {
     if (!out.length || out[out.length - 1][0] !== r[0] || out[out.length - 1][1] !== r[1]) out.push(r);
   }
   while (out.length > 1 && out[0][0] === out[out.length - 1][0] && out[0][1] === out[out.length - 1][1]) out.pop();
+  // some OSM ways go round twice (e.g. the Bentonville Community Center, way 751973534):
+  // stop at the first return to the start, or point-in-polygon sees every point as outside
+  for (let i = 3; i < out.length; i++) {
+    if (out[i][0] === out[0][0] && out[i][1] === out[0][1]) {
+      out.length = i;
+      break;
+    }
+  }
   if (out.length < 3) return null;
   if (shoelace(out) > 0) out.reverse(); // negative shoelace == CCW with x right / z down
   return out;

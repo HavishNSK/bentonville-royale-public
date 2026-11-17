@@ -9,11 +9,14 @@ export const PATCH_NOTES = [
   {
     version: '0.8.1',
     date: '2026-11-17',
-    title: 'Stairwell fix',
+    title: 'Roof and stairwell fixes',
     sections: [
       {
         heading: 'Fixes',
-        items: ['You can no longer climb sideways out of a building stairwell up through the floor above. Take the stairs!'],
+        items: [
+          'You can stand on the roof of the Bentonville Community Center again (you used to sink into the building), and its walls are solid.',
+          'You can no longer climb sideways out of a building stairwell up through the floor above. Take the stairs!',
+        ],
       },
     ],
   },
