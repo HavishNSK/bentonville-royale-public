@@ -144,9 +144,15 @@ export class Game {
     this.input = new Input(canvas);
     this.input.onLockChange = (locked) => this._onLockChange(locked);
     this.input.setBindings(this.settings.bindings); // remappable actions (src/ui/settings.js)
+    this._lockAndFullscreen = () => {
+      this.input.lock();
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+      }
+    };
     this._wasLocked = false;
     canvas.addEventListener('click', () => {
-      if ((this.state === 'play' || this.state === 'drop') && !this.paused) this.input.lock();
+      if ((this.state === 'play' || this.state === 'drop') && !this.paused) this._lockAndFullscreen();
     });
 
     window.addEventListener('resize', () => this._resize());
@@ -897,7 +903,7 @@ export class Game {
     this.hud.announce('DROP!', 'SPACE opens your glider early', 2200);
     sfx.play('zone_enter', { volume: 0.6 });
     sfx.startLoop('glide_wind');
-    if (!this.paused) this.input.lock(); // multiplayer auto-eject under the pause menu: keep the menu
+    if (!this.paused) this._lockAndFullscreen(); // multiplayer auto-eject under the pause menu: keep the menu
     return true;
   }
 
@@ -913,7 +919,7 @@ export class Game {
     } else {
       this.menus.hideAll();
       if (this.state === 'drop') this._showBusBanner();
-      this.input.lock();
+      this._lockAndFullscreen();
     }
   }
 
