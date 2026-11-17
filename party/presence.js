@@ -11,6 +11,7 @@
 //
 // Global chat (everyone connected, in a lobby or in a match):
 //   client -> server  {t:'chat', text}
+//                     {t:'chatBlocked', c}   the client's filter stopped a message (category only, never the text)
 //   server -> client  {t:'chat', m:{id, name, text, at, dev, announce}}
 //                     {t:'chatHistory', list:[m...]}           the last CHAT_KEEP, on connect
 //                     {t:'chatError', reason}                  to the sender only
@@ -19,7 +20,9 @@
 // `/announce ...` from a dev is broadcast to everyone as an announcement. Anyone else
 // who tries it is refused. The displayed name is the account name, not a typed nickname.
 // The server is the authority: text goes through cleanChat (src/net/chatFilter.js: length,
-// no links / e-mails / phone numbers, swear words masked) and is rate limited per player.
+// no links / e-mails / phone numbers; swearing, slurs, unsafe phrases and personal-info requests
+// are refused, not masked) and is rate limited per player. Breaking the content rules
+// CHAT_STRIKES times in CHAT_STRIKE_WINDOW_MS pauses that player's chat for CHAT_STRIKE_MUTE_MS.
 // History lives in memory only (it is gone when the room sleeps).
 
 import { Server } from 'partyserver';
@@ -39,6 +42,10 @@ const CHAT_GAP_MS = 1500; // at least this between one player's messages
 const CHAT_BURST = 6; // ...and at most this many per CHAT_WINDOW_MS
 const CHAT_WINDOW_MS = 30000;
 const CHAT_MUTE_MS = 60000; // going over the burst limit mutes for this long
+const CHAT_STRIKES = 3; // blocked messages (not counting links / personal-info refusals)...
+const CHAT_STRIKE_WINDOW_MS = 10 * 60000; // ...within this window...
+const CHAT_STRIKE_MUTE_MS = 5 * 60000; // ...pause chat for this long
+const STRIKE_CATEGORIES = new Set(['slur', 'selfharm', 'threat', 'sexual', 'drugs', 'profanity', 'bully']);
 
 function cleanName(name) {
   const s = String(name || '')
@@ -190,12 +197,35 @@ export class Presence extends Server {
     return isDevName(name) ? String(name).slice(0, 16) : null;
   }
 
+  _chatLimits(p) {
+    const lim = this.chatBy.get(p.token) || { last: 0, times: [], mutedUntil: 0, lastText: '', strikes: [], muteWhy: '' };
+    this.chatBy.set(p.token, lim);
+    if (this.chatBy.size > 5000) this.chatBy.delete(this.chatBy.keys().next().value);
+    return lim;
+  }
+
+  /** A message broke the content rules (seen here or by the client's filter): count a strike. */
+  _strike(conn, p, category) {
+    if (!STRIKE_CATEGORIES.has(category)) return;
+    const now = Date.now();
+    const lim = this._chatLimits(p);
+    lim.strikes = (lim.strikes || []).filter((t) => now - t < CHAT_STRIKE_WINDOW_MS);
+    lim.strikes.push(now);
+    if (lim.strikes.length < CHAT_STRIKES) return;
+    lim.strikes = [];
+    lim.mutedUntil = now + CHAT_STRIKE_MUTE_MS;
+    lim.muteWhy = 'rules';
+    try {
+      conn.send(JSON.stringify({ t: 'chatError', reason: 'Your chat is paused for 5 minutes for breaking the chat rules.' }));
+    } catch {
+      /* gone */
+    }
+  }
+
   /** One chat message from `p` (rate limited, filtered), broadcast to everyone. */
   async _chat(conn, p, raw) {
     const now = Date.now();
-    const lim = this.chatBy.get(p.token) || { last: 0, times: [], mutedUntil: 0, lastText: '' };
-    this.chatBy.set(p.token, lim);
-    if (this.chatBy.size > 5000) this.chatBy.delete(this.chatBy.keys().next().value);
+    const lim = this._chatLimits(p);
     const fail = (reason) => {
       try {
         conn.send(JSON.stringify({ t: 'chatError', reason }));
@@ -203,7 +233,12 @@ export class Presence extends Server {
         /* gone */
       }
     };
-    if (now < lim.mutedUntil) return fail(`Slow down: you can chat again in ${Math.ceil((lim.mutedUntil - now) / 1000)} s.`);
+    if (now < lim.mutedUntil) {
+      const s = Math.ceil((lim.mutedUntil - now) / 1000);
+      const wait = s >= 60 ? `${Math.ceil(s / 60)} min` : `${s} s`;
+      return fail(lim.muteWhy === 'rules' ? `Your chat is paused for breaking the chat rules. Try again in ${wait}.` : `Slow down: you can chat again in ${wait}.`);
+    }
+    lim.muteWhy = '';
     if (now - lim.last < CHAT_GAP_MS) return fail('Slow down a little.');
     lim.times = lim.times.filter((t) => now - t < CHAT_WINDOW_MS);
     if (lim.times.length >= CHAT_BURST) {
@@ -214,7 +249,11 @@ export class Presence extends Server {
     const parsed = parseDevChat(raw, p.dev);
     if (parsed.error) return fail(parsed.error);
     const r = cleanChat(parsed.text);
-    if (!r.ok) return r.reason === 'empty' ? undefined : fail(r.reason);
+    if (!r.ok) {
+      if (r.reason === 'empty') return undefined;
+      fail(r.reason);
+      return this._strike(conn, p, r.category);
+    }
     if (r.text.toLowerCase() === lim.lastText) return fail('You just said that.');
     lim.last = now;
     lim.times.push(now);
@@ -236,6 +275,10 @@ export class Presence extends Server {
     }
     if (msg && msg.t === 'chat') {
       this._chat(sender, p, msg.text).catch(() => {});
+      return;
+    }
+    if (msg && msg.t === 'chatBlocked') {
+      this._strike(sender, p, String(msg.c || ''));
       return;
     }
     if (msg && msg.acct != null) {
