@@ -112,18 +112,6 @@ export const RECIPES = {
   shelter() {
     return leaf('open', 'Shelter');
   },
-  restaurant: () => cut('b', 0.65,
-    leaf('dining', 'Dining Room'),
-    cut('a', 0.5, leaf('kitchen', 'Kitchen'), leaf('restroom', 'Restrooms')),
-  ),
-  bike_shop: () => cut('b', 0.6,
-    leaf('sales', 'Sales Floor'),
-    cut('a', 0.5, leaf('storage', 'Workshop'), leaf('restroom', 'Restroom')),
-  ),
-  brewpub: () => cut('b', 0.55,
-    leaf('bar', 'Taproom'),
-    cut('a', 0.5, leaf('open', 'Brewhouse'), leaf('storage', 'Cold Room')),
-  ),
   /** Generic large building: big halls plus a strip of side rooms along the back. */
   hall(f) {
     if (f.area < 1500) {

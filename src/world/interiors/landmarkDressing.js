@@ -787,27 +787,6 @@ export const LANDMARK_DRESSING = {
     ...kitchen('Kitchen', { islands: 0 }),
   ],
 
-  // Bentonville Community Center — aquatic lobby, fitness equipment, full-court gym with bleachers
-  // and hoops, commons seating, meeting rooms with tables, administration offices.
-  // Approximation from bentonvillear.com/departments/parks/community-center.
-  751973534: [
-    d('Aquatic Center', 'walls', 'bench', { gap: 2, max: 6 }, 0),
-    d('Aquatic Center', 'walls', 'planter', { gap: 4, max: 4 }, 0),
-    d('Fitness Center', 'grid', 'workbench', { face: 'b+', aisle: 1.6, margin: 1.4, max: 10 }, 0),
-    d('Fitness Center', 'walls', 'bench', { gap: 1.5, max: 4 }, 0),
-    d('Fitness Center', 'wall_mount', 'tv', { sides: ['b1'], max: 2, gap: 3 }, 0),
-    ...gym('Main Gymnasium', 62.6, { court: [16, 28], bleachers: 8, level: 0 }),
-    ...lobby('Lobby', { entrance: 'b0', level: 1 }),
-    d('Lobby', 'walls', 'display_case', { gap: 0.6, max: 4 }, 1),
-    d('Commons', 'grid', 'cafe_table', { aisle: 1.6, margin: 1.6, max: 20 }, 1),
-    d('Commons', 'walls', 'bench', { gap: 2, max: 6 }, 1),
-    d('Commons', 'walls', 'planter', { gap: 4, max: 4 }, 1),
-    ...meeting('Meeting Room A', { tables: 2, level: 1 }),
-    ...meeting('Meeting Room B', { tables: 2, level: 1 }),
-    ...offices('Administration', { desks: 10, level: 2 }),
-    ...storage('Storage', { racks: 6, crates: 6, level: 2 }),
-  ],
-
   // Onyx Coffee Lab + Block Street Records — record bins in rows with a register and wall racks,
   // the stock room, Onyx's café (counter, pastry case, menu boards, tables) and the coffee bar with
   // stools. Approximation from downtownbentonville.org / onyxcoffeelab.com (landmarks.js).
