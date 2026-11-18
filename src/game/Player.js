@@ -91,7 +91,10 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
   // walls, ramps and floors; these only stop it resting in a slab.
   let lift = 0;
   if (world && world.groundHeight) {
-    const gy = world.groundHeight(_cam.x, _cam.z, _cam.y, 0.5) + 0.45; // ground up to 0.5 m over the lens
+    // the ground itself only (terrain, the museum ravine): built ramps and floors are left to the
+    // boom ray. Counting them lifted the lens up onto a ramp behind you, so you looked down on
+    // the stair, or into its wood.
+    const gy = (world.surfaceHeight ? world.surfaceHeight(_cam.x, _cam.z) : world.groundHeight(_cam.x, _cam.z, _cam.y, 0.5)) + 0.45;
     if (_cam.y < gy && gy - _cam.y < 1) lift = gy - _cam.y;
     if (world.ceilingAbove) {
       const ceil = world.ceilingAbove(_cam.x, _cam.z, _cam.y - 1); // a slab the lens is inside of

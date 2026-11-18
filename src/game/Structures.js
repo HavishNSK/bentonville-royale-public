@@ -771,7 +771,11 @@ export class Structures {
     // off the terrain the level grid follows what the feet stand on: a built piece keeps its own
     // grid, and a landmark slab (the museum's floors at -7 / -11, its roofs) starts a grid at
     // its surface, so the first piece sits flush instead of 1 m above or below the floor
-    const phase = onGround ? 0 : standOn ? levelPhase(standOn.y) : levelPhase(Number.isFinite(surf) ? surf : 0);
+    // In the air over a built piece (jumping on a ramp), the surface below is the ramp's slope
+    // at some odd height: its own base keeps the grid instead (the slope height shifted every
+    // piece off the levels for the length of the jump)
+    const under = !onGround && !standOn && Number.isFinite(surf) ? this._pieceAtSurface(pos.x, pos.z, surf) : null;
+    const phase = onGround ? 0 : standOn ? levelPhase(standOn.y) : under ? levelPhase(under.y) : levelPhase(Number.isFinite(surf) ? surf : 0);
     const kFeet = Math.floor((pos.y - phase) / LEVEL + 0.34);
     let dk = 0;
     let x;
@@ -917,6 +921,20 @@ export class Structures {
         const t = clamp(((pos.x - s[0]) * ex + (pos.z - s[1]) * ez) / l2, 0, 1);
         if (Math.hypot(pos.x - s[0] - ex * t, pos.z - s[1] - ez * t) < 0.6) return q;
       }
+    }
+    return null;
+  }
+
+  /** The built piece whose top is the surface `y` at (x, z) (within 5 cm), or null. */
+  _pieceAtSurface(x, z, y) {
+    const set = this._grid.get(Math.floor(x / CELL) + ',' + Math.floor(z / CELL));
+    if (!set) return null;
+    for (const q of set) {
+      if (!q.alive) continue;
+      if (q.surf) {
+        if (x < q.minX || x > q.maxX || z < q.minZ || z > q.maxZ) continue;
+        if (Math.abs(q.surf(x, z) - y) < 0.05) return q;
+      } else if (q.seg && Math.abs(q.y1 - y) < 0.05) return q;
     }
     return null;
   }
