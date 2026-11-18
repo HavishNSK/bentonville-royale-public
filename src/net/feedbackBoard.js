@@ -7,6 +7,24 @@ import { moderate } from './chatFilter.js';
 export const FEEDBACK_MAX = 500;
 export const MAX_REPLIES = 30;
 
+/** The two board kinds. Anything else (including posts saved without a kind) is a suggestion. */
+export const FEEDBACK_KINDS = Object.freeze(['idea', 'bug']);
+
+export function feedbackKind(raw) {
+  return raw === 'bug' ? 'bug' : 'idea';
+}
+
+/** Title-screen tab -> board kind. SUGGEST shows ideas, REPORT A BUG shows bugs. */
+export const FEEDBACK_TAB_KIND = Object.freeze({ feedback: 'idea', bugs: 'bug' });
+
+/** Posts for one tab, most upvoted first (newest breaks ties). Does not mutate the input. */
+export function boardPosts(items, kind) {
+  const want = feedbackKind(kind);
+  return (Array.isArray(items) ? items : [])
+    .filter((it) => it && feedbackKind(it.kind) === want)
+    .sort((a, b) => (b.votes | 0) - (a.votes | 0) || (Number(b.at) || 0) - (Number(a.at) || 0));
+}
+
 export function canModerateFeedback(name) {
   return isDevName(name);
 }
@@ -17,7 +35,7 @@ export function publicItem(item) {
   const replies = Array.isArray(item.replies) ? item.replies.map(publicReply).filter(Boolean).slice(0, MAX_REPLIES) : [];
   return {
     id: String(item.id || ''),
-    kind: item.kind === 'bug' ? 'bug' : 'idea',
+    kind: feedbackKind(item.kind),
     text: String(item.text || '').slice(0, FEEDBACK_MAX),
     by: String(item.by || 'Guest').slice(0, 16),
     at: Number(item.at) || 0,

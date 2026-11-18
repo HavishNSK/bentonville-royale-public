@@ -42,6 +42,27 @@ const FLOOR_UNDER = 0.22; // a built floor's thickness: its underside sits this 
 const clientNet = (g) => (g && g.net && g.net.isClient ? g.net : null);
 
 /**
+ * Edit tiles crossed going from tile `a` to tile `b` of a piece's grid (walls 3 x 3, floors and
+ * cones 2 x 2; index = row * cols + col), both included, in order.
+ */
+export function editPath(kind, a, b) {
+  const cols = kind === 'wall' ? 3 : 2;
+  if (a < 0 || a === b) return [b];
+  const [ac, ar] = [a % cols, Math.floor(a / cols)];
+  const [bc, br] = [b % cols, Math.floor(b / cols)];
+  const n = Math.max(Math.abs(bc - ac), Math.abs(br - ar));
+  const out = [];
+  for (let i = 0; i <= n; i++) {
+    const t = out.length ? i / n : 0;
+    const c = Math.round(ac + (bc - ac) * t);
+    const r = Math.round(ar + (br - ar) * t);
+    const idx = r * cols + c;
+    if (out[out.length - 1] !== idx) out.push(idx);
+  }
+  return out;
+}
+
+/**
  * Positions `camera` behind `pivot` on an orbit (heading/pitch), pulled in
  * when world geometry is in the way. Shared by the player and spectating.
  */
@@ -1382,13 +1403,24 @@ export class Player {
       if (!lmb) e.from = -1;
     } else {
       const all = (1 << st.tileCount(p.kind)) - 1;
-      if (lmbClick && e.hover >= 0) e.drag = e.mask & (1 << e.hover) ? 'deselect' : 'select';
-      if (lmb && e.drag && e.hover >= 0) {
-        const bit = 1 << e.hover;
-        const next = e.drag === 'select' ? e.mask | bit : e.mask & ~bit;
-        if (next !== all) e.mask = next; // a piece keeps at least one tile
+      if (lmbClick && e.hover >= 0) {
+        e.drag = e.mask & (1 << e.hover) ? 'deselect' : 'select';
+        e.last = -1;
       }
-      if (!lmb) e.drag = null;
+      if (lmb && e.drag && e.hover >= 0) {
+        // every tile on the line from the last tile to this one: a quick flick across the
+        // grid (or a slow frame) no longer skips the tiles in between
+        for (const t of editPath(p.kind, e.last >= 0 ? e.last : e.hover, e.hover)) {
+          const bit = 1 << t;
+          const next = e.drag === 'select' ? e.mask | bit : e.mask & ~bit;
+          if (next !== all) e.mask = next; // a piece keeps at least one tile
+        }
+        e.last = e.hover;
+      }
+      if (!lmb) {
+        e.drag = null;
+        e.last = -1;
+      }
     }
     // confirm edit on release (setting): the mouse came up after selecting
     if (!lmb && e.selecting) {
@@ -1414,8 +1446,14 @@ export class Player {
       g.sfx.play('build_denied', { volume: 0.5 });
     } else if (e && st && e.piece.alive && m !== st.editValue(e.piece)) {
       const net = clientNet(g);
-      if (net) net.action({ k: 'e', key: e.piece.key, ed: m });
-      else st.edit(e.piece, m);
+      if (net) {
+        net.action({ k: 'e', key: e.piece.key, ed: m });
+        // show it now, not after the round trip (ClientSession reverts it if the host refuses)
+        if (net.predictEdit) {
+          net.predictEdit(e.piece, st.editValue(e.piece));
+          st.edit(e.piece, m);
+        }
+      } else st.edit(e.piece, m);
     }
     this._endEdit(g);
   }

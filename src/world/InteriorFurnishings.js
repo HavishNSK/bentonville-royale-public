@@ -1164,12 +1164,17 @@ export function addLightGeometry(chunk,shell,h,{quad,floorAt}) {
   if (!plan || !plan.lights) return;
   const F = plan.frame;
   const P = (a,b,y) => { const [x,z] = toWorld(F,a,b); return [x,y,z]; };
-  for (const L of plan.lights) {
+  for (let li = 0; li < plan.lights.length; li++) {
+    const L = plan.lights[li];
     if (!L || !(L.a1 > L.a0) || !(L.b1 > L.b0) || !Number.isFinite(L.y)) continue;
     const {a0,b0,a1,b1} = L, y = L.y - shell.floor;
     const ins = Math.min(0.06,(a1-a0)/4,(b1-b0)/4);
+    const i0 = chunk.buf ? chunk.buf.idx.length : 0;
     quad(chunk,P(a0,b0,y-0.02),P(a1,b0,y-0.02),P(a1,b1,y-0.02),P(a0,b1,y-0.02),0,-1,0,...rgb(LIGHT_RIM),null,h);
     quad(chunk,P(a0+ins,b0+ins,y-0.03),P(a1-ins,b0+ins,y-0.03),P(a1-ins,b1-ins,y-0.03),P(a0+ins,b1-ins,y-0.03),0,-1,0,...rgb(LIGHT_PANEL),null,h,UP);
+    // a light hanging under a breakable roof tile goes with the tile (interiors/shellPanels.js)
+    const tile = plan.roofLights ? plan.roofLights[li] : -1;
+    if (tile >= 0 && chunk.panelRanges && chunk.buf && plan.panels[tile]) chunk.panelRanges.push(plan.panels[tile], i0, chunk.buf.idx.length - i0);
     const lv = (plan.levels || []).find(l => l.i === L.level);
     if (!lv || !Number.isFinite(lv.y)) continue;
     const floor = floorAt ? floorAt(L.level,(a0+a1)/2,(b0+b1)/2) : null;

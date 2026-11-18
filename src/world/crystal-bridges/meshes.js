@@ -559,7 +559,7 @@ function waterMaterial(uniforms) {
 
 /**
  * Build every mesh into `root`. site = buildSite() output. Returns { update(dt), hideCollider(c),
- * showCollider(c), meshes } — the hide/show pair hides a broken pane / prop instance.
+ * showCollider(c), meshes } — the hide/show pair hides a broken pane / prop instance, roof tile or wall panel.
  */
 export function buildSiteMeshes({ root, world, site }) {
   const M = makeMaterials();
@@ -606,6 +606,9 @@ export function buildSiteMeshes({ root, world, site }) {
   // architecture: merged per material (roof boxes are drawn as smooth roofs instead)
   const bufs = {};
   const bufOf = (k) => bufs[k] || (bufs[k] = new GeoBuf());
+  // breakable wall panels (build.js archPanel) stay in the merged per-material meshes; their
+  // vertex range is recorded so a break collapses it (like a roof tile) without extra draw calls
+  const panelVerts = new Map(); // collider -> { buf, start, n }
   for (const p of site.parts) {
     if (p.roofOf || p.hidden || p.doorLeaf || p.frame || p.mullion) continue; // hidden: statue figure. doorLeaf: animated. frame/mullion: instanced so a blast can hide them.
     let mat = p.mat;
@@ -619,7 +622,10 @@ export function buildSiteMeshes({ root, world, site }) {
     }
     if (mat === 'stone' || mat === 'oak' || mat === 'quartzite') mat = FLOOR_MAT[mat];
     if (!M[mat]) mat = 'concrete';
-    addBox(bufOf(mat), p, { bottom: true });
+    const buf = bufOf(mat);
+    const start = buf.pos.length / 3;
+    addBox(buf, p, { bottom: true });
+    if (p.archPanel && p.collider) panelVerts.set(p.collider, { buf, start, n: buf.pos.length / 3 - start });
   }
   const roofBufs = { copper: new GeoBuf(), steel: new GeoBuf(), concrete: new GeoBuf(), green: new GeoBuf(), glass: new GeoBuf() };
   const soffit = new GeoBuf();
@@ -642,8 +648,8 @@ export function buildSiteMeshes({ root, world, site }) {
     meshes.push(m);
     return m;
   };
-  for (const k in bufs) add(bufs[k], M[k] || M.concrete, 'cb-' + k);
   const meshOfBuf = new Map();
+  for (const k in bufs) meshOfBuf.set(bufs[k], add(bufs[k], M[k] || M.concrete, 'cb-' + k));
   meshOfBuf.set(roofBufs.copper, add(roofBufs.copper, M.copper, 'cb-roof-copper'));
   meshOfBuf.set(roofBufs.steel, add(roofBufs.steel, M.steel, 'cb-roof-steel'));
   meshOfBuf.set(roofBufs.concrete, add(roofBufs.concrete, M.concrete, 'cb-roof-concrete'));
@@ -669,6 +675,21 @@ export function buildSiteMeshes({ root, world, site }) {
       dirty.add(attr);
     }
     for (const attr of dirty) attr.needsUpdate = true;
+    return true;
+  };
+  /** A broken wall panel: collapse its box's vertices onto its first one; restore puts them back. */
+  const setWallPanel = (c, broken) => {
+    const rec = panelVerts.get(c);
+    const mesh = rec && meshOfBuf.get(rec.buf);
+    if (!mesh) return false;
+    const attr = mesh.geometry.attributes.position;
+    if (!roofOriginal.has(mesh)) roofOriginal.set(mesh, attr.array.slice());
+    const orig = roofOriginal.get(mesh);
+    for (let v = 0; v < rec.n; v++) {
+      const src = broken ? rec.start : rec.start + v;
+      attr.setXYZ(rec.start + v, orig[src * 3], orig[src * 3 + 1], orig[src * 3 + 2]);
+    }
+    attr.needsUpdate = true;
     return true;
   };
   add(ribs, M.rib, 'cb-ribs');
@@ -850,6 +871,7 @@ export function buildSiteMeshes({ root, world, site }) {
     /** A broken pane / prop: hide its instance. Returns true when the collider belongs to the site. */
     hideCollider(c) {
       if (roofQuads.has(c)) return setRoofTile(c, true);
+      if (panelVerts.has(c)) return setWallPanel(c, true);
       if (paneIndex.has(c)) {
         glassMesh.setMatrixAt(paneIndex.get(c), zero);
         glassMesh.instanceMatrix.needsUpdate = true;
@@ -870,6 +892,7 @@ export function buildSiteMeshes({ root, world, site }) {
     },
     showCollider(c) {
       if (roofQuads.has(c)) return setRoofTile(c, false);
+      if (panelVerts.has(c)) return setWallPanel(c, false);
       if (paneIndex.has(c)) {
         glassMesh.setMatrixAt(paneIndex.get(c), paneMatrix(c.part, mtx));
         glassMesh.instanceMatrix.needsUpdate = true;

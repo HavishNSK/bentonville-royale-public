@@ -781,7 +781,8 @@ export class Grenades {
       for (const k of cell.boxes) {
         if (hits.has(k) || !k.alive) continue;
         if (k.passable && !k.frame) continue;
-        const smash = combat._isBreakable(k) || (k.kind === 'prop' && k.hp > 0);
+        // museum wall panels (archPanel: harvestable, finite hp) break like map wall panels
+        const smash = combat._isBreakable(k) || (k.kind === 'prop' && k.hp > 0) || (k.archPanel && k.hp > 0);
         if (!smash) continue;
         const px = Math.max(k.minX, Math.min(c.x, k.maxX));
         const pz = Math.max(k.minZ, Math.min(c.z, k.maxZ));

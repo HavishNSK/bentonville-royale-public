@@ -444,7 +444,10 @@ export class Game {
     this.combat.clear();
     this.combat.authoritative = true;
     this.grenades.clear();
-    if (this.structures) this.structures.clear();
+    if (this.structures) {
+      this.structures.clear();
+      this.structures.warm(); // compile build shaders now, not on the first piece
+    }
     this.fx.clear();
     this.hud.clearTransient();
     if (this.pings) this.pings.reset();
@@ -705,7 +708,10 @@ export class Game {
     this.grenades.clear();
     this.freeBuild = false;
     this.hud.setStormVisible(true);
-    if (this.structures) this.structures.clear();
+    if (this.structures) {
+      this.structures.clear();
+      this.structures.warm();
+    }
     this.fx.clear();
     this.hud.clearTransient();
     if (this.pings) this.pings.reset();

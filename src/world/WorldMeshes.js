@@ -493,8 +493,10 @@ export function appendBuildingGeometry(chunk, b, tint, collider) {
     tris = [];
   }
 
+  const i0 = chunk.buf.idx.length;
+  let roofDrawn = false;
   if (shell) {
-    addShell(chunk, b, shell, sign, style, wr, wg, wb, tris);
+    roofDrawn = addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roofHex);
   } else {
     for (let i = 0; i < n; i++) {
       const a = pts[i];
@@ -516,22 +518,26 @@ export function appendBuildingGeometry(chunk, b, tint, collider) {
     }
   }
 
-  _c.setHex(roofHex);
-  const base = buf.n;
-  for (const p of pts) {
-    buf.v(p[0], h, p[1], 0, 1, 0, _c.r, _c.g, _c.b);
-    wall.push(0, h, -1, 0);
-    bh.push(h);
+  if (!roofDrawn) {
+    _c.setHex(roofHex);
+    const base = buf.n;
+    for (const p of pts) {
+      buf.v(p[0], h, p[1], 0, 1, 0, _c.r, _c.g, _c.b);
+      wall.push(0, h, -1, 0);
+      bh.push(h);
+    }
+    for (const t of tris) {
+      const a = pts[t[0]];
+      const c = pts[t[1]];
+      const d = pts[t[2]];
+      // make the triangle face up (+y): (c-a) x (d-a) must have positive y
+      const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
+      if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
+      else buf.idx.push(base + t[0], base + t[2], base + t[1]);
+    }
   }
-  for (const t of tris) {
-    const a = pts[t[0]];
-    const c = pts[t[1]];
-    const d = pts[t[2]];
-    // make the triangle face up (+y): (c-a) x (d-a) must have positive y
-    const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
-    if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
-    else buf.idx.push(base + t[0], base + t[2], base + t[1]);
-  }
+  // a solid (non-enterable) building breaks as one block: its whole mesh is the block's range
+  if (collider && collider.solid) chunk.panelRanges.push(collider.solid.panels[0], i0, buf.idx.length - i0);
   // Interior generators deliberately emit heights relative to shell.floor. Lift the
   // entire building together, including panels, stairs and furniture, to the very
   // same foundation used by World collision. Shader facade heights remain local.
@@ -541,17 +547,23 @@ export function appendBuildingGeometry(chunk, b, tint, collider) {
 
 /**
  * Walls with door openings + inner faces, jambs, lintels, floor and ceiling of a hollow building.
- * The outer wall is drawn per breakable panel (shell.panels, see Interiors.js): each panel's
- * outer face (floor -> ceiling), inner face and end caps / door jambs are consecutive quads
- * whose index range is recorded (chunk.panelRanges) so view.hidePanel can blank them. The
- * wall above the ceiling and a panel's underside stay (the hole is closed at the top).
+ * The outer wall is drawn per breakable panel (shell.panels, see Interiors.js and
+ * interiors/shellPanels.js): ground-storey panels (floor -> ground ceiling, split at the doors)
+ * and one band of panels per upper storey (that storey's ceiling band). Each panel's outer face,
+ * inner face, end caps / door jambs and its top / bottom faces toward the neighbouring band are
+ * consecutive quads whose index range is recorded (chunk.panelRanges) so view.hidePanel can blank
+ * them. The roof rim above the top ceiling stays (its underside closes a hole at the top). With a
+ * roof tile grid (shell.roof) the roof and the top ceiling are drawn by InteriorMeshes; returns
+ * true then (the caller skips its whole-footprint roof cap).
  */
-function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris) {
+function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roofHex) {
   const pts = b.p;
   const n = pts.length;
   const h = b.h;
   const inner = shell.inner;
-  const top = shell.groundCeil !== undefined ? shell.groundCeil - shell.floor : shell.ceilRel; // interior ceiling above the floor
+  const top = shell.groundCeil !== undefined ? shell.groundCeil - shell.floor : shell.ceilRel; // ground ceiling above the floor
+  const ceilTop = shell.ceil - shell.floor; // the top storey's ceiling (the roof slab's underside)
+  const multi = ceilTop > top + 0.01; // upper-storey panel bands above the ground storey
   const dh = shell.doorH;
   _c.setHex(INTERIOR_WALL[b.mat] || INTERIOR_WALL.brick);
   const ishade = 0.95 + hash01(b.id, 6) * 0.08;
@@ -583,18 +595,19 @@ function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris) {
     const I = (f, y) => [qa[0] + (qc[0] - qa[0]) * f, y, qa[1] + (qc[1] - qa[1]) * f];
     const doors = shell.doors.filter((d) => d.e === i);
     const doorAt = (f, end) => doors.some((d) => (end ? d.f0 : d.f1) === f);
-    // one solid stretch [f0, f1]: the breakable part (floor -> ceiling) then the permanent part above
-    const solid = (f0, f1, pn) => {
+    // one solid stretch [f0, f1] from y0 to y1 (relative): faces, end caps / jambs and the faces
+    // toward the band below (bottom) / above (cap) when those can break too
+    const solid = (f0, f1, pn, y0, y1, ground, bottom, cap) => {
       const i0 = chunk.buf.idx.length;
-      quad(chunk, O(f0, 0), O(f1, 0), O(f1, top), O(f0, top), nx, 0, nz, wr, wg, wb, wa(len, f0, f1, 0, top), h);
-      quad(chunk, I(f0, 0), I(f1, 0), I(f1, top), I(f0, top), -nx, 0, -nz, ir, ig, ib, null, h);
+      quad(chunk, O(f0, y0), O(f1, y0), O(f1, y1), O(f0, y1), nx, 0, nz, wr, wg, wb, wa(len, f0, f1, y0, y1), h);
+      quad(chunk, I(f0, y0), I(f1, y0), I(f1, y1), I(f0, y1), -nx, 0, -nz, ir, ig, ib, null, h);
       // ends: a door jamb (faces into the opening) or an end cap facing the neighbouring panel
       // (inside the wall while that neighbour stands; it closes the hole when it breaks)
       // end caps are inset 3 cm from both faces so their edges never peek through the seams
       // between neighbouring panels' faces; door jambs are flush (they are always visible)
-      const j0 = doorAt(f0, false);
-      const j1 = doorAt(f1, true);
-      const cap = (f, y, jamb) => {
+      const j0 = ground && doorAt(f0, false);
+      const j1 = ground && doorAt(f1, true);
+      const endCap = (f, y, jamb) => {
         const o = O(f, y);
         const ii = I(f, y);
         if (jamb) return [o, ii];
@@ -604,49 +617,59 @@ function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris) {
         const e = Math.min(0.03, dl * 0.2) / dl;
         return [[o[0] + dx * e, y, o[2] + dz * e], [ii[0] - dx * e, y, ii[2] - dz * e]];
       };
-      const y0 = j0 ? dh : top;
-      const y1 = j1 ? dh : top;
-      const [c0o, c0i] = cap(f0, 0, j0);
-      const [c0O, c0I] = cap(f0, y0, j0);
-      const [c1o, c1i] = cap(f1, 0, j1);
-      const [c1O, c1I] = cap(f1, y1, j1);
+      const ya = j0 ? dh : y1;
+      const yb = j1 ? dh : y1;
+      const [c0o, c0i] = endCap(f0, y0, j0);
+      const [c0O, c0I] = endCap(f0, ya, j0);
+      const [c1o, c1i] = endCap(f1, y0, j1);
+      const [c1O, c1I] = endCap(f1, yb, j1);
       quad(chunk, c0o, c0i, c0I, c0O, -tx, 0, -tz, j0 ? wr : ir, j0 ? wg : ig, j0 ? wb : ib, null, h);
       quad(chunk, c1o, c1i, c1I, c1O, tx, 0, tz, j1 ? wr : ir, j1 ? wg : ig, j1 ? wb : ib, null, h);
+      if (bottom) quad(chunk, O(f0, y0), O(f1, y0), I(f1, y0), I(f0, y0), 0, -1, 0, ir, ig, ib, null, h);
+      if (cap) quad(chunk, O(f0, y1), O(f1, y1), I(f1, y1), I(f0, y1), 0, 1, 0, ir, ig, ib, null, h);
       if (pn) chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
-      if (h > top + 0.01) {
-        quad(chunk, O(f0, top), O(f1, top), O(f1, h), O(f0, h), nx, 0, nz, wr, wg, wb, wa(len, f0, f1, top, h), h);
-        quad(chunk, I(f0, top), I(f1, top), I(f1, shell.ceil-shell.floor), I(f0, shell.ceil-shell.floor), -nx, 0, -nz, ir, ig, ib, null, h);
-      }
-      // underside of the wall band above a broken panel
-      quad(chunk, O(f0, top), O(f1, top), I(f1, top), I(f0, top), 0, -1, 0, ir, ig, ib, null, h);
     };
     const list = edgePanels[i];
     if (list && list.length) {
-      for (const pn of list) solid(pn.f0, pn.f1, pn);
+      for (const pn of list) {
+        if (pn.level > 0) solid(pn.f0, pn.f1, pn, pn.y0 - shell.floor, pn.y1 - shell.floor, false, true, pn.y1 < shell.ceil - 0.01);
+        else solid(pn.f0, pn.f1, pn, 0, top, true, false, multi);
+      }
     } else {
       // no panels (no interior plan): the solid runs between the doors
       let f = 0;
       for (const d of doors) {
-        if (d.f0 > f) solid(f, d.f0, null);
+        if (d.f0 > f) solid(f, d.f0, null, 0, top, true, false, false);
         f = d.f1;
       }
-      if (f < 1) solid(f, 1, null);
+      if (f < 1) solid(f, 1, null, 0, top, true, false, false);
+      if (multi) solid(0, 1, null, top, ceilTop, false, false, false);
+    }
+    // the roof rim above the top ceiling (permanent) and its underside over a broken panel
+    if (h > ceilTop + 0.01) {
+      quad(chunk, O(0, ceilTop), O(1, ceilTop), O(1, h), O(0, h), nx, 0, nz, wr, wg, wb, wa(len, 0, 1, ceilTop, h), h);
+      quad(chunk, O(0, ceilTop), O(1, ceilTop), I(1, ceilTop), I(0, ceilTop), 0, -1, 0, ir, ig, ib, null, h);
     }
     for (const d of doors) {
-      // above the opening: outer lintel face, inner face, underside
-      quad(chunk, O(d.f0, dh), O(d.f1, dh), O(d.f1, h), O(d.f0, h), nx, 0, nz, wr, wg, wb, wa(len, d.f0, d.f1, dh, h), h);
-      quad(chunk, I(d.f0, dh), I(d.f1, dh), I(d.f1, shell.ceil-shell.floor), I(d.f0, shell.ceil-shell.floor), -nx, 0, -nz, ir, ig, ib, null, h);
+      // above the opening up to the ground ceiling: outer lintel face, inner face, underside
+      quad(chunk, O(d.f0, dh), O(d.f1, dh), O(d.f1, top), O(d.f0, top), nx, 0, nz, wr, wg, wb, wa(len, d.f0, d.f1, dh, top), h);
+      quad(chunk, I(d.f0, dh), I(d.f1, dh), I(d.f1, top), I(d.f0, top), -nx, 0, -nz, ir, ig, ib, null, h);
       quad(chunk, O(d.f0, dh), O(d.f1, dh), I(d.f1, dh), I(d.f0, dh), 0, -1, 0, ir, ig, ib, null, h);
+      // the lintel's top toward a broken upper-storey panel above it
+      if (multi) quad(chunk, O(d.f0, top), O(d.f1, top), I(d.f1, top), I(d.f0, top), 0, 1, 0, ir, ig, ib, null, h);
     }
   }
   // interior floor (just above the ground layers) and ceiling; the inner ring has the
   // footprint's vertex order, so the footprint triangulation is reused
   hcap(chunk, inner, tris, 0.03, 1, FLOOR_COLOR[b.mat] || FLOOR_COLOR.brick, h);
+  const roofGrid = !!(shell.plan && shell.plan.roof);
   // the ceiling is wound to face down but lit with an up normal, so it reads as a bright
-  // painted ceiling instead of picking up the dim ground hemisphere colour
-  hcap(chunk, inner, tris, shell.ceil-shell.floor, -1, CEILING_COLOR, h, 1);
-  // interior partitions + room floors (InteriorMeshes.js)
-  if (shell.plan) addInteriorGeometry(chunk, shell, h, { quad, hcapFlat });
+  // painted ceiling instead of picking up the dim ground hemisphere colour (with a roof tile
+  // grid InteriorMeshes draws it around the tiles)
+  if (!roofGrid) hcap(chunk, inner, tris, ceilTop, -1, CEILING_COLOR, h, 1);
+  // interior partitions + room floors (InteriorMeshes.js), and the roof with its breakable tiles
+  if (shell.plan) addInteriorGeometry(chunk, shell, h, { quad, hcapFlat, roof: roofGrid ? { outer: pts, hex: roofHex, ceiling: CEILING_COLOR } : null });
+  return roofGrid;
 }
 
 /** Horizontal polygon (flat [x, z, ...]) facing up, triangulated here (room floor overlays). */

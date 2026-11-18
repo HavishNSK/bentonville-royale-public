@@ -1519,8 +1519,79 @@ export class Structures {
 
   // ----------------------------------------------------------------- per frame
 
+  /**
+   * Compile every build shader now (each kind x material batch, the tile batches, the ghosts
+   * and the edit grid, shadow passes included) instead of on the first piece of the match: that
+   * first wall used to stall a frame for ~400 ms. Empty batches show one instance far under the
+   * map for the next few rendered frames, then hide again (update()).
+   */
+  warm() {
+    if (!this.batches) return;
+    const hidden = new THREE.Matrix4().makeTranslation(0, -5000, 0);
+    this._warmed = [];
+    for (const k in this.batches) {
+      const b = this.batches[k];
+      if (b.list.length) continue;
+      b.mesh.setMatrixAt(0, hidden);
+      b.mesh.count = 1;
+      b.mesh.visible = true;
+      b.mesh.instanceMatrix.needsUpdate = true;
+      this._warmed.push(b);
+    }
+    for (const k in this.ghosts || {}) {
+      const g = this.ghosts[k];
+      if (g.visible) continue;
+      g.position.set(0, -5000, 0);
+      g.visible = true;
+      this._warmed.push({ ghost: g });
+    }
+    for (const k in this.editGhosts || {}) {
+      const g = this.editGhosts[k];
+      if (g.visible) continue;
+      g.position.set(0, -5000, 0);
+      g.visible = true;
+      this._warmed.push({ ghost: g });
+    }
+    // keep them up until they have really been drawn twice (main + shadow passes): a match can
+    // start under the loading screen, where the game updates without rendering
+    this._warmRenders = 0;
+    this._warmT = 0;
+    const probe = this._warmed.find((w) => w.mesh);
+    if (probe) {
+      const prev = probe.mesh.onAfterRender;
+      probe.mesh.onAfterRender = (...args) => {
+        this._warmRenders++;
+        if (prev) prev.apply(probe.mesh, args);
+      };
+      this._warmProbe = { mesh: probe.mesh, prev };
+    }
+  }
+
+  _endWarm() {
+    if (this._warmProbe) {
+      this._warmProbe.mesh.onAfterRender = this._warmProbe.prev || (() => {});
+      this._warmProbe = null;
+    }
+    for (const w of this._warmed || []) {
+      if (w.ghost) {
+        // a ghost the player started using meanwhile keeps its own visibility
+        if (w.ghost.position.y === -5000) w.ghost.visible = false;
+        continue;
+      }
+      if (w.list.length) continue; // a real piece took instance 0 meanwhile
+      w.mesh.count = 0;
+      w.mesh.visible = false;
+    }
+    this._warmed = null;
+  }
+
   update(dt) {
     this._time += dt;
+    if (this._warmed) {
+      this._warmT += dt;
+      // drawn twice, or (headless / never rendered) a 20 s backstop
+      if (this._warmRenders >= 2 || this._warmT > 20 || typeof window === 'undefined') this._endWarm();
+    }
     for (const p of this._doorsMoving) {
       let moving = false;
       for (let c = 0; c < 3; c++) {

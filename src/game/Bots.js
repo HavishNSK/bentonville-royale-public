@@ -570,6 +570,7 @@ export class Bots {
 
   _onDamage(b, victim, amount, info) {
     const src = info && info.source;
+    this._resetPeekOnHit(b);
     if (sameTeam(src, victim)) return;
     const t = this.time;
     b.alertUntil = t + 5;
@@ -973,7 +974,9 @@ export class Bots {
     if (bx.peek === 'open' && bx.blocked > 3 && bx.editKey) {
       // the window does not line up with them: open the full door instead
       const w = this.structures.slots.get(bx.editKey);
-      if (w && w.alive && w.edit !== DOOR) st.edit(w, DOOR);
+      const tg = b.target;
+      const dm = w && tg ? this._peekMask(b, w, tg.pos.x, tg.pos.y, tg.pos.z, true) : DOOR;
+      if (w && w.alive && w.edit !== dm) st.edit(w, dm);
       bx.blocked = 0;
     }
     const tx = b.targetVisible && b.target ? b.target.pos.x : b.lastSeenX;
@@ -1019,13 +1022,18 @@ export class Bots {
         bx.peekT = t + 0.2;
         return;
       }
-      const w = this._boxWall(b, face);
+      const close = Math.hypot(tx - a.pos.x, tz - a.pos.z) < 9;
+      const ty = b.target ? b.target.pos.y : a.pos.y;
+      // edit whatever of ours is actually on the line to them: the roof cone / floor when they
+      // are above us, else the facing wall at the tile the line crosses (not always the middle)
+      const own = this._ownBlocker(b, tx, ty, tz);
+      const w = own || this._boxWall(b, face);
       if (!w) {
         bx.peekT = t + 0.2;
         return;
       }
-      const close = Math.hypot(tx - a.pos.x, tz - a.pos.z) < 9;
-      st.edit(w, close && !diff.peekWindow ? DOOR : WINDOW); // hard: window first (door if it does not line up)
+      st.edit(w, w.kind === 'wall' ? this._peekMask(b, w, tx, ty, tz, close && !diff.peekWindow) : this._quarterMask(w, tx, tz)); // hard: window first (door if it does not line up)
+      bx.extraKeys = this._openRestOfLine(b, w, tx, ty, tz); // a trap wall of ours behind it too
       bx.blocked = 0;
       bx.peek = 'open';
       bx.editKey = w.key;
@@ -1040,12 +1048,134 @@ export class Bots {
       b.fireCd = Math.min(b.fireCd, 0.08);
     } else {
       // reset the edit (edit course: open, shoot, close)
-      const w = bx.editKey && st.slots.get(bx.editKey);
-      if (w && w.alive && w.edit) st.edit(w, 0);
+      this._closePeek(bx);
       bx.peek = 'closed';
-      bx.editKey = null;
       bx.peekT = t + diff.peekClosed * (0.7 + this.rng() * 0.8);
     }
+  }
+
+  /**
+   * Edit mask for a peek through wall `w` at a target at (tx, ty, tz): the 3 x 3 tile where the
+   * line from the bot's eyes to the target's chest crosses the wall (index = row * 3 + col, row 0
+   * at the bottom), so the window lines up with them. door: that column's bottom two tiles.
+   * Falls back to the centre window / door when the line does not cross the wall plane.
+   */
+  _peekMask(b, w, tx, ty, tz, door = false) {
+    const a = b.actor;
+    const ux = Math.cos(w.rot);
+    const uz = Math.sin(w.rot); // the wall's local +x (Structures draws it with rotation.y = -rot)
+    const nx = -uz;
+    const nz = ux;
+    const ex = a.pos.x;
+    const ey = a.pos.y + EYE;
+    const ez = a.pos.z;
+    const dB = (w.x - ex) * nx + (w.z - ez) * nz;
+    const dT = (tx - ex) * nx + (tz - ez) * nz;
+    const tw = BUILD.cell / 3;
+    const th = BUILD.level / 3;
+    let col = 1;
+    let row = 1;
+    let cols = [1];
+    let rows = [1];
+    if (Math.abs(dT) > 1e-3 && dB / dT > 0 && dB / dT < 1) {
+      const f = dB / dT;
+      const hx = ex + (tx - ex) * f;
+      const hz = ez + (tz - ez) * f;
+      const hy = ey + (ty + CHEST - ey) * f;
+      const u = (hx - w.x) * ux + (hz - w.z) * uz + 1.5 * tw; // 0 .. 3 tw across the wall
+      const v = hy - w.y; // 0 .. 3 th up the wall
+      col = Math.max(0, Math.min(2, Math.floor(u / tw)));
+      row = Math.max(0, Math.min(2, Math.floor(v / th)));
+      // a line close to a tile edge (a body is ~0.8 m wide, aim scatters): open the neighbour too
+      const near = (x, i, size, edge) => (x - i * size < edge && i > 0 ? [i - 1, i] : (i + 1) * size - x < edge && i < 2 ? [i, i + 1] : [i]);
+      cols = near(u, col, tw, 0.4);
+      rows = near(v, row, th, 0.3);
+    }
+    let m = 0;
+    if (door || row === 0) {
+      // a door in that column (both columns when the line runs along their edge), plus the tile
+      // the line crosses when it runs higher than a door
+      for (const c of cols) m |= (1 << c) | (1 << (3 + c));
+      if (row === 2) for (const c of cols) m |= 1 << (6 + c);
+    } else for (const r of rows) for (const c of cols) m |= 1 << (r * 3 + c);
+    return m === 0x1ff ? 1 << 4 : m;
+  }
+
+  /**
+   * After opening `first`, open every other piece of ours still on the line to the target (a
+   * box wall and the trap wall around them, or a roof cone): one window that lines up is useless
+   * behind a second closed wall. Returns their keys (reset with the peek), at most 3.
+   */
+  _openRestOfLine(b, first, tx, ty, tz) {
+    const st = this.structures;
+    const out = [];
+    for (let i = 0; i < 3; i++) {
+      const p = this._ownBlocker(b, tx, ty, tz);
+      if (!p || p === first || out.includes(p.key)) break;
+      const m = p.kind === 'wall' ? this._peekMask(b, p, tx, ty, tz, false) : this._quarterMask(p, tx, tz);
+      if (!st.edit(p, m)) break;
+      out.push(p.key);
+    }
+    return out.length ? out : null;
+  }
+
+  /** Reset a peek's edits (the main piece and any opened behind it). */
+  _closePeek(pk) {
+    const st = this.structures;
+    if (!pk || !st) return;
+    for (const key of [pk.editKey, ...(pk.extraKeys || [])]) {
+      const w = key && st.slots.get(key);
+      if (w && w.alive && w.edit) st.edit(w, 0);
+    }
+    pk.editKey = null;
+    pk.extraKeys = null;
+  }
+
+  /** First built piece of this bot's on the line from its eyes to (tx, ty + CHEST, tz), or null. */
+  _ownBlocker(b, tx, ty, tz) {
+    const a = b.actor;
+    const w = this.world;
+    if (!w || !w.raycast) return null;
+    const ex = a.pos.x;
+    const ey = a.pos.y + EYE;
+    const ez = a.pos.z;
+    const dx = tx - ex;
+    const dy = ty + CHEST - ey;
+    const dz = tz - ez;
+    const L = Math.hypot(dx, dy, dz);
+    if (L < 0.1) return null;
+    const h = w.raycast(ex, ey, ez, dx / L, dy / L, dz / L, Math.min(L, 16));
+    const c = h && h.collider;
+    return c && c.isStructure && c.alive !== false && c.owner === a && c.kind !== 'ramp' ? c : null;
+  }
+
+  /** Cone / floor edit opening the quarter toward (tx, tz) (2 x 2: bit = col + 2 * row, local). */
+  _quarterMask(p, tx, tz) {
+    const dx = tx - p.x;
+    const dz = tz - p.z;
+    const c = Math.cos(p.rot || 0);
+    const s = Math.sin(p.rot || 0);
+    const lx = dx * c + dz * s;
+    const lz = -dx * s + dz * c;
+    return 1 << ((lx > 0 ? 1 : 0) | (lz > 0 ? 2 : 0));
+  }
+
+  /**
+   * Shot while a peek (box or trap window / door) is open: reset the edit at once, like a player
+   * taking a hit mid-peek, then reopen after a short beat (hard bots reopen sooner).
+   */
+  _resetPeekOnHit(b) {
+    const st = this.structures;
+    if (!st || this.diffName === 'easy') return false;
+    const t = this.time;
+    for (const pk of [b.box, b.trap]) {
+      if (!pk || pk.peek !== 'open' || !pk.editKey) continue;
+      this._closePeek(pk);
+      pk.peek = 'closed';
+      pk.peekT = t + this.diff.peekClosed * (this.diffName === 'hard' ? 0.6 : 1) * (0.7 + this.rng() * 0.6);
+      return true;
+    }
+    return false;
   }
 
   /** Leaves the box: closes the peek, or edits a door toward the target to push out. */
@@ -1053,12 +1183,13 @@ export class Bots {
     const bx = b.box;
     if (!bx) return;
     const st = this.structures;
-    const w = bx.editKey && st && st.slots.get(bx.editKey);
-    if (w && w.alive) st.edit(w, 0);
+    this._closePeek(bx);
     if (mask && st && b.target) {
       const face = (Math.round(Math.atan2(b.target.pos.x - bx.x, -(b.target.pos.z - bx.z)) / (Math.PI / 2)) * Math.PI) / 2;
       const d = this._boxWall(b, face);
-      if (d) st.edit(d, mask);
+      // a door that lines up with them (same column as the line out), not always the middle one
+      const tg = b.target;
+      if (d) st.edit(d, mask === DOOR ? this._peekMask(b, d, tg.pos.x, tg.pos.y, tg.pos.z, true) : mask);
     }
     b.box = null;
     b.holdUntil = 0;
@@ -1120,8 +1251,7 @@ export class Bots {
   _endTrap(b) {
     const tr = b.trap;
     const st = this.structures;
-    const w = tr && tr.editKey && st && st.slots.get(tr.editKey);
-    if (w && w.alive && w.edit) st.edit(w, 0);
+    if (tr && st) this._closePeek(tr);
     b.trap = null;
   }
 
@@ -1145,9 +1275,11 @@ export class Bots {
     const w = this._trapWall(b, tr.face);
     if (!w) return false; // our side was shot out: fight through the gap like a normal fight
     if (tr.peek === 'closed') {
-      st.edit(w, WINDOW);
+      const tg = b.target;
+      st.edit(w, tg ? this._peekMask(b, w, tg.pos.x, tg.pos.y, tg.pos.z, false) : WINDOW);
       tr.peek = 'open';
       tr.editKey = w.key;
+      tr.extraKeys = tg ? this._openRestOfLine(b, w, tg.pos.x, tg.pos.y, tg.pos.z) : null; // our own box wall too
       tr.peekT = t + diff.peekOpen * (0.7 + this.rng() * 0.6);
       // pre-aimed at the window: shoot the moment it opens
       b.reactLeft = Math.min(b.reactLeft, diff.reaction * 0.4);
@@ -1156,9 +1288,8 @@ export class Bots {
       b.burstLeft = 6;
       b.fireCd = Math.min(b.fireCd, 0.06);
     } else {
-      if (w.edit) st.edit(w, 0);
+      this._closePeek(tr);
       tr.peek = 'closed';
-      tr.editKey = null;
       tr.peekT = t + diff.peekClosed * (0.7 + this.rng() * 0.8);
     }
     return true;

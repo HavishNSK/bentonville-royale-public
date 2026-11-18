@@ -76,8 +76,10 @@ import { LANDMARK_RECIPES, classify } from './interiors/landmarks.js';
 import { storeyCount, addStoreys, FLOOR_THICKNESS } from './interiors/storeys.js';
 import { furnishInterior } from './interiors/furnishings.js';
 import { addFloorTiles } from './interiors/floorTiles.js';
+import { addShellPanels } from './interiors/shellPanels.js';
 
-export const INTERIOR_VERSION = 8;
+export const INTERIOR_VERSION = 9;
+const ROOF_SLAB = 0.35; // roof slab over a one-storey building's full-height room (World ROOF_T)
 
 const HUB = { corridor: 1, hall: 1, lobby: 1, sales: 1, living: 1, open: 1 };
 
@@ -246,7 +248,7 @@ export function planInterior(bd, shell, ctx = {}) {
   }
   const recipe = classify(bd, pois, shell.area);
   const fn = recipe === 'landmark' ? LANDMARK_RECIPES[id] : RECIPES[recipe] || RECIPES.hall;
-  const count = ctx._single ? 1 : storeyCount(bd, shell);
+  const count = ctx._single || ctx._flat ? 1 : storeyCount(bd, shell);
   const f = {
     levels: count,
     L: F.L,
@@ -270,7 +272,10 @@ export function planInterior(bd, shell, ctx = {}) {
   placeDoors(lay.rooms, lay.pieces, (k) => q(1.6 + 0.2 * hash01(id, 31 + k)), (r) => !!HUB[r.kind]);
 
   const y = shell.floor;
-  const ceil = count > 1 ? q(Math.min(shell.ceil, shell.floor + (bd.h - 0.2) / count - FLOOR_THICKNESS)) : shell.ceil;
+  // one storey (not an upper level): the room is the building's full height under the roof slab,
+  // so no solid block is left above the ceiling (every wall above it is a breakable panel)
+  const fullH = Number.isFinite(bd.h) && !ctx._single ? q(shell.floor + bd.h - ROOF_SLAB) : -Infinity;
+  const ceil = count > 1 ? q(Math.min(shell.ceil, shell.floor + (bd.h - 0.2) / count - FLOOR_THICKNESS)) : Math.max(shell.ceil, fullH);
   const doorH = shell.doorH;
   const rooms = lay.rooms.map((r, i) => {
     const [ca, cb] = roomPoint(r, Ploc);
@@ -415,7 +420,11 @@ export function planInterior(bd, shell, ctx = {}) {
   if (ctx._single) return plan;
   const complete = addStoreys(plan, bd, { ...shell, ceil }, count, trees, authored?.stairs, (upperShell, upperTree) =>
     planInterior(bd, upperShell, { ...ctx, _single: true, _tree: upperTree }));
-  return addFloorTiles(furnishInterior(complete, shell), shell); // breakable slabs between storeys
+  // no stair shaft fits: plan it again as one full-height storey
+  if (count > 1 && complete.levels.length < 2) return planInterior(bd, shell, { ...ctx, _flat: true });
+  const top = Number.isFinite(bd.h) ? shell.floor + bd.h : NaN;
+  // breakable slabs between storeys, then the exterior wall above the ground storey and the roof
+  return addShellPanels(addFloorTiles(furnishInterior(complete, shell), shell), bd, shell, top);
 }
 
 /**

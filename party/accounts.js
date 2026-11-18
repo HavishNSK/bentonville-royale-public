@@ -43,7 +43,7 @@ import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLI
 import { verifyGoogleIdToken } from './googleIdToken.js';
 import { applyMatchStats } from './matchStats.js';
 import { nameIsClean } from '../src/net/chatFilter.js';
-import { publicItem, sanitizeFeedbackText, addReply, removeReply, canModerateFeedback } from '../src/net/feedbackBoard.js';
+import { publicItem, sanitizeFeedbackText, addReply, removeReply, canModerateFeedback, feedbackKind } from '../src/net/feedbackBoard.js';
 
 const START_COINS = 1500;
 const SESSION_DAYS = 30;
@@ -376,7 +376,7 @@ export class Accounts extends Server {
     if (m.op === 'feedback') {
       const clean = sanitizeFeedbackText(m.text);
       if (!clean.ok) return err(clean.reason);
-      const kind = m.kind === 'bug' ? 'bug' : 'idea';
+      const kind = feedbackKind(m.kind); // enum: 'bug' or 'idea' (missing/unknown = suggestion)
       const ip = (req.headers.get('cf-connecting-ip') || 'local').slice(0, 64);
       const last = (await this.ctx.storage.get('fbip:' + ip)) || 0;
       if (Date.now() - last < 30000) return err('Thanks! Give it 30 seconds before posting again.', 429);

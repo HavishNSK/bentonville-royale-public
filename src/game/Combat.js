@@ -393,7 +393,7 @@ export class Combat {
       } else if (res.hit.panel) {
         this.damagePanel(c, res.hit.panel, dmg * BUILDING_WALL.bulletMult, _pt); // no mats from bullets
       } else if (this._isHarvestable(c) || this._isBreakable(c)) {
-        c.hp -= dmg;
+        c.hp -= c.archPanel ? dmg * BUILDING_WALL.bulletMult : dmg; // museum wall panels take bullets like map wall panels
         if (c.hp <= 0) this._destroyCollider(c, _pt);
       }
       if (this.sfx && sound) this.sfx.play('bullet_impact', { x: _pt.x, y: _pt.y, z: _pt.z, volume: 0.6, surface: impactSound(res.surface) });

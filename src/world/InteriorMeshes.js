@@ -302,6 +302,98 @@ function addFloorTile(chunk, quad, F, plan, shell, styles, L, below, t, g, floor
 }
 
 /**
+ * The roof slab of a building with a roof tile grid (plan.roof, interiors/shellPanels.js): its
+ * top (at h) and the top storey's ceiling (underside) over the solid rim and the non-tile cells,
+ * then each breakable roof tile in its own panel range: top, underside (that room's styled
+ * ceiling when it has one) and side faces toward neighbouring tiles. Where a tile borders solid
+ * roof, an always-drawn face looks into the tile (the clean cut edge once it breaks).
+ * api.roof = { outer: footprint [[x, z], ...], hex: roof colour, ceiling: plain ceiling colour }.
+ */
+function addRoofGeometry(chunk, shell, h, api, styles) {
+  const plan = shell.plan;
+  const { quad, hcapFlat } = api;
+  const { outer, hex, ceiling } = api.roof;
+  const F = plan.frame;
+  const g = plan.roof;
+  const yT = h;
+  const yU = shell.ceil - shell.floor;
+  const top = plan.levels[plan.levels.length - 1];
+  const local = (pts) => {
+    const out = [];
+    for (let i = 0; i < pts.length; i += 2) out.push(...toLocal(F, pts[i], pts[i + 1]));
+    return out;
+  };
+  const O = local(outer.flat());
+  const I = local(shell.inner);
+  const cell = (i, j) => ({
+    a0: q(g.a0 + ((g.a1 - g.a0) * i) / g.na), a1: q(g.a0 + ((g.a1 - g.a0) * (i + 1)) / g.na),
+    b0: q(g.b0 + ((g.b1 - g.b0) * j) / g.nb), b1: q(g.b0 + ((g.b1 - g.b0) * (j + 1)) / g.nb),
+  });
+  const cap = (P, R, y, color, facing, litDir) => {
+    const poly = clipRect(P, R.a0, R.b0, R.a1, R.b1);
+    if (poly.length < 6) return;
+    const pts = [];
+    for (let i = 0; i < poly.length; i += 2) pts.push(...toWorld(F, poly[i], poly[i + 1]));
+    hcapFlat(chunk, pts, y, color, h, facing, litDir);
+  };
+  // solid roof: the frame outside the grid (generous: clipped to the polygons) and non-tile cells
+  const M = 1;
+  const solid = [
+    { a0: -M, b0: -M, a1: g.a0, b1: F.W + M }, { a0: g.a1, b0: -M, a1: F.L + M, b1: F.W + M },
+    { a0: g.a0, b0: -M, a1: g.a1, b1: g.b0 }, { a0: g.a0, b0: g.b1, a1: g.a1, b1: F.W + M },
+  ];
+  for (let i = 0; i < g.na; i++) for (let j = 0; j < g.nb; j++) if (g.ids[i * g.nb + j] < 0) solid.push(cell(i, j));
+  for (const R of solid) {
+    if (R.a1 - R.a0 < 1e-3 || R.b1 - R.b0 < 1e-3) continue;
+    cap(O, R, yT, hex, 1, 1);
+    cap(I, R, yU, ceiling, -1, 1); // wound down, lit as up: a bright painted ceiling
+  }
+  const W = (a, b, y) => { const [x, z] = toWorld(F, a, b); return [x, y, z]; };
+  const isTile = (i, j) => i >= 0 && j >= 0 && i < g.na && j < g.nb && g.ids[i * g.nb + j] >= 0;
+  const edge = rgb(SLAB_EDGE_HEX);
+  const [rr, rg, rb] = rgb(hex);
+  for (let i = 0; i < g.na; i++) for (let j = 0; j < g.nb; j++) {
+    const id = g.ids[i * g.nb + j];
+    if (id < 0) continue;
+    const pn = plan.panels[id];
+    const { a0, b0, a1, b1 } = pn;
+    const i0 = chunk.buf.idx.length;
+    quad(chunk, W(a0, b0, yT), W(a1, b0, yT), W(a1, b1, yT), W(a0, b1, yT), 0, 1, 0, rr, rg, rb, null, h);
+    // underside: per top-storey room, its styled ceiling plane or the plain ceiling
+    let covered = 0;
+    for (const lr of top.rooms) {
+      const c0 = Math.max(a0, lr.a0), c1 = Math.min(a1, lr.a1), d0 = Math.max(b0, lr.b0), d1 = Math.min(b1, lr.b1);
+      if (c1 - c0 < 0.01 || d1 - d0 < 0.01) continue;
+      covered += (c1 - c0) * (d1 - d0);
+      const lst = styleFor(plan.id, lr, styles);
+      const styled = lst && lst.ceiling !== undefined;
+      const y = styled ? yU - STYLED_CEIL_GAP : yU;
+      quad(chunk, W(c0, d0, y), W(c1, d0, y), W(c1, d1, y), W(c0, d1, y), 0, -1, 0,
+        ...rgb(styled ? lst.ceiling : ceiling), null, h, styled ? NEUTRAL_LIT : UP_LIT);
+    }
+    if (covered < (a1 - a0) * (b1 - b0) - 0.05) {
+      // rooms don't cover the whole tile: the plain ceiling just above any room planes
+      quad(chunk, W(a0, b0, yU + 0.002), W(a1, b0, yU + 0.002), W(a1, b1, yU + 0.002), W(a0, b1, yU + 0.002), 0, -1, 0, ...rgb(ceiling), null, h, UP_LIT);
+    }
+    const sides = [
+      [i - 1, j, [a0, b0], [a0, b1], [F.ux, F.uz], -1],
+      [i + 1, j, [a1, b0], [a1, b1], [F.ux, F.uz], 1],
+      [i, j - 1, [a0, b0], [a1, b0], [F.vx, F.vz], -1],
+      [i, j + 1, [a0, b1], [a1, b1], [F.vx, F.vz], 1],
+    ];
+    const solidSides = [];
+    for (const [ni, nj, A, B, n, sg] of sides) {
+      if (!isTile(ni, nj)) { solidSides.push([A, B, n, -sg]); continue; }
+      quad(chunk, W(A[0], A[1], yU), W(B[0], B[1], yU), W(B[0], B[1], yT), W(A[0], A[1], yT), n[0] * sg, 0, n[1] * sg, ...edge, null, h);
+    }
+    chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
+    for (const [A, B, n, sg] of solidSides) {
+      quad(chunk, W(A[0], A[1], yU), W(B[0], B[1], yU), W(B[0], B[1], yT), W(A[0], A[1], yT), n[0] * sg, 0, n[1] * sg, ...edge, null, h);
+    }
+  }
+}
+
+/**
  * shell: World collider.shell with .plan; h: building height (aH attribute);
  * api: { quad, hcapFlat } from WorldMeshes.
  */
@@ -326,8 +418,11 @@ export function addInteriorGeometry(chunk, shell, h, api, styles = LANDMARK_STYL
     const above = plan.levels.find((l) => l.i === L.i + 1);
     const styledBelow = below ? below.rooms.filter((q) => styleFor(plan.id, q, styles)?.ceiling !== undefined) : [];
 
-    // breakable floor tiles of the storey above (its slab is this storey's ceiling)
-    const aboveTiles = above ? plan.panels.filter((p) => p.kind === 'floor' && p.level === above.i) : [];
+    // breakable floor tiles of the storey above (its slab is this storey's ceiling), or on the top
+    // storey the breakable roof tiles (interiors/shellPanels.js)
+    const aboveTiles = above
+      ? plan.panels.filter((p) => p.kind === 'floor' && p.level === above.i)
+      : plan.panels.filter((p) => p.kind === 'roof');
 
     // ---- room floors (+0.02 over the interior floor); breakable tiles drawn on their own
     for (const r of L.rooms) {
@@ -458,6 +553,7 @@ export function addInteriorGeometry(chunk, shell, h, api, styles = LANDMARK_STYL
     }
   }
   addStairGeometry(chunk,shell,h,api);
+  if (plan.roof && api.roof) addRoofGeometry(chunk, shell, h, api, styles);
   const lit = { ...api, floorAt: floorLookup(plan, styles) };
   addLightGeometry(chunk,shell,h,lit);
   addFurnishingGeometry(chunk,shell,h,lit);

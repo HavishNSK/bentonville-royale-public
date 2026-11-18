@@ -171,6 +171,7 @@ export class ClientSession {
     this.offset = null;
     this.lastSeq = -1;
     this._predicted = new Map(); // piece -> performance.now() it was placed locally
+    this._predictedEdits = new Map(); // piece key -> { piece, prev, at }: edits shown before the host's 'se'
     this.aliveCount = 0;
     this.started = false;
     this.ended = false;
@@ -245,7 +246,31 @@ export class ClientSession {
   }
 
   /** Predicted pieces the host never confirmed (refused): taken back quietly. */
+  /**
+   * An edit this client applied ahead of the host (Player._confirmEdit): the host's 'se' echo
+   * confirms it; with no echo within PREDICT_MS the host refused it, and the piece goes back.
+   */
+  predictEdit(piece, prev) {
+    if (!piece || !piece.key) return;
+    const had = this._predictedEdits.get(piece.key);
+    this._predictedEdits.set(piece.key, { piece, prev: had ? had.prev : prev, at: performance.now() });
+  }
+
+  _expirePredictedEdits() {
+    if (!this._predictedEdits.size) return;
+    const now = performance.now();
+    const st = this.game.structures;
+    for (const [key, pe] of this._predictedEdits) {
+      if (!pe.piece.alive) this._predictedEdits.delete(key);
+      else if (now - pe.at > PREDICT_MS) {
+        this._predictedEdits.delete(key);
+        if (st && st.edit && st.editValue(pe.piece) !== pe.prev) st.edit(pe.piece, pe.prev);
+      }
+    }
+  }
+
   _expirePredicted() {
+    this._expirePredictedEdits();
     if (!this._predicted.size) return;
     const now = performance.now();
     const st = this.game.structures;
@@ -611,7 +636,8 @@ export class ClientSession {
       case 'se': {
         const st = g.structures;
         const piece = st && st.slots.get(e.key);
-        if (piece && st.edit) st.edit(piece, e.ed | 0);
+        this._predictedEdits.delete(e.key); // the host's word on it (ours confirmed, or replaced)
+        if (piece && st.edit && st.editValue(piece) !== (e.ed | 0)) st.edit(piece, e.ed | 0);
         return;
       }
       case 'sdr': {

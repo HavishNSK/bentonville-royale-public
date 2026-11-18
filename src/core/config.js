@@ -331,7 +331,9 @@ export const PICKAXE = {
 // building's material, interior partitions are wood. Panels are at most panelW m wide and one
 // storey tall; bullets do bulletMult of their damage to a panel (and grant no mats).
 // floorHp: each breakable floor / ceiling tile between storeys (interiors/floorTiles.js).
-export const BUILDING_WALL = { hp: { wood: 300, brick: 450, metal: 600 }, innerHp: 150, floorHp: 200, panelW: 4, bulletMult: 0.5 };
+// roofHp: each breakable roof tile (interiors/shellPanels.js). A solid (non-enterable)
+// building breaks as one block with hp[mat] x a size factor (World.finishBuildings).
+export const BUILDING_WALL = { hp: { wood: 300, brick: 450, metal: 600 }, innerHp: 150, floorHp: 200, roofHp: 300, panelW: 4, bulletMult: 0.5 };
 
 export const MATERIALS = ['wood', 'brick', 'metal'];
 export const MATERIAL_COLOR = { wood: 0xb9803f, brick: 0xb5533c, metal: 0x8d99a6 };

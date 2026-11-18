@@ -23,6 +23,7 @@ import { SKINS, EMOTES, PICKAXES, BACKBLINGS, EMOTE_SLOTS, PRICES, featuredToday
 import { createShowcase } from './Showcase.js';
 import { PATCH_NOTES, LATEST_VERSION } from '../data/patchNotes.js';
 import { RANKED_NOTE } from '../core/config.js';
+import { boardPosts, FEEDBACK_TAB_KIND } from '../net/feedbackBoard.js';
 
 const SEEN_KEY = 'bentonville-royale.seenPatch';
 const seenPatch = () => {
@@ -155,10 +156,11 @@ export function createMeta(menus, account, opts = {}) {
   const bBoard = tab('RANKS', 'leaderboard');
   const bNews = tab('PATCH NOTES', 'news');
   const bFeedback = tab('SUGGEST', 'feedback');
+  const bBugs = tab('REPORT A BUG', 'bugs');
   const newBadge = h('em', 'mt-badge mt-badge-new', 'NEW');
   newBadge.hidden = seenPatch() === LATEST_VERSION;
   bNews.appendChild(newBadge);
-  tabs.append(bPlay, bLocker, bShop, bBoard, bNews, bFeedback);
+  tabs.append(bPlay, bLocker, bShop, bBoard, bNews, bFeedback, bBugs);
   const bFriends = btn('FRIENDS', 'mn-chip mt-chip', 'friends');
   const badge = h('em', 'mt-badge');
   bFriends.appendChild(badge);
@@ -286,7 +288,7 @@ export function createMeta(menus, account, opts = {}) {
     panelBody.replaceChildren();
     close.hidden = open === 'rename' && mustRename(); // no way around a forced rename
     if (open === 'news') renderNews();
-    else if (open === 'feedback') renderFeedback();
+    else if (open === 'feedback' || open === 'bugs') renderFeedback(open);
     else if (open === 'auth') renderAuth();
     else if (open === 'signout') renderSignOut();
     else if (open === 'rename') renderRename();
@@ -343,8 +345,9 @@ export function createMeta(menus, account, opts = {}) {
   renderOnlineChip();
 
   // ---------------------------------------------------------------- patch notes + board
+  // One shared list from the server (both kinds). Each tab filters it: SUGGEST = 'idea' (and old
+  // posts saved without a kind), REPORT A BUG = 'bug'. Nothing is dropped from storage.
   let board = null; // last loaded posts
-  let boardKind = 'idea';
   function renderNews() {
     panelTitle.textContent = 'PATCH NOTES';
     try {
@@ -368,61 +371,63 @@ export function createMeta(menus, account, opts = {}) {
     }
   }
 
-  function renderFeedback() {
-    panelTitle.textContent = 'SUGGEST / REPORT A BUG';
+  const BOARD_COPY = {
+    idea: {
+      title: 'SUGGEST',
+      placeholder: 'What should we add or change?',
+      label: 'Your suggestion',
+      sub: 'SUGGESTIONS FROM PLAYERS (UPVOTE WHAT YOU WANT MOST)',
+      empty: 'No suggestions yet. Be the first!',
+      posted: 'Posted. Thanks for helping make the game better!',
+    },
+    bug: {
+      title: 'REPORT A BUG',
+      placeholder: 'What went wrong, and what were you doing when it happened?',
+      label: 'Your bug report',
+      sub: 'BUG REPORTS FROM PLAYERS (UPVOTE IF IT HAPPENS TO YOU TOO)',
+      empty: 'No bug reports yet. Nice!',
+      posted: 'Bug reported. Thanks for helping us fix it!',
+    },
+  };
+
+  function renderFeedback(tabId) {
+    const kind = FEEDBACK_TAB_KIND[tabId] || 'idea';
+    const copy = BOARD_COPY[kind];
+    panelTitle.textContent = copy.title;
     const form = h('form', 'mt-form mt-board-form');
-    const kinds = h('div', 'mn-seg');
-    for (const [id, label] of [
-      ['idea', 'SUGGESTION'],
-      ['bug', 'BUG REPORT'],
-    ]) {
-      const t = h('button', boardKind === id ? 'is-on' : '', label);
-      t.type = 'button';
-      t.setAttribute('aria-pressed', String(boardKind === id));
-      t.addEventListener('click', () => {
-        click();
-        boardKind = id;
-        kinds.querySelectorAll('button').forEach((b) => {
-          b.classList.toggle('is-on', b === t);
-          b.setAttribute('aria-pressed', String(b === t));
-        });
-        text.placeholder = id === 'bug' ? 'What went wrong, and what were you doing when it happened?' : 'What should we add or change?';
-      });
-      kinds.appendChild(t);
-    }
     const text = h('textarea', 'mn-field mt-board-text');
     text.maxLength = 500;
     text.rows = 3;
-    text.placeholder = boardKind === 'bug' ? 'What went wrong, and what were you doing when it happened?' : 'What should we add or change?';
-    text.setAttribute('aria-label', 'Your suggestion or bug report');
+    text.placeholder = copy.placeholder;
+    text.setAttribute('aria-label', copy.label);
     const send = btn('POST', 'mn-btn');
     send.type = 'submit';
-    form.append(kinds, text, send);
+    form.append(text, send);
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       click();
       send.disabled = true;
       try {
-        const item = await account.feedback(boardKind, text.value);
+        const item = await account.feedback(kind, text.value);
         text.value = '';
         board = [item, ...(board || []).filter((x) => x.id !== item.id)];
-        say('Posted. Thanks for helping make the game better!');
-        renderBoard(list);
+        say(copy.posted);
+        renderBoard(list, kind);
       } catch (err) {
         say(err.offline ? 'Could not reach the server. Try again in a moment.' : err.message, true);
       }
       send.disabled = false;
     });
     panelBody.appendChild(form);
-    panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'FROM PLAYERS (UPVOTE WHAT YOU WANT MOST)'));
+    panelBody.appendChild(h('div', 'mn-party-label mt-sub', copy.sub));
     const list = h('div', 'mt-posts');
     panelBody.appendChild(list);
-    renderBoard(list);
+    renderBoard(list, kind);
     account
       .feedbackList()
       .then((items) => {
         board = items;
-        if (open === 'feedback') renderBoard(list);
+        if (open === tabId) renderBoard(list, kind);
       })
       .catch(() => {
         if (!board) {
@@ -431,18 +436,18 @@ export function createMeta(menus, account, opts = {}) {
       });
   }
 
-  function renderBoard(list) {
+  function renderBoard(list, kind) {
     list.replaceChildren();
     if (!board) {
       list.appendChild(h('p', 'mt-hint', 'Loading…'));
       return;
     }
-    if (!board.length) {
-      list.appendChild(h('p', 'mt-hint', 'No posts yet. Be the first!'));
+    const items = boardPosts(board, kind);
+    if (!items.length) {
+      list.appendChild(h('p', 'mt-hint', BOARD_COPY[kind].empty));
       return;
     }
     const canMod = account.signedIn && isDevName(account.profile.name);
-    const items = board.slice().sort((a, b) => b.votes - a.votes || b.at - a.at);
     for (const it of items) {
       const row = h('div', 'mt-post');
       row.dataset.kind = it.kind;
@@ -453,7 +458,7 @@ export function createMeta(menus, account, opts = {}) {
         try {
           const up = await account.feedbackVote(it.id);
           board = board.map((x) => (x.id === up.id ? up : x));
-          renderBoard(list);
+          renderBoard(list, kind);
         } catch (err) {
           say(err.message, true);
         }
@@ -469,7 +474,7 @@ export function createMeta(menus, account, opts = {}) {
             await account.feedbackDelete(it.id);
             board = board.filter((x) => x.id !== it.id);
             say('Deleted.');
-            renderBoard(list);
+            renderBoard(list, kind);
           } catch (err) {
             say(err.message, true);
           }
@@ -491,7 +496,7 @@ export function createMeta(menus, account, opts = {}) {
                 const up = await account.feedbackDelete(it.id, rp.id);
                 board = board.map((x) => (x.id === up.id ? up : x));
                 say('Deleted.');
-                renderBoard(list);
+                renderBoard(list, kind);
               } catch (err) {
                 say(err.message, true);
               }
@@ -520,7 +525,7 @@ export function createMeta(menus, account, opts = {}) {
           board = board.map((x) => (x.id === up.id ? up : x));
           replyIn.value = '';
           say('Reply posted.');
-          renderBoard(list);
+          renderBoard(list, kind);
         } catch (err) {
           say(err.offline ? 'Could not reach the server. Try again in a moment.' : err.message, true);
         }
