@@ -1818,7 +1818,7 @@ export class Bots {
     if (!item) return false;
     if (item.type === 'ammo' || item.type === 'material') return inv.canTake(item);
     // bots do not throw grenades: leave them for the humans
-    if (item.type === 'consumable') return !(CONSUMABLES[item.id] && CONSUMABLES[item.id].throwable) && inv.canTake(item);
+    if (item.type === 'consumable') return !(CONSUMABLES[item.id] && (CONSUMABLES[item.id].throwable || CONSUMABLES[item.id].fuel)) && inv.canTake(item);
     if (item.type === 'weapon') {
       if (!WEAPONS[item.id] || WEAPONS[item.id].projectile) return false; // no rocket launchers either
       let weapons = 0;
@@ -2792,6 +2792,32 @@ export class Bots {
 
   // --------------------------------------------------------------- physics
 
+  /** Sideways escape from a car closing on `a` (faster than 10 m/s, within 25 m), or null. */
+  _carDodge(a) {
+    const out = this._dodge || (this._dodge = { x: 0, z: 0 });
+    for (const car of this.vehicles.cars) {
+      if (!car.alive) continue;
+      const vx = car.vx;
+      const vz = car.vz;
+      const sp = Math.hypot(vx, vz);
+      if (sp < 10) continue;
+      const rx = a.pos.x - car.x;
+      const rz = a.pos.z - car.z;
+      if (Math.abs(rx) > 30 || Math.abs(rz) > 30) continue;
+      const ux = vx / sp;
+      const uz = vz / sp;
+      const along = rx * ux + rz * uz;
+      if (along <= 0 || along > 25) continue;
+      const side = rx * -uz + rz * ux; // + = to the car's left
+      if (Math.abs(side) > 3.2) continue;
+      const s = side === 0 ? (a.id & 1 ? 1 : -1) : Math.sign(side);
+      out.x = -uz * s;
+      out.z = ux * s;
+      return out;
+    }
+    return null;
+  }
+
   _move(b, dt) {
     const a = b.actor;
     const world = this.world;
@@ -2843,6 +2869,13 @@ export class Bots {
     // swimming (World.inWater): slower, like players
     a.swimming = a.grounded && !a.downed && !!world.inWater && world.inWater(pos.x, pos.z, pos.y);
     if (a.swimming) sp = Math.min(sp, PLAYER.runSpeed * SWIM.speed);
+    // a car coming straight at us: sprint out of its path
+    const dodge = this.vehicles && a.grounded ? this._carDodge(a) : null;
+    if (dodge) {
+      b.mx = dodge.x;
+      b.mz = dodge.z;
+      sp = Math.max(sp, PLAYER.sprintSpeed);
+    }
     approach(vel, b.mx * sp, b.mz * sp, (a.grounded ? PLAYER.accelGround : PLAYER.accelAir) * dt);
     if (b.wantJump && a.grounded) {
       vel.y = PLAYER.jumpSpeed;

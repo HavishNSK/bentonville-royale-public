@@ -45,6 +45,9 @@ import { Combat, rayActor } from './Combat.js';
 import { canFastTravel, poiTargets, nearestPoi, landAt } from './fastTravel.js';
 import { Pings } from './Pings.js';
 import { Reboot } from './Reboot.js';
+import { Vehicles } from './Vehicles.js';
+import { buildCarMesh } from '../render/CarMesh.js';
+import { CAR } from './vehicles/cars.js';
 import { Grenades, launcherModel } from './Grenades.js';
 import { Player, placeOrbitCamera, itemLabel } from './Player.js';
 import * as StormMod from './Storm.js';
@@ -334,6 +337,21 @@ export class Game {
     };
     this.bots.reboot = this.reboot;
     this.reboot.viewer = this.camera.position; // Catfish Ken waves to whoever walks up
+    // drivable cars (parking lots and main-road curbs, same spots on every machine)
+    this.vehicles = new Vehicles({ scene: this.scene, world: this.world, fx: this.fx, sfx, combat: this.combat, structures: this.structures, meshFactory: buildCarMesh });
+    try {
+      this.vehicles.setup();
+    } catch (err) {
+      this._error('vehicles.setup', err);
+    }
+    this.vehicles.viewer = this.camera.position;
+    this.vehicles.local = this.player;
+    this.vehicles.onEvent = (e) => {
+      if (this.net && this.net.isHost && this.net.started && this.net.events) this.net.events.push(e);
+    };
+    this.combat.vehicles = this.vehicles;
+    this.grenades.vehicles = this.vehicles;
+    this.bots.vehicles = this.vehicles;
     this.dropBus = new DropBusMesh();
     this.scene.add(this.dropBus.root);
     this.busRoute = null;
@@ -739,6 +757,7 @@ export class Game {
     members.forEach((a, i) => (a.teamSlot = i));
     this.mates = members.filter((a) => a !== p);
     if (this.reboot) this.reboot.reset({ teamMode: this.teamMode, authoritative: !(this.net && this.net.isClient), myTeam: this.teamMode ? p.team : null });
+    if (this.vehicles) this.vehicles.reset({ authoritative: !(this.net && this.net.isClient) });
   }
 
   /**
@@ -1112,9 +1131,11 @@ export class Game {
     } else if (info.fall) text = `${victim.name} fell too far`;
     else if (info.bleed) text = killer ? `${victim.name} bled out (${killer.name})` : `${victim.name} bled out`;
     else if (info.wipe) text = killer ? `${killer.name} wiped ${victim.name}` : `${victim.name} was eliminated`;
+    else if (info.weapon === 'car_explosion' && !killer) text = `${victim.name} went up with their car`;
+    else if (info.weapon === 'car_ram' && !killer) text = `${victim.name} was run over`;
     else if (info.explosive && !killer) text = `${victim.name} blew themselves up`;
     else if (killer) {
-      const how = info.weapon === 'pickaxe' ? 'bonked' : info.explosive ? 'blew up' : info.headshot ? 'headshot' : 'eliminated';
+      const how = info.weapon === 'pickaxe' ? 'bonked' : info.weapon === 'car_ram' ? 'ran over' : info.weapon === 'car_explosion' ? 'blew up the car with' : info.explosive ? 'blew up' : info.headshot ? 'headshot' : 'eliminated';
       text = `${killer.name} ${how} ${victim.name}`;
     } else text = `${victim.name} was eliminated`;
     if (killer === p) kind = 'kill';
@@ -1150,7 +1171,7 @@ export class Game {
     let text;
     if (info.storm && !by) text = `${victim.name} was knocked by the storm`;
     else if (info.fall) text = `${victim.name} fell and was knocked`;
-    else if (by) text = `${by.name} ${info.weapon === 'pickaxe' ? 'bonked' : 'knocked'} ${victim.name}`;
+    else if (by) text = `${by.name} ${info.weapon === 'pickaxe' ? 'bonked' : info.weapon === 'car_ram' ? 'ran over' : 'knocked'} ${victim.name}`;
     else text = `${victim.name} was knocked`;
     if (victim === p && !by && !info.storm && !info.fall) text = 'You were knocked';
     this.hud.killFeed(text, by === p ? 'kill' : victim === p ? 'self' : victim.team === p.team ? 'mate' : 'knock', [victim.name, by && by.name], p.name);
@@ -1397,6 +1418,13 @@ export class Game {
     if (this.structures) this.structures.update(dt);
     this.grenades.update(dt);
     if (this.reboot && (this.state === 'play' || this.state === 'over')) this.reboot.update(dt, this.combat.actors);
+    if (this.vehicles && (this.state === 'play' || this.state === 'over')) {
+      try {
+        this.vehicles.update(dt, this.combat.actors);
+      } catch (err) {
+        this._error('vehicles.update', err);
+      }
+    }
 
     // match end (team modes: a team is out once nobody on it is alive; dead members wait)
     if (this.state === 'play') {
@@ -1682,6 +1710,33 @@ export class Game {
         else blips.push({ x: v.x, z: v.z, kind: ready ? 'van' : 'vanCd' });
       }
       if (this.teamMode) for (const c of this.reboot.cards.values()) if (c.holder == null && c.team === p.team) blips.push({ x: c.x, z: c.z, kind: 'card' });
+    }
+    // car panel: the car we ride in, else the car under the crosshair (when it is hurt)
+    if (this.vehicles && this.hud.setCar) {
+      let info = null;
+      const car = p.alive ? p.vehicle : null;
+      if (car && car.alive) {
+        info = {
+          name: car.spec.name,
+          hp: car.hp,
+          maxHp: car.maxHp,
+          fuel: car.fuel,
+          speed: car.speed,
+          seats: car.seats.map((a) => (a === p ? 2 : a ? 1 : 0)),
+          boost: car.boostT > 0 ? 'on' : car.boostCd > 0 ? car.boostCd : 'ready',
+        };
+      } else if (p.alive && this.state === 'play' && !p.airborneDrop) {
+        const h = this.vehicles.ray(this.camera.position, p.aimDir, 90, p);
+        if (h && h.car.alive && (h.car.hp < h.car.maxHp || h.car.seats.some(Boolean))) info = { name: h.car.spec.name, hp: h.car.hp, maxHp: h.car.maxHp, target: true };
+      }
+      this.hud.setCar(info);
+    }
+    // drivable cars nearby (not the one we ride in: our own arrow is on it)
+    if (this.vehicles && (this.state === 'play' || this.state === 'drop')) {
+      for (const c of this.vehicles.cars) {
+        if (!c.alive || c === p.vehicle) continue;
+        if ((c.x - f.pos.x) ** 2 + (c.z - f.pos.z) ** 2 < 260 * 260) blips.push({ x: c.x, z: c.z, kind: 'car' });
+      }
     }
     if (this.teamMode && this.mates && this.mates.length && this.state === 'play') {
       for (const m of this.mates) {

@@ -274,6 +274,8 @@ export const CONSUMABLES = {
   tonic: { id: 'tonic', name: 'Shield Tonic', icon: 'potion', model: 'potion', rarity: 'rare', useTime: 2.4, heal: 0, shield: 50, stack: 3, sound: 'drink_shield' },
   // throwable: fire throws one instead of channelling a heal (see GRENADE and game/Grenades.js)
   grenade: { id: 'grenade', name: 'Grenade', icon: 'grenade', model: 'grenade', rarity: 'common', throwable: true, useTime: 0, heal: 0, shield: 0, stack: 6, pickup: 3, sound: null },
+  // gas can: refuels the car you sit in or stand beside (Vehicles); `fuel` instead of a heal
+  gascan: { id: 'gascan', name: 'Gas Can', icon: 'gascan', model: 'gascan', rarity: 'uncommon', useTime: 2.5, heal: 0, shield: 0, fuel: 50, stack: 2, sound: 'car_door' },
   smoke: { id: 'smoke', name: 'Smoke Grenade', icon: 'smoke', model: 'smoke', rarity: 'uncommon', throwable: true, useTime: 0, heal: 0, shield: 0, stack: 4, pickup: 2, sound: null },
 };
 

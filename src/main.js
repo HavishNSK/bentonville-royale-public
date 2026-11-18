@@ -116,6 +116,7 @@ const menus = createMenus(uiRoot, {
   onNameChange: (name) => party && party.setName(name),
   onFreeBuild: unlessBanned(async () => {
     try {
+      unreadyForSolo();
       closeMultiplayer();
       await ensureLoaded();
       game.startMatch(undefined, { freeBuild: true });
@@ -127,6 +128,7 @@ const menus = createMenus(uiRoot, {
   }),
   onMuseum: unlessBanned(async () => {
     try {
+      unreadyForSolo();
       closeMultiplayer();
       await ensureLoaded();
       game.startMatch(undefined, { freeBuild: true, museum: true });
@@ -436,7 +438,7 @@ async function joinMultiplayer(code, name, match = null) {
     if (mp !== me) return;
     mp = null;
     matchStatus = '';
-    menus.showNotice(errText(err, 'Could not join that room.'));
+    menus.showNotice(match ? "Couldn't reach the party leader's match. Ask them to press PLAY again." : errText(err, 'Could not join that room.'));
     renderParty();
   }
 }
@@ -657,14 +659,33 @@ function partyPlay() {
   playLocal(lastLocal.mode, lastLocal.fill);
 }
 
+/** A party member who goes off to play alone is no longer ready for the party's match. */
+function unreadyForSolo() {
+  if (party && party.party && !party.isLeader && party.me && party.me.ready) party.ready(false);
+}
+
 function onMatchFound(plan) {
-  // busy in a private lobby or a match: skip this one
-  if (mp || game.state !== 'menu') return;
   const token = party.token;
+  const mine = (plan.teams || []).some((t) => (t.tokens || []).includes(token));
+  if (!mine) return;
+  // Only a live online match (or a private lobby) keeps us out: the party is counting on us,
+  // so leave Free Build, Museum, a bot match or a results screen and go.
+  if (game.state === 'loading') return;
+  const live = game.state === 'drop' || game.state === 'play';
+  if (mp && (live || menus.current === 'lobby')) return;
+  if (live && game.net) return;
+  if (game.state !== 'menu') {
+    game.leave();
+    sfx.playMusic('menu');
+    menus.showTitle();
+  }
+  closeMultiplayer();
   const name = menus.playerName();
   if (plan.hostToken === token) hostMatch(plan, name, token);
   else joinMultiplayer(plan.code, name, { ...plan, token });
 }
+
+const HOST_WAIT_MS = 15000; // the host starts with whoever made it by then
 
 async function hostMatch(plan, name, token) {
   closeMultiplayer();
@@ -682,7 +703,7 @@ async function hostMatch(plan, name, token) {
     room.mode = normalizeMode(plan.mode);
     preloadInLobby();
     room.onError = (text) => mp === me && console.warn('[net]', text);
-    // wait for every expected player (or 20 s; late joiners are turned away)
+    // wait for every expected player (or HOST_WAIT_MS; late joiners are turned away)
     await new Promise((resolve) => {
       let done = false;
       const finish = () => {
@@ -695,10 +716,13 @@ async function hostMatch(plan, name, token) {
         if (done) return;
         if (mp !== me) return finish();
         const have = [...room.clients.values()].filter((c) => expected.has(c.token)).length;
-        setMatchStatus(`Match found! Waiting for players ${have + 1}/${total}`);
+        const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        setMatchStatus(`Match found! ${have + 1}/${total} here · starting in ${left}s`);
         if (have >= expected.size) finish();
       };
-      const timer = setTimeout(finish, 20000);
+      const deadline = Date.now() + HOST_WAIT_MS;
+      const timer = setTimeout(finish, HOST_WAIT_MS);
+      const tick = setInterval(() => (done ? clearInterval(tick) : check()), 1000);
       room.onLobby(check);
       check();
     });
@@ -729,6 +753,7 @@ async function playLocal(mode = 'solo', fill = true) {
   lastLocal.mode = normalizeMode(mode);
   lastLocal.fill = fill;
   try {
+    unreadyForSolo();
     closeMultiplayer();
     await ensureLoaded();
     game.startMatch(undefined, { mode: lastLocal.mode, fill: lastLocal.fill });

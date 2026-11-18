@@ -26,6 +26,7 @@
 
 import * as THREE from 'three';
 import { PLAYER, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, MATCH, REBOOT, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
+import { CAR } from '../game/vehicles/cars.js';
 import { Character } from '../game/Character.js';
 import { heldSlot } from '../game/Game.js';
 import { SKINS, EMOTES, PICKAXES, BACKBLINGS } from '../game/Cosmetics.js';
@@ -440,6 +441,9 @@ export class HostSession {
     if (this._snapAcc >= 1 / SNAP_HZ) {
       this._snapAcc = Math.min(this._snapAcc - 1 / SNAP_HZ, 0.1);
       this._sendSnapshot();
+      // moving / occupied cars (Vehicles.poses): small, and only while something drives
+      const rows = g.vehicles ? g.vehicles.poses() : null;
+      if (rows && rows.length && this.room.clients.size) this.stats.evBytes += this.room.broadcast({ t: 'cars', l: rows });
     }
     // events go out every frame, not with the next snapshot (up to 50 ms sooner)
     this._flushEvents();
@@ -469,7 +473,7 @@ export class HostSession {
         health: a.downed ? a.downHp : a.health,
         shield: a.shield,
         kills: a.kills,
-        xf: (a.downed ? XFLAG.downed : 0) | (a.downed && a.reviver ? XFLAG.revived : 0),
+        xf: (a.downed ? XFLAG.downed : 0) | (a.downed && a.reviver ? XFLAG.revived : 0) | (a.vehicle && a.leaning ? XFLAG.lean : 0),
       });
     };
     push(g.player);
@@ -690,6 +694,8 @@ export class HostSession {
       busPosAt(route, Math.min(this.time, route.tClose), a.pos); // riding: wherever the bus is
     } else if (a.carriedBy) {
       // on a teammate's shoulder: the host owns where they are (Combat.tickCarry)
+    } else if (a.vehicle) {
+      // in a car: the host pins them to their seat (Vehicles)
     } else if (inBounds && (fromBus || a.allowJump || dist <= cap || was === 'bus' || this._portalOk(a, s))) {
       a.pos.set(s.x, s.y, s.z);
       a.allowJump = false;
@@ -894,12 +900,19 @@ export class HostSession {
       case 'use': {
         const it = inv.slots[m.s];
         if (!it || it.type !== 'consumable' || CONSUMABLES[it.id].throwable) return;
+        // gas can: only with a car to pour it into
+        const fuelCar = CONSUMABLES[it.id].fuel > 0 && g.vehicles ? a.vehicle || g.vehicles.near(a.pos) : null;
+        if (CONSUMABLES[it.id].fuel > 0 && !fuelCar) return;
         const keep = inv.selected;
         inv.selected = m.s;
         const used = inv.useConsumable();
         inv.selected = keep;
         if (!used) return;
         const def = CONSUMABLES[used.id];
+        if (def.fuel > 0) {
+          g.vehicles.refuel(fuelCar, def.fuel);
+          return;
+        }
         a.health = Math.min(PLAYER.maxHealth, a.health + def.heal);
         a.shield = Math.min(PLAYER.maxShield, a.shield + def.shield);
         if (g.fx) g.fx.aura(a.pos, def.shield > 0 ? 'shield' : 'heal', 1.2);
@@ -924,6 +937,39 @@ export class HostSession {
         a.lastThrow = this.time;
         if (a.character) a.character.swing();
         g.grenades.throw(a, _o, _d.normalize(), used.id);
+        return;
+      }
+      case 'veh': {
+        // cars: get in (c = car id) / out / change seat / horn / lean out of the window
+        const V = g.vehicles;
+        if (!V || a.inBus || a.airborneDrop) return;
+        if (m.op === 'in') {
+          const car = V.byId.get(m.c);
+          if (!car || a.vehicle || a.carrying) return;
+          if (V.nearest(a, CAR.enterRange + 1.5) !== car) return; // a little lag allowance
+          V.enter(a, car);
+        } else if (m.op === 'out') V.exit(a);
+        else if (m.op === 'seat') V.switchSeat(a);
+        else if (m.op === 'horn' && a.vehicle && a.seat === 0) {
+          if (this.time - (a.lastHorn || -9) < 0.4) return;
+          a.lastHorn = this.time;
+          V.horn(a.vehicle);
+        } else if (m.op === 'lean') V.setLean(a, !!m.on);
+        return;
+      }
+      case 'drv': {
+        // the driver's own car pose (they simulate it; we check it is not a teleport)
+        const V = g.vehicles;
+        if (!V || !a.vehicle || a.seat !== 0) return;
+        const now = this.time;
+        const since = now - (a.lastDrv || now - 0.05);
+        a.lastDrv = now;
+        if (!V.acceptDriverPose(a, m, since) && now - (a.lastCarCor || -9) > 0.5) {
+          a.lastCarCor = now;
+          const car = a.vehicle;
+          const n = car.net || car;
+          this.room.sendTo(a.id, { t: 'ccor', c: car.id, x: n.x, y: n.y, z: n.z, h: n.h != null ? n.h : car.heading });
+        }
         return;
       }
       case 'mv': {

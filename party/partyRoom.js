@@ -28,6 +28,7 @@ import { originAllowed } from './authLimits.js';
 
 const POLL_MS = 2000;
 const MATCHED_MS = 4000;
+const RESEND_MS = 10000; // a member who reconnects this soon after a match still gets it
 // A dropped connection (page refresh, network blip) keeps its party slot this long, so the
 // player comes back into the same party instead of vanishing from everyone's lobby.
 const AWAY_MS = 20000;
@@ -190,6 +191,14 @@ export class Party extends Server {
       conn.setState({ token });
       if (this.state === 'queued' && !wasLeader) this._cancel(`${name} reconnected`);
       this._sync();
+      // dropped while the match was being handed out: give them the plan now (the host waits ~20 s)
+      if (this._lastMatch && Date.now() - this._lastMatch.at < RESEND_MS) {
+        try {
+          conn.send(JSON.stringify(this._lastMatch.msg));
+        } catch {
+          /* gone again */
+        }
+      }
       return;
     }
 
@@ -348,6 +357,9 @@ export class Party extends Server {
         if (this.state !== 'idle') return;
         const waiting = this.members.filter((m) => m.id !== this.leaderId && !m.ready);
         if (waiting.length) return err(`Waiting for ${waiting.length} to ready up.`);
+        // a reconnecting member would miss the match message and never reach the game
+        const away = this.members.filter((m) => m.away);
+        if (away.length) return err(`Waiting for ${away.map((m) => m.name).join(', ')} to reconnect.`);
         this._queue();
         return;
       }
@@ -414,7 +426,9 @@ export class Party extends Server {
     this.ticketId = null;
     this._stopPoll();
     for (const m of this.members) if (m.id !== this.leaderId) m.ready = false;
-    this._broadcast({ t: 'match', code: msg.code, hostToken: msg.hostToken, teams: msg.teams, mode: msg.mode });
+    const match = { t: 'match', code: msg.code, hostToken: msg.hostToken, teams: msg.teams, mode: msg.mode };
+    this._lastMatch = { msg: match, at: Date.now() };
+    this._broadcast(match);
     this._sync();
     clearTimeout(this._matchedTimer);
     this._matchedTimer = setTimeout(() => {

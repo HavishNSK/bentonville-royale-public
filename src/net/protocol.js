@@ -29,7 +29,7 @@
 
 import { WEAPONS, TAU } from '../core/config.js';
 
-export const PROTO_VERSION = 3; // 2: teams (roster tm, start mode, snapshot xflags, knock / revive events); 3: ballistic sniper rounds ('sh' b/d, 'ph' claims)
+export const PROTO_VERSION = 4; // 2: teams (roster tm, start mode, snapshot xflags, knock / revive events); 3: ballistic sniper rounds ('sh' b/d, 'ph' claims); 4: drivable cars ('veh' / 'drv' actions, 've' 'vw' 'vd' 'vx' 'vh' 'vf' events, 'cars' poses, XFLAG.lean)
 export const MAX_HUMANS = 16;
 export const SNAP_HZ = 20;
 export const STATE_HZ = 30;
@@ -41,7 +41,7 @@ export const T_SNAP = 1;
 export const T_STATE = 2;
 
 export const FLAG = { alive: 1, grounded: 2, gliding: 4, crouch: 8, bus: 16, emote: 32, ads: 64, reloading: 128 };
-export const XFLAG = { downed: 1, revived: 2 }; // revived = a teammate is reviving this actor right now
+export const XFLAG = { downed: 1, revived: 2, lean: 4 }; // revived = a teammate is reviving this actor right now; lean = leaning out of a car window
 export const MODES = ['ground', 'freefall', 'glide', 'bus', 'dead', 'downed'];
 export const STORM_MODES = ['waiting', 'shrinking', 'final', 'done'];
 export const EQUIP = ['pickaxe', 'none', ...Object.keys(WEAPONS), 'grenade', 'smoke']; // new ids go on the end
