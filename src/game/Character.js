@@ -709,6 +709,10 @@ export class Character {
     this.mixer.stopAllAction();
     this.mixer.uncacheRoot(this.model);
     this.root.removeFromParent();
+    // each clone owns its skeletons (SkeletonUtils.clone); their bone textures are GPU textures
+    this.model.traverse((o) => {
+      if (o.isSkinnedMesh && o.skeleton) o.skeleton.dispose();
+    });
     this.canopy.geometry.dispose();
     this.canopy.material.dispose();
     this.downRing.geometry.dispose();
