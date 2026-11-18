@@ -39,6 +39,7 @@ import { applyCrosshairStyle } from './hud.js';
 import { createFpsMeter } from './fpsMeter.js';
 import { MATCH, RANKED_NOTE } from '../core/config.js';
 import { nameIsClean } from '../net/chatFilter.js';
+import { nameplate } from '../net/devs.js';
 import { TEAM_MODES, MODE_LABELS, teamSize } from '../game/Teams.js';
 
 const MODE_IDS = Object.keys(TEAM_MODES);
@@ -755,7 +756,10 @@ export function createMenus(root, opts = {}) {
         btn.classList.toggle('is-ready', !!m.ready);
         btn.classList.toggle('is-you', !!m.you);
         btn.classList.toggle('is-leader', !!m.leader);
-        btn.innerHTML = `${m.leader ? `<span class="mn-slot-crown" title="Party leader">${icon('crown')}</span>` : ''}<b class="mn-slot-name">${esc(m.name)}</b><span class="mn-slot-state">${m.away ? 'RECONNECTING…' : m.ready ? '<i aria-hidden="true">&#10003;</i>READY' : 'NOT READY'}</span>${m.you ? '<em>YOU</em>' : ''}`;
+        const plate = m.you ? nameplate(m.name) : { name: m.name, title: '', color: '' };
+        const titleHtml = plate.title ? `<em class="br-title-tag">${esc(plate.title)}</em>` : '';
+        const nameStyle = plate.color ? ` style="color:${plate.color}"` : '';
+        btn.innerHTML = `${m.leader ? `<span class="mn-slot-crown" title="Party leader">${icon('crown')}</span>` : ''}${titleHtml}<b class="mn-slot-name"${nameStyle}>${esc(m.name)}</b><span class="mn-slot-state">${m.away ? 'RECONNECTING…' : m.ready ? '<i aria-hidden="true">&#10003;</i>READY' : 'NOT READY'}</span>${m.you ? '<em>YOU</em>' : ''}`;
         const canManage = v.online && v.isLeader && !m.you;
         btn.disabled = !canManage;
         btn.setAttribute('aria-label', `${m.name}${m.leader ? ', leader' : ''}, ${m.ready ? 'ready' : 'not ready'}${canManage ? '. Kick or make leader' : ''}`);
@@ -929,7 +933,15 @@ export function createMenus(root, opts = {}) {
         const li = document.createElement('li');
         li.classList.toggle('is-ready', !!p.ready);
         const nm = document.createElement('span');
-        nm.textContent = p.name;
+        const plate = p.you ? nameplate(p.name) : { name: p.name, title: '', color: '' };
+        if (plate.title) {
+          const tag = document.createElement('em');
+          tag.className = 'br-title-tag';
+          tag.textContent = plate.title;
+          tag.style.color = plate.color;
+          nm.style.color = plate.color;
+          nm.append(tag, document.createTextNode(' ' + plate.name));
+        } else nm.textContent = p.name;
         li.appendChild(nm);
         const tags = [p.host ? 'HOST' : p.ready ? '\u2713 READY' : 'NOT READY', p.you ? 'YOU' : ''].filter(Boolean);
         const tag = document.createElement('em');

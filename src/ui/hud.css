@@ -51,6 +51,23 @@
   --br-spring: cubic-bezier(0.3, 1.6, 0.5, 1);
 }
 
+/* verified account title (devs.js PLAYER_TITLES), e.g. [CHULDE] */
+.br-title-tag {
+  display: inline-block;
+  margin-right: 0.4em;
+  padding: 0 0.38em 0.04em;
+  border: 0.12em solid currentColor;
+  border-radius: 0.28em;
+  font-family: var(--br-display);
+  font-size: 0.72em;
+  font-style: normal;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  vertical-align: 0.12em;
+  color: #facece;
+}
+
 /* ---- root ---------------------------------------------------------------- */
 .br-hud {
   position: fixed;

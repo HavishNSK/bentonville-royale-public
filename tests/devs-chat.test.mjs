@@ -26,6 +26,17 @@ test('TheChosenOne has the CHULDE title in #facece; nobody else does', () => {
   for (const t of Object.values(PLAYER_TITLES)) assert.ok(cleanTitle(t.title, t.color), 'table entries pass the wire check');
 });
 
+test('nameplate paints [CHULDE] TheChosenOne in #facece', async () => {
+  const { nameplate } = await import('../src/net/devs.js');
+  assert.deepEqual(nameplate('TheChosenOne'), {
+    name: 'TheChosenOne',
+    title: 'CHULDE',
+    color: '#facece',
+    label: '[CHULDE] TheChosenOne',
+  });
+  assert.deepEqual(nameplate('Player'), { name: 'Player', title: '', color: '', label: 'Player' });
+});
+
 test('titles off the wire are shape-checked (no markup, only #rrggbb colours)', () => {
   assert.deepEqual(cleanTitle('CHULDE', '#FACECE'), { title: 'CHULDE', color: '#facece' });
   assert.equal(cleanTitle('<b>X</b>', '#facece'), null);

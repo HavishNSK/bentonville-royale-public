@@ -14,6 +14,7 @@ import * as THREE from 'three';
 import { loadGLB, loadJSON } from '../core/assets.js';
 import { CharacterKit, Character, registerKits, cosmeticMesh } from '../game/Character.js';
 import { skinDef, SKINS, PICKAXES, BACKBLINGS, cosmeticDef } from '../game/Cosmetics.js';
+import { nameplate } from '../net/devs.js';
 
 const SPOTS = [0, -1.25, 1.25, -2.4]; // x of member i (you in the middle)
 
@@ -156,9 +157,17 @@ export function createShowcase(parent) {
     want.forEach((m, i) => {
       if (!m || !m.name) return;
       const tag = document.createElement('span');
-      tag.textContent = m.name;
       tag.className = i === 0 ? 'is-you' : '';
       tag.style.setProperty('--x', String(SPOTS[i]));
+      const plateName = m.you ? nameplate(m.name) : { name: m.name, title: '', color: '' };
+      if (plateName.title) {
+        const badge = document.createElement('em');
+        badge.className = 'br-title-tag';
+        badge.textContent = plateName.title;
+        badge.style.color = plateName.color;
+        tag.style.color = plateName.color;
+        tag.append(badge, document.createTextNode(' ' + plateName.name));
+      } else tag.textContent = m.name;
       plate.appendChild(tag);
     });
   }

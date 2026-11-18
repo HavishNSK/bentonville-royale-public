@@ -25,10 +25,13 @@
 //     (wins/kills reach the boards only when ranked === true: a HARD bot-difficulty match)
 //   friendAdd {token, name}  friendAccept {token, name}  friendDecline {token, name}  friendRemove {token, name}
 //   invite {token, name, code}                            (delivered over the socket)
-// Suggestion / bug board (no account needed; signed-in posts carry the account name):
+// Suggestion / bug board (no account needed; signed-in posts carry the account name).
+// Posts stay on fb:<id> so existing suggestions keep showing. Replies are an array on that record.
 //   feedback {kind: 'idea'|'bug', text, token?, anon?}   -> {item}   (one post per IP per 30 s)
 //   feedbackList {}                                       -> {items: newest first, max 60}
 //   feedbackVote {id, token?, anon}                       -> {item}   (one vote per voter)
+//   feedbackReply {id, text, token?, anon?}               -> {item}
+//   feedbackDelete {id, replyId?, token}                  -> {ok} or {item}  (DEV accounts only)
 // WebSocket: /parties/accounts/global?token=   presence + live friend updates
 //   client -> server  {t:'status', s:'lobby'|'match', party?:CODE, skin?}
 //   server -> client  {t:'friends', list:[{name, online, status, skin}], incoming:[names], outgoing:[names]}
@@ -40,6 +43,7 @@ import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLI
 import { verifyGoogleIdToken } from './googleIdToken.js';
 import { applyMatchStats } from './matchStats.js';
 import { nameIsClean } from '../src/net/chatFilter.js';
+import { publicItem, sanitizeFeedbackText, addReply, removeReply, canModerateFeedback } from '../src/net/feedbackBoard.js';
 
 const START_COINS = 1500;
 const SESSION_DAYS = 30;
@@ -359,18 +363,19 @@ export class Accounts extends Server {
   async _feedback(m, req) {
     const voterOf = async () => {
       const acc = m.token ? await this._session(m.token) : null;
-      if (acc) return { id: 'u:' + acc.name.toLowerCase(), name: acc.name };
+      if (acc) return { id: 'u:' + acc.name.toLowerCase(), name: acc.name, acc };
       const anon = String(m.anon || '').replace(/[^a-z0-9]/gi, '').slice(0, 32);
-      return anon.length >= 8 ? { id: 'a:' + anon, name: null } : null;
+      return anon.length >= 8 ? { id: 'a:' + anon, name: null, acc: null } : null;
     };
+    const fbKey = (id) => 'fb:' + String(id || '').replace(/[^a-z0-9]/gi, '').slice(0, 24);
     if (m.op === 'feedbackList') {
       const rows = await this.ctx.storage.list({ prefix: 'fb:', reverse: true, limit: 60 });
-      const items = [...rows.values()].map(({ voters, ip, ...pub }) => pub); // voters / IPs stay private
+      const items = [...rows.values()].map((row) => publicItem(row)).filter(Boolean);
       return json({ items });
     }
     if (m.op === 'feedback') {
-      const text = String(m.text || '').replace(/[\u0000-\u0008\u000b-\u001f<>]/g, '').trim().slice(0, 500);
-      if (text.length < 4) return err('Write a few words first.');
+      const clean = sanitizeFeedbackText(m.text);
+      if (!clean.ok) return err(clean.reason);
       const kind = m.kind === 'bug' ? 'bug' : 'idea';
       const ip = (req.headers.get('cf-connecting-ip') || 'local').slice(0, 64);
       const last = (await this.ctx.storage.get('fbip:' + ip)) || 0;
@@ -379,24 +384,54 @@ export class Accounts extends Server {
       const who = await voterOf();
       const at = Date.now();
       const id = String(at).padStart(14, '0') + Math.random().toString(36).slice(2, 6);
-      const item = { id, kind, text, by: who && who.name ? who.name : 'Guest', at, votes: 1, voters: who ? [who.id] : [] };
+      const item = { id, kind, text: clean.text, by: who && who.name ? who.name : 'Guest', at, votes: 1, voters: who ? [who.id] : [], replies: [] };
       await this.ctx.storage.put('fb:' + id, item);
-      const { voters, ...pub } = item;
-      return json({ item: pub });
+      return json({ item: publicItem(item) });
     }
     if (m.op === 'feedbackVote') {
-      const id = String(m.id || '').replace(/[^a-z0-9]/gi, '').slice(0, 24);
-      const item = await this.ctx.storage.get('fb:' + id);
+      const item = await this.ctx.storage.get(fbKey(m.id));
       if (!item) return err('That post is gone.', 404);
       const who = await voterOf();
       if (!who) return err('Could not count that vote.');
+      if (!Array.isArray(item.voters)) item.voters = [];
       if (!item.voters.includes(who.id)) {
         if (item.voters.length < 5000) item.voters.push(who.id);
         item.votes = item.voters.length;
-        await this.ctx.storage.put('fb:' + id, item);
+        await this.ctx.storage.put('fb:' + item.id, item);
       }
-      const { voters, ...pub } = item;
-      return json({ item: pub });
+      return json({ item: publicItem(item) });
+    }
+    if (m.op === 'feedbackReply') {
+      const item = await this.ctx.storage.get(fbKey(m.id));
+      if (!item) return err('That post is gone.', 404);
+      const clean = sanitizeFeedbackText(m.text);
+      if (!clean.ok) return err(clean.reason);
+      const ip = (req.headers.get('cf-connecting-ip') || 'local').slice(0, 64);
+      const last = (await this.ctx.storage.get('fbip:' + ip)) || 0;
+      if (Date.now() - last < 30000) return err('Thanks! Give it 30 seconds before posting again.', 429);
+      await this.ctx.storage.put('fbip:' + ip, Date.now());
+      const who = await voterOf();
+      const at = Date.now();
+      const rid = ('r' + String(at).slice(-10) + Math.random().toString(36).slice(2, 6)).replace(/[^a-z0-9]/gi, '').slice(0, 24);
+      const out = addReply(item, { id: rid, text: clean.text, by: who && who.name ? who.name : 'Guest', at });
+      if (out.error) return err(out.error);
+      await this.ctx.storage.put('fb:' + item.id, out.item);
+      return json({ item: publicItem(out.item) });
+    }
+    if (m.op === 'feedbackDelete') {
+      const who = await voterOf();
+      if (!who || !who.acc || !canModerateFeedback(who.acc.name)) return err('Only developers can delete posts.', 403);
+      const item = await this.ctx.storage.get(fbKey(m.id));
+      if (!item) return err('That post is gone.', 404);
+      const replyId = String(m.replyId || '').replace(/[^a-z0-9]/gi, '').slice(0, 24);
+      if (replyId) {
+        const out = removeReply(item, replyId);
+        if (out.error) return err(out.error, 404);
+        await this.ctx.storage.put('fb:' + item.id, out.item);
+        return json({ item: publicItem(out.item) });
+      }
+      await this.ctx.storage.delete('fb:' + item.id);
+      return json({ ok: true, id: item.id });
     }
     return err('Unknown request.');
   }

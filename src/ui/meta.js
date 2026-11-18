@@ -1,6 +1,6 @@
 // BENTONVILLE ROYALE — out-of-match meta screens on the title: account bar, sign in / create
-// account, item shop, locker (outfit + emote wheel), friends, party invites, and the 3D
-// line-up (Showcase) with lobby emotes.
+// account, item shop, locker (outfit + emote wheel), friends, party invites, patch notes,
+// suggest / report-a-bug, and the 3D line-up (Showcase) with lobby emotes.
 //
 //   const meta = createMeta(menus, account, {
 //     partyCode: () => 'ABCD' | null,       // current party (invites)
@@ -35,6 +35,7 @@ const seenPatch = () => {
 
 import { partyHost, isLocal } from '../net/Net.js';
 import { nameIsClean } from '../net/chatFilter.js';
+import { nameplate, isDevName } from '../net/devs.js';
 import { createUpdateFlyer } from './updateFlyer.js';
 
 // GIS / Clever buttons in renderAuth(); Account.loginWithGoogle / Clever OAuth redirect.
@@ -153,10 +154,11 @@ export function createMeta(menus, account, opts = {}) {
   const bShop = tab('ITEM SHOP', 'shop');
   const bBoard = tab('RANKS', 'leaderboard');
   const bNews = tab('PATCH NOTES', 'news');
+  const bFeedback = tab('SUGGEST', 'feedback');
   const newBadge = h('em', 'mt-badge mt-badge-new', 'NEW');
   newBadge.hidden = seenPatch() === LATEST_VERSION;
   bNews.appendChild(newBadge);
-  tabs.append(bPlay, bLocker, bShop, bBoard, bNews);
+  tabs.append(bPlay, bLocker, bShop, bBoard, bNews, bFeedback);
   const bFriends = btn('FRIENDS', 'mn-chip mt-chip', 'friends');
   const badge = h('em', 'mt-badge');
   bFriends.appendChild(badge);
@@ -284,6 +286,7 @@ export function createMeta(menus, account, opts = {}) {
     panelBody.replaceChildren();
     close.hidden = open === 'rename' && mustRename(); // no way around a forced rename
     if (open === 'news') renderNews();
+    else if (open === 'feedback') renderFeedback();
     else if (open === 'auth') renderAuth();
     else if (open === 'signout') renderSignOut();
     else if (open === 'rename') renderRename();
@@ -319,8 +322,12 @@ export function createMeta(menus, account, opts = {}) {
       const row = h('div', 'mt-friend is-online' + (p.status === 'queued' ? ' is-queued' : p.status === 'match' ? ' is-busy' : ''));
       const info = h('span', 'mt-friend-info');
       const what = p.status === 'queued' ? `Searching · ${MODE_LABEL[p.mode]}` : p.status === 'match' ? 'In a match' : 'In the lobby';
-      const who = h('b', null, p.title ? `[${p.title}] ${p.name}` : p.name);
-      if (p.title && p.color) who.style.color = p.color; // verified account title (devs.js PLAYER_TITLES)
+      const who = h('b', null);
+      if (p.title) {
+        const tag = h('em', 'br-title-tag', p.title);
+        if (p.color) tag.style.color = who.style.color = p.color; // verified account title (devs.js PLAYER_TITLES)
+        who.append(tag, document.createTextNode(' ' + p.name));
+      } else who.textContent = p.name;
       info.append(who, h('small', null, what));
       row.append(h('i', 'mt-dot'), info);
       panelBody.appendChild(row);
@@ -336,51 +343,33 @@ export function createMeta(menus, account, opts = {}) {
   renderOnlineChip();
 
   // ---------------------------------------------------------------- patch notes + board
-  let newsTab = 'notes';
   let board = null; // last loaded posts
   let boardKind = 'idea';
   function renderNews() {
-    panelTitle.textContent = newsTab === 'notes' ? 'PATCH NOTES' : 'IDEAS & BUGS';
+    panelTitle.textContent = 'PATCH NOTES';
     try {
       localStorage.setItem(SEEN_KEY, LATEST_VERSION);
     } catch {
       /* private mode */
     }
     newBadge.hidden = true;
-    const tabs = h('div', 'mn-seg');
-    for (const [id, label] of [
-      ['notes', 'PATCH NOTES'],
-      ['board', 'SUGGEST / REPORT A BUG'],
-    ]) {
-      const t = h('button', newsTab === id ? 'is-on' : '', label);
-      t.type = 'button';
-      t.setAttribute('aria-pressed', String(newsTab === id));
-      t.addEventListener('click', () => {
-        click();
-        newsTab = id;
-        say('');
-        render();
-      });
-      tabs.appendChild(t);
-    }
-    panelBody.appendChild(tabs);
-    if (newsTab === 'notes') {
-      for (const n of PATCH_NOTES) {
-        const sec = h('section', 'mt-note' + (n.version === LATEST_VERSION ? ' is-latest' : ''));
-        const head = h('div', 'mt-note-head');
-        head.append(h('b', 'mt-note-ver', 'v' + n.version), h('span', 'mt-note-title', n.title), h('small', 'mt-note-date', n.date));
-        sec.appendChild(head);
-        for (const g of n.sections) {
-          sec.appendChild(h('div', 'mt-note-h', g.heading));
-          const ul = h('ul', 'mt-note-list');
-          for (const it of g.items) ul.appendChild(h('li', null, it));
-          sec.appendChild(ul);
-        }
-        panelBody.appendChild(sec);
+    for (const n of PATCH_NOTES) {
+      const sec = h('section', 'mt-note' + (n.version === LATEST_VERSION ? ' is-latest' : ''));
+      const head = h('div', 'mt-note-head');
+      head.append(h('b', 'mt-note-ver', 'v' + n.version), h('span', 'mt-note-title', n.title), h('small', 'mt-note-date', n.date));
+      sec.appendChild(head);
+      for (const g of n.sections) {
+        sec.appendChild(h('div', 'mt-note-h', g.heading));
+        const ul = h('ul', 'mt-note-list');
+        for (const it of g.items) ul.appendChild(h('li', null, it));
+        sec.appendChild(ul);
       }
-      return;
+      panelBody.appendChild(sec);
     }
-    // board: post form + recent posts
+  }
+
+  function renderFeedback() {
+    panelTitle.textContent = 'SUGGEST / REPORT A BUG';
     const form = h('form', 'mt-form mt-board-form');
     const kinds = h('div', 'mn-seg');
     for (const [id, label] of [
@@ -433,7 +422,7 @@ export function createMeta(menus, account, opts = {}) {
       .feedbackList()
       .then((items) => {
         board = items;
-        if (open === 'news' && newsTab === 'board') renderBoard(list);
+        if (open === 'feedback') renderBoard(list);
       })
       .catch(() => {
         if (!board) {
@@ -452,6 +441,7 @@ export function createMeta(menus, account, opts = {}) {
       list.appendChild(h('p', 'mt-hint', 'No posts yet. Be the first!'));
       return;
     }
+    const canMod = account.signedIn && isDevName(account.profile.name);
     const items = board.slice().sort((a, b) => b.votes - a.votes || b.at - a.at);
     for (const it of items) {
       const row = h('div', 'mt-post');
@@ -469,7 +459,74 @@ export function createMeta(menus, account, opts = {}) {
         }
       });
       const body = h('div', 'mt-post-body');
-      body.append(h('span', 'mt-post-kind', it.kind === 'bug' ? 'BUG' : 'IDEA'), h('p', 'mt-post-text', it.text), h('small', null, `${it.by} · ${new Date(it.at).toLocaleDateString()}`));
+      const head = h('div', 'mt-post-head');
+      head.append(h('span', 'mt-post-kind', it.kind === 'bug' ? 'BUG' : 'IDEA'));
+      if (canMod) {
+        const del = btn('DELETE', 'mn-chip mt-chip-danger mt-del');
+        del.addEventListener('click', async () => {
+          click();
+          try {
+            await account.feedbackDelete(it.id);
+            board = board.filter((x) => x.id !== it.id);
+            say('Deleted.');
+            renderBoard(list);
+          } catch (err) {
+            say(err.message, true);
+          }
+        });
+        head.appendChild(del);
+      }
+      body.append(head, h('p', 'mt-post-text', it.text), h('small', null, `${it.by} · ${new Date(it.at).toLocaleDateString()}`));
+      const replies = Array.isArray(it.replies) ? it.replies : [];
+      if (replies.length) {
+        const thread = h('div', 'mt-replies');
+        for (const rp of replies) {
+          const line = h('div', 'mt-reply');
+          line.append(h('p', 'mt-post-text', rp.text), h('small', null, `${rp.by} · ${new Date(rp.at).toLocaleDateString()}`));
+          if (canMod) {
+            const delR = btn('DELETE', 'mn-chip mt-chip-danger mt-del');
+            delR.addEventListener('click', async () => {
+              click();
+              try {
+                const up = await account.feedbackDelete(it.id, rp.id);
+                board = board.map((x) => (x.id === up.id ? up : x));
+                say('Deleted.');
+                renderBoard(list);
+              } catch (err) {
+                say(err.message, true);
+              }
+            });
+            line.appendChild(delR);
+          }
+          thread.appendChild(line);
+        }
+        body.appendChild(thread);
+      }
+      const replyForm = h('form', 'mt-reply-form');
+      const replyIn = h('input', 'mn-field');
+      replyIn.type = 'text';
+      replyIn.maxLength = 500;
+      replyIn.placeholder = 'Reply to this…';
+      replyIn.setAttribute('aria-label', 'Reply');
+      const replyBtn = btn('REPLY', 'mn-chip');
+      replyBtn.type = 'submit';
+      replyForm.append(replyIn, replyBtn);
+      replyForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        click();
+        replyBtn.disabled = true;
+        try {
+          const up = await account.feedbackReply(it.id, replyIn.value);
+          board = board.map((x) => (x.id === up.id ? up : x));
+          replyIn.value = '';
+          say('Reply posted.');
+          renderBoard(list);
+        } catch (err) {
+          say(err.offline ? 'Could not reach the server. Try again in a moment.' : err.message, true);
+        }
+        replyBtn.disabled = false;
+      });
+      body.appendChild(replyForm);
       row.append(vote, body);
       list.appendChild(row);
     }
@@ -1158,7 +1215,18 @@ export function createMeta(menus, account, opts = {}) {
 
   function renderBar() {
     const p = account.profile;
-    whoName.textContent = p.guest ? 'GUEST' : p.name;
+    whoName.replaceChildren();
+    whoName.style.color = '';
+    if (p.guest) whoName.textContent = 'GUEST';
+    else {
+      const plate = nameplate(p.name);
+      if (plate.title) {
+        const tag = h('em', 'br-title-tag', plate.title);
+        tag.style.color = plate.color;
+        whoName.style.color = plate.color;
+        whoName.append(tag, document.createTextNode(' ' + plate.name));
+      } else whoName.textContent = p.name;
+    }
     whoSub.textContent = p.guest ? 'Sign in for coins & skins' : `${p.stats.wins} wins · ${p.stats.kills} elims`;
     coinsNum.textContent = p.coins.toLocaleString();
     bAuth.querySelector('span').textContent = account.signedIn ? 'SIGN OUT' : 'SIGN IN';
@@ -1188,7 +1256,6 @@ export function createMeta(menus, account, opts = {}) {
   const flyer = createUpdateFlyer(document.body, {
     onClick: click,
     onNotes: () => {
-      newsTab = 'notes';
       openPanel('news');
     },
   });

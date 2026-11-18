@@ -36,6 +36,14 @@ export function titleForName(name) {
   return PLAYER_TITLES[String(name || '').trim().toLowerCase()] || null;
 }
 
+/** Local nameplate for a username we already trust (signed-in account, or you in the party). */
+export function nameplate(name) {
+  const n = String(name || '').trim().slice(0, 16);
+  const t = titleForName(n);
+  if (!t) return { name: n, title: '', color: '', label: n };
+  return { name: n, title: t.title, color: t.color, label: `[${t.title}] ${n}` };
+}
+
 /** A title from the network, shape-checked: { title, color } or null (rendered as text only). */
 export function cleanTitle(title, color) {
   const t = typeof title === 'string' ? title.trim() : '';

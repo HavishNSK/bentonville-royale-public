@@ -11,7 +11,8 @@
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
 //   await acct.leaderboard() -> { online, wins:[{name,wins,kills}], kills:[...] }
 //   acct.setStatus('lobby'|'match', partyCode)
-//   await acct.feedbackList() / feedback(kind, text) / feedbackVote(id)   suggestions + bugs board
+//   await acct.feedbackList() / feedback(kind, text) / feedbackVote(id)
+//   await acct.feedbackReply(id, text) / feedbackDelete(id, replyId?)   suggestions + bugs board
 //   acct.on('change', fn(profile)) / on('friends', fn({list, incoming, outgoing})) / on('invite', fn({from, code}))
 //   acct.on('request', fn(from)) / on('online', fn(bool))
 //
@@ -284,6 +285,13 @@ export function createAccount() {
     },
     async feedbackVote(id) {
       return (await api('feedbackVote', { id, token: token || undefined, anon: anonId() })).item;
+    },
+    async feedbackReply(id, text) {
+      return (await api('feedbackReply', { id, text, token: token || undefined, anon: anonId() })).item;
+    },
+    async feedbackDelete(id, replyId) {
+      const r = await api('feedbackDelete', { id, replyId: replyId || undefined, token });
+      return r.item || r;
     },
 
     setStatus(s, party) {
