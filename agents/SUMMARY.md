@@ -2,6 +2,27 @@
 
 Snapshot **2026-11-16 ~9:40pm America/Chicago**. Branch: `feat/interior-overhaul` (uncommitted Crystal Bridges restyle + spectator POV work). Root `AGENTS.md` still applies. Older wave reports under `agents/reports/` are historical; do not treat them as current product truth (multiplayer, accounts, interiors phase 1–2, and ranks already shipped on `main`).
 
+## Patch Notes Automation
+
+**Rule:** Any agent (or manual change) that ships a user-visible or gameplay-significant change must append an entry to `PATCH_NOTES.md` at the repo root before finishing.
+
+What counts as a significant change: new features, balance tweaks, bug fixes, new maps/assets, multiplayer changes, UI overhauls, rendering upgrades.
+
+What to write in `PATCH_NOTES.md`:
+
+```
+## [YYYY-MM-DD] — <short title>
+- <bullet describing what changed and why>
+```
+
+What does NOT need a patch note: file renames, internal refactors with no player-visible effect, dependency bumps, documentation-only edits.
+
+If `PATCH_NOTES.md` does not yet exist, create it with this header before appending:
+
+```
+# Patch Notes
+```
+
 The Claude Code session that owned this restyle hit the **5-hour usage limit** (resets **1:10am America/Chicago**). One background agent finished; the follow-up polish agent died mid-fix.
 
 ## Failed / incomplete this session

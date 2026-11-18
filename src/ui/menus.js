@@ -21,6 +21,7 @@
 //   menus.partyNotice(text, isError)
 //   menus.showNotice(text)  title screen with a message (host left, room full, ...)
 //   menus.playerName()      saved name (localStorage)
+//   menus.onNeedRename = fn  called when PLAY is blocked because the signed-in account name breaks the rules
 //   menus.setSettings(settings)       // update the shown settings without firing onSettings
 //   menus.showTitle() / showSettings(from) / showLoading(pct, label) / showPause()
 //   menus.showResult({ victory, placement, kills, total, time, killer, difficulty, ranked })
@@ -37,6 +38,7 @@ import {
 import { applyCrosshairStyle } from './hud.js';
 import { createFpsMeter } from './fpsMeter.js';
 import { MATCH, RANKED_NOTE } from '../core/config.js';
+import { nameIsClean } from '../net/chatFilter.js';
 import { TEAM_MODES, MODE_LABELS, teamSize } from '../game/Teams.js';
 
 const MODE_IDS = Object.keys(TEAM_MODES);
@@ -174,7 +176,7 @@ export function createMenus(root, opts = {}) {
        <span><kbd class="br-key" data-bind="pickaxe">F</kbd>pickaxe</span><span><kbd class="br-key" data-bind="map">M</kbd>map</span>
      </div>
      </div>
-     <div class="mn-foot">Map data &copy; OpenStreetMap contributors &middot; An original fan-made game, not affiliated with any other battle royale</div>`
+     <div class="mn-foot">Map data &copy; OpenStreetMap contributors &middot; An original fan-made game, not affiliated with any other battle royale &middot; <a href="privacy.html" target="_blank" rel="noopener">Privacy</a></div>`
   );
   wrap.appendChild(title);
   const T = {};
@@ -191,6 +193,18 @@ export function createMenus(root, opts = {}) {
     }
   };
   T.name.value = savedName() || 'Player' + Math.floor(100 + Math.random() * 900);
+  // A saved name with a swear word or slur must be replaced before playing (see nameBlocked).
+  let mustRenameGuest = false;
+  if (!nameIsClean(T.name.value)) {
+    mustRenameGuest = true;
+    T.name.value = '';
+    T.name.placeholder = 'New name';
+    try {
+      localStorage.removeItem(NAME_KEY);
+    } catch {
+      /* private mode */
+    }
+  }
   // keep the generated name too: a refresh must not turn you into someone else in your party
   if (!savedName()) {
     try {
@@ -200,6 +214,12 @@ export function createMenus(root, opts = {}) {
     }
   }
   T.name.addEventListener('change', () => {
+    if (!T.name.readOnly && !nameIsClean(T.name.value)) {
+      api.partyNotice('That name is not allowed. Pick one without swear words.', true);
+      return;
+    }
+    if (T.name.value.trim()) mustRenameGuest = false;
+    T.name.classList.remove('is-invalid');
     try {
       localStorage.setItem(NAME_KEY, T.name.value.trim().slice(0, 16));
     } catch {
@@ -372,6 +392,7 @@ export function createMenus(root, opts = {}) {
        <div class="mn-stack mn-stack-row">
          <button class="mn-btn mn-btn-hero" data-act="again">${icon('replay')}<span>PLAY AGAIN</span></button>
          <button class="mn-btn" data-act="menu">${icon('home')}<span>MAIN MENU</span></button>
+         <button class="mn-btn mn-btn-ad" data-act="adcoins" data-ref="adBtn" hidden><i class="mt-coin" aria-hidden="true"></i><span data-ref="adText">WATCH AD +100</span></button>
        </div>
      </div>`
   );
@@ -585,6 +606,23 @@ export function createMenus(root, opts = {}) {
     if (opts.onClick) opts.onClick();
     fn();
   };
+  /** A reason PLAY is refused because of the name, else ''. Shows it and points at the fix. */
+  function nameBlocked() {
+    const v = T.name.value.trim();
+    if (T.name.readOnly) {
+      if (nameIsClean(v)) return '';
+      api.partyNotice('Your username is not allowed. Choose a new one to keep playing.', true);
+      if (api.onNeedRename) api.onNeedRename();
+      return 'account';
+    }
+    if (nameIsClean(v) && !(mustRenameGuest && !v)) return '';
+    api.partyNotice(mustRenameGuest && !v ? 'Your old name is not allowed. Type a new name to play.' : 'That name is not allowed. Pick one without swear words.', true);
+    T.name.classList.add('is-invalid');
+    T.name.focus();
+    return 'guest';
+  }
+  const NAME_GATED = new Set(['play', 'party-go', 'party-join', 'freebuild', 'host', 'join', 'again']);
+
   wrap.querySelectorAll('[data-act]').forEach((b) => {
     b.addEventListener('mouseenter', () => opts.onHover && opts.onHover());
     const act = b.dataset.act;
@@ -600,6 +638,7 @@ export function createMenus(root, opts = {}) {
           }
           return n;
         };
+        if (NAME_GATED.has(act) && nameBlocked()) return;
         if (act === 'play') opts.onPlay && opts.onPlay();
         else if (act === 'party-go') partyGo();
         else if (act === 'party-copy') {
@@ -655,6 +694,7 @@ export function createMenus(root, opts = {}) {
         else if (act === 'leave') opts.onLeave && opts.onLeave();
         else if (act === 'again') opts.onPlayAgain && opts.onPlayAgain();
         else if (act === 'menu') opts.onLeave && opts.onLeave();
+        else if (act === 'adcoins') opts.onAdReward && opts.onAdReward();
       })
     );
   });
@@ -1010,6 +1050,12 @@ export function createMenus(root, opts = {}) {
       show(result, false);
     },
     /** Coins the match paid out (after the server confirms): counts up on the result screen. */
+    /** Results screen "watch an ad for coins" button: { show, text, disabled }. */
+    setAdReward({ show = false, text = 'WATCH AD +100', disabled = false } = {}) {
+      R.adBtn.hidden = !show;
+      R.adText.textContent = text;
+      R.adBtn.disabled = !!disabled;
+    },
     showReward(n) {
       if (!(n > 0) || !result.classList.contains('is-reveal')) return;
       R.coinStat.hidden = false;

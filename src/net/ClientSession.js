@@ -133,6 +133,8 @@ export class Puppet {
     const far = viewer && (this.pos.x - viewer.x) ** 2 + (this.pos.z - viewer.z) ** 2 > cd2;
     c.root.visible = this.seen && !this.inBus && !far;
     c.setDowned(this.downed);
+    const w = this.game && this.game.world;
+    c.setSwim(!!w && !!w.inWater && this.alive && !this.downed && !!(this.flags & FLAG.grounded) && w.inWater(this.pos.x, this.pos.z, this.pos.y));
     if (!c.root.visible) return;
     const v = this.vel;
     const hs = this.alive ? Math.hypot(v.x, v.z) : 0;
@@ -212,6 +214,7 @@ export class ClientSession {
         game.scene.add(ch.root);
       }
       const pup = new Puppet(info, ch);
+      pup.game = game; // world lookups in present() (swimming)
       if (info.sk) pup.skin = info.sk;
       this.puppets.set(info.id, pup);
       game.combat.register(pup);
@@ -443,7 +446,7 @@ export class ClientSession {
         if (g.reboot) g.reboot.applyEvent(e);
         if (e.by === this.id && g.reboot) {
           const c = g.reboot.cards.get(e.v);
-          g.hud.toast((c ? c.name : 'Teammate') + "'s reboot card: take it to a reboot van", 'pickup');
+          g.hud.toast((c ? c.name : 'Teammate') + "'s reboot card: take it to a reboot van (marked on your map)", 'pickup');
         }
         return;
       case 'rbd':

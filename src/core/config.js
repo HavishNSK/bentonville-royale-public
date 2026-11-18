@@ -278,7 +278,7 @@ export const CONSUMABLES = {
 export const GRENADE = {
   damage: 75, // flat, to every character within `radius` that the blast can see (the thrower too)
   radius: 5.5, // m
-  structureDamage: 375, // to built pieces, trees, rocks and props in the blast
+  structureDamage: 600, // one blast breaks a build, a wall panel, a tree or a prop in range
   fuse: 2.2, // s
   speed: 20, // m/s along the aim direction
   lift: 4, // m/s added straight up
@@ -298,7 +298,7 @@ export const ROCKET = {
   radius: 4.5, // m
   cleanRadius: 1.3, // m
   minDamage: 40,
-  structureDamage: 300, // to built pieces, trees, rocks and props in the blast
+  structureDamage: 600, // one blast breaks a build, a wall panel, a tree or a prop in range
   size: 0.15, // collision radius (m)
 };
 
@@ -380,6 +380,11 @@ export const KNOCK = {
   reviveRange: 2.2,
   botReviveClear: 40, // m: bots only revive with no enemy this close
 };
+
+// Swimming: on the terrain inside a map water area (World.inWater) you swim: slower, no
+// sprint / jump / aim, and no shooting, building or healing until you are out. The body sinks
+// to the chest (Character.setSwim).
+export const SWIM = { speed: 0.6, sink: 0.75, strokeT: 0.55 };
 
 // Reboot vans (team modes): an eliminated player drops a reboot card; a teammate picks it up
 // and holds interact at one of Catfish Ken's reboot vans (one per DROP_ZONES POI) to bring

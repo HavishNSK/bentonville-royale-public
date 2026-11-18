@@ -7,6 +7,108 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.16.0',
+    date: '2026-11-17',
+    title: 'Supporting the game',
+    sections: [
+      {
+        heading: 'Ads',
+        items: [
+          'Short ads can play between matches, when you leave the results screen. Never during a match, and at most one every few minutes.',
+          'Signed in? Watch an ad on the results screen or in the Item Shop for +100 coins, up to 5 times a day.',
+          'Only child-safe, non-personalized ads are shown. See the Privacy link at the bottom of the title screen.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.15.1',
+    date: '2026-11-17',
+    title: 'Safer global chat',
+    sections: [
+      {
+        heading: 'Global chat',
+        items: [
+          'Chat is much stricter so it stays kid-friendly. A message that breaks the rules is not sent at all, and you see why.',
+          'Blocked: swearing and its abbreviations, slurs and hate speech, bullying, sexual talk, threats, talk about hurting yourself or others, drugs, and asking for or sharing personal info like ages, schools, addresses or other apps.',
+          'Tricks like s.p.a.c.i.n.g, symbols, numbers for letters, fancy fonts and stretched letters no longer get around the filter.',
+          'Breaking the chat rules 3 times in 10 minutes pauses your chat for 5 minutes.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.15.0',
+    date: '2026-11-17',
+    title: 'Developer announcements and cleaner names',
+    sections: [
+      {
+        heading: 'Global chat',
+        items: [
+          'New Full screen button on the lobby chat: the chat fills the window with bigger text. Press Esc, Exit full screen or click outside it to go back.',
+          'Developer accounts show a red [DEV] name in chat and can post announcements everyone sees.',
+        ],
+      },
+      {
+        heading: 'Names',
+        items: [
+          'Names and usernames with swear words or slurs are no longer allowed.',
+          'If your account username has one, you will be asked to pick a new one before you can play. Your coins, items, stats and friends stay with you.',
+          'Guests with a name like that need to type a new name before playing. Other players see it as "Player" until then.',
+        ],
+      },
+      {
+        heading: 'Fixes',
+        items: ['Clicking into the game, dropping from the Drop Bus or unpausing now switches the game to full screen along with locking the mouse.'],
+      },
+    ],
+  },
+  {
+    version: '0.14.0',
+    date: '2026-11-17',
+    title: "Catfish Ken's van",
+    sections: [
+      {
+        heading: 'Reboot vans',
+        items: [
+          "The reboot van is now Catfish Ken's own van: spray-painted pink, purple and blue all over (sides, roof, hood and back), with 'Catfish Ken' down both sides and lime-green rims.",
+          'Catfish Ken himself sits in the driver\'s seat. He waves when you walk up and looks your way. He is friendly and never hurts anyone.',
+          'While you carry a teammate\'s reboot card, every reboot van is highlighted and labeled on the minimap and the full map ("REBOOT VAN", or a countdown while it recharges).',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.13.0',
+    date: '2026-11-17',
+    title: 'Global chat, swimming and a pickleball paddle',
+    sections: [
+      {
+        heading: 'Global chat',
+        items: [
+          'Chat with everyone who is online, in the lobby or in a match, wherever they are.',
+          'In a match, press Enter to chat and Enter again to send (Esc closes). Messages fade after a few seconds.',
+          'Keep it friendly: swear words are hidden, links, e-mails and phone numbers are blocked, and spamming pauses your chat for a minute.',
+          'Hide the chat any time with the Hide button.',
+        ],
+      },
+      {
+        heading: 'Swimming',
+        items: [
+          "Walk into ponds and lakes to swim. You're slower in the water and can't shoot, build or heal until you climb out.",
+        ],
+      },
+      {
+        heading: 'Item Shop',
+        items: ['New pickaxe: the Pickleball Paddle.'],
+      },
+      {
+        heading: 'Map',
+        items: ["Catfish Ken's reboot vans now show on the minimap and the full map in every mode, from the Drop Bus on, with a bigger icon."],
+      },
+    ],
+  },
+  {
     version: '0.12.0',
     date: '2026-11-17',
     title: 'Hard mode ranks and breakable ceilings',

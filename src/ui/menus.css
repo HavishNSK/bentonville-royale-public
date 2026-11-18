@@ -224,6 +224,23 @@
   opacity: 0.75;
 }
 
+.mn-foot a {
+  color: inherit;
+  text-decoration: underline;
+  pointer-events: auto;
+}
+/* results: optional rewarded ad (src/net/Ads.js), under PLAY AGAIN / MAIN MENU */
+.mn-btn-ad {
+  gap: calc(var(--u) * 8);
+}
+.mn-btn-ad[hidden] {
+  display: none;
+}
+.mn-btn-ad .mt-coin {
+  width: calc(var(--u) * 18);
+  height: calc(var(--u) * 18);
+}
+
 /* ---- cards (settings, pause) -------------------------------------------- */
 .mn-card {
   display: flex;
@@ -762,6 +779,10 @@
 .mn-field:focus-visible {
   outline: calc(var(--u) * 3) solid var(--br-sun);
   outline-offset: 2px;
+}
+.mn-field.is-invalid {
+  border-color: var(--br-coral);
+  background: #fff0ee;
 }
 .mn-join {
   display: grid;

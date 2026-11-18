@@ -34,6 +34,7 @@ const seenPatch = () => {
 };
 
 import { partyHost, isLocal } from '../net/Net.js';
+import { nameIsClean } from '../net/chatFilter.js';
 
 // GIS / Clever buttons in renderAuth(); Account.loginWithGoogle / Clever OAuth redirect.
 const GOOGLE_CLIENT_ID =
@@ -166,6 +167,11 @@ export function createMeta(menus, account, opts = {}) {
   const bAuth = btn('SIGN IN', 'mn-chip mt-chip mt-chip-sun', 'auth');
   right.append(bOnline, bFriends, coins, who, bAuth);
   bar.append(tabs, right);
+  // portal builds (opts.guestOnly, CrazyGames): no outside sign-in, so no accounts, coins,
+  // friends or buying; the locker keeps the free items
+  if (opts.guestOnly) {
+    for (const el of [bAuth, coins, bFriends, bShop, who]) el.hidden = true;
+  }
   let online = null; // last presence snapshot
   titleEl.appendChild(bar);
   function syncTabs() {
@@ -224,8 +230,11 @@ export function createMeta(menus, account, opts = {}) {
     const f = panel.querySelector('input, button:not([data-act=close])');
     if (f) f.focus();
   }
+  // A signed-in name that breaks the username rules: the RENAME panel stays up until it is fixed.
+  const mustRename = () => account.signedIn && !!account.profile.mustRename;
   function closePanel() {
     if (!open) return;
+    if (open === 'rename' && mustRename()) return;
     open = null;
     panel.classList.remove('is-open');
     hideT = setTimeout(() => (panel.hidden = true), 220);
@@ -251,6 +260,10 @@ export function createMeta(menus, account, opts = {}) {
     if (!b) return;
     click();
     const act = b.dataset.act;
+    if (mustRename() && act !== 'auth') {
+      openPanel('rename');
+      return;
+    }
     if (act === 'play') {
       closePanel();
       return;
@@ -268,9 +281,11 @@ export function createMeta(menus, account, opts = {}) {
   // ---------------------------------------------------------------- renderers
   function render() {
     panelBody.replaceChildren();
+    close.hidden = open === 'rename' && mustRename(); // no way around a forced rename
     if (open === 'news') renderNews();
     else if (open === 'auth') renderAuth();
     else if (open === 'signout') renderSignOut();
+    else if (open === 'rename') renderRename();
     else if (open === 'shop') renderShop();
     else if (open === 'locker') renderLocker();
     else if (open === 'leaderboard') renderLeaderboard();
@@ -534,6 +549,44 @@ export function createMeta(menus, account, opts = {}) {
     panelBody.appendChild(row);
   }
 
+  function renderRename() {
+    panelTitle.textContent = 'NEW USERNAME NEEDED';
+    panelBody.appendChild(
+      h('p', 'mt-hint', `Your username “${account.profile.name}” has a word that isn’t allowed. Pick a new one to keep playing. Your coins, items, stats and friends stay with you.`)
+    );
+    const form = h('form', 'mt-form');
+    const user = h('input', 'mn-field');
+    user.placeholder = 'New username';
+    user.autocomplete = 'username';
+    user.maxLength = 16;
+    user.required = true;
+    user.spellcheck = false;
+    user.setAttribute('aria-label', 'New username');
+    const go = btn('SAVE USERNAME', 'mn-btn mn-btn-hero');
+    go.type = 'submit';
+    form.append(user, go, h('p', 'mt-hint', 'Usernames are 3-16 letters, numbers, _ or -, with no swear words.'));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      click();
+      const name = user.value.trim();
+      if (!nameIsClean(name)) {
+        say('That username is not allowed. Pick one without swear words.', true);
+        return;
+      }
+      go.disabled = true;
+      say('Saving…');
+      try {
+        await account.rename(name);
+        say('');
+        closePanel();
+      } catch (err) {
+        say(err.offline ? 'Could not reach the account server. Try again in a moment.' : err.message, true);
+        go.disabled = false;
+      }
+    });
+    panelBody.append(form, h('p', 'mt-hint', 'Not your account? Use SIGN OUT at the top to play as a guest.'));
+  }
+
   let authTab = 'login';
   function renderAuth() {
     panelTitle.textContent = authTab === 'login' ? 'SIGN IN' : 'CREATE ACCOUNT';
@@ -762,6 +815,20 @@ export function createMeta(menus, account, opts = {}) {
     }
     if (!pending) {
       bar.appendChild(h('span', 'mt-hint', 'Pick an item to try it on. Earn coins in matches: placing well, eliminations and wins.'));
+      // rewarded ad: +coins (opts.adCoins: { can() -> bool, watch() -> Promise<string> })
+      if (opts.adCoins && opts.adCoins.can()) {
+        const ad = btn('WATCH AD +100', 'mn-btn mt-buy-ad');
+        ad.firstChild.prepend(h('i', 'mt-coin'), ' ');
+        ad.addEventListener('click', async () => {
+          click();
+          ad.disabled = true;
+          ad.firstChild.textContent = 'LOADING AD…';
+          const text = await opts.adCoins.watch();
+          say(text);
+          renderBuy();
+        });
+        bar.appendChild(ad);
+      }
       return;
     }
     const c = cosmeticDef(pending);
@@ -1098,9 +1165,20 @@ export function createMeta(menus, account, opts = {}) {
     badge.hidden = !n;
   }
 
+  function checkRename() {
+    if (mustRename()) {
+      if (open !== 'rename' && open !== 'signout') openPanel('rename');
+    } else if (open === 'rename') {
+      closePanel();
+    }
+  }
+  account.on('change', checkRename);
+  menus.onNeedRename = () => openPanel('rename');
+
   renderBar();
   lineUp();
   renderEmoteBar();
+  checkRename();
 
   return {
     refresh() {

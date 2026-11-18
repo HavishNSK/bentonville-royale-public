@@ -144,9 +144,15 @@ export class Game {
     this.input = new Input(canvas);
     this.input.onLockChange = (locked) => this._onLockChange(locked);
     this.input.setBindings(this.settings.bindings); // remappable actions (src/ui/settings.js)
+    this._lockAndFullscreen = () => {
+      this.input.lock();
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+      }
+    };
     this._wasLocked = false;
     canvas.addEventListener('click', () => {
-      if ((this.state === 'play' || this.state === 'drop') && !this.paused) this.input.lock();
+      if ((this.state === 'play' || this.state === 'drop') && !this.paused) this._lockAndFullscreen();
     });
 
     window.addEventListener('resize', () => this._resize());
@@ -303,6 +309,7 @@ export class Game {
       if (this.net && this.net.isHost && this.net.started && this.net.events) this.net.events.push(e);
     };
     this.bots.reboot = this.reboot;
+    this.reboot.viewer = this.camera.position; // Catfish Ken waves to whoever walks up
     this.dropBus = new DropBusMesh();
     this.scene.add(this.dropBus.root);
     this.busRoute = null;
@@ -928,7 +935,7 @@ export class Game {
     this.hud.announce('DROP!', 'SPACE opens your glider early', 2200);
     sfx.play('zone_enter', { volume: 0.6 });
     sfx.startLoop('glide_wind');
-    if (!this.paused) this.input.lock(); // multiplayer auto-eject under the pause menu: keep the menu
+    if (!this.paused) this._lockAndFullscreen(); // multiplayer auto-eject under the pause menu: keep the menu
     return true;
   }
 
@@ -944,7 +951,7 @@ export class Game {
     } else {
       this.menus.hideAll();
       if (this.state === 'drop') this._showBusBanner();
-      this.input.lock();
+      this._lockAndFullscreen();
     }
   }
 
@@ -1605,9 +1612,16 @@ export class Game {
     }
     if (this.pings) this.pings.blips(blips);
     // Catfish Ken's reboot vans (team modes), and our team's reboot cards on the ground
-    if (this.teamMode && this.reboot && this.state === 'play') {
-      for (const v of this.reboot.vans) blips.push({ x: v.x, z: v.z, kind: this.reboot.vanReady(v) ? 'van' : 'vanCd' });
-      for (const c of this.reboot.cards.values()) if (c.holder == null && c.team === p.team) blips.push({ x: c.x, z: c.z, kind: 'card' });
+    // (vans: every mode, from the bus on, so drops can be planned around them; cards: team modes)
+    if (this.reboot && (this.state === 'play' || this.state === 'drop')) {
+      // carrying a teammate's card: every car is highlighted and labeled (ready / recharging)
+      const carrying = this.teamMode && this.reboot.cardsOf(p).length > 0;
+      for (const v of this.reboot.vans) {
+        const ready = this.reboot.vanReady(v);
+        if (carrying) blips.push({ x: v.x, z: v.z, kind: ready ? 'vanHot' : 'vanCd', label: ready ? 'REBOOT VAN' : `REBOOT ${Math.ceil(this.reboot.vanCooldown(v))}s` });
+        else blips.push({ x: v.x, z: v.z, kind: ready ? 'van' : 'vanCd' });
+      }
+      if (this.teamMode) for (const c of this.reboot.cards.values()) if (c.holder == null && c.team === p.team) blips.push({ x: c.x, z: c.z, kind: 'card' });
     }
     if (this.teamMode && this.mates && this.mates.length && this.state === 'play') {
       for (const m of this.mates) {
@@ -1728,7 +1742,25 @@ export class Game {
       this._wasLocked = true;
       if (this.inventoryOpen) this.closeInventory(false); // something re-grabbed the pointer
       if (this.fullMapOpen) this.toggleFullMap(false);
-    } else if (this._wasLocked && (this.state === 'play' || this.state === 'drop') && !this.paused && !this.inventoryOpen && !this.fullMapOpen) this.pause(true);
+    } else if (this._wasLocked && (this.state === 'play' || this.state === 'drop') && !this.paused && !this.inventoryOpen && !this.fullMapOpen && !this.chatOpen) this.pause(true);
+  }
+
+  /**
+   * Global chat box open in a match (src/ui/chat.js): the game lets go of the keyboard and the
+   * mouse (no pause menu) until it closes, then grabs the mouse again.
+   */
+  setChatTyping(on) {
+    this.chatOpen = !!on;
+    const input = this.input;
+    if (on) {
+      input.keys.clear();
+      input.pressed.clear();
+      input.enabled = false;
+      input.unlock();
+    } else {
+      input.enabled = true;
+      if ((this.state === 'play' || this.state === 'drop') && !this.paused) input.lock();
+    }
   }
 
   // ---------------------------------------------------------------- inventory screen

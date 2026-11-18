@@ -1,0 +1,286 @@
+/* Global chat (src/ui/chat.js). Lobby: a docked panel. Match: a fading feed; Enter types. */
+.br-chat {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  width: min(340px, calc(100vw - 32px));
+  z-index: 60;
+  font-family: var(--br-body, 'Nunito', sans-serif);
+  color: #fff6dc;
+  pointer-events: auto;
+}
+.br-chat-box {
+  background: rgba(21, 16, 58, 0.82);
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.br-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 6px 12px;
+  font-family: var(--br-display, 'Lilita One', sans-serif);
+  letter-spacing: 0.04em;
+  font-size: 14px;
+}
+.br-chat-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #8a96a3;
+}
+.br-chat.is-online .br-chat-dot {
+  background: #46cf63;
+  box-shadow: 0 0 6px #46cf63;
+}
+.br-chat-title {
+  flex: 1;
+}
+.br-chat-toggle {
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+.br-chat-toggle:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+.br-chat-toggle:focus-visible,
+.br-chat-input:focus-visible,
+.br-chat-send:focus-visible {
+  outline: 2px solid #ffc21f;
+  outline-offset: 2px;
+}
+.br-chat-list {
+  height: 96px;
+  overflow-y: auto;
+  padding: 2px 12px 6px;
+  font-size: 13.5px;
+  line-height: 1.35;
+  scrollbar-width: thin;
+}
+.br-chat-msg {
+  margin: 2px 0;
+  overflow-wrap: anywhere;
+}
+.br-chat-name {
+  font-weight: 800;
+  color: #ffc21f;
+  margin-right: 6px;
+}
+.br-chat-msg.is-me .br-chat-name {
+  color: #8fd4ff;
+}
+.br-chat-msg.is-dev .br-chat-name,
+.br-chat-msg.is-dev.is-me .br-chat-name {
+  color: #ff3b3b;
+}
+.br-chat-ann {
+  display: block;
+  font-family: var(--br-display, 'Lilita One', sans-serif);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: #ff3b3b;
+}
+.br-chat-msg.is-announce {
+  margin: 4px 0;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: rgba(255, 59, 59, 0.16);
+}
+.br-chat-sys {
+  color: rgba(255, 246, 220, 0.6);
+  font-style: italic;
+}
+.br-chat-form {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+.br-chat-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 10px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #15103a;
+  font: inherit;
+  font-size: 14px;
+}
+.br-chat-send {
+  border: 0;
+  border-radius: 9px;
+  padding: 0 12px;
+  background: #ffc21f;
+  color: #15103a;
+  font-family: var(--br-display, 'Lilita One', sans-serif);
+  cursor: pointer;
+}
+.br-chat-send:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.br-chat-err {
+  padding: 0 12px 8px;
+  font-size: 12.5px;
+  color: #ff8b7a;
+}
+.br-chat-err:empty {
+  display: none;
+}
+/* collapsed (lobby): just the header pill */
+.br-chat.is-collapsed .br-chat-list,
+.br-chat.is-collapsed .br-chat-form,
+.br-chat.is-collapsed .br-chat-err {
+  display: none;
+}
+.br-chat-unread {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #ff5d4a;
+  font-size: 11px;
+  text-align: center;
+}
+.br-chat-unread:empty {
+  display: none;
+}
+
+/* ---- in a match: no panel, a feed of recent lines above the team list; Enter opens the box */
+.br-chat.is-match {
+  bottom: 200px;
+  pointer-events: none;
+}
+.br-chat.is-match .br-chat-box {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.br-chat.is-match .br-chat-head,
+.br-chat.is-match .br-chat-form,
+.br-chat.is-match .br-chat-err {
+  display: none;
+}
+.br-chat.is-match .br-chat-list {
+  height: auto;
+  max-height: 150px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 0;
+}
+.br-chat.is-match .br-chat-msg {
+  align-self: flex-start;
+  background: rgba(21, 16, 58, 0.62);
+  border-radius: 8px;
+  padding: 2px 8px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  transition: opacity 0.6s;
+}
+.br-chat.is-match .br-chat-msg.is-old {
+  opacity: 0;
+}
+.br-chat.is-match.is-collapsed .br-chat-list {
+  display: none;
+}
+/* typing in a match: the full box comes back */
+.br-chat.is-match.is-typing {
+  pointer-events: auto;
+}
+.br-chat.is-match.is-typing .br-chat-box {
+  background: rgba(21, 16, 58, 0.86);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+.br-chat.is-match.is-typing .br-chat-list {
+  display: flex;
+  max-height: 170px;
+  overflow-y: auto;
+  padding: 6px 12px;
+}
+.br-chat.is-match.is-typing .br-chat-msg {
+  background: none;
+  padding: 0;
+  opacity: 1;
+}
+.br-chat.is-match.is-typing .br-chat-form,
+.br-chat.is-match.is-typing .br-chat-err {
+  display: flex;
+}
+.br-chat-hint {
+  position: absolute;
+  left: 0;
+  bottom: -18px;
+  font-size: 11.5px;
+  color: rgba(255, 246, 220, 0.75);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  display: none;
+}
+.br-chat.is-match:not(.is-typing):not(.is-collapsed) .br-chat-hint {
+  display: block;
+}
+@media (prefers-reduced-motion: reduce) {
+  .br-chat.is-match .br-chat-msg {
+    transition: none;
+  }
+}
+
+/* lobby: the open chat sits where the controls hints are (they hide while it is open) */
+body:has(.br-chat:not(.is-match):not(.is-collapsed)) .mn-controls {
+  visibility: hidden;
+}
+
+/* ---- full screen (lobby): the chat fills the window over a dimmed backdrop; Esc exits */
+.br-chat.is-full {
+  inset: 0;
+  width: auto;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: rgba(21, 16, 58, 0.6);
+}
+.br-chat.is-full .br-chat-box {
+  display: flex;
+  flex-direction: column;
+  width: min(880px, 100%);
+  height: min(760px, 100%);
+  background: rgba(21, 16, 58, 0.96);
+}
+.br-chat.is-full .br-chat-head {
+  padding: 14px 14px 10px 18px;
+  font-size: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+.br-chat.is-full .br-chat-toggle {
+  font-size: 14px;
+  padding: 6px 12px;
+}
+.br-chat.is-full .br-chat-list {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  padding: 10px 18px;
+  font-size: 16.5px;
+  line-height: 1.45;
+}
+.br-chat.is-full .br-chat-form {
+  padding: 12px;
+}
+.br-chat.is-full .br-chat-input {
+  padding: 11px 14px;
+  font-size: 16px;
+}
+.br-chat.is-full .br-chat-send {
+  padding: 0 20px;
+  font-size: 16px;
+}

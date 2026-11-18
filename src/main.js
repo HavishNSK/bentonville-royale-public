@@ -11,10 +11,35 @@ import { createAccount } from './net/Account.js';
 import { createMeta } from './ui/meta.js';
 import { RANKED_NOTE } from './core/config.js';
 import { lookString, parseLook } from './game/Cosmetics.js';
+import { createAds, pickPlatform } from './net/Ads.js';
 
-// Vercel Web Analytics: anonymous page views / visitors (no cookies). Only reports from the Vercel deployment.
+// Ads (src/net/Ads.js): CrazyGames SDK in the portal build, AdSense H5 when VITE_ADSENSE_CLIENT is
+// set, else none. While an ad plays the game is muted and ignores input.
+const ENV = import.meta.env || {};
+const PLATFORM = pickPlatform(ENV);
+let adMutedBefore = false;
+const ads = createAds({
+  platform: PLATFORM,
+  client: ENV.VITE_ADSENSE_CLIENT || '',
+  test: !!ENV.DEV,
+  onPause: () => {
+    adMutedBefore = sfx.muted;
+    sfx.setMuted(true);
+    if (game && game.input) game.input.enabled = false;
+  },
+  onResume: () => {
+    sfx.setMuted(adMutedBefore);
+    if (game && game.input) game.input.enabled = true;
+  },
+});
+const adsReady = ads.init();
+if (ENV.DEV) window.__ads = ads; // QA: inspect / trigger ads from the console
+if (PLATFORM === 'crazygames') document.documentElement.classList.add('is-crazygames');
+
+// Vercel Web Analytics: anonymous page views / visitors (no cookies). Only reports from the Vercel
+// deployment, so it is left out of the CrazyGames build.
 try {
-  injectAnalytics();
+  if (PLATFORM !== 'crazygames') injectAnalytics();
 } catch (err) {
   /* analytics must never break the game */
 }
@@ -35,12 +60,14 @@ sfx.setVolume(settings.volume);
 // Optional local menu music, served only by the local dev/preview server from
 // local-music/menu.mp3 (git-ignored, never built or deployed). Falls back to
 // the synthesized theme when absent.
-fetch('/local-music/menu.mp3', { method: 'HEAD' })
-  .then((r) => {
-    const type = r.headers.get('content-type') || '';
-    if (r.ok && type.startsWith('audio/')) sfx.setCustomMusic('menu', '/local-music/menu.mp3');
-  })
-  .catch(() => {});
+if (ENV.DEV) {
+  fetch('/local-music/menu.mp3', { method: 'HEAD' })
+    .then((r) => {
+      const type = r.headers.get('content-type') || '';
+      if (r.ok && type.startsWith('audio/')) sfx.setCustomMusic('menu', '/local-music/menu.mp3');
+    })
+    .catch(() => {});
+}
 
 let game = null;
 
@@ -92,9 +119,14 @@ const menus = createMenus(uiRoot, {
       menus.showTitle();
     }
   },
-  onPlayAgain: () => playLocal(lastLocal.mode, lastLocal.fill),
+  onPlayAgain: async () => {
+    if (menus.current === 'result') await ads.interstitial('match-end'); // a natural break, on the player's click
+    playLocal(lastLocal.mode, lastLocal.fill);
+  },
+  onAdReward: () => watchAdForCoins('match-coins').then(() => setTimeout(refreshAdButton, 2500)),
   onResume: () => game && game.pause(false),
-  onLeave: () => {
+  onLeave: async () => {
+    if (menus.current === 'result') await ads.interstitial('match-end');
     if (game) game.leave();
     closeMultiplayer();
     sfx.playMusic('menu');
@@ -147,7 +179,54 @@ function loadGame(onProgress) {
 async function ensureLoaded() {
   if (game.loaded) return;
   menus.showLoading(0, 'Warming up');
-  await loadGame((p, label) => menus.setLoading(p, label));
+  await adsReady;
+  ads.loadingStart();
+  try {
+    await loadGame((p, label) => menus.setLoading(p, label));
+  } finally {
+    ads.loadingDone();
+  }
+}
+
+// ---------------------------------------------------------------- rewarded ads
+/** Signed in, the provider can reward, and the server still allows one today. */
+function canWatchAdForCoins() {
+  const p = account.profile;
+  return ads.canReward && account.signedIn && !(p && p.adRewardsLeft === 0);
+}
+
+/** Plays a rewarded ad and, if it was watched to the end, claims the coins. Returns a message. */
+async function watchAdForCoins(placement) {
+  menus.setAdReward({ show: true, text: 'LOADING AD…', disabled: true });
+  const watched = await ads.rewarded(placement);
+  if (!watched) {
+    menus.setAdReward({ show: true, text: 'NO AD RIGHT NOW', disabled: true });
+    return 'No ad right now. Try again later.';
+  }
+  try {
+    const earned = await account.adReward();
+    menus.setAdReward({ show: true, text: `+${earned} COINS!`, disabled: true });
+    return `+${earned} coins for watching. Thanks for supporting the game!`;
+  } catch (err) {
+    const msg = err && err.message ? err.message : 'Could not add the coins.';
+    menus.setAdReward({ show: true, text: msg.toUpperCase().slice(0, 40), disabled: true });
+    return msg;
+  }
+}
+
+/** CrazyGames: the SDK's own invite link for a party code (null elsewhere). */
+function crazyInvite(code) {
+  const sdk = ads.sdk;
+  if (!sdk || !sdk.game || !sdk.game.inviteLink) return null;
+  try {
+    return sdk.game.inviteLink({ p: code }) || null;
+  } catch {
+    return null;
+  }
+}
+
+function refreshAdButton() {
+  menus.setAdReward({ show: canWatchAdForCoins() });
 }
 
 // ---------------------------------------------------------------- multiplayer
@@ -360,6 +439,7 @@ const lastLocal = { mode: 'solo', fill: true }; // offline mode / fill, and what
 // so players can see each other and queue in the same mode at the same time.
 let presence = null;
 let presenceInMatch = false;
+let chat = null; // global chat (src/ui/chat.js), fed by the presence socket
 
 function partyMode() {
   return party && party.party ? party.party.mode : lastLocal.mode;
@@ -371,7 +451,11 @@ function presenceStatus() {
 }
 
 function syncPresence() {
-  if (presence) presence.set({ name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
+  if (presence) presence.set({ name: menus.playerName(), status: presenceStatus(), mode: partyMode(), accountToken: account.sessionToken });
+  if (chat) {
+    chat.setMe(menus.playerName());
+    chat.setMode(presenceInMatch ? 'match' : 'lobby');
+  }
 }
 
 /** Players searching in our mode right now, not counting our own party. */
@@ -385,10 +469,20 @@ function othersSearching() {
 
 async function startPresence() {
   try {
-    const [{ partyToken }, { openPresence }] = await Promise.all([import('./net/Party.js'), import('./net/Presence.js')]);
-    presence = openPresence({ token: partyToken(), name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
+    const [{ partyToken }, { openPresence }, { createChat }] = await Promise.all([import('./net/Party.js'), import('./net/Presence.js'), import('./ui/chat.js')]);
+    chat = createChat({
+      onSend: (text) => presence && presence.sendChat(text),
+      onBlocked: (category) => presence && presence.reportBlocked && presence.reportBlocked(category),
+      onTypingChange: (on) => game && game.setChatTyping && game.setChatTyping(on),
+    });
+    presence = openPresence({ token: partyToken(), accountToken: account.sessionToken, name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
+    chat.setMe(menus.playerName());
+    chat.setMode(presenceInMatch ? 'match' : 'lobby');
+    presence.onChat = (m) => chat.add(m);
+    presence.onChatError = (reason) => chat.error(reason);
     presence.onUpdate = (snap) => {
       if (meta) meta.setOnline(snap);
+      if (chat) chat.setOnline(!!snap);
       renderParty();
     };
   } catch (err) {
@@ -419,7 +513,7 @@ function partyView() {
   return {
     online: true,
     code: p.code,
-    link: partyMod.inviteLink(p.code),
+    link: crazyInvite(p.code) || partyMod.inviteLink(p.code),
     isLeader: party.isLeader,
     mode: p.mode,
     fill: p.fill,
@@ -630,6 +724,8 @@ try {
   game.setCosmetics(account.profile.equipped);
   meta = createMeta(menus, account, {
     onClick: () => sfx.play('ui_click'),
+    guestOnly: PLATFORM === 'crazygames', // portals: no outside sign-in (CrazyGames rules)
+    adCoins: { can: canWatchAdForCoins, watch: () => watchAdForCoins('shop-coins') },
     partyCode: () => (party && party.party ? party.party.code : null),
     partyMembers: () => (party && party.party ? party.party.members.map((m) => ({ name: m.name, ...parseLook(m.skin), you: m.id === party.you })) : []),
     onJoinParty: (code) => {
@@ -647,11 +743,16 @@ try {
   });
   account.on('change', (p) => {
     if (p.guest) menus.setAccountName(null);
+    syncPresence();
   });
   // QA (dev builds): the party as this tab sees it
   if (import.meta.env && import.meta.env.DEV) window.__party = () => (party && party.party ? JSON.parse(JSON.stringify(party.party)) : null);
   menus.onScreen = (s) => {
     meta.setActive(s === 'title');
+    // ads: gameplay only while the HUD is up (a match); the results screen may offer a rewarded ad
+    if (s === null) ads.gameplayStart();
+    else ads.gameplayStop();
+    if (menus.current === 'result') refreshAdButton();
     if (s === 'title') presenceInMatch = false;
     else if (s === null) presenceInMatch = true;
     syncPresence();
@@ -707,6 +808,19 @@ try {
   if (invite.length === 4) joinParty(invite);
   else joinParty(/^[A-Z]{4}$/.test(rejoin) ? rejoin : null, true);
   startPresence();
+  // CrazyGames: invite links carry the party code; "instant multiplayer" goes straight to PLAY
+  adsReady.then(() => {
+    const sdk = ads.sdk;
+    if (!sdk || !sdk.game) return;
+    let code = '';
+    try {
+      code = String(sdk.game.getInviteParam('p') || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
+    } catch {
+      code = '';
+    }
+    if (code.length === 4) joinParty(code);
+    else if (sdk.game.isInstantMultiplayer) setTimeout(() => partyPlay(), 1500);
+  });
   sfx.playMusic('menu');
   googleTiles.setEnabled(settings.googleTiles);
 } catch (err) {

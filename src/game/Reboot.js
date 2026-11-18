@@ -54,6 +54,7 @@ export class Reboot {
     this.onReboot = null;
     this.onEvent = null;
     this.myTeam = null; // client / local player: only this team's cards are drawn
+    this.viewer = null; // camera position (Vector3): Catfish Ken looks at / waves to it
   }
 
   /** Parks one van near each POI and registers its collider. Safe to call once. */
@@ -475,6 +476,7 @@ export class Reboot {
       c.mesh.position.y = c.y + 1.1 + Math.sin(c.spin * 1.3) * 0.12;
     }
     for (const v of this.vans) {
+      if (v.mesh && v.mesh.userData.update) v.mesh.userData.update(dt, this.viewer);
       const set = v.mesh && v.mesh.userData.setBeacon;
       if (!set) continue;
       if (v.user != null) v.t = Math.min(REBOOT.time, v.t + (this.authoritative ? 0 : dt)); // clients advance the ring locally

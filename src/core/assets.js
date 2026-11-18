@@ -10,8 +10,26 @@ const loader = new GLTFLoader();
 const TOON_MODEL = { saturate: 1.18 };
 const cache = new Map();
 
+// Site-absolute paths ('/assets/...', '/data/...') resolve against the build's base URL, so the
+// same code works at the site root and inside a portal build served from a sub-folder
+// (vite --base ./, see npm run build:crazygames).
+const BASE = (() => {
+  try {
+    const b = import.meta.env && import.meta.env.BASE_URL;
+    return typeof b === 'string' && b ? b.replace(/\/?$/, '/') : '/';
+  } catch {
+    return '/';
+  }
+})();
+
+/** '/assets/x.glb' -> BASE + 'assets/x.glb' (other URLs unchanged). */
+export function asset(url) {
+  return typeof url === 'string' && url.startsWith('/') && !url.startsWith('//') ? BASE + url.slice(1) : url;
+}
+
 /** Loads a GLB once; later calls share the same promise. Resolves to the gltf object. */
 export function loadGLB(url) {
+  url = asset(url);
   let p = cache.get(url);
   if (!p) {
     p = loader.loadAsync(url);
@@ -21,6 +39,7 @@ export function loadGLB(url) {
 }
 
 export async function loadJSON(url) {
+  url = asset(url);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   return res.json();

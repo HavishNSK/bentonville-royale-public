@@ -8,9 +8,27 @@
 // Client -> server (JSON):  {t:'status', status:'lobby'|'queued'|'match', mode, name}
 // Server -> client (JSON):  {t:'online', count, searching:{solo,duo,trio,squad}, inMatch,
 //                            players:[{name, status, mode}]}   (tokens are never sent out)
+//
+// Global chat (everyone connected, in a lobby or in a match):
+//   client -> server  {t:'chat', text}
+//                     {t:'chatBlocked', c}   the client's filter stopped a message (category only, never the text)
+//   server -> client  {t:'chat', m:{id, name, text, at, dev, announce}}
+//                     {t:'chatHistory', list:[m...]}           the last CHAT_KEEP, on connect
+//                     {t:'chatError', reason}                  to the sender only
+// Dev accounts (src/net/devs.js) are verified from the signed-in session (`acct` on the
+// socket, or a later status message). Their name is sent as `[DEV]` by the client, in red.
+// `/announce ...` from a dev is broadcast to everyone as an announcement. Anyone else
+// who tries it is refused. The displayed name is the account name, not a typed nickname.
+// The server is the authority: text goes through cleanChat (src/net/chatFilter.js: length,
+// no links / e-mails / phone numbers; swearing, slurs, unsafe phrases and personal-info requests
+// are refused, not masked) and is rate limited per player. Breaking the content rules
+// CHAT_STRIKES times in CHAT_STRIKE_WINDOW_MS pauses that player's chat for CHAT_STRIKE_MUTE_MS.
+// History lives in memory only (it is gone when the room sleeps).
 
 import { Server } from 'partyserver';
 import { validMode } from './modes.js';
+import { cleanChat, nameIsClean } from '../src/net/chatFilter.js';
+import { isDevName, parseDevChat } from '../src/net/devs.js';
 
 export const ROOM = 'global';
 const MAX_CONNECTIONS = 2000; // well past what a prototype sees; refuses floods
@@ -19,13 +37,29 @@ const BROADCAST_MS = 1000; // at most one list update per second
 const MIN_MSG_MS = 250; // status updates faster than this are dropped
 const STATUSES = new Set(['lobby', 'queued', 'match']);
 const ORDER = { queued: 0, lobby: 1, match: 2 };
+const CHAT_KEEP = 30; // recent messages sent to new connections
+const CHAT_GAP_MS = 1500; // at least this between one player's messages
+const CHAT_BURST = 6; // ...and at most this many per CHAT_WINDOW_MS
+const CHAT_WINDOW_MS = 30000;
+const CHAT_MUTE_MS = 60000; // going over the burst limit mutes for this long
+const CHAT_STRIKES = 3; // blocked messages (not counting links / personal-info refusals)...
+const CHAT_STRIKE_WINDOW_MS = 10 * 60000; // ...within this window...
+const CHAT_STRIKE_MUTE_MS = 5 * 60000; // ...pause chat for this long
+const STRIKE_CATEGORIES = new Set(['slur', 'selfharm', 'threat', 'sexual', 'drugs', 'profanity', 'bully']);
 
 function cleanName(name) {
   const s = String(name || '')
     .replace(/[\u0000-\u001f<>]/g, '')
     .trim()
     .slice(0, 16);
-  return s || 'Player';
+  return s && nameIsClean(s) ? s : 'Player'; // names with swear words show as Player
+}
+
+function cleanAcct(t) {
+  const s = String(t || '')
+    .replace(/[^a-f0-9]/gi, '')
+    .slice(0, 64);
+  return s.length >= 32 ? s : '';
 }
 
 function cleanToken(t) {
@@ -64,6 +98,9 @@ export class Presence extends Server {
     super(ctx, env);
     this.players = new Map(); // connection id -> {token, name, status, mode, since, last}
     this.timer = null;
+    this.chat = []; // recent messages, oldest first
+    this.chatSeq = 0;
+    this.chatBy = new Map(); // token -> {last, times:[ms], mutedUntil, lastText} (survives reconnects)
   }
 
   onConnect(conn, ctx) {
@@ -92,36 +129,172 @@ export class Presence extends Server {
     }
     this.players.set(conn.id, {
       token,
+      acct: cleanAcct(url.searchParams.get('acct')),
       name: cleanName(url.searchParams.get('name')),
+      dev: false,
+      devName: '',
+      devFor: '',
+      devCheck: null,
       status: cleanStatus(url.searchParams.get('status')),
       mode: cleanMode(url.searchParams.get('mode')),
       since: Date.now(),
       last: 0,
     });
+    this._markDev(this.players.get(conn.id));
     try {
       conn.send(JSON.stringify(snapshot(this.players.values())));
+      if (this.chat.length) conn.send(JSON.stringify({ t: 'chatHistory', list: this.chat }));
     } catch {
       /* gone */
     }
     this._schedule();
   }
 
+  /** Resolve the signed-in account. Dev rights stick to that account, not the typed name. */
+  _markDev(p) {
+    const acct = p.acct;
+    if (!acct) {
+      p.dev = false;
+      p.devName = '';
+      p.devFor = '';
+      p.devCheck = null;
+      return Promise.resolve();
+    }
+    if (p.devCheck && p.devFor === acct) return p.devCheck;
+    p.devFor = acct;
+    p.dev = false;
+    p.devName = '';
+    p.devCheck = this._lookupDev(acct)
+      .then((name) => {
+        if (p.acct !== acct) return;
+        p.dev = !!name;
+        p.devName = name || '';
+        if (name) p.name = name;
+      })
+      .catch(() => {
+        if (p.acct === acct) {
+          p.dev = false;
+          p.devName = '';
+        }
+      });
+    return p.devCheck;
+  }
+
+  async _lookupDev(acct) {
+    if (!this.env || !this.env.Accounts) return null;
+    const id = this.env.Accounts.idFromName('global');
+    const stub = this.env.Accounts.get(id);
+    const res = await stub.fetch(
+      new Request('https://accounts/global', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'me', token: acct }),
+      })
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const name = data && data.profile && data.profile.name;
+    return isDevName(name) ? String(name).slice(0, 16) : null;
+  }
+
+  _chatLimits(p) {
+    const lim = this.chatBy.get(p.token) || { last: 0, times: [], mutedUntil: 0, lastText: '', strikes: [], muteWhy: '' };
+    this.chatBy.set(p.token, lim);
+    if (this.chatBy.size > 5000) this.chatBy.delete(this.chatBy.keys().next().value);
+    return lim;
+  }
+
+  /** A message broke the content rules (seen here or by the client's filter): count a strike. */
+  _strike(conn, p, category) {
+    if (!STRIKE_CATEGORIES.has(category)) return;
+    const now = Date.now();
+    const lim = this._chatLimits(p);
+    lim.strikes = (lim.strikes || []).filter((t) => now - t < CHAT_STRIKE_WINDOW_MS);
+    lim.strikes.push(now);
+    if (lim.strikes.length < CHAT_STRIKES) return;
+    lim.strikes = [];
+    lim.mutedUntil = now + CHAT_STRIKE_MUTE_MS;
+    lim.muteWhy = 'rules';
+    try {
+      conn.send(JSON.stringify({ t: 'chatError', reason: 'Your chat is paused for 5 minutes for breaking the chat rules.' }));
+    } catch {
+      /* gone */
+    }
+  }
+
+  /** One chat message from `p` (rate limited, filtered), broadcast to everyone. */
+  async _chat(conn, p, raw) {
+    const now = Date.now();
+    const lim = this._chatLimits(p);
+    const fail = (reason) => {
+      try {
+        conn.send(JSON.stringify({ t: 'chatError', reason }));
+      } catch {
+        /* gone */
+      }
+    };
+    if (now < lim.mutedUntil) {
+      const s = Math.ceil((lim.mutedUntil - now) / 1000);
+      const wait = s >= 60 ? `${Math.ceil(s / 60)} min` : `${s} s`;
+      return fail(lim.muteWhy === 'rules' ? `Your chat is paused for breaking the chat rules. Try again in ${wait}.` : `Slow down: you can chat again in ${wait}.`);
+    }
+    lim.muteWhy = '';
+    if (now - lim.last < CHAT_GAP_MS) return fail('Slow down a little.');
+    lim.times = lim.times.filter((t) => now - t < CHAT_WINDOW_MS);
+    if (lim.times.length >= CHAT_BURST) {
+      lim.mutedUntil = now + CHAT_MUTE_MS;
+      return fail('Too many messages: chat paused for a minute.');
+    }
+    await this._markDev(p);
+    const parsed = parseDevChat(raw, p.dev);
+    if (parsed.error) return fail(parsed.error);
+    const r = cleanChat(parsed.text);
+    if (!r.ok) {
+      if (r.reason === 'empty') return undefined;
+      fail(r.reason);
+      return this._strike(conn, p, r.category);
+    }
+    if (r.text.toLowerCase() === lim.lastText) return fail('You just said that.');
+    lim.last = now;
+    lim.times.push(now);
+    lim.lastText = r.text.toLowerCase();
+    const m = { id: ++this.chatSeq, name: p.dev ? p.devName : p.name, text: r.text, at: now, dev: !!p.dev, announce: !!parsed.announce };
+    this.chat.push(m);
+    if (this.chat.length > CHAT_KEEP) this.chat.shift();
+    this.broadcast(JSON.stringify({ t: 'chat', m }));
+  }
+
   onMessage(sender, message) {
     const p = this.players.get(sender.id);
-    if (!p || typeof message !== 'string' || message.length > 300) return;
-    const now = Date.now();
-    if (now - p.last < MIN_MSG_MS) return;
-    p.last = now;
+    if (!p || typeof message !== 'string' || message.length > 600) return;
     let msg;
     try {
       msg = JSON.parse(message);
     } catch {
       return;
     }
+    if (msg && msg.t === 'chat') {
+      this._chat(sender, p, msg.text).catch(() => {});
+      return;
+    }
+    if (msg && msg.t === 'chatBlocked') {
+      this._strike(sender, p, String(msg.c || ''));
+      return;
+    }
+    if (msg && msg.acct != null) {
+      const next = cleanAcct(msg.acct);
+      if (next !== p.acct) {
+        p.acct = next;
+        this._markDev(p);
+      }
+    }
+    const now = Date.now();
+    if (now - p.last < MIN_MSG_MS) return;
+    p.last = now;
     if (!msg || msg.t !== 'status') return;
     p.status = cleanStatus(msg.status);
     p.mode = cleanMode(msg.mode);
-    if (msg.name != null) p.name = cleanName(msg.name);
+    if (msg.name != null && !p.dev) p.name = cleanName(msg.name);
     this._schedule();
   }
 

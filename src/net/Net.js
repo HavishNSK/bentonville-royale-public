@@ -27,6 +27,7 @@
 // unreliable channel); see party/server.js for the frame routing format.
 
 import { PROTO_VERSION, MAX_HUMANS, randomCode, normalizeCode, validCode, makeReassembler } from './protocol.js';
+import { nameIsClean } from './chatFilter.js';
 
 const OPEN_MS = 12000;
 const CHUNK = 256 * 1024; // chars per text frame; PartyKit's frame limit is 1 MB
@@ -121,7 +122,7 @@ export function cleanName(name) {
     .replace(/[\u0000-\u001f<>]/g, '')
     .trim()
     .slice(0, 16);
-  return s || 'Player';
+  return s && nameIsClean(s) ? s : 'Player'; // names with swear words show as Player
 }
 
 // ------------------------------------------------------------------ host
