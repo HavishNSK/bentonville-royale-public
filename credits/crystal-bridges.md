@@ -87,7 +87,7 @@ Stone figures on plinths around the museum (`src/world/crystal-bridges/statues.j
 
 | File | Source | License |
 | --- | --- | --- |
-| `dragon.glb` | Supplied by the project owner (`dragon-statue.glb`, Blender glTF export). Origin and license **not recorded**: confirm before public release. | Unconfirmed |
+| `dragon.glb` | Original model made for this game by the project owner, Shehryar (`dragon-statue.glb`, Blender glTF export). | Project's own work |
 | `gargoyle.glb` | Pixor free library, "Gargoyle" (`https://pixor.art/library/dungeon/gargoyle/`), retrieved 2026-11-17 | CC0 1.0 |
 | `guardian.glb` | Pixor free library, "Guardian statue" (`https://pixor.art/library/dungeon/statue/`), retrieved 2026-11-17 | CC0 1.0 |
 | `broken-statue.glb` | Pixor free library, "Broken statue" (`https://pixor.art/library/ruins/broken-statue/`), retrieved 2026-11-17 | CC0 1.0 |
