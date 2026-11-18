@@ -129,9 +129,13 @@ function wallGeometry() {
   return g;
 }
 
+// Floor tops sit FLOOR_LIFT above their level: a ground-level floor would otherwise share a
+// plane with the ground (y = 0) and flicker against it (z-fighting). Collision is unchanged.
+const FLOOR_LIFT = 0.02;
+
 function floorGeometry() {
   const g = new THREE.BoxGeometry(CELL, FLOOR_THICK, CELL);
-  g.translate(0, -FLOOR_THICK / 2, 0);
+  g.translate(0, -FLOOR_THICK / 2 + FLOOR_LIFT, 0);
   return g;
 }
 
@@ -224,7 +228,7 @@ export function doorColumns(edit) {
 /** Geometry of one tile of an edited piece, centred on its local tile origin (see TILE_LOCAL). */
 const TILE_GEOMETRY = {
   wall: (s = 1, t = 1) => new THREE.BoxGeometry(TILE_W * s, TILE_H * s, WALL_THICK * t),
-  floor: (s = 1, t = 1) => new THREE.BoxGeometry(HALF * s, FLOOR_THICK * t, HALF * s).translate(0, (-FLOOR_THICK * t) / 2, 0),
+  floor: (s = 1, t = 1) => new THREE.BoxGeometry(HALF * s, FLOOR_THICK * t, HALF * s).translate(0, (-FLOOR_THICK * t) / 2 + FLOOR_LIFT, 0),
   cone: () => coneQuarterGeometry(), // edit overlay only
   // edit overlay only: a quarter of the ramp slab, laid on the slope
   ramp: (s = 1, t = 1) =>
@@ -340,11 +344,27 @@ function makeMaterial(kind, mat) {
     roughness: mat === 'metal' ? 0.45 : 0.85,
     metalness: mat === 'metal' ? 0.55 : 0,
     side: kind === 'cone' ? THREE.DoubleSide : THREE.FrontSide,
+    // a small pull toward the camera: far-away floors lying 2 cm over the ground stay clear of
+    // it even where the depth buffer is too coarse to tell them apart
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -2,
   });
   m.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nattribute float aDmg;\nvarying float vDmg;\nvarying vec2 vCrackUv;')
-      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvDmg = aDmg;\nvCrackUv = uv;');
+      // World-space texture mapping (one texture per 4 m x 3 m of wall, 4 m x 4 m of floor):
+      // an edited piece is drawn as separate tiles, and with per-tile UVs every tile repeated
+      // the whole texture (a 3x3 grid of mini planks / bricks). Mapping by world position keeps
+      // the pattern continuous across tiles and neighbouring pieces, and unstretched on edges.
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvDmg = aDmg;\nvCrackUv = uv;\n' +
+        '#ifdef USE_INSTANCING\n' +
+        '  vec4 sWp = modelMatrix * instanceMatrix * vec4(position, 1.0);\n' +
+        '  vec3 sWn = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);\n' +
+        '  vec2 sUv = abs(sWn.y) > 0.5 ? sWp.xz / ' + CELL.toFixed(1) + ' : (abs(sWn.x) > abs(sWn.z) ? vec2(sWp.z / ' + CELL.toFixed(1) + ', sWp.y / ' + LEVEL.toFixed(1) + ') : vec2(sWp.x / ' + CELL.toFixed(1) + ', sWp.y / ' + LEVEL.toFixed(1) + '));\n' +
+        '  vCrackUv = sUv;\n' +
+        '  #ifdef USE_MAP\n    vMapUv = sUv;\n  #endif\n' +
+        '#endif');
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying float vDmg;\nvarying vec2 vCrackUv;\n' +
         'float crackLine(vec2 p, float f, float s){ float w = sin(p.x * f + sin(p.y * f * 0.7 + s) * 2.3) * sin(p.y * f * 1.3 + sin(p.x * f * 0.6 + s * 1.7) * 2.1); return 1.0 - smoothstep(0.0, 0.07, abs(w)); }')
@@ -354,7 +374,7 @@ function makeMaterial(kind, mat) {
         '  diffuseColor.rgb *= 1.0 - clamp(c, 0.0, 1.0) * 0.75;\n' +
         '}');
   };
-  m.customProgramCacheKey = () => 'structure-crack';
+  m.customProgramCacheKey = () => 'structure-crack-worlduv';
   // cel-shaded; the crack patch hooks <map_fragment>, which MeshToonMaterial also has
   return toToon(m, { dispose: true });
 }

@@ -257,6 +257,8 @@ function slabSplit(plan, L, r) {
   return { solid, tiles, g };
 }
 
+const TILE_LAP = 0.004; // metres a breakable floor tile's faces overlap their surroundings
+
 /**
  * One breakable floor tile of level L (> 0): its floor top, the ceiling of the storey below
  * under it (that room's style, lit like the rest of its ceiling) and side faces toward
@@ -271,14 +273,19 @@ function addFloorTile(chunk, quad, F, plan, shell, styles, L, below, t, g, floor
   const yT = base + 0.05, yU = base - FLOOR_THICKNESS;
   const W = (a, b, y) => { const [x, z] = toWorld(F, a, b); return [x, y, z]; };
   const i0 = chunk.buf.idx.length;
-  quad(chunk, W(a0, b0, yT), W(a1, b0, yT), W(a1, b1, yT), W(a0, b1, yT), 0, 1, 0, ...rgb(floorHex), null, h);
+  // The top (and the ceiling under it) reaches TILE_LAP past the tile on every side. Tiles meet
+  // the solid floor around them at T-junctions (no shared vertices), where single-pixel cracks
+  // showed the dark slab edge as a dotted grid; a few millimetres of same-coloured overlap
+  // covers them.
+  const e = TILE_LAP;
+  quad(chunk, W(a0 - e, b0 - e, yT), W(a1 + e, b0 - e, yT), W(a1 + e, b1 + e, yT), W(a0 - e, b1 + e, yT), 0, 1, 0, ...rgb(floorHex), null, h);
   for (const lr of below ? below.rooms : []) {
     const c0 = Math.max(a0, lr.a0), c1 = Math.min(a1, lr.a1), d0 = Math.max(b0, lr.b0), d1 = Math.min(b1, lr.b1);
     if (c1 - c0 < 0.01 || d1 - d0 < 0.01) continue;
     const lst = styleFor(plan.id, lr, styles);
     const styled = lst && lst.ceiling !== undefined;
     const y = styled ? below.ceil - shell.floor - STYLED_CEIL_GAP : yU;
-    quad(chunk, W(c0, d0, y), W(c1, d0, y), W(c1, d1, y), W(c0, d1, y), 0, -1, 0,
+    quad(chunk, W(c0 - e, d0 - e, y), W(c1 + e, d0 - e, y), W(c1 + e, d1 + e, y), W(c0 - e, d1 + e, y), 0, -1, 0,
       ...rgb(styled ? lst.ceiling : CEILING_HEX), null, h, styled ? NEUTRAL_LIT : UP_LIT);
   }
   const edge = rgb(SLAB_EDGE_HEX);

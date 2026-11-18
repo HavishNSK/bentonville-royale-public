@@ -92,8 +92,16 @@ export function tileIdAt(L, a, b) {
   for (let k = 0; k < T.length; k++) {
     const g = T[k];
     if (a < g.a0 || a >= g.a1 || b < g.b0 || b >= g.b1) continue;
-    const i = Math.min(g.na - 1, Math.floor(((a - g.a0) / (g.a1 - g.a0)) * g.na));
-    const j = Math.min(g.nb - 1, Math.floor(((b - g.b0) / (g.b1 - g.b0)) * g.nb));
+    let i = Math.min(g.na - 1, Math.floor(((a - g.a0) / (g.a1 - g.a0)) * g.na));
+    let j = Math.min(g.nb - 1, Math.floor(((b - g.b0) / (g.b1 - g.b0)) * g.nb));
+    // tile edges are rounded (q) when the tiles are laid out: use the same edges here, so a
+    // point just beside a seam picks the tile it is really over
+    const ea = (n) => q(g.a0 + ((g.a1 - g.a0) * n) / g.na);
+    const eb = (n) => q(g.b0 + ((g.b1 - g.b0) * n) / g.nb);
+    if (i > 0 && a < ea(i)) i--;
+    else if (i < g.na - 1 && a >= ea(i + 1)) i++;
+    if (j > 0 && b < eb(j)) j--;
+    else if (j < g.nb - 1 && b >= eb(j + 1)) j++;
     return g.ids[i * g.nb + j];
   }
   return -1;

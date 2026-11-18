@@ -254,8 +254,17 @@ class Batch {
     this.mesh.count = this.n;
     this.mesh.visible = this.n > 0;
     if (this.n) {
-      this.mesh.instanceMatrix.needsUpdate = true;
-      if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+      // upload only the instances in use, not the whole buffer (hundreds of KB a frame)
+      const im = this.mesh.instanceMatrix;
+      im.clearUpdateRanges();
+      im.addUpdateRange(0, this.n * 16);
+      im.needsUpdate = true;
+      const ic = this.mesh.instanceColor;
+      if (ic) {
+        ic.clearUpdateRanges();
+        ic.addUpdateRange(0, this.n * 3);
+        ic.needsUpdate = true;
+      }
     }
   }
   dispose() {

@@ -134,7 +134,11 @@ export class Game {
     this.inventoryOpen = false; // inventory screen (pointer unlocked, no pause)
     this.sandboxLoadoutOpen = false; // sandbox weapons overlay on the map
 
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+    // MSAA only where it is the anti-aliasing: presets with post-processing end in FXAA (MSAA on
+    // the backbuffer would be paid for and thrown away), and performance mode runs without.
+    const qAA = QUALITY[graphicsQuality(settings)] || QUALITY.medium;
+    const antialias = !(qAA.outline || qAA.bloom) && qAA.msaa !== false;
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias, powerPreference: 'high-performance' });
     this.renderer.setSize(window.innerWidth, window.innerHeight, false);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(CAMERA.fov, window.innerWidth / window.innerHeight, CAMERA.near, CAMERA.far);
@@ -162,6 +166,9 @@ export class Game {
     window.addEventListener('resize', () => this._resize());
     this._resize();
 
+    this.perf = { sim: 0, present: 0, frame: 16, calls: 0, tris: 0, frames: 0 };
+    this.scene.matrixWorldAutoUpdate = false; // done once per frame in _present
+    this.renderer.info.autoReset = false;
     this._last = performance.now();
     this._loop = this._loop.bind(this);
     requestAnimationFrame(this._loop);
@@ -1055,6 +1062,7 @@ export class Game {
     const p = this.player;
     if (this.net && this.net.isHost) this.net.onDamage(target, amount, info);
     if (this.bots.notifyDamage && !target.isPlayer) this.bots.notifyDamage(target, amount, info);
+    if (target.character && !info.storm && amount >= 8 && target.alive) target.character.flinch(); // hit reaction
     if (target === p) {
       this.hud.damageFlash(clamp(amount / 40, 0.15, 1));
       if (!info.storm) sfx.play('hurt', { volume: 0.7 });
@@ -1217,6 +1225,7 @@ export class Game {
     this.time += dt;
     const input = this.input;
     if (!this.loaded) {
+      this.scene.updateMatrixWorld();
       this.post.render(this.scene, this.camera, dt);
       input.endFrame();
       return;
@@ -1238,10 +1247,23 @@ export class Game {
 
     // a multiplayer match keeps running under the pause menu
     const live = (!this.paused || !!this.net) && (this.state === 'drop' || this.state === 'play' || this.state === 'over');
+    const pf = this.perf;
+    const t0 = performance.now();
     if (live) this._simulateSteps(dt);
+    const t1 = performance.now();
+    this.renderer.info.reset(); // autoReset is off: one count per frame across every post pass
 
-    this._present(Math.min(dt, SIM_STEP));
+    this._present(Math.min(dt, 0.1)); // camera / effects smoothing keeps real time down to 10 fps
     input.endFrame();
+    // rolling averages (window.__game.perf): sim / present CPU ms, frame interval, draw calls
+    const t2 = performance.now();
+    const k = 0.05;
+    pf.sim += (t1 - t0 - pf.sim) * k;
+    pf.present += (t2 - t1 - pf.present) * k;
+    pf.frame += (dt * 1000 - pf.frame) * k;
+    pf.calls = this.renderer.info.render.calls;
+    pf.tris = this.renderer.info.render.triangles;
+    pf.frames++;
   }
 
   /**
@@ -1367,7 +1389,6 @@ export class Game {
     if (!client) this._syncStats(dt);
     if (this.structures) this.structures.update(dt);
     this.grenades.update(dt);
-    if (this.loot) this.loot.update(dt, this.camera.position);
     if (this.reboot && (this.state === 'play' || this.state === 'over')) this.reboot.update(dt, this.combat.actors);
 
     // match end (team modes: a team is out once nobody on it is alive; dead members wait)
@@ -1463,6 +1484,9 @@ export class Game {
       this.grenades.preview(aim ? p.throwOrigin(_v) : null, p.aimDir);
     }
 
+    // loot visuals (instance matrices, beams, glows): once per frame, not per sim sub-step
+    if (this.loot && inMatch && (!this.paused || this.net)) this.loot.update(dt, cam.position);
+
     // the Drop Bus keeps flying its route after everyone has jumped
     if (this.dropBus) this.dropBus.update(this.busRoute, this.busT, dt, inMatch && !this.freeBuild && !!this.busRoute);
 
@@ -1495,6 +1519,8 @@ export class Game {
     }
 
     if (inMatch) this._updateHud(dt);
+    // one world-matrix pass per frame (the renderer would redo it on every post pass)
+    this.scene.updateMatrixWorld();
     this.post.render(this.scene, cam, dt);
   }
 
@@ -2397,6 +2423,11 @@ export class Game {
       },
       get role() {
         return game.net ? (game.net.isHost ? 'host' : 'client') : 'solo';
+      },
+      /** Rolling frame stats: { sim, present (CPU ms), frame (ms between frames), calls, tris }. */
+      get perf() {
+        const p = game.perf;
+        return { sim: +p.sim.toFixed(2), present: +p.present.toFixed(2), frame: +p.frame.toFixed(2), calls: p.calls, tris: p.tris, frames: p.frames };
       },
       get paused() {
         return game.paused;

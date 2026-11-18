@@ -183,7 +183,40 @@ export function loadSettings() {
   } catch (err) {
     /* private mode / blocked storage / bad JSON: fall through to defaults */
   }
-  return sanitizeSettings(null);
+  // first visit: start on graphics this device can run smoothly (the player can change it)
+  return sanitizeSettings(firstRunGraphics(deviceInfo()));
+}
+
+/** What the browser says about this device (all optional; missing = unknown). */
+export function deviceInfo() {
+  const out = { ua: '', gpu: '', cores: 0, memory: 0 };
+  try {
+    out.ua = navigator.userAgent || '';
+    out.cores = navigator.hardwareConcurrency || 0;
+    out.memory = navigator.deviceMemory || 0;
+    const gl = document.createElement('canvas').getContext('webgl2') || document.createElement('canvas').getContext('webgl');
+    const ext = gl && gl.getExtension('WEBGL_debug_renderer_info');
+    if (ext) out.gpu = String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) || '');
+    const lose = gl && gl.getExtension('WEBGL_lose_context');
+    if (lose) lose.loseContext();
+  } catch (err) {
+    /* no WebGL / blocked: unknown device */
+  }
+  return out;
+}
+
+/**
+ * First-run graphics for a device: { performanceMode } for Chromebooks and software / very
+ * weak GPUs, { quality: 'low' } for older integrated graphics or small machines, else {}
+ * (the 'medium' default). Pure, so it can be tested.
+ */
+export function firstRunGraphics({ ua = '', gpu = '', cores = 0, memory = 0 } = {}) {
+  const weakest = /\bCrOS\b/.test(ua) || /SwiftShader|llvmpipe|Software|Mali-[4T]|Mali-G[35]\d\b|PowerVR|Adreno \(TM\) [1-5]\d\d/i.test(gpu);
+  if (weakest) return { performanceMode: true, quality: 'low' };
+  const modest =
+    /Intel.*(HD Graphics|UHD Graphics 6[0-2]\d|Iris\(R\)? Graphics [56]\d\d\d|Celeron|Pentium)|Radeon (R[2-5]|HD)|GeForce (GT |MX1|9\d\dM)/i.test(gpu) ||
+    (cores > 0 && cores <= 4 && memory > 0 && memory <= 4);
+  return modest ? { quality: 'low' } : {};
 }
 
 export function saveSettings(settings) {

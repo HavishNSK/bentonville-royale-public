@@ -133,6 +133,7 @@ export class Puppet {
     const far = viewer && (this.pos.x - viewer.x) ** 2 + (this.pos.z - viewer.z) ** 2 > cd2;
     c.root.visible = this.seen && !this.inBus && !far;
     c.setDowned(this.downed);
+    c.setCrouch(this.crouching && this.alive);
     const w = this.game && this.game.world;
     c.setSwim(!!w && !!w.inWater && this.alive && !this.downed && !!(this.flags & FLAG.grounded) && w.inWater(this.pos.x, this.pos.z, this.pos.y));
     if (!c.root.visible) return;
@@ -698,6 +699,7 @@ export class ClientSession {
     const g = this.game;
     const p = g.player;
     const victim = this.actorById(e.v);
+    if (victim && victim.character && !e.st && e.d >= 8 && victim.alive) victim.character.flinch(); // hit reaction
     if (victim && victim !== p) {
       if (e.dn) victim.downHp = e.hp;
       else victim.health = e.hp;

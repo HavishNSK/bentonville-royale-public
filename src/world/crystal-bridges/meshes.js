@@ -467,7 +467,9 @@ function addRibs(pv, buf) {
 // ---------------------------------------------------------------- terrain + water
 
 function terrainMesh(world, ponds) {
-  const cell = 1;
+  // the collision heightfield's own 2 m spacing (site.js bakeTerrain): every vertex sits on a
+  // grid node players walk on, at a quarter of the triangles of a 1 m mesh
+  const cell = 2;
   const nx = Math.round((TILE.x1 - TILE.x0) / cell);
   const nz = Math.round((TILE.z1 - TILE.z0) / cell);
   const pos = new Float32Array((nx + 1) * (nz + 1) * 3);
