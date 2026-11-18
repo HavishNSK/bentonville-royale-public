@@ -76,3 +76,12 @@ export async function seedStorage(context, entries) {
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Close the first-visit "NEW UPDATE" flyer (src/ui/updateFlyer.js) through its own button, if open. */
+export async function dismissFlyer(page) {
+  const open = await page.$('.ufl.is-open .ufl-go');
+  if (!open) return false;
+  await open.click();
+  await page.waitForSelector('.ufl.is-open', { state: 'detached', timeout: 5000 }).catch(() => {});
+  return true;
+}

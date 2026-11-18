@@ -15,7 +15,7 @@
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchWithWebGL, attachDiagnostics, newSink, seedStorage, sleep } from './lib/browser.mjs';
+import { launchWithWebGL, attachDiagnostics, newSink, seedStorage, sleep, dismissFlyer } from './lib/browser.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MONITOR = readFileSync(path.join(HERE, 'lib/monitor.js'), 'utf8');
@@ -54,6 +54,8 @@ async function openPlayer(browser, label, query = '') {
   attachDiagnostics(page, sink, label);
   await page.goto(args.url + query, { waitUntil: 'load', timeout: 90000 });
   await page.waitForFunction(() => window.__game && window.__game.game, null, { timeout: 90000 });
+  await sleep(1500);
+  await dismissFlyer(page);
   return { label, context, page, sink, shot: (n) => page.screenshot({ path: path.join(args.out, `${label}-${n}.png`) }).catch(() => {}) };
 }
 

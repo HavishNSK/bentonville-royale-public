@@ -16,7 +16,7 @@
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchWithWebGL, attachDiagnostics, newSink, throttleCpu, seedStorage, sleep } from './lib/browser.mjs';
+import { launchWithWebGL, attachDiagnostics, newSink, throttleCpu, seedStorage, sleep, dismissFlyer } from './lib/browser.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const MONITOR = readFileSync(path.join(HERE, 'lib/monitor.js'), 'utf8');
@@ -116,6 +116,8 @@ async function waitState(page, s, timeout = 90000) {
 /** Menu PLAY (offline: a local match), wait for the bus. */
 async function clickPlay(page, step) {
   await page.waitForSelector('[data-act=party-go]', { state: 'visible', timeout: 60000 });
+  await sleep(1500); // the update flyer opens shortly after the title screen
+  if (await dismissFlyer(page)) step('dismissed update flyer');
   await page.click('[data-act=party-go]');
   await waitState(page, ['drop', 'play'], 120000);
   step('match started', await page.evaluate(() => ({ seed: window.__game.game.seed, bots: window.__game.bots.length, mode: window.__game.game.mode })));
