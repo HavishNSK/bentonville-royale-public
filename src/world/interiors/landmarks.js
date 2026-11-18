@@ -144,6 +144,8 @@ const def = (id, L, W, front, build, tol) => {
 // and the generated upper floors remain gameplay approximations, not published floor plans.
 // Sources: crystalbridges.org/faq, crystalbridges.org/venue-rentals/venue-info-maps,
 // en.wikipedia.org/wiki/Crystal_Bridges_Museum_of_American_Art, arkansas.com (Crystal Bridges).
+// tol=20: the planner's rectangular frame for the irregular pavilion complex often
+// differs from the reference by 5–15 m; a 2 m default causes silent fallback to 'hall'.
 def(8240824, 332.2, 118.1, 'b', () => {
   const ground = cut(
     'a',
@@ -191,7 +193,7 @@ def(8240824, 332.2, 118.1, 'b', () => {
       cut('a', { abs: 276 }, R('open', 'Great Hall Balcony'), R('gallery', 'Bridge Gallery Upper'))
     );
   return { levels: [ground, upper(1), upper(2)], stairs: [{ a: 190, b: 30, dir: 'a' }, { a: 60, b: 56, dir: 'a' }] };
-});
+}, 20);
 
 // The Momentary (896842916; 108 x 93 m, main door on the west side). Contemporary art space in
 // the former Kraft cheese plant: white-box galleries, Fermentation Hall (black box in the old

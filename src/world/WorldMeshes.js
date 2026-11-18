@@ -975,7 +975,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const tintIds = (key, tint) => {
     if (lm[key] && lm[key].ids) for (const id of lm[key].ids) tints.set(id, tint);
   };
-  tintIds('crystal_bridges', { wall: 0xd8d0bc, roof: 0xb0703c });
+  tintIds('crystal_bridges', { wall: 0xd4ccb0, roof: 0xb87038 }); // warm limestone walls, saturated copper roof
   tintIds('courthouse', { wall: 0xe6dcc3, roof: 0x7f8a8c });
   tintIds('walmart_museum', { wall: 0xc9483a, roof: 0x5c5148 });
   tintIds('momentary', { wall: 0xd9dde0, roof: 0xe2574c });
