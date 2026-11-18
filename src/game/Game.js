@@ -134,6 +134,7 @@ export class Game {
     this.net = null; // HostSession | ClientSession while in a multiplayer match
     this.inventoryOpen = false; // inventory screen (pointer unlocked, no pause)
     this.sandboxLoadoutOpen = false; // sandbox weapons overlay on the map
+    this.sandboxBotsOpen = false; // sandbox bot spawn menu on the map
 
     // MSAA only where it is the anti-aliasing: presets with post-processing end in FXAA (MSAA on
     // the backbuffer would be paid for and thrown away), and performance mode runs without.
@@ -222,6 +223,8 @@ export class Game {
     this.hud.setVisible(false);
     if (this.hud.setMapTravelHandler) this.hud.setMapTravelHandler((key) => this.fastTravelTo(key));
     if (this.hud.setMapWeaponsHandler) this.hud.setMapWeaponsHandler(() => this.toggleSandboxLoadout(true));
+    if (this.hud.setMapBotsHandler) this.hud.setMapBotsHandler(() => this.toggleSandboxBots(true));
+    if (this.hud.setSandboxBotsClose) this.hud.setSandboxBotsClose(() => this.toggleSandboxBots(false));
     if (this.hud.setSandboxLoadoutHandler) this.hud.setSandboxLoadoutHandler((id) => this.giveSandboxGun(id));
     if (this.hud.setSandboxLoadoutClose) this.hud.setSandboxLoadoutClose(() => this.toggleSandboxLoadout(false));
     if (this.hud.setSandboxBotHandlers) this.hud.setSandboxBotHandlers((d) => this.spawnSandboxBot(d), () => this.clearSandboxBots());
@@ -437,6 +440,7 @@ export class Game {
     this._matchEndPosted = false;
     this.paused = false;
     this.sandboxLoadoutOpen = false;
+    this.sandboxBotsOpen = false;
     this._endTimer = 0;
     this._stormTick = 0;
     this.spectating = null;
@@ -550,6 +554,7 @@ export class Game {
     this.state = 'drop';
     this.fullMapOpen = false;
     this.sandboxLoadoutOpen = false;
+    this.sandboxBotsOpen = false;
     if (!this.inventoryOpen && this.input) this.input.trap = false;
     this.hud.setVisible(true);
     this.hud.showFullMap(false);
@@ -702,6 +707,7 @@ export class Game {
     this._matchEndPosted = false;
     this.paused = false;
     this.sandboxLoadoutOpen = false;
+    this.sandboxBotsOpen = false;
     this._endTimer = 0;
     this._stormTick = 0;
     this.spectating = null;
@@ -999,6 +1005,7 @@ export class Game {
     this.state = 'play';
     this.fullMapOpen = false;
     this.sandboxLoadoutOpen = false;
+    this.sandboxBotsOpen = false;
     if (!this.inventoryOpen && this.input) this.input.trap = false;
     this.hud.showFullMap(false);
     this._setFullMapInteractive(false);
@@ -1018,6 +1025,7 @@ export class Game {
     if (on) {
       this.closeInventory(false);
       this.toggleSandboxLoadout(false);
+      this.toggleSandboxBots(false);
       if (this.fullMapOpen) this.toggleFullMap(false);
       this.input.unlock();
       this.input.releaseAll();
@@ -1283,6 +1291,10 @@ export class Game {
 
     input.inMatch = this.state === 'play' && !this.paused;
     this._inventoryInput(input);
+    if (this.sandboxBotsOpen && input.hit('Escape')) {
+      input.consume('Escape');
+      this.toggleSandboxBots(false);
+    }
     if (this.sandboxLoadoutOpen && input.hit('Escape')) {
       input.consume('Escape');
       this.toggleSandboxLoadout(false);
@@ -1408,7 +1420,7 @@ export class Game {
         this._sandboxTick = (this._sandboxTick || 0) + dt;
         if (this._sandboxTick >= 1) {
           this._sandboxTick = 0;
-          if (this._purgeSandboxBodies() || this.sandboxLoadoutOpen) this._syncSandboxBots();
+          if (this._purgeSandboxBodies() || this.sandboxLoadoutOpen || this.sandboxBotsOpen) this._syncSandboxBots();
         }
       }
     }
@@ -1894,6 +1906,8 @@ export class Game {
     this.inventoryOpen = true; // set before unlock(): _onLockChange must not pause
     this.sandboxLoadoutOpen = false;
     if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(false);
+    this.sandboxBotsOpen = false;
+    if (this.hud.showSandboxBotsMenu) this.hud.showSandboxBotsMenu(false);
     this.fullMapOpen = false;
     this._setFullMapInteractive(false);
     this.input.trap = true;
@@ -2046,6 +2060,8 @@ export class Game {
     } else {
       this.sandboxLoadoutOpen = false;
       if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(false);
+      this.sandboxBotsOpen = false;
+      if (this.hud.showSandboxBotsMenu) this.hud.showSandboxBotsMenu(false);
       this.input.trap = false;
       this._setFullMapInteractive(false);
       if ((this.state === 'play' || this.state === 'drop') && !this.paused) this.input.lock();
@@ -2060,6 +2076,7 @@ export class Game {
       if (!canSandboxLoadout(this) || this.paused) return;
       if (!this.fullMapOpen) this.toggleFullMap(true);
       if (!this.fullMapOpen) return;
+      this.toggleSandboxBots(false); // one panel at a time
       this.sandboxLoadoutOpen = true;
       if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(true);
       this._syncSandboxBots();
@@ -2068,6 +2085,25 @@ export class Game {
     }
     this.sandboxLoadoutOpen = false;
     if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(false);
+  }
+
+  /** Sandbox map overlay: spawn / clear bots (its own menu, under WEAPONS). No-op in a match. */
+  toggleSandboxBots(on) {
+    on = on === undefined ? !this.sandboxBotsOpen : !!on;
+    if (on === !!this.sandboxBotsOpen) return;
+    if (on) {
+      if (!canSandboxLoadout(this) || this.paused) return;
+      if (!this.fullMapOpen) this.toggleFullMap(true);
+      if (!this.fullMapOpen) return;
+      this.toggleSandboxLoadout(false); // one panel at a time
+      this.sandboxBotsOpen = true;
+      if (this.hud.showSandboxBotsMenu) this.hud.showSandboxBotsMenu(true);
+      this._syncSandboxBots();
+      sfx.play('ui_click');
+      return;
+    }
+    this.sandboxBotsOpen = false;
+    if (this.hud.showSandboxBotsMenu) this.hud.showSandboxBotsMenu(false);
   }
 
   /** Your team colour slot (0..3). */

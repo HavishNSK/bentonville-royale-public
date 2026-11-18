@@ -264,9 +264,15 @@ function hudHTML() {
     <div class="br-sandbox-loadout-h">${icon('rifle')}WEAPONS</div>
     <p class="br-sandbox-loadout-sub">Click a gun or grenade — it lands on your hotbar</p>
     <div class="br-sandbox-loadout-guns" data-ref="sandboxLoadoutGuns"></div>
+    <button type="button" class="br-sandbox-loadout-close" data-ref="sandboxLoadoutClose">Close</button>
+  </div>
+</div>
+<div class="br-sandbox-loadout br-sandbox-botsmenu" data-ref="sandboxBotsMenu" hidden>
+  <div class="br-sandbox-loadout-card">
+    <div class="br-sandbox-loadout-h">${icon('people')}BOTS</div>
     <section class="br-sandbox-bots" aria-labelledby="br-sandbox-bots-h">
       <div class="br-sandbox-bots-top">
-        <h3 class="br-sandbox-bots-h" id="br-sandbox-bots-h">BOTS</h3>
+        <h3 class="br-sandbox-bots-h" id="br-sandbox-bots-h">SPAWN</h3>
         <span class="br-sandbox-bots-count" data-ref="sandboxBotsCount" aria-live="polite">0 / 0</span>
       </div>
       <p class="br-sandbox-bots-sub">Spawns in front of you and hunts you. You can't be eliminated in Sandbox.</p>
@@ -278,7 +284,7 @@ function hudHTML() {
       </div>
       <p class="br-sandbox-bots-note" data-ref="sandboxBotsNote" role="status" hidden></p>
     </section>
-    <button type="button" class="br-sandbox-loadout-close" data-ref="sandboxLoadoutClose">Close</button>
+    <button type="button" class="br-sandbox-loadout-close" data-ref="sandboxBotsClose">Close</button>
   </div>
 </div>`;
 }
@@ -894,7 +900,10 @@ export function buildHud(root) {
     fullMapOn = v;
     r.fullmap.classList.toggle('is-on', v);
     hud.classList.toggle('has-fullmap', v);
-    if (!v) showSandboxLoadout(false);
+    if (!v) {
+      showSandboxLoadout(false);
+      showSandboxBotsMenu(false);
+    }
   }
   /**
    * Sizes the full-map canvas to the map's width/height ratio (meta.bounds). The short side
@@ -969,6 +978,8 @@ export function buildHud(root) {
   let lastTravelKey = '';
   let onTravel = null;
   let onWeapons = null;
+  let onBots = null;
+  let onSandboxBotsClose = null;
   let onSandboxGun = null;
   let onSandboxLoadoutClose = null;
   function setMapTravelHandler(fn) {
@@ -976,6 +987,13 @@ export function buildHud(root) {
   }
   function setMapWeaponsHandler(fn) {
     onWeapons = typeof fn === 'function' ? fn : null;
+  }
+  /** Sandbox map: the BOTS button (under WEAPONS) opens the bot spawn menu. */
+  function setMapBotsHandler(fn) {
+    onBots = typeof fn === 'function' ? fn : null;
+  }
+  function setSandboxBotsClose(fn) {
+    onSandboxBotsClose = typeof fn === 'function' ? fn : null;
   }
   function setSandboxLoadoutHandler(fn) {
     onSandboxGun = typeof fn === 'function' ? fn : null;
@@ -1012,6 +1030,22 @@ export function buildHud(root) {
       if (onWeapons) onWeapons();
     });
     box.appendChild(wep);
+    const bots = document.createElement('button');
+    bots.type = 'button';
+    bots.className = 'br-map-weapons br-map-bots';
+    bots.setAttribute('aria-label', 'Bots');
+    const botsIco = document.createElement('span');
+    botsIco.className = 'br-map-weapons-ico';
+    botsIco.innerHTML = icon('people');
+    const botsLab = document.createElement('span');
+    botsLab.textContent = 'BOTS';
+    bots.append(botsIco, botsLab);
+    bots.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (onBots) onBots();
+    });
+    box.appendChild(bots);
     const head = document.createElement('div');
     head.className = 'br-mapstats-row br-mapstats-head';
     const label = document.createElement('span');
@@ -1098,13 +1132,29 @@ export function buildHud(root) {
     sandboxLoadoutOn = v;
     r.sandboxLoadout.hidden = !v;
     r.sandboxLoadout.classList.toggle('is-on', v);
-    hud.classList.toggle('has-sandbox-loadout', v);
+    hud.classList.toggle('has-sandbox-loadout', v || sandboxBotsOn);
   }
   r.sandboxLoadoutClose.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     if (onSandboxLoadoutClose) onSandboxLoadoutClose();
     else showSandboxLoadout(false);
+  });
+
+  let sandboxBotsOn = false;
+  function showSandboxBotsMenu(on) {
+    const v = !!on;
+    if (v === sandboxBotsOn) return;
+    sandboxBotsOn = v;
+    r.sandboxBotsMenu.hidden = !v;
+    r.sandboxBotsMenu.classList.toggle('is-on', v);
+    hud.classList.toggle('has-sandbox-loadout', v || sandboxLoadoutOn);
+  }
+  r.sandboxBotsClose.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onSandboxBotsClose) onSandboxBotsClose();
+    else showSandboxBotsMenu(false);
   });
 
   let emoteOn = false;
@@ -1332,6 +1382,9 @@ export function buildHud(root) {
     setMapTravel,
     setMapTravelHandler,
     setMapWeaponsHandler,
+    setMapBotsHandler,
+    setSandboxBotsClose,
+    showSandboxBotsMenu,
     setSandboxLoadoutHandler,
     setSandboxLoadoutClose,
     setSandboxBotHandlers,
@@ -1356,6 +1409,7 @@ export function buildHud(root) {
       setObjectBar(null);
       showFullMap(false);
       showSandboxLoadout(false);
+      showSandboxBotsMenu(false);
       setRevive(null);
       setDowned(null);
       setSpectate(null);
