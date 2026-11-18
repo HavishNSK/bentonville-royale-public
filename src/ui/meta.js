@@ -126,7 +126,7 @@ export function createMeta(menus, account, opts = {}) {
     const me = { name: account.profile.guest ? '' : account.profile.name, skin: eq.skin, pickaxe: eq.pickaxe, backbling: eq.backbling, you: true };
     const others = (opts.partyMembers ? opts.partyMembers() : [])
       .filter((m) => !m.you)
-      .map((m) => ({ name: m.name, skin: m.skin || 'skin_rogue', pickaxe: m.pickaxe, backbling: m.backbling }));
+      .map((m) => ({ name: m.name, skin: m.skin || 'skin_rogue', pickaxe: m.pickaxe, backbling: m.backbling, ready: m.ready }));
     showcase.setMembers([me, ...others]);
   }
 
