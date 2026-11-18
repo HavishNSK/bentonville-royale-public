@@ -6,6 +6,8 @@
 //   view.destroyInstance(collider)         // hide a harvested tree / rock / prop / vehicle
 
 import * as THREE from 'three';
+import { createCrystalBridges, hasCrystalBridges } from './crystal-bridges/index.js';
+import { TILE as CB_TILE } from './crystal-bridges/site.js';
 import { makeRng } from '../core/config.js';
 import { flattenModel } from '../core/assets.js';
 import { pointInPoly } from './World.js';
@@ -13,16 +15,18 @@ import { addInteriorGeometry } from './InteriorMeshes.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { schoolBusParts, schoolBusMaterials, SCHOOL_BUS } from '../render/SchoolBus.js';
 
+const CB_DETAIL_DIST = 160; // metres from Crystal Bridges' centre: statues, frames, furniture
+const CB_SHADOW_DIST = 80; // ...and statue shadows
 const CHUNK = 256;
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 const AREA_COLOR = {
-  water: 0x4f97cf,
-  wood: 0x4d8a45,
-  park: 0x84bf5f,
-  grass: 0x8ac464,
-  pitch: 0x6cb257,
-  garden: 0x76b65c,
+  water: 0x527d86,
+  wood: 0x526849,
+  park: 0x75885b,
+  grass: 0x7b8b60,
+  pitch: 0x6c845b,
+  garden: 0x71865e,
   parking: 0x8a8e93,
   busloop: 0x83878c, // a school's bus loop: asphalt with parked school buses (parkSchoolBuses)
 };
@@ -93,7 +97,39 @@ class Buf {
 
 const _c = new THREE.Color();
 
-function addPolygon(buf, pts, y, hex) {
+// Subdivide a triangle until its longest edge is <= POLYGON_STEP, sampling
+// the height function at every new midpoint so the mesh follows terrain.
+// 16 m keeps terrain-following accurate for Bentonville's gentle hills while
+// producing ~16x fewer triangles than 4 m (avoids GPU memory exhaustion on
+// city-sized maps where large park / wood polygons dominate the flat mesh).
+const POLYGON_STEP = 16;
+function emitSubTri(buf, ax, ay, az, bx, by, bz, cx, cy, cz, getY, r, g, b) {
+  const abLen = Math.hypot(bx - ax, bz - az);
+  const bcLen = Math.hypot(cx - bx, cz - bz);
+  const caLen = Math.hypot(ax - cx, az - cz);
+  if (Math.max(abLen, bcLen, caLen) <= POLYGON_STEP) {
+    const ia = buf.v(ax, ay, az, 0, 1, 0, r, g, b);
+    const ib = buf.v(bx, by, bz, 0, 1, 0, r, g, b);
+    const ic = buf.v(cx, cy, cz, 0, 1, 0, r, g, b);
+    buf.idx.push(ia, ib, ic);
+    return;
+  }
+  if (abLen >= bcLen && abLen >= caLen) {
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2, my = getY(mx, mz);
+    emitSubTri(buf, ax, ay, az, mx, my, mz, cx, cy, cz, getY, r, g, b);
+    emitSubTri(buf, mx, my, mz, bx, by, bz, cx, cy, cz, getY, r, g, b);
+  } else if (bcLen >= caLen) {
+    const mx = (bx + cx) / 2, mz = (bz + cz) / 2, my = getY(mx, mz);
+    emitSubTri(buf, ax, ay, az, bx, by, bz, mx, my, mz, getY, r, g, b);
+    emitSubTri(buf, ax, ay, az, mx, my, mz, cx, cy, cz, getY, r, g, b);
+  } else {
+    const mx = (cx + ax) / 2, mz = (cz + az) / 2, my = getY(mx, mz);
+    emitSubTri(buf, ax, ay, az, bx, by, bz, mx, my, mz, getY, r, g, b);
+    emitSubTri(buf, mx, my, mz, bx, by, bz, cx, cy, cz, getY, r, g, b);
+  }
+}
+
+export function addPolygon(buf, pts, y, hex) {
   if (pts.length < 3) return;
   const contour = pts.map((p) => new THREE.Vector2(p[0], p[1]));
   let tris;
@@ -103,23 +139,51 @@ function addPolygon(buf, pts, y, hex) {
     return;
   }
   _c.setHex(hex);
-  const base = buf.n;
-  for (const p of pts) buf.v(p[0], y, p[1], 0, 1, 0, _c.r, _c.g, _c.b);
-  for (const t of tris) {
-    const a = pts[t[0]];
-    const c = pts[t[1]];
-    const d = pts[t[2]];
-    const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
-    if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
-    else buf.idx.push(base + t[0], base + t[2], base + t[1]);
+  const getY = typeof y === 'function' ? y : () => y;
+  const r = _c.r, g = _c.g, b = _c.b;
+  if (typeof y === 'function') {
+    // Terrain-aware: subdivide each triangle so interior points sample the heightfield.
+    for (const t of tris) {
+      const a = pts[t[0]], c = pts[t[1]], d = pts[t[2]];
+      const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
+      let ax, az, bx, bz, cx, cz;
+      if (up > 0) { [ax, az] = a; [bx, bz] = c; [cx, cz] = d; }
+      else         { [ax, az] = a; [bx, bz] = d; [cx, cz] = c; }
+      emitSubTri(buf, ax, getY(ax, az), az, bx, getY(bx, bz), bz, cx, getY(cx, cz), cz, getY, r, g, b);
+    }
+  } else {
+    // Flat polygon: share boundary vertices, no subdivision needed.
+    const base = buf.n;
+    for (const p of pts) buf.v(p[0], getY(p[0], p[1]), p[1], 0, 1, 0, r, g, b);
+    for (const t of tris) {
+      const a = pts[t[0]], c = pts[t[1]], d = pts[t[2]];
+      const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
+      if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
+      else        buf.idx.push(base + t[0], base + t[2], base + t[1]);
+    }
   }
 }
 
-function addRibbon(buf, pts, halfWidth, y, hex) {
+// A road can span hundreds of metres between OSM nodes. Four-metre samples
+// follow the DEM instead of drawing a flat chord through hills and foundations.
+function ribbonSamples(path) {
+  if (path.length < 2) return path;
+  const points = [path[0]];
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1], b = path[i];
+    const count = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 4));
+    for (let k = 1; k <= count; k++) points.push([a[0] + (b[0] - a[0]) * k / count, a[1] + (b[1] - a[1]) * k / count]);
+  }
+  return points;
+}
+
+export function addRibbon(buf, path, halfWidth, y, hex) {
+  const pts = ribbonSamples(path);
   const n = pts.length;
   if (n < 2) return;
   _c.setHex(hex);
   const base = buf.n;
+  const getY = typeof y === 'function' ? y : () => y;
   for (let i = 0; i < n; i++) {
     const p = pts[i];
     const a = pts[Math.max(0, i - 1)];
@@ -157,8 +221,10 @@ function addRibbon(buf, pts, halfWidth, y, hex) {
     // miter length, clamped so sharp corners do not spike
     const cos = Math.max(0.5, nx * -d1z + nz * d1x);
     const w = halfWidth / cos;
-    buf.v(p[0] + nx * w, y, p[1] + nz * w, 0, 1, 0, _c.r, _c.g, _c.b);
-    buf.v(p[0] - nx * w, y, p[1] - nz * w, 0, 1, 0, _c.r, _c.g, _c.b);
+    const lx = p[0] + nx * w, lz = p[1] + nz * w;
+    const rx = p[0] - nx * w, rz = p[1] - nz * w;
+    buf.v(lx, getY(lx, lz), lz, 0, 1, 0, _c.r, _c.g, _c.b);
+    buf.v(rx, getY(rx, rz), rz, 0, 1, 0, _c.r, _c.g, _c.b);
   }
   for (let i = 0; i < n - 1; i++) {
     const a = base + i * 2;
@@ -197,7 +263,8 @@ function noiseTexture(size, base, spread) {
     for (let x = 0; x < size; x++) {
       const u = x / size;
       const v = y / size;
-      const nse = sample(l1, 8, u, v) * 0.65 + sample(l2, 32, u, v) * 0.35 + (rng() - 0.5) * 0.12;
+      // (only a trace of per-pixel grain: more of it sparkles at grazing angles)
+      const nse = sample(l1, 8, u, v) * 0.65 + sample(l2, 32, u, v) * 0.35 + (rng() - 0.5) * 0.03;
       const k = base + (nse - 0.5) * spread;
       const i = (y * size + x) * 4;
       img.data[i] = img.data[i + 1] = img.data[i + 2] = Math.max(0, Math.min(255, k * 255));
@@ -253,36 +320,58 @@ function buildingMaterial() {
           // sill under each window
           float sill = (1.0 - smoothstep(0.0, aa.y + 0.02, abs(f.y - (lo.y - fr.y - 0.03)))) * step(lo.x - fr.x, f.x) * step(f.x, hi.x + fr.x);
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.18, sill * win);
-          // plinth at the base
-          diffuseColor.rgb *= mix(0.72, 1.0, smoothstep(0.55, 0.62, vWall.y));
-          // slab line between floors (brick / metal)
-          if (style > 0.5) {
-            float fl = fract(vWall.y / fh);
-            float band = smoothstep(0.0, 0.015 + aa.y, fl) * (1.0 - smoothstep(0.06 - aa.y, 0.06, fl));
-            diffuseColor.rgb *= 1.0 - 0.12 * band * near * step(1.0, vWall.y);
-          }
-          // parapet / cornice cap: a lighter band with a dark shadow line beneath it
+          // plinth at the base (taller, darker — visible from street level)
+          diffuseColor.rgb *= mix(0.65, 1.0, smoothstep(0.70, 0.90, vWall.y));
+          // slab line between floors — wider and stronger for all material styles
+          float fl = fract(vWall.y / fh);
+          float band = smoothstep(0.0, 0.02 + aa.y, fl) * (1.0 - smoothstep(0.10 - aa.y, 0.10, fl));
+          float bandStr = style < 0.5 ? 0.08 : 0.18;
+          diffuseColor.rgb *= 1.0 - bandStr * band * near * step(1.0, vWall.y);
+          // parapet / cornice cap: more pronounced lighter band with deeper shadow beneath
           float top = vH - vWall.y;
-          diffuseColor.rgb *= mix(1.0, 1.14, 1.0 - smoothstep(0.42, 0.46, top));
-          diffuseColor.rgb *= 1.0 - 0.28 * smoothstep(0.42, 0.46, top) * (1.0 - smoothstep(0.58, 0.64, top));
-          // corners: darker pilaster at each end of the wall so building edges read up close
+          diffuseColor.rgb *= mix(1.0, 1.22, 1.0 - smoothstep(0.38, 0.44, top));
+          diffuseColor.rgb *= 1.0 - 0.38 * smoothstep(0.38, 0.44, top) * (1.0 - smoothstep(0.60, 0.70, top));
+          // corners: wider, darker pilasters so building edges read clearly
           float edge = vWall.w * 0.5 - abs(vWall.x);
-          diffuseColor.rgb *= mix(0.8, 1.0, smoothstep(0.32, 0.4, edge));
+          diffuseColor.rgb *= mix(0.68, 1.0, smoothstep(0.18, 0.46, edge));
           // low-frequency grime so a large wall is not one flat colour
           float gx = floor(vWall.x / 1.3);
           float gz = floor(vWall.y / 1.1);
           float grime = fract(sin(gx * 91.7 + gz * 47.3 + vWall.w * 1.7) * 43758.5453);
-          diffuseColor.rgb *= 1.0 - 0.05 * grime * near;
+          // (faded out before the 1.3 m blocks shrink to a few pixels: no checker shimmer)
+          float grimeVis = 1.0 - smoothstep(0.08, 0.3, max(fwidth(vWall.x), fwidth(vWall.y)) / 1.1);
+          diffuseColor.rgb *= 1.0 - 0.05 * grime * near * grimeVis;
           // darker toward the ground (fake AO)
           diffuseColor.rgb *= mix(0.86, 1.0, smoothstep(0.0, 2.5, vWall.y));
           if (style < 0.5) {
-            float l = smoothstep(0.0, 0.1, fract(vWall.y / 0.4));
-            diffuseColor.rgb *= mix(1.0, mix(0.9, 1.0, l), near);
+            // siding lines every 0.4 m: anti-aliased by their own screen-space size and faded
+            // to their average shade before they get thinner than a pixel (no moire stripes)
+            float sy = vWall.y / 0.4;
+            float sa = fwidth(sy);
+            float l = smoothstep(0.0, 0.1 + sa, fract(sy));
+            float sVis = 1.0 - smoothstep(0.2, 0.55, sa);
+            diffuseColor.rgb *= mix(0.995, mix(0.9, 1.0, l), near * sVis);
+          } else if (style < 1.5) {
+            // Running-bond masonry in metres, antialiased away at distance. A
+            // restrained mortar joint gives brick a scale without new textures.
+            float row = floor(vWall.y / 0.085);
+            vec2 brick = vec2(vWall.x / 0.25 + mod(row, 2.0) * 0.5, vWall.y / 0.085);
+            vec2 bf = fract(brick);
+            vec2 ba = fwidth(brick) + 1e-4;
+            vec2 joint = smoothstep(vec2(0.04) - ba, vec2(0.04) + ba, bf);
+            float mortar = 1.0 - joint.x * joint.y;
+            float detail = 1.0 - smoothstep(0.2, 0.65, max(ba.x, ba.y));
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.82 + vec3(0.035), mortar * detail * 0.55 * (1.0 - m.x * m.y * win));
+          } else {
+            // Industrial metal cladding: narrow vertical panel seams.
+            float seam = abs(fract(vWall.x / 1.2) - 0.5);
+            float edgeAA = fwidth(vWall.x / 1.2) + 1e-4;
+            diffuseColor.rgb *= 1.0 - (1.0 - smoothstep(0.006, 0.006 + edgeAA, seam)) * 0.16 * near;
           }
         }`
       );
   };
-  mat.customProgramCacheKey = () => 'br-building-v2';
+  mat.customProgramCacheKey = () => 'br-building-v3';
   return mat;
 }
 
@@ -346,7 +435,10 @@ function hcap(chunk, pts, tris, y, dir, hex, h, litDir = dir) {
  * door openings, the wall thickness (an inner face), door jambs and lintels, an
  * interior floor and ceiling. Geometry sits on y = 0 like the rest of the map.
  */
-function addBuilding(chunk, b, tint, shell) {
+export function appendBuildingGeometry(chunk, b, tint, collider, roomChunk = chunk) {
+  const shell = collider?.shell;
+  const start = chunk.buf.pos.length;
+  const roomStart = roomChunk.buf.pos.length;
   const pts = b.p;
   const n = pts.length;
   const h = b.h;
@@ -371,7 +463,7 @@ function addBuilding(chunk, b, tint, shell) {
   }
 
   if (shell) {
-    addShell(chunk, b, shell, sign, style, wr, wg, wb, tris);
+    addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roomChunk);
   } else {
     for (let i = 0; i < n; i++) {
       const a = pts[i];
@@ -409,6 +501,12 @@ function addBuilding(chunk, b, tint, shell) {
     if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
     else buf.idx.push(base + t[0], base + t[2], base + t[1]);
   }
+  // Interior generators deliberately emit heights relative to shell.floor. Lift the
+  // entire building together, including panels, stairs and furniture, to the very
+  // same foundation used by World collision. Shader facade heights remain local.
+  const baseY = collider?.y0 || 0;
+  for (let i = start + 1; i < buf.pos.length; i += 3) buf.pos[i] += baseY;
+  if (roomChunk !== chunk) for (let i = roomStart + 1; i < roomChunk.buf.pos.length; i += 3) roomChunk.buf.pos[i] += baseY;
 }
 
 /**
@@ -418,7 +516,7 @@ function addBuilding(chunk, b, tint, shell) {
  * whose index range is recorded (chunk.panelRanges) so view.hidePanel can blank them. The
  * wall above the ceiling and a panel's underside stay (the hole is closed at the top).
  */
-function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris) {
+function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roomChunk = chunk) {
   const pts = b.p;
   const n = pts.length;
   const h = b.h;
@@ -518,7 +616,8 @@ function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris) {
   // painted ceiling instead of picking up the dim ground hemisphere colour
   hcap(chunk, inner, tris, shell.ceil-shell.floor, -1, CEILING_COLOR, h, 1);
   // interior partitions + room floors (InteriorMeshes.js)
-  if (shell.plan) addInteriorGeometry(chunk, shell, h, { quad, hcapFlat });
+  // (into `roomChunk`: the building's own interior mesh, drawn only from nearby, see view.update)
+  if (shell.plan) addInteriorGeometry(roomChunk, shell, h, { quad, hcapFlat });
 }
 
 /** Horizontal polygon (flat [x, z, ...]) facing up, triangulated here (room floor overlays). */
@@ -545,20 +644,21 @@ const _s = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
 
-class Scatter {
-  constructor(scene, shadows) {
+export class Scatter {
+  constructor(scene, shadows, surfaceHeight = () => 0) {
     this.scene = scene;
     this.shadows = shadows;
     this.defs = new Map();
     this.buckets = new Map(); // "cx,cz|name" -> records
     this.meshes = [];
+    this.surfaceHeight = surfaceHeight;
   }
 
   define(name, gltf, scale) {
     if (!gltf) return false;
     const flat = flattenModel(gltf.scene);
     if (!flat) return false;
-    this.defs.set(name, { geometry: flat.geometry, material: flat.material, scale });
+    this.defs.set(name, { geometry: flat.geometry, material: flat.material, scale, minY: flat.geometry.boundingBox.min.y });
     return true;
   }
 
@@ -567,13 +667,14 @@ class Scatter {
   }
 
   /** Returns a record you can later pass to hide(). */
-  add(name, x, z, rotY, scaleMul = 1, colorHex = null, y = 0) {
+  add(name, x, z, rotY, scaleMul = 1, colorHex = null, y = this.surfaceHeight(x, z)) {
     const def = this.defs.get(name);
     if (!def) return null;
     const key = Math.floor(x / CHUNK) + ',' + Math.floor(z / CHUNK) + '|' + name;
     let list = this.buckets.get(key);
     if (!list) this.buckets.set(key, (list = []));
-    const rec = { name, x, y, z, rotY, scale: def.scale * scaleMul, color: colorHex, mesh: null, index: list.length };
+    const scale = def.scale * scaleMul;
+    const rec = { name, x, y: y - def.minY * scale, z, rotY, scale, color: colorHex, mesh: null, index: list.length };
     list.push(rec);
     return rec;
   }
@@ -621,12 +722,12 @@ class Scatter {
   }
 
   cull(cam, dist) {
-    const lim = dist + CHUNK * 0.75;
-    const lim2 = lim * lim;
     for (const m of this.meshes) {
       const dx = m.userData.cx - cam.x;
       const dz = m.userData.cz - cam.z;
-      m.visible = dx * dx + dz * dz < lim2;
+      // the bucket's own size, not a whole chunk: small clusters drop out sooner
+      const lim = dist + (m.boundingSphere ? m.boundingSphere.radius : CHUNK * 0.75);
+      m.visible = dx * dx + dz * dz < lim * lim;
     }
   }
 }
@@ -727,7 +828,7 @@ function parkSchoolBuses(world, data, root) {
       // bus-local -z (the front) points along +f; origin sits BUS_MID behind the footprint centre
       const ox = cx - fx * -BUS_MID;
       const oz = cz - fz * -BUS_MID;
-      const gy = world.terrainHeight(cx, cz);
+      const gy = world.surfaceHeight(cx, cz);
       m.makeRotationY(Math.atan2(-fx, -fz)).setPosition(ox, gy + SCHOOL_BUS.groundY, oz);
       for (const part of parts) (byMat[part.mat] ||= []).push(part.geometry.clone().applyMatrix4(m));
       const corners = [
@@ -736,7 +837,7 @@ function parkSchoolBuses(world, data, root) {
         [cx - fx * BUS_HALF_LEN - vx * BUS_HALF_W, cz - fz * BUS_HALF_LEN - vz * BUS_HALF_W],
         [cx - fx * BUS_HALF_LEN + vx * BUS_HALF_W, cz - fz * BUS_HALF_LEN + vz * BUS_HALF_W],
       ];
-      const col = world.addPoly(corners, SCHOOL_BUS.groundY + SCHOOL_BUS.top, 'vehicle', 'metal', []);
+      const col = world.addPoly(corners, SCHOOL_BUS.groundY + SCHOOL_BUS.top, 'vehicle', 'metal', [], { y0: gy });
       col.x = cx;
       col.z = cz;
       n++;
@@ -760,6 +861,21 @@ function parkSchoolBuses(world, data, root) {
 
 // ----------------------------------------------------------------------- main
 
+/** Ground plane (XY shape, rotated flat by the caller) with a rectangular hole for a bespoke terrain tile. */
+function groundWithHole(b, margin, hole) {
+  const x0 = b.minX - margin, x1 = b.maxX + margin;
+  const z0 = b.minZ - margin, z1 = b.maxZ + margin;
+  // shape space: (x, -z) so rotation.x = -PI/2 maps it back to (x, 0, z)
+  const shape = new THREE.Shape([new THREE.Vector2(x0, -z1), new THREE.Vector2(x1, -z1), new THREE.Vector2(x1, -z0), new THREE.Vector2(x0, -z0)]);
+  shape.holes.push(new THREE.Path([new THREE.Vector2(hole.x0, -hole.z1), new THREE.Vector2(hole.x0, -hole.z0), new THREE.Vector2(hole.x1, -hole.z0), new THREE.Vector2(hole.x1, -hole.z1)]));
+  const g = new THREE.ShapeGeometry(shape);
+  // world-space UVs scaled like the plane's repeat (texture repeats every 70 m)
+  const pos = g.attributes.position;
+  const uv = g.attributes.uv;
+  for (let i = 0; i < pos.count; i++) uv.setXY(i, (pos.getX(i) - x0) / (x1 - x0), (pos.getY(i) + z1) / (z1 - z0));
+  return g;
+}
+
 export async function buildWorldMeshes({ world, scene, models, manifests, onProgress }) {
   const data = world.data;
   const b = world.bounds;
@@ -773,39 +889,73 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   root.name = 'world';
   scene.add(root);
 
+  // The map is flat: the USGS heightfield and aerial ground photo (public/data/bentonville-
+  // terrain.*, bentonville-ground.webp) are not loaded. With them players and bots fell under the
+  // ground and slipped into buildings. World.terrain stays null, so terrainHeight is 0.
+
+  // ---- Crystal Bridges (bespoke landmark): registered before every other collider. It lays its
+  // ravine into the ground (World.setTerrainOverlay; the edges ease back to street level) and
+  // reserves its site (src/world/crystal-bridges/)
+  const cb = hasCrystalBridges(data) ? createCrystalBridges(world, data) : null;
+  const skipFlat = (pts, k) => !!cb && cb.skipFlat(pts, k);
+
   // ---- ground
   progress(0.02, 'Laying out the ground');
   const margin = 2600;
   const gw = b.maxX - b.minX + margin * 2;
   const gd = b.maxZ - b.minZ + margin * 2;
+  const cx0 = (b.minX + b.maxX) / 2;
+  const cz0 = (b.minZ + b.maxZ) / 2;
+  // Flat ground (the USGS hills and photo ground were taken back out: players fell under them
+  // and slipped into buildings). The Crystal Bridges tile is cut out: its ravine draws its own.
   const groundTex = noiseTexture(256, 0.92, 0.22);
   groundTex.repeat.set(gw / 70, gd / 70);
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(gw, gd), new THREE.MeshLambertMaterial({ color: 0x7daf58, map: groundTex }));
+  const groundMat = new THREE.MeshLambertMaterial({ color: 0x7daf58, map: groundTex });
+  // The 70 m noise tile alone repeats ~14 times across town and reads as a grid of identical
+  // blocks from the air. A second read of the same texture, turned 90 degrees at an unrelated
+  // scale, breaks the repeat: the two patterns only line up again far beyond the map.
+  groundMat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <map_fragment>',
+      `#ifdef USE_MAP
+        vec4 gA = texture2D(map, vMapUv);
+        vec4 gB = texture2D(map, vec2(vMapUv.y, -vMapUv.x) * 0.283 + vec2(0.37, 0.61));
+        diffuseColor.rgb *= gA.rgb * gB.rgb / 0.92;
+      #endif`
+    );
+  };
+  groundMat.customProgramCacheKey = () => 'br-ground-v2';
+  const ground = new THREE.Mesh(cb ? groundWithHole(b, margin, CB_TILE) : new THREE.PlaneGeometry(gw, gd), groundMat);
   ground.rotation.x = -Math.PI / 2;
-  ground.position.set((b.minX + b.maxX) / 2, 0, (b.minZ + b.maxZ) / 2);
+  if (!cb) ground.position.set(cx0, 0, cz0);
   ground.receiveShadow = true;
   ground.renderOrder = -2;
   root.add(ground);
 
-  // ---- flat layers: land cover, sidewalks, paths, roads, centre lines (painter's order in one mesh)
+  // ---- flat layers: land cover, sidewalks, paths, roads, centre lines. One mesh on the ground
+  // (y = 0), drawn after it in painter's order (no depth writes, a small polygon offset), so
+  // later layers cover earlier ones without any of them floating above the ground.
+  const yGround = 0;
   const flat = new Buf();
   for (const a of data.areas) {
-    if (!AREA_COLOR[a.k]) continue;
+    if (!AREA_COLOR[a.k] || skipFlat(a.p, a.k)) continue;
     addPolygon(flat, a.p, 0, AREA_COLOR[a.k]);
     world.addArea(a.p, a.k);
   }
-  for (const w of data.waterways || []) addRibbon(flat, w.p, w.k === 'river' ? 5 : 1.6, 0, AREA_COLOR.water);
+  for (const w of data.waterways || []) if (!skipFlat(w.p)) addRibbon(flat, w.p, w.k === 'river' ? 5 : 1.6, yGround, AREA_COLOR.water);
+  // roads that would float over the Crystal Bridges ravine are left out (its paths replace them)
+  const roads = cb ? data.roads.filter((r) => !skipFlat(r.p)) : data.roads;
   await tick();
-  for (const r of data.roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2 + 1.7, 0, 0xb7b3a8);
-  for (const r of data.roads) {
+  for (const r of roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2 + 1.7, yGround, 0xb7b3a8);
+  for (const r of roads) {
     if (!PATHS.has(r.k)) continue;
     const hex = r.k === 'path' || r.k === 'track' ? 0xb7a27a : r.k === 'pedestrian' ? 0xd9d1bd : r.k === 'cycleway' ? 0xc4bda8 : 0xcdc5b0;
-    addRibbon(flat, r.p, r.w / 2, 0, hex);
+    addRibbon(flat, r.p, r.w / 2, yGround, hex);
   }
-  for (const r of data.roads) if (r.k === 'service') addRibbon(flat, r.p, r.w / 2, 0, 0x64686d);
-  for (const r of data.roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2, 0, MAJOR.has(r.k) ? 0x484c52 : 0x53575c);
-  for (const r of data.roads) if (MAJOR.has(r.k)) addRibbon(flat, r.p, 0.14, 0, 0xe3c545);
-  for (const r of data.roads) {
+  for (const r of roads) if (r.k === 'service') addRibbon(flat, r.p, r.w / 2, yGround, 0x64686d);
+  for (const r of roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2, yGround, MAJOR.has(r.k) ? 0x484c52 : 0x53575c);
+  for (const r of roads) if (MAJOR.has(r.k)) addRibbon(flat, r.p, 0.14, yGround, 0xe3c545);
+  for (const r of roads) {
     for (let i = 0; i + 1 < r.p.length; i++) world.addRoadSegment(r.p[i][0], r.p[i][1], r.p[i + 1][0], r.p[i + 1][1], r.w, r.k);
   }
   const flatMesh = new THREE.Mesh(
@@ -825,18 +975,25 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const tintIds = (key, tint) => {
     if (lm[key] && lm[key].ids) for (const id of lm[key].ids) tints.set(id, tint);
   };
-  tintIds('crystal_bridges', { wall: 0xd8d0bc, roof: 0xb0703c });
+  tintIds('crystal_bridges', { wall: 0xd4ccb0, roof: 0xb87038 }); // warm limestone walls, saturated copper roof
   tintIds('courthouse', { wall: 0xe6dcc3, roof: 0x7f8a8c });
   tintIds('walmart_museum', { wall: 0xc9483a, roof: 0x5c5148 });
   tintIds('momentary', { wall: 0xd9dde0, roof: 0xe2574c });
   // 8th Street Market is a converted plant: warm industrial grey, not a sky-blue slab
   tintIds('market_8th', { wall: 0xbdb3a1, roof: 0x6f7376 });
+  tintIds('compton_gardens',   { wall: 0xd6cebc, roof: 0x8a8070 });
+  tintIds('bentonville_high',  { wall: 0xb04030, roof: 0x6b4a3a });
+  tintIds('bentonville_west',  { wall: 0xd4cfc6, roof: 0x556678 });
+  tintIds('community_center',  { wall: 0xa8b2bc, roof: 0x7a8a96 });
+  tints.set(912841351, { wall: 0xd6cebc, roof: 0x8a8070 });
+  tints.set(912841368, { wall: 0xc8c0ae, roof: 0x857c6e });
 
   const chunks = new Map();
   const placed = []; // [chunk, map record, collider] triples
   let count = 0;
   for (const bd of data.buildings) {
     if (!bd.p || bd.p.length < 3) continue;
+    if (cb && cb.skipBuilding(bd.id)) continue; // replaced by the bespoke pavilions
     let cx = 0;
     let cz = 0;
     for (const p of bd.p) {
@@ -855,9 +1012,14 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // doors need every building and road registered first (road-facing, not into a neighbour)
   world.finishBuildings();
   await tick();
+  const interiorChunks = [];
   for (let i = 0; i < placed.length; i += 3) {
     const bd = placed[i + 1];
-    addBuilding(placed[i], bd, tints.get(bd.id), placed[i + 2].shell || null);
+    // rooms, stairs and furniture go in a mesh per building (about half of all the map's
+    // triangles): culled by distance and never drawn into the shadow map
+    const rooms = { buf: new Buf(), wall: [], bh: [], panelRanges: [] };
+    appendBuildingGeometry(placed[i], bd, tints.get(bd.id), placed[i + 2], rooms);
+    if (rooms.buf.idx.length) interiorChunks.push(rooms);
     if ((i / 3) % 600 === 599) {
       progress(0.25 + 0.2 * (i / placed.length), 'Raising buildings');
       await tick();
@@ -865,8 +1027,10 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   }
   const bMat = buildingMaterial();
   const buildingMeshes = [];
+  const interiorMeshes = [];
   const panelRanges = new Map(); // panel -> { geo, ranges: [start, count, ...], saved, hidden }
-  for (const chunk of chunks.values()) {
+  for (const chunk of [...chunks.values(), ...interiorChunks]) {
+    const isInterior = interiorChunks.includes(chunk);
     const g = chunk.buf.geometry();
     g.setAttribute('aWall', new THREE.Float32BufferAttribute(chunk.wall, 4));
     g.setAttribute('aH', new THREE.Float32BufferAttribute(chunk.bh, 1));
@@ -878,24 +1042,29 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
       for (let i = 0; i < R.length; i += 3) {
         let rec = panelRanges.get(R[i]);
         if (!rec) panelRanges.set(R[i], (rec = { geo: g, ranges: [], saved: null, hidden: false }));
+        if (rec.geo !== g) {
+          console.warn('[world] panel geometry split across meshes: not breakable visually');
+          continue;
+        }
         rec.ranges.push(R[i + 1], R[i + 2]);
       }
     }
     const mesh = new THREE.Mesh(g, bMat);
-    mesh.castShadow = true;
+    mesh.castShadow = !isInterior; // the shell already shades the rooms
     mesh.receiveShadow = true;
     mesh.userData.cx = g.boundingSphere.center.x;
     mesh.userData.cz = g.boundingSphere.center.z;
     mesh.userData.r = g.boundingSphere.radius;
     root.add(mesh);
-    buildingMeshes.push(mesh);
+    (isInterior ? interiorMeshes : buildingMeshes).push(mesh);
   }
   progress(0.48, 'Parking cars');
   await tick();
 
   // ---- instanced props
-  const trees = new Scatter(root, true);
-  const props = new Scatter(root, true);
+  const surfaceHeight = (x, z) => world.surfaceHeight(x, z);
+  const trees = new Scatter(root, true, surfaceHeight);
+  const props = new Scatter(root, true, surfaceHeight);
   const scaleOf = (list, file) => (list || []).find((m) => m.file === file)?.suggestedUniformScale || 1;
   const TREE_NAMES = ['tree_a', 'tree_b', 'tree_c', 'tree_d', 'pine_a', 'pine_b'];
   const TREE_H = { tree_a: 9, tree_b: 6.5, tree_c: 7, tree_d: 5.5, pine_a: 10, pine_b: 9 };
@@ -907,7 +1076,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const VEH_LEN = { sedan: 4.6, suv: 4.8, pickup: 5.6, van: 5, truck: 7 };
   for (const n of VEHICLES) props.define(n, models[n], scaleOf(manifests.vehicles, n + '.glb'));
 
-  const isOpen = (x, z, r) => world.inBounds(x, z, 4) && !world.blockedAt(x, z, r) && !world.roadAt(x, z, 1.2);
+  const isOpen = (x, z, r) => world.inBounds(x, z, 4) && !world.blockedAt(x, z, r) && !world.roadAt(x, z, 1.2) && !world.reservedAt(x, z);
   const harvestables = { trees: 0, rocks: 0, props: 0, vehicles: 0 };
 
   // parked vehicles
@@ -967,7 +1136,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
           [x - fx * hl - ux * hw, z - fz * hl - uz * hw],
           [x - fx * hl + ux * hw, z - fz * hl + uz * hw],
         ];
-        const col2 = world.addPoly(corners, name === 'truck' ? 2.3 : 1.5, 'vehicle', 'metal', [rec]);
+        const col2 = world.addPoly(corners, name === 'truck' ? 2.3 : 1.5, 'vehicle', 'metal', [rec], { y0: surfaceHeight(x, z) });
         col2.hp = col2.maxHp = 300;
         col2.x = x;
         col2.z = z;
@@ -1118,8 +1287,8 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   await tick();
 
   // trees: mapped ones, then woods and parks, then yards everywhere
-  const addTree = (x, z, pine) => {
-    if (!isOpen(x, z, 1.1)) return false;
+  const addTree = (x, z, pine, force = false) => {
+    if (force ? !world.inBounds(x, z, 4) || world.blockedAt(x, z, 1.1) : !isOpen(x, z, 1.1)) return false;
     const k = world.areaAt(x, z);
     if (k === 'water' || k === 'parking' || k === 'busloop' || k === 'pitch') return false;
     const pool = pine ? 4 + Math.floor(rng() * 2) : Math.floor(rng() * 4);
@@ -1127,7 +1296,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     if (!trees.has(name)) name = TREE_NAMES.find((t) => trees.has(t));
     if (!name) return false;
     const s = 0.8 + rng() * 0.55;
-    const rec = trees.add(name, x, z, rng() * 6.28, s);
+    const rec = trees.add(name, x, z, rng() * 6.28, s, null, world.terrainHeight(x, z));
     const h = TREE_H[name] * s;
     world.addCircle(x, z, 0.32 + h * 0.022, h * 0.8, 'tree', 'wood', 200, [rec]);
     harvestables.trees++;
@@ -1137,6 +1306,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const treesBy = { mapped: 0, wood: 0, park: 0, garden: 0, yard: 0 };
   const plant = (src, x, z, pine) => addTree(x, z, pine) && treesBy[src]++;
   for (const t of data.trees) plant('mapped', t[0], t[1], false);
+  if (cb) for (const t of cb.treeSpots()) if (addTree(t.x, t.z, t.pine, true)) treesBy.wood++;
   for (const info of areaInfo) {
     const k = info.a.k;
     if (k !== 'wood' && k !== 'park' && k !== 'garden') continue;
@@ -1158,7 +1328,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     const x = b.minX + rng() * (b.maxX - b.minX);
     const z = b.minZ + rng() * (b.maxZ - b.minZ);
     const k = world.areaAt(x, z);
-    if (k === 'water' || k === 'parking' || k === 'busloop' || k === 'pitch') continue;
+    if (k === 'water' || k === 'parking' || k === 'busloop' || k === 'pitch' || world.reservedAt(x, z)) continue;
     const wild = k === 'wood' || k === 'park';
     if (i % 3 === 0 && (wild || rng() < 0.35)) {
       const name = ['rock_a', 'rock_b', 'rock_b', 'rock_c'][Math.floor(rng() * 4)];
@@ -1180,6 +1350,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   props.build();
   await tick();
 
+  let cbGroup = null;
   const view = {
     root,
     counts: { buildings: count, hollow: world.counts.hollow || 0, chunks: buildingMeshes.length, cars, schoolBuses, lamps, ...harvestables, treesBy },
@@ -1192,6 +1363,29 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
         const dz = m.userData.cz - cam.z;
         const lim = q.buildingDist + m.userData.r;
         m.visible = dx * dx + dz * dz < lim * lim;
+      }
+      const iDist = q.interiorDist || 130;
+      for (const m of interiorMeshes) {
+        const dx = m.userData.cx - cam.x;
+        const dz = m.userData.cz - cam.z;
+        const lim = iDist + m.userData.r;
+        m.visible = dx * dx + dz * dz < lim * lim;
+      }
+      // Crystal Bridges: its statues (the dragons alone are ~95k triangles), picture frames and
+      // furniture are drawn only from nearby; the ground, ponds, walls and roofs always are
+      const cbg = cbGroup || (cbGroup = root.getObjectByName('crystal-bridges'));
+      const cbl = world.landmarks && world.landmarks.crystal_bridges;
+      if (cbg && cbl) {
+        const d2 = (cbl.x - cam.x) ** 2 + (cbl.z - cam.z) ** 2;
+        const near = d2 < CB_DETAIL_DIST * CB_DETAIL_DIST;
+        const shadow = d2 < CB_SHADOW_DIST * CB_SHADOW_DIST;
+        for (const c of cbg.children) {
+          const n = c.name || '';
+          if (n.startsWith('cb-statue-') || n === 'cb-frames' || n.startsWith('cb-prop-') || n === 'cb-sign' || n.startsWith('cb-door-')) {
+            c.visible = near;
+            if (n.startsWith('cb-statue-')) c.castShadow = shadow;
+          }
+        }
       }
     },
     /**
@@ -1249,6 +1443,16 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
       for (const rec of col.ref) (TREE_H[rec.name] ? trees : props).show(rec);
     },
   };
+  if (cb) {
+    // museum meshes + its breakable glass / furniture behind the shared hide/show hooks
+    const cbView = await cb.buildMeshes(root);
+    view.crystalBridges = { site: cb.site, view: cbView };
+    const hide = view.hideCollider;
+    const show = view.showCollider;
+    view.hideCollider = (col) => (col && col.type === 'box' ? cbView.hideCollider(col) : hide(col));
+    view.showCollider = (col) => (col && col.type === 'box' ? cbView.showCollider(col) : show(col));
+    view.frame = (dt, ctx) => cbView.update(dt, ctx); // every frame (water, gallery, lighting)
+  }
   progress(0.85, 'World ready');
   return view;
 }

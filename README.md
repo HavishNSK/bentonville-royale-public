@@ -14,11 +14,13 @@ Implemented systems include:
 - Five weapon types, inventory/hotbar, floor loot, chests, and ammo boxes.
 - Walls, floors, ramps, and cones using wood, brick, or metal; damage and structural collapse.
 - Scripted bots, difficulty settings, storm phases, victory/defeat screens, minimap, and full map.
+- Team modes: an eliminated player drops a reboot card (it lands on the ground under them); a teammate carries it to one of Catfish Ken's reboot vans and holds interact for 5 seconds (`src/game/Reboot.js`, `REBOOT` in `src/core/config.js`).
+- In-game patch notes (`src/data/patchNotes.js`) and an update flyer (`src/data/updateFlyer.js`, `src/ui/updateFlyer.js`) that opens by itself the first time the title screen shows after an update, once per version (`localStorage` key `bentonville-royale.seenFlyer`).
 - Cartoon rendering, quality settings, synthesized audio with recorded sample fallbacks, and saved player preferences.
 - Friend lobbies via PartyServer/WebSocket rooms; optional Google Photorealistic 3D Tiles as a visual layer.
 - Optional accounts (username/password or Google sign-in) for coins, shop, locker, and friends on the Cloudflare Accounts Durable Object.
 
-There is no traditional database, paid checkout, or model-provider integration. Bots are scripted game logic. Additional terrain, canopy, and ground-imagery files exist but are not loaded by the current game.
+There is no traditional database, paid checkout, or model-provider integration. Bots are scripted game logic. The game loads the USGS terrain heightfield (`public/data/bentonville-terrain.*`); canopy and other imagery outputs are not wired into the runtime.
 
 ## Local Setup
 
@@ -79,13 +81,19 @@ Bentonville Google Workspace blocks unverified apps with `Error 400: admin_polic
 
 Flow: **Log in with Clever** → Clever → Worker callback → one-time `?br_auth=` ticket → game redeems a session. Accounts are keyed by Clever user id (`clever:<id>`), not email. Username/password still works without Clever.
 
+### Developer Chat Access
+
+Developer chat access is granted by the username allowlist in `src/net/devs.js`, including `Rakkart13`. The presence Worker verifies the signed-in account session before granting the red `[DEV]` chat title and `/announce message` command; changing a display nickname does not grant access. Allowlist changes require deploying the Worker (`npm run party:deploy`), then reconnecting or refreshing while signed in to that account.
+
+Special account titles work the same way: `PLAYER_TITLES` in `src/net/devs.js` maps a username to a title and name colour (`TheChosenOne` shows as `[CHULDE] TheChosenOne` in `#facece`). The presence Worker grants it from the verified signed-in account (`accountGrants`), sends it with that player's chat lines and online-list entry, and the client re-checks it (letters and digits only, `#rrggbb` colours) and renders it as text. A typed nickname never grants a title, and changes need the same Worker deploy.
+
 ### Optional Personal Music
 
 Place a personal track at `local-music/menu.mp3`. The dev/preview middleware serves it locally; the game otherwise uses synthesized music. The folder is ignored by Git and Vercel and is not copied to `dist/`. Do not move personal tracks into `public/`.
 
 ## User Flow and Controls
 
-1. Select **PLAY** for solo, or **WITH FRIENDS** to host/join using a room code and display name.
+1. Select **PLAY** for solo, or **WITH FRIENDS** to host/join using a room code and display name. **SANDBOX** has no bots or storm; **N** opens the sandbox map (also remappable). Click **WEAPONS** on that map to pick a gun or grenades from pictures, or click a named POI to travel there. Frag grenades and the rocket launcher shatter museum windows and their frames, break benches, and blow chests apart so the loot spills and the chest is gone. Smoke grenades pop a thick opaque cloud, about three times the original area, that hides whatever is behind it.
 2. The host shares the code and starts the friend match when players have joined.
 3. Drop/glide, loot, fight, build, and remain inside the storm circle.
 4. Use the result screen to play again or return to the menu. In friend matches, the host starts the next round.
@@ -105,6 +113,7 @@ Place a personal track at `local-music/menu.mp3`. The dev/preview middleware ser
 | G | Cycle build material |
 | B | Emote |
 | M / Escape | Full map / pause |
+| N | Sandbox map (sandbox only; remappable in Settings). Click **WEAPONS** for pictured guns, or a named POI to travel. Fast travel and the weapon menu are not available in matches. **M** still opens the same map in sandbox. |
 
 Click into gameplay to capture the pointer. Settings include sensitivity, invert Y, volume, graphics quality, bot difficulty, and optional Google view. Only matches on **Hard** bot difficulty count toward the RANKS leaderboards (wins and eliminations); Easy and Normal matches still pay coins. In multiplayer the host's difficulty is sent in the start message and decides for everyone. The client reports `ranked` with the match result and the account server (`party/accounts.js`) adds wins/kills only when `ranked === true`. Like kills, this is client-reported, not anti-cheat. Touch gameplay is not implemented.
 
@@ -136,6 +145,12 @@ node tools/qa/smoke.mjs --url http://localhost:5173 --script tools/qa/interiors.
 Inspect the final JSON and screenshots. The harness can return success while reporting console errors, failed requests, or a blank canvas. It does not verify audible output or full pointer-lock behavior. `npm test` in the QA package is a failing placeholder, not the smoke-test entry point.
 
 For future gameplay changes, add targeted unit/integration coverage and critical-flow browser checks. Multiplayer verification should include separate host/guest browsers, disconnects, malformed messages, and network failure.
+
+### Releasing an update
+
+1. Add an entry at the top of `src/data/patchNotes.js` and bump `version` in `package.json` and `package-lock.json` to match.
+2. For a flyer, set `FLYER.version` in `src/data/updateFlyer.js` to that version and update its copy. Put its images in `public/ui/news/`: in-game captures with the HUD hidden, JPEG screenshots and transparent PNG item renders, about 600 KB total. Every player sees the flyer once, the first time the title screen shows after the update.
+3. Run `npm test` (`tests/update-flyer.test.mjs` checks the versions match and every image exists) and `npm run build`.
 
 ## Repository Structure
 
@@ -198,6 +213,71 @@ Pickaxes and bullets damage wall panels; broken panels open matching visual, mov
 
 The strict browser interiors script starts free build and exercises Player movement through a door and stairs, Combat pickaxe destruction, upper-floor loot interaction and bot stair movement through the development inspection API. It avoids headless pointer-lock limitations; audible output and real multi-browser relay play still need manual checks.
 
+## Crystal Bridges Landmark
+
+Crystal Bridges Museum of American Art is a bespoke point of interest in `src/world/crystal-bridges/`. It replaces the generic OSM block (building 8240824) in the north-centre tile of the composed map, north of the Square as in the real town.
+
+**Site.** Twenty-two pavilions follow Moshe Safdie's building:
+- the Eleven and Modern Art bridges, with hull-shaped copper roofs on cables and concrete abutments, and glass walls (the Modern Art bridge's lean outward 12°);
+- concave-roofed hillside galleries (Early American, People on the Move, Contemporary);
+- the Great Hall standing in the south pond;
+- the Great Hall Corridor with the library above it;
+- the Garrison Lobby, an entrance stair hall from the crest, Walker Landing's stepwell tiers, and the 2026 expansion (west galleries, glass Bridge Gallery with café, sawtooth Hub).
+
+**Entrances.** Three public doorways (`nav.js` `ENTRANCES`) have bronze frames, a copper canopy and a sign:
+- **Main:** the east colonnade on the crest, then down the Entrance Hall stair to the lobby. This doorway stays open, with glass leaves parked to the sides.
+- **South:** at the foot of the lawn path, into the café. Framed sliding glass doors start closed; press Interact to open or close them.
+- **Library:** the upper east door. Same framed sliding doors as South.
+
+Bots open the south and library doors as they walk up to them. Other exterior doors keep walk-through door glass.
+
+**Café.** The South Lobby holds a coffee bar (counters, espresso machines, pastry case, menu board), a cafeteria serving line with a sneeze guard, and tables with chairs on either side of the central aisle.
+
+**Windows.** Wall glass is clear, tinted, specular glass with sky-reflection streaks. Every pane has mullions, sill and head rails, and a transom in tall bays. Grenades and rockets destroy the pane and those frames together. Slab undersides are drawn, so floors don't turn see-through when seen from under the bridges.
+
+These sit in a ravine of three ponds that step down northward over two weirs. The site plan and its sources are in [docs/crystal-bridges-layout.md](docs/crystal-bridges-layout.md) and [docs/crystal-bridges-research.md](docs/crystal-bridges-research.md). Pavilion-to-outline assignments are inferences from schematic plans, not survey data.
+
+**Collision.**
+- **Terrain:** the ravine is a site heightfield (`site.js` `bakeTerrain`) laid over the map's USGS terrain with `World.setTerrainOverlay`: inside the tile it is the terrain, and the surrounding hills ease down to street level (y = 0) over 60 m, so the museum's colliders keep their heights. Without map terrain it is the whole heightfield. Entrance paths and terraces (`PADS`) have 6 m sloped shoulders instead of cliff edges, and grass berms fill the clamped trench along walls that face higher ground.
+- **Architecture:** walls, slabs, roofs and stairs are oriented box colliders (`World.addBox`, `src/world/boxColliders.js`). You can walk under the bridges and stand on the roofs.
+- **Hits and materials:**
+  - The walls are indestructible but harvestable for brick (concrete) and wood.
+  - The roof is breakable tiles on a shared grid (`build.js` `roofTileLines`, about 4 m, 2 m along curved axes) that overlap so no slit opens between two heights. Bullets, the pickaxe and explosives break them; grenades and rockets do 3x damage to roof tiles over 1.6x / 1.8x their radius (`GRENADE` / `ROCKET` `roofDamageMult`, `roofRadiusMult`). The drawn roof hides a broken tile's patch. The tile under the North Tower high-tier chest stays solid.
+  - Where a taller pavilion opens onto a lower one, a transfer wall closes the gap above the lower roof.
+  - Building works on the museum's floors and roofs: off the terrain the build grid follows the surface you stand on, so pieces sit flush (`Structures.plan`).
+  - Glass panes break when shot or swung at, and give no materials.
+  - Benches, tables, chairs, counters and shelves break and give wood. Every gallery and the Great Hall Corridor has benches, kept clear of the bot lanes and the loot.
+- **Multiplayer:** breakable boxes sync to clients by box id, and clients ignore destroy events for unbreakable boxes.
+
+**Bots.** The museum isn't an OSM shell building, so `nav.js` gives it a waypoint graph that `World.siteNav` exposes. When a bot's goal is inside (or it needs to get out, or change level), `Bots._siteRoute` walks it through the nearest entrance and the stairs. Bots target museum loot up to 16 m below them, since the galleries are in the ravine. Floor slabs are `walkable`, so the A* fallback (`World.blockedAt`) treats pavilion floors as open ground.
+
+**Loot.** The museum places its own chests, ammo boxes and floor items (`world.fixedLoot`). Most chests sit on furniture: gallery benches, a library reading table, a café table, a Great Hall table, the lobby desk and the store's display case. Others are tucked away: behind the Contemporary idol, out on the Contemporary balcony, at the foot of the Reflection Room dragon, behind the coffee bar and in Eleven's kitchen. Two high-tier chests sit on the North Elevator Tower roof (reach it by building) and on the weir under Eleven. Generic scatter and loot stay off the site (`world.reserve`). Known gap: breaking a bench or table that holds a chest leaves the chest floating at seat height.
+
+**Statues.** Thirty stone figures on plinths (`src/world/crystal-bridges/statues.js`, models in `public/assets/statues/`): obelisks, guardians and two dragons line the main-entrance colonnade, marble figures flank the Entrance Hall stair, gargoyles guard the south door, and one or two stand in each gallery and on the terraces. Each figure is solid (a plinth box plus a hidden collider), stays out of bot lanes and doorways, and the paintings hang around it. Credits are in [credits/crystal-bridges.md](credits/crystal-bridges.md): five Pixor CC0 models, plus a dragon the project owner made for the game.
+
+**Galleries.**
+- **Look:** the presentation is ported from [musewalk](https://github.com/shuyan-5200/musewalk) (MIT, see [credits/crystal-bridges.md](credits/crystal-bridges.md)): gold, dark and float frames, plaques, light pools plus a pool of three real spotlights, and an interior mood crossfade (misty fog, light, bloom, vignette over about 1 s). The ravine stays hazy even between pavilions. The orbit camera clamps to walkable slabs so looking up does not drop it through the oak floors.
+- **Config:** works hang from `public/data/crystal-bridges.config.json`, which uses musewalk's `gallery.config.json` shape. `?cbConfig=/data/<file>.json` swaps it for testing; only same-origin `/data/*.json` is accepted, and every field is validated.
+- **Focus mode:** **E** near a painting opens it, with the info panel; **E** again, moving, or taking damage closes it, and recent combat blocks it.
+- **Portals:** walking into Kindred Spirits, The Backwoods of America or Indian Encampment plays musewalk's brush-stroke dissolve and white veil, then moves you to a paired spot. Each player has a 10 s cooldown; bots can't use portals, and they don't work from inside the storm. In multiplayer the host validates range, cooldown, storm and the exact destination.
+- **Ambience:** a synthesized ambience, ported from musewalk, plays on the music bus and ducks under nearby gunfire or the storm.
+- **Museum Mode:** **VISIT THE MUSEUM** on the title screen starts a no-bot, no-storm session in the lobby.
+
+**Art.** `node scripts/fetch-cb-art.mjs` (Commons) or `node scripts/fetch-cb-art.mjs --source museum` (crystalbridges.org collection records) fetches public-domain paintings in the museum's collection into `public/art/crystal-bridges/`, with provenance in `public/art/sources.json`. Both sources are paced, and only Public Domain / CC0 / CC BY works are accepted. Copyrighted works are never reproduced: they appear as empty frames or plinths with their real labels. See [ASSET_CREDITS.md](ASSET_CREDITS.md).
+
+**Verification.**
+- `npm test` covers the box colliders, the site's walkable routes, glass, loot placement and gallery hanging. `tests/crystal-bridges-nav.test.mjs` walks every bot-graph edge both ways and checks the entrances, café, benches, chests and a full bot route from the crest to the Contemporary gallery.
+- The browser walkthrough checks every wing, focus mode and a portal, after the QA setup in [tools/qa/README.md](tools/qa/README.md):
+
+```bash
+node tools/qa/smoke.mjs --url http://localhost:5173 --script tools/qa/crystal-bridges.steps.mjs --out tools/qa/out/cb --timeout 240000
+```
+
+**Limits.**
+- The galleries are rectangular rooms with bowed long walls; the real fan-shaped curved plans are simplified.
+- Bots navigate the museum with the generic open-world steering and can look clumsy on stairs.
+- Measured frame rate held at the 60 fps vsync cap inside and outside the museum in headless Chromium on an Apple M4; a typical laptop has not been measured.
+
 ## Map and Asset Maintenance
 
 The game currently consumes `public/data/bentonville-osm.json`. World units are meters: x east, z south, y up; heading zero faces north.
@@ -209,13 +289,13 @@ The optional scripts regenerate source data:
 - `scripts/fetch-terrain.mjs`: USGS terrain output.
 - `scripts/fetch-imagery.mjs`: imagery-derived canopy and ground texture; requires the map and terrain outputs first and uses `sharp`/`geotiff`.
 
-These tools contact external data services and write generated files. Preserve request pacing/caps, cache behavior, and provenance. Do not run the OSM fetch in parallel. Normal setup does not require regeneration. Terrain/canopy/ground outputs are not currently consumed by the game.
+These tools contact external data services and write generated files. Preserve request pacing/caps, cache behavior, and provenance. Do not run the OSM fetch in parallel. Normal setup does not require regeneration. Terrain/canopy/ground outputs are not currently consumed by the game (the Crystal Bridges ravine uses its own synthetic site heightfield, not the USGS terrain).
 
 Asset and data credits are maintained in [credits/](credits/). Preserve the existing notices when redistributing assets or changing data processing.
 
 ## Design System and Accessibility
 
-The game uses a deliberate cartoon dusk/Ozark visual identity. Shared tokens and fonts live in `src/ui/hud.css`; menus extend them in `src/ui/menus.css`.
+The game uses a deliberate cartoon dusk/Ozark visual identity. Shared tokens and fonts live in `src/ui/hud.css`; menus extend them in `src/ui/menus.css`. The title, friend-lobby, and loading backdrop is the water-tower illustration at `public/ui/lobby-bg.jpg`.
 
 | Token | Value | Role |
 | --- | --- | --- |

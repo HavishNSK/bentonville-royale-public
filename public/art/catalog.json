@@ -1,0 +1,367 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "scripts/fetch-cb-art.mjs",
+  "works": {
+    "durand-kindred-spirits": {
+      "title": "Kindred Spirits",
+      "artist": "Asher B. Durand",
+      "year": "1849",
+      "room": "early-american"
+    },
+    "church-home-by-the-lake": {
+      "title": "Home by the Lake",
+      "artist": "Frederic Edwin Church",
+      "year": "1852",
+      "room": "early-american"
+    },
+    "cole-landscape-with-indian": {
+      "title": "Landscape with Indian",
+      "artist": "Thomas Cole",
+      "year": "1826–28",
+      "room": "early-american"
+    },
+    "cole-mount-etna": {
+      "title": "View of Mount Etna",
+      "artist": "Thomas Cole",
+      "year": "1842",
+      "room": "early-american"
+    },
+    "cole-good-shepherd": {
+      "title": "The Good Shepherd",
+      "artist": "Thomas Cole",
+      "year": "1848",
+      "room": "early-american"
+    },
+    "cropsey-backwoods": {
+      "title": "The Backwoods of America",
+      "artist": "Jasper Francis Cropsey",
+      "year": "1858",
+      "room": "early-american"
+    },
+    "lane-camden-mountains": {
+      "title": "View of Camden Mountains from Penobscot Bay",
+      "artist": "Fitz Henry Lane",
+      "year": "1852",
+      "room": "early-american"
+    },
+    "kensett-mount-washington": {
+      "title": "View of Mount Washington",
+      "artist": "John Frederick Kensett",
+      "year": "1851",
+      "room": "early-american"
+    },
+    "vanderlyn-niagara": {
+      "title": "Niagara and the Rapids",
+      "artist": "John Vanderlyn",
+      "year": "c. 1801–02",
+      "room": "early-american"
+    },
+    "guy-winter-brooklyn": {
+      "title": "Winter Scene in Brooklyn",
+      "artist": "Francis Guy",
+      "year": "c. 1819–20",
+      "room": "early-american"
+    },
+    "duncanson-landscape": {
+      "title": "Landscape",
+      "artist": "Robert Seldon Duncanson",
+      "year": "1853",
+      "room": "early-american"
+    },
+    "woodville-war-news": {
+      "title": "War News from Mexico",
+      "artist": "Richard Caton Woodville",
+      "year": "1848",
+      "room": "early-american"
+    },
+    "bierstadt-indian-encampment": {
+      "title": "Indian Encampment",
+      "artist": "Albert Bierstadt",
+      "year": "c. 1862",
+      "room": "nineteenth"
+    },
+    "bierstadt-wharf-scene": {
+      "title": "Wharf Scene with Ship at Dock",
+      "artist": "Albert Bierstadt",
+      "year": "c. 1863",
+      "room": "nineteenth"
+    },
+    "moran-catawissa": {
+      "title": "Valley of the Catawissa in Autumn",
+      "artist": "Thomas Moran",
+      "year": "1862",
+      "room": "nineteenth"
+    },
+    "moran-lake-superior": {
+      "title": "The Shores of Lake Superior",
+      "artist": "Thomas Moran",
+      "year": "1873",
+      "room": "nineteenth"
+    },
+    "hill-yosemite-falls": {
+      "title": "Yosemite Falls",
+      "artist": "Thomas Hill",
+      "year": "1865",
+      "room": "nineteenth"
+    },
+    "keith-sentinel-rock": {
+      "title": "Sentinel Rock, Yosemite",
+      "artist": "William Keith",
+      "year": "1872",
+      "room": "nineteenth"
+    },
+    "inness-old-roadway": {
+      "title": "An Old Roadway",
+      "artist": "George Inness",
+      "year": "c. 1880",
+      "room": "nineteenth"
+    },
+    "inness-sunset-river": {
+      "title": "Sunset on the River",
+      "artist": "George Inness",
+      "year": "1867",
+      "room": "nineteenth"
+    },
+    "johnson-cranberry-pickers": {
+      "title": "Cranberry Pickers, Nantucket",
+      "artist": "Eastman Johnson",
+      "year": "c. 1879",
+      "room": "nineteenth"
+    },
+    "tait-tight-fix": {
+      "title": "A Tight Fix—Bear Hunting, Early Winter",
+      "artist": "Arthur Fitzwilliam Tait",
+      "year": "1856",
+      "room": "nineteenth"
+    },
+    "tanner-good-shepherd": {
+      "title": "The Good Shepherd",
+      "artist": "Henry Ossawa Tanner",
+      "year": "c. 1902–03",
+      "room": "nineteenth"
+    },
+    "sargent-stevenson": {
+      "title": "Robert Louis Stevenson and His Wife",
+      "artist": "John Singer Sargent",
+      "year": "1885",
+      "room": "bridge-gallery"
+    },
+    "hassam-paris-twilight": {
+      "title": "Paris at Twilight",
+      "artist": "Childe Hassam",
+      "year": "1888",
+      "room": "bridge-gallery"
+    },
+    "chase-seaside-flowers": {
+      "title": "Seaside Flowers",
+      "artist": "William Merritt Chase",
+      "year": "c. 1890s",
+      "room": "bridge-gallery"
+    },
+    "cassatt-reader": {
+      "title": "The Reader",
+      "artist": "Mary Cassatt",
+      "year": "1877",
+      "room": "bridge-gallery",
+      "museumSlug": "a2003-007"
+    },
+    "robinson-columbian": {
+      "title": "World's Columbian Exposition",
+      "artist": "Theodore Robinson",
+      "year": "1894",
+      "room": "bridge-gallery"
+    },
+    "twachtman-september": {
+      "title": "September Sunshine",
+      "artist": "John Henry Twachtman",
+      "year": "c. 1895",
+      "room": "bridge-gallery"
+    },
+    "ryder-misty-moonlight": {
+      "title": "Misty Moonlight",
+      "artist": "Albert Pinkham Ryder",
+      "year": "c. 1890",
+      "room": "bridge-gallery"
+    },
+    "bellows-excavation": {
+      "title": "Excavation at Night",
+      "artist": "George Wesley Bellows",
+      "year": "1908",
+      "room": "early-twentieth"
+    },
+    "sloan-bleecker": {
+      "title": "Bleecker Street, Saturday Night",
+      "artist": "John Sloan",
+      "year": "1918",
+      "room": "early-twentieth"
+    },
+    "hartley-mountain-king": {
+      "title": "Hall of the Mountain King",
+      "artist": "Marsden Hartley",
+      "year": "1908–09",
+      "room": "early-twentieth"
+    },
+    "remington-cowpuncher": {
+      "title": "Cowpuncher's Lullaby",
+      "artist": "Frederic Remington",
+      "year": "1906",
+      "room": "early-twentieth"
+    },
+    "bluemner-montville": {
+      "title": "Motive of Space and Form—A New Jersey Village (Montville)",
+      "artist": "Oscar Bluemner",
+      "year": "1916–18",
+      "room": "early-twentieth"
+    },
+    "krimmel-village-politicians": {
+      "title": "The Village Politicians",
+      "artist": "John Lewis Krimmel",
+      "year": "c. 1819",
+      "room": "early-american"
+    },
+    "catlin-indian-encampment": {
+      "title": "Indian Encampment",
+      "artist": "George Catlin",
+      "year": "c. 1830s",
+      "room": "early-american"
+    },
+    "mcentee-winter-country": {
+      "title": "Winter in the Country",
+      "artist": "Jervis McEntee",
+      "year": "1867",
+      "room": "early-american"
+    },
+    "pomarede-st-louis": {
+      "title": "View of St. Louis",
+      "artist": "Leon Pomarede",
+      "year": "1835",
+      "room": "early-american"
+    },
+    "taylor-classical-landscape": {
+      "title": "A Wooded Classical Landscape at Evening",
+      "artist": "John Taylor",
+      "year": "18th century",
+      "room": "early-american"
+    },
+    "bannister-harvest": {
+      "title": "Harvest",
+      "artist": "Edward Mitchell Bannister",
+      "year": "c. 1880s",
+      "room": "nineteenth"
+    },
+    "johnson-at-the-camp": {
+      "title": "At the Camp—Spinning Yarns and Whittling",
+      "artist": "Eastman Johnson",
+      "year": "c. 1864–66",
+      "room": "nineteenth"
+    },
+    "stanley-buffalo-hunt": {
+      "title": "The Buffalo Hunt",
+      "artist": "John Mix Stanley",
+      "year": "1855",
+      "room": "nineteenth"
+    },
+    "pettit-union-refugees": {
+      "title": "Union Refugees",
+      "artist": "George W. Pettit",
+      "year": "1865",
+      "room": "nineteenth"
+    },
+    "richards-along-the-shore": {
+      "title": "Along the Shore",
+      "artist": "William Trost Richards",
+      "year": "1881",
+      "room": "nineteenth"
+    },
+    "brush-indian-lily": {
+      "title": "The Indian and the Lily",
+      "artist": "George de Forest Brush",
+      "year": "1887",
+      "room": "nineteenth"
+    },
+    "ulrich-glass-engraver": {
+      "title": "The Glass Engraver",
+      "artist": "Charles Frederic Ulrich",
+      "year": "1883",
+      "room": "nineteenth"
+    },
+    "chase-the-song": {
+      "title": "The Song",
+      "artist": "William Merritt Chase",
+      "year": "1907",
+      "room": "bridge-gallery"
+    },
+    "sargent-under-willows": {
+      "title": "Under the Willows",
+      "artist": "John Singer Sargent",
+      "year": "c. 1887",
+      "room": "bridge-gallery"
+    },
+    "twachtman-yellowstone": {
+      "title": "Lower Falls of the Yellowstone",
+      "artist": "John Henry Twachtman",
+      "year": "1895",
+      "room": "bridge-gallery"
+    },
+    "metcalf-pool": {
+      "title": "The Pool",
+      "artist": "Willard LeRoy Metcalf",
+      "year": "1904",
+      "room": "bridge-gallery"
+    },
+    "dewing-fortune-teller": {
+      "title": "The Fortune Teller",
+      "artist": "Thomas Wilmer Dewing",
+      "year": "1904–05",
+      "room": "bridge-gallery"
+    },
+    "bellows-the-studio": {
+      "title": "The Studio",
+      "artist": "George Wesley Bellows",
+      "year": "1919",
+      "room": "early-twentieth"
+    },
+    "maurer-midinette": {
+      "title": "The Midinette",
+      "artist": "Alfred Henry Maurer",
+      "year": "c. 1901",
+      "room": "early-twentieth"
+    },
+    "luks-in-the-corner": {
+      "title": "In the Corner",
+      "artist": "George Benjamin Luks",
+      "year": "c. 1905",
+      "room": "early-twentieth"
+    },
+    "decker-boy-berries": {
+      "title": "Boy Eating Berries",
+      "artist": "Joseph Decker",
+      "year": "1886",
+      "room": "corridor"
+    },
+    "peto-green-book": {
+      "title": "Green Book and Lard Lamp",
+      "artist": "John Frederick Peto",
+      "year": "c. 1890s",
+      "room": "corridor"
+    },
+    "audubon-wild-turkey": {
+      "title": "Wild Turkey Cock, Hen and Young",
+      "artist": "John James Audubon",
+      "year": "1826",
+      "room": "corridor"
+    },
+    "tryon-brook-in-may": {
+      "title": "The Brook in May",
+      "artist": "Dwight William Tryon",
+      "year": "1914",
+      "room": "corridor"
+    },
+    "dewing-rose-garden": {
+      "title": "Rose Garden",
+      "artist": "Maria Oakey Dewing",
+      "year": "1901",
+      "room": "corridor"
+    }
+  }
+}

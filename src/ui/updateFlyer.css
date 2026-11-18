@@ -1,0 +1,347 @@
+/* BENTONVILLE ROYALE — update flyer (src/ui/updateFlyer.js). Mounted on <body> (above the global
+ * chat); .ufl is in hud.css's token selector, so it uses the shared tokens (--br-ink, --br-sun, --br-cream, rarity colours, Lilita One / Nunito, --u). */
+
+.ufl {
+  position: fixed;
+  inset: 0;
+  z-index: 90; /* above the global chat (z 60, on body) */
+  display: grid;
+  place-items: center;
+  padding: calc(var(--u) * 18);
+  background: rgba(10, 7, 32, 0.78);
+  font-family: var(--br-body);
+  color: var(--br-cream);
+}
+.ufl[hidden] {
+  display: none;
+}
+
+.ufl-card {
+  position: relative;
+  width: min(100%, calc(var(--u) * 820));
+  max-height: calc(100vh - var(--u) * 36);
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--br-ink);
+  border: calc(var(--u) * 3) solid var(--br-ink-2);
+  border-radius: calc(var(--u) * 18);
+  box-shadow: 0 calc(var(--u) * 10) 0 rgba(0, 0, 0, 0.35);
+  transform: translateY(calc(var(--u) * 24)) scale(0.97);
+  opacity: 0;
+  transition: transform 0.38s var(--br-spring), opacity 0.2s ease;
+}
+.ufl.is-open .ufl-card {
+  transform: none;
+  opacity: 1;
+}
+
+/* ---- hero: the roof blast with the headline over it */
+.ufl-hero {
+  position: relative;
+  aspect-ratio: 16 / 7.4;
+  overflow: hidden;
+  border-radius: calc(var(--u) * 15) calc(var(--u) * 15) 0 0;
+}
+.ufl-hero-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 40%;
+}
+.ufl-hero::after {
+  /* ink fade at the bottom so the headline reads on a busy shot */
+  content: '';
+  position: absolute;
+  inset: 45% 0 0;
+  background: linear-gradient(to top, var(--br-ink), rgba(21, 16, 58, 0));
+}
+.ufl-hero-text {
+  position: absolute;
+  z-index: 1;
+  left: calc(var(--u) * 26);
+  right: calc(var(--u) * 26);
+  bottom: calc(var(--u) * 16);
+}
+.ufl-kicker {
+  display: flex;
+  gap: calc(var(--u) * 8);
+  align-items: center;
+  margin-bottom: calc(var(--u) * 6);
+}
+.ufl-kicker-tag,
+.ufl-tag {
+  font-family: var(--br-display);
+  letter-spacing: 0.06em;
+  color: var(--br-ink);
+  background: var(--br-sun);
+  border-radius: calc(var(--u) * 6);
+  padding: calc(var(--u) * 3) calc(var(--u) * 9);
+  font-size: calc(var(--u) * 13);
+  transform: rotate(-2deg);
+}
+.ufl-kicker-ver {
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 14);
+  color: var(--br-sun-hi);
+}
+.ufl-title {
+  margin: 0;
+  line-height: 0.88;
+  font-family: var(--br-display);
+  font-weight: 400;
+  --ol: calc(var(--u) * 2.4);
+  text-shadow:
+    var(--ol) 0 0 var(--br-ink),
+    calc(var(--ol) * -1) 0 0 var(--br-ink),
+    0 var(--ol) 0 var(--br-ink),
+    0 calc(var(--ol) * -1) 0 var(--br-ink),
+    calc(var(--ol) * 0.71) calc(var(--ol) * 0.71) 0 var(--br-ink),
+    calc(var(--ol) * -0.71) calc(var(--ol) * 0.71) 0 var(--br-ink),
+    calc(var(--ol) * 0.71) calc(var(--ol) * -0.71) 0 var(--br-ink),
+    calc(var(--ol) * -0.71) calc(var(--ol) * -0.71) 0 var(--br-ink),
+    0 calc(var(--ol) * 2.6) 0 var(--br-ink);
+}
+.ufl-title-big {
+  display: block;
+  font-size: calc(var(--u) * 96);
+  color: var(--br-coral);
+  letter-spacing: 0.02em;
+}
+.ufl-title-small {
+  display: block;
+  font-size: calc(var(--u) * 46);
+  color: var(--br-cream);
+  margin-left: calc(var(--u) * 6);
+}
+.ufl-tagline {
+  margin: calc(var(--u) * 10) 0 0;
+  font-size: calc(var(--u) * 16);
+  font-weight: 800;
+  color: var(--br-sun-hi);
+}
+
+/* ---- sections */
+.ufl-body {
+  padding: calc(var(--u) * 8) calc(var(--u) * 26) calc(var(--u) * 6);
+}
+.ufl-sec {
+  padding: calc(var(--u) * 16) 0;
+  border-top: calc(var(--u) * 2) dashed rgba(255, 246, 220, 0.14);
+}
+.ufl-sec:first-child {
+  border-top: 0;
+}
+.ufl-sec-head {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 12);
+  margin-bottom: calc(var(--u) * 12);
+}
+.ufl-sec-fixes .ufl-tag {
+  background: var(--br-leaf);
+}
+.ufl-sec-bridges .ufl-tag {
+  background: var(--br-sky-hi);
+}
+.ufl-sec-title {
+  margin: 0;
+  font-family: var(--br-display);
+  font-weight: 400;
+  font-size: calc(var(--u) * 24);
+  color: var(--br-cream);
+}
+
+/* BOMBS: item cards framed in their rarity colour */
+.ufl-items {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: calc(var(--u) * 12);
+}
+.ufl-item {
+  --r: var(--br-common);
+  background: var(--br-ink-2);
+  border: calc(var(--u) * 3) solid var(--r);
+  border-radius: calc(var(--u) * 14);
+  padding: calc(var(--u) * 10) calc(var(--u) * 12) calc(var(--u) * 12);
+}
+.ufl-r-uncommon {
+  --r: var(--br-uncommon);
+}
+.ufl-r-rare {
+  --r: var(--br-rare);
+}
+.ufl-r-epic {
+  --r: var(--br-epic);
+}
+.ufl-r-legendary {
+  --r: var(--br-legendary);
+}
+.ufl-item-pic {
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border-radius: calc(var(--u) * 10);
+  background: radial-gradient(circle at 50% 60%, color-mix(in srgb, var(--r) 45%, transparent), transparent 70%);
+}
+.ufl-item-img {
+  width: 92%;
+  height: 92%;
+  object-fit: contain;
+}
+.ufl-item-name {
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 18);
+  color: var(--r);
+  margin-top: calc(var(--u) * 4);
+}
+.ufl-item-text {
+  margin: calc(var(--u) * 4) 0 0;
+  font-size: calc(var(--u) * 13.5);
+  line-height: 1.35;
+  font-weight: 700;
+}
+
+/* BRIDGES / FIXED: screenshots + bullets */
+.ufl-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: calc(var(--u) * 16);
+  align-items: start;
+}
+.ufl-shots {
+  display: grid;
+  gap: calc(var(--u) * 10);
+}
+.ufl-shot {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  display: block;
+  border-radius: calc(var(--u) * 12);
+  border: calc(var(--u) * 3) solid var(--br-ink-2);
+}
+.ufl-bullets {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: calc(var(--u) * 9);
+}
+.ufl-bullets li {
+  position: relative;
+  padding-left: calc(var(--u) * 22);
+  font-size: calc(var(--u) * 14.5);
+  line-height: 1.4;
+  font-weight: 700;
+}
+.ufl-bullets li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.45em;
+  width: calc(var(--u) * 11);
+  height: calc(var(--u) * 11);
+  border-radius: calc(var(--u) * 3);
+  background: var(--br-sun);
+  transform: rotate(45deg);
+}
+
+/* ---- footer */
+.ufl-foot {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: calc(var(--u) * 14);
+  padding: calc(var(--u) * 14) calc(var(--u) * 26);
+  background: var(--br-ink);
+  border-top: calc(var(--u) * 2) solid var(--br-ink-2);
+  border-radius: 0 0 calc(var(--u) * 15) calc(var(--u) * 15);
+}
+.ufl-go {
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 22);
+  letter-spacing: 0.04em;
+  color: var(--br-ink);
+  background: var(--br-sun);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 12);
+  padding: calc(var(--u) * 10) calc(var(--u) * 30);
+  box-shadow: 0 calc(var(--u) * 5) 0 #b8860b;
+  cursor: pointer;
+  transition: transform 0.12s var(--br-spring);
+}
+.ufl-go:hover {
+  transform: translateY(calc(var(--u) * -2));
+}
+.ufl-go:active {
+  transform: translateY(calc(var(--u) * 3));
+  box-shadow: 0 calc(var(--u) * 2) 0 #b8860b;
+}
+.ufl-notes {
+  font-family: var(--br-body);
+  font-weight: 800;
+  font-size: calc(var(--u) * 14);
+  color: var(--br-sky-hi);
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+  cursor: pointer;
+  padding: calc(var(--u) * 8);
+}
+.ufl-x {
+  position: absolute;
+  top: calc(var(--u) * 10);
+  right: calc(var(--u) * 10);
+  z-index: 2;
+  width: calc(var(--u) * 38);
+  height: calc(var(--u) * 38);
+  border-radius: 50%;
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  background: var(--br-cream);
+  color: var(--br-ink);
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 24);
+  line-height: 1;
+  cursor: pointer;
+}
+.ufl-go:focus-visible,
+.ufl-notes:focus-visible,
+.ufl-x:focus-visible {
+  outline: calc(var(--u) * 3) solid var(--br-sky-hi);
+  outline-offset: calc(var(--u) * 3);
+}
+
+/* ---- small / narrow windows */
+@media (max-width: 760px) {
+  .ufl-items,
+  .ufl-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ufl-item {
+    display: grid;
+    grid-template-columns: calc(var(--u) * 96) minmax(0, 1fr);
+    column-gap: calc(var(--u) * 12);
+    align-items: center;
+  }
+  .ufl-item-pic {
+    grid-row: span 2;
+  }
+  .ufl-title-big {
+    font-size: calc(var(--u) * 70);
+  }
+  .ufl-title-small {
+    font-size: calc(var(--u) * 34);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ufl-card,
+  .ufl-go {
+    transition: none;
+  }
+}

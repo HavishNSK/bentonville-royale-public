@@ -13,6 +13,7 @@
 
 import * as THREE from 'three';
 import { toToon } from './Toon.js';
+import { mergeMeshes } from './mergeMeshes.js';
 
 export const REBOOT_VAN = Object.freeze({
   halfLength: 2.5,
@@ -363,12 +364,21 @@ export function buildRebootVan() {
   const ring = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.05, 8, 28), glowMat);
   ring.rotation.x = Math.PI / 2;
   ring.position.set(0, ROOF + 0.7, 1.2);
+  ring.userData.dynamic = true;
   g.add(ring);
   const beamMat = new THREE.MeshBasicMaterial({ color: BEACON.busy, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending });
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.7, 30, 16, 1, true), beamMat);
   beam.position.set(0, ROOF + 0.7 + 15, 1.2);
   beam.visible = false;
+  beam.userData.dynamic = true;
   g.add(beam);
+
+  // ~70 parts -> one mesh per material (Ken's head and waving arm stay movable)
+  ken.head.userData.dynamic = true;
+  ken.waveArm.userData.dynamic = true;
+  mergeMeshes(ken.head);
+  mergeMeshes(ken.waveArm);
+  mergeMeshes(g);
 
   let spin = 0;
   g.userData.setBeacon = (state, k = 0, dt = 0) => {

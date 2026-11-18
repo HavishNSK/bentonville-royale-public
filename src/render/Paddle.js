@@ -5,6 +5,7 @@
 // materialFn(color) -> material (Character passes its toon material maker).
 
 import * as THREE from 'three';
+import { mergeMeshes } from './mergeMeshes.js';
 
 function roundedRect(w, h, r) {
   const s = new THREE.Shape();
@@ -29,7 +30,7 @@ export function buildPaddle(mat = (color) => new THREE.MeshStandardMaterial({ co
   const stripe = mat(0xffe14d); // yellow stripe
   const edge = mat(0x1d2a36); // edge guard
   const grip = mat(0xf4f1ea); // white grip wrap
-  const butt = mat(0x1d2a36);
+  const butt = edge;
 
   // grip (handle) from the hand up
   const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.36, 10), grip);
@@ -62,6 +63,7 @@ export function buildPaddle(mat = (color) => new THREE.MeshStandardMaterial({ co
   g.traverse((o) => {
     if (o.isMesh) o.castShadow = true;
   });
+  mergeMeshes(g); // 9 parts -> one mesh per material (many players can carry one)
   g.scale.setScalar(1.45); // game-sized: about as long as the swords
   return g;
 }

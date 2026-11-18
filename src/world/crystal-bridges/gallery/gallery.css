@@ -1,0 +1,213 @@
+/* BENTONVILLE ROYALE — Crystal Bridges gallery UI.
+ * Ported from musewalk src/styles.css (MIT License, Copyright (c) 2026 Musewalk contributors):
+ * the caption, info panel, veil and vignette keep musewalk's values (palette, hairline gold
+ * borders, wide letter-spacing, 1.05 s panel slide, 1 s staggered rise, cubic-bezier ease).
+ * Everything is scoped under .cbg so nothing leaks into the game HUD. Cormorant Garamond
+ * (OFL 1.1) is self-hosted; musewalk's Noto Serif SC is replaced by Cormorant (Latin-only UI). */
+
+@font-face {
+  font-family: 'Cormorant Garamond';
+  src: url('/assets/fonts/CormorantGaramond-Variable.woff2') format('woff2');
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  src: url('/assets/fonts/CormorantGaramond-Italic-Variable.woff2') format('woff2');
+  font-weight: 300 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+.cbg {
+  --gold: #d4af5a;
+  --gold-dim: rgba(212, 175, 90, 0.45);
+  --ink: #e9e2d4;
+  --ink-dim: rgba(233, 226, 212, 0.55);
+  --serif-en: 'Cormorant Garamond', 'Didot', 'Times New Roman', serif;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 30;
+  font-family: var(--serif-en);
+  color: var(--ink);
+}
+
+.cbg .vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 130% 100% at 50% 45%, transparent 55%, rgba(0, 0, 0, 0.42) 100%);
+  opacity: 0;
+}
+.cbg .vignette.deep {
+  background: radial-gradient(ellipse 120% 95% at 50% 45%, transparent 40%, rgba(0, 0, 0, 0.62) 100%);
+  transition: opacity 1.2s var(--ease);
+}
+
+.cbg .veil {
+  position: absolute;
+  inset: 0;
+  background: #f6f1e6;
+  opacity: 0;
+  transition-property: opacity;
+  transition-timing-function: var(--ease);
+  z-index: 5;
+}
+
+.cbg .caption {
+  position: absolute;
+  left: 50%;
+  top: 44%;
+  transform: translate(26px, -50%);
+  opacity: 0;
+  transition: opacity 0.35s var(--ease);
+  max-width: 300px;
+}
+.cbg .caption.show { opacity: 1; }
+.cbg .caption .cap-t {
+  font-size: 18px;
+  font-weight: 500;
+  font-style: italic;
+  letter-spacing: 0.12em;
+  color: var(--ink);
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.9);
+}
+.cbg .caption .cap-s {
+  font-style: italic;
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  color: var(--gold);
+  margin-top: 3px;
+  text-shadow: 0 1px 10px rgba(0, 0, 0, 0.9);
+}
+.cbg .caption .cap-k {
+  margin-top: 6px;
+  font-size: 12px;
+  letter-spacing: 0.28em;
+  color: var(--ink-dim);
+}
+
+.cbg .panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(440px, 94vw);
+  padding: 80px 96px 28px 48px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: linear-gradient(200deg, rgba(11, 11, 17, 0.62), rgba(6, 6, 10, 0.86));
+  backdrop-filter: blur(20px) saturate(1.25);
+  border-left: 1px solid rgba(212, 175, 90, 0.22);
+  transform: translateX(103%);
+  transition: transform 1.05s var(--ease);
+}
+.cbg .panel.show { transform: translateX(0); }
+.cbg .p-scroll { flex: 1 1 auto; overflow: hidden; }
+.cbg .p-hall { font-size: 12px; letter-spacing: 0.4em; color: var(--gold-dim); text-transform: uppercase; }
+.cbg .p-title { margin: 18px 0 0; font-size: 36px; font-weight: 400; letter-spacing: 0.06em; line-height: 1.3; }
+.cbg .p-orig { margin-top: 8px; font-style: italic; font-size: 19px; font-weight: 400; color: rgba(233, 226, 212, 0.62); }
+.cbg .p-meta { margin-top: 20px; font-size: 13px; letter-spacing: 0.22em; line-height: 2; color: var(--gold); }
+.cbg .p-rule { height: 1px; margin: 26px 0; background: linear-gradient(to right, var(--gold-dim), transparent); }
+.cbg .p-desc { margin: 0; font-size: 16.5px; font-weight: 400; line-height: 1.95; color: rgba(233, 226, 212, 0.86); text-align: justify; }
+.cbg .p-artist-label { margin-top: 34px; font-size: 11px; letter-spacing: 0.5em; color: var(--gold-dim); }
+.cbg .p-artist-name { margin-top: 10px; font-size: 22px; font-weight: 500; letter-spacing: 0.1em; }
+.cbg .p-credit { margin-top: 10px; font-size: 13px; font-style: italic; line-height: 1.7; color: rgba(233, 226, 212, 0.5); }
+.cbg .p-actions {
+  flex: 0 0 auto;
+  margin-top: 18px;
+  padding-top: 16px;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  background: linear-gradient(to bottom, rgba(6, 6, 10, 0), rgba(6, 6, 10, 0.72) 28%, rgba(6, 6, 10, 0.92));
+}
+.cbg .p-enter {
+  flex: 1;
+  padding: 15px 10px 13px;
+  font-family: var(--serif-en);
+  font-size: 14.5px;
+  letter-spacing: 0.16em;
+  text-indent: 0.16em;
+  white-space: nowrap;
+  color: var(--gold);
+  background: rgba(212, 175, 90, 0.07);
+  border: 1px solid rgba(212, 175, 90, 0.55);
+  text-align: center;
+}
+.cbg .p-close {
+  padding: 15px 22px 13px;
+  font-family: var(--serif-en);
+  font-size: 14px;
+  letter-spacing: 0.2em;
+  text-indent: 0.2em;
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid rgba(233, 226, 212, 0.2);
+  text-align: center;
+}
+.cbg .p-poem {
+  position: absolute;
+  top: 84px;
+  right: 30px;
+  writing-mode: vertical-rl;
+  font-size: 17px;
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: 0.22em;
+  line-height: 2.1;
+  max-height: 62vh;
+  color: rgba(212, 175, 90, 0.78);
+  text-shadow: 0 0 22px rgba(212, 175, 90, 0.25);
+}
+.cbg .reveal { opacity: 0; transform: translateY(16px); }
+.cbg .panel.show .reveal { animation: cbg-rise 1s var(--ease) both; animation-delay: calc(0.25s + var(--i, 0) * 0.09s); }
+@keyframes cbg-rise {
+  from { opacity: 0; transform: translateY(26px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* "NOW ENTERING: CRYSTAL BRIDGES" — musewalk intro-card styling, centred high on screen */
+.cbg .entering {
+  position: absolute;
+  left: 50%;
+  top: 17%;
+  transform: translate(-50%, 0);
+  padding: 22px 54px 20px;
+  text-align: center;
+  background: linear-gradient(165deg, rgba(10, 10, 15, 0.55), rgba(7, 7, 11, 0.75));
+  backdrop-filter: blur(14px);
+  border-top: 1px solid var(--gold-dim);
+  border-bottom: 1px solid rgba(212, 175, 90, 0.18);
+  opacity: 0;
+  transition: opacity 1.1s var(--ease), transform 1.1s var(--ease);
+}
+.cbg .entering.show { opacity: 1; transform: translate(-50%, 6px); }
+.cbg .entering .e-k { font-size: 12px; letter-spacing: 0.55em; text-indent: 0.55em; color: var(--gold-dim); }
+.cbg .entering .e-t { margin-top: 8px; font-size: 34px; font-weight: 400; letter-spacing: 0.3em; text-indent: 0.3em; }
+.cbg .entering .e-s { margin-top: 6px; font-size: 13px; font-style: italic; letter-spacing: 0.3em; color: var(--gold); }
+
+.cbg .hint {
+  position: absolute;
+  left: 50%;
+  bottom: 150px;
+  transform: translateX(-50%);
+  font-size: 15px;
+  letter-spacing: 0.22em;
+  color: rgba(233, 226, 212, 0.75);
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.92), 0 0 18px rgba(212, 175, 90, 0.15);
+  opacity: 0;
+  transition: opacity 1.1s var(--ease);
+  white-space: nowrap;
+}
+.cbg .hint.show { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .cbg .panel, .cbg .entering, .cbg .caption, .cbg .hint, .cbg .vignette.deep { transition-duration: 0.01s; }
+  .cbg .panel.show .reveal { animation: none; opacity: 1; transform: none; }
+}

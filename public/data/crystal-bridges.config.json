@@ -1,0 +1,155 @@
+{
+  "title": "Crystal Bridges",
+  "subtitle": "Museum of American Art",
+  "kicker": "BENTONVILLE · ARKANSAS",
+  "tagline": "Moshe Safdie's pavilions around Crystal Spring's ponds",
+  "format": "Shape follows musewalk's gallery.config.json (wings / theme hexes / frameStyle / works). Works name a public-domain file from public/art/sources.json by `art`, or are `placeholder: true` (still in copyright: empty frame + real label, never reproduced).",
+  "wings": [
+    {
+      "id": "lobby", "no": "I", "name": "Garrison Lobby", "latin": "MAIN LOBBY", "en": "The Main Lobby",
+      "intro": "Visitors arrive at the crest of the ravine and come down into the lobby, with the ponds and both bridges in view.",
+      "accent": "#b7a98c", "wall": "#2a211c", "panel": "#39302a", "floor": "#8b5a32", "fog": "#c5d2c8", "lightColor": "#ffe2b8", "frameStyle": "gold",
+      "works": [
+        { "art": "pomarede-st-louis", "wide": true, "line": "A river town at the edge of the map, steamboats at the landing." },
+        { "art": "catlin-indian-encampment", "wide": true, "line": "Lodges along the riverbank, painted from life." },
+        { "art": "krimmel-village-politicians", "line": "Arguments over a tavern table." }
+      ]
+    },
+    {
+      "id": "early-american", "no": "II", "name": "Early American Art", "latin": "COLONIAL TO 1850", "en": "Early American Galleries",
+      "intro": "Curved walls, concave timber ceilings and red-oak floors. Landscapes of the Hudson River School.",
+      "accent": "#d4af5a", "wall": "#33191c", "panel": "#422026", "floor": "#8b5a32", "fog": "#d2cbb8", "lightColor": "#ffd9a8", "frameStyle": "gold",
+      "works": [
+        { "art": "durand-kindred-spirits", "wide": false, "desc": "Asher B. Durand painted Thomas Cole and the poet William Cullen Bryant together on a ledge above a Catskills gorge, a tribute made after Cole's death in 1848.", "line": "Two friends, one gorge, and the light that outlasts them.", "portal": { "to": [-86, 0, -309], "heading": 1.57, "name": "Crystal Bridges Overlook" } },
+        { "art": "church-home-by-the-lake", "line": "A homestead small against an enormous evening." },
+        { "art": "cole-landscape-with-indian", "line": "Wilderness, before the axe." },
+        { "art": "cole-mount-etna", "line": "The volcano rests in the distance; the ruins stay near." },
+        { "art": "cole-good-shepherd", "line": "A shepherd, a flock, and the end of a long afternoon." },
+        { "art": "kensett-mount-washington", "line": "A meadow that runs all the way to the mountain." },
+        { "art": "vanderlyn-niagara", "line": "Water falling for as long as anyone has looked." },
+        { "art": "guy-winter-brooklyn", "line": "A whole village out in the snow." },
+        { "art": "lane-camden-mountains", "line": "Still water, still sails, still hills." },
+        { "art": "duncanson-landscape", "line": "Soft light over a quiet valley." },
+        { "art": "woodville-war-news", "line": "Everyone leans toward the newspaper." },
+        { "art": "cropsey-backwoods", "line": "A clearing cut out of the forest.", "portal": { "to": [-26, -7, -188], "heading": 0, "name": "Great Hall" } }
+      ]
+    },
+    {
+      "id": "nineteenth", "no": "III", "name": "People on the Move", "latin": "1850 – 1900", "en": "Nineteenth-Century Galleries",
+      "intro": "Glulam beams of southern pine, made in Arkansas, pass through the glass walls to the outside.",
+      "accent": "#d4af5a", "wall": "#33191c", "panel": "#422026", "floor": "#8b5a32", "fog": "#d2cbb8", "lightColor": "#ffd9a8", "frameStyle": "gold",
+      "works": [
+        { "art": "bierstadt-indian-encampment", "line": "Smoke rising into a mountain evening.", "portal": { "to": [74, -0.6, -374], "heading": -1.57, "name": "North Forest Trail" } },
+        { "art": "bierstadt-wharf-scene", "line": "A ship at rest, ropes slack." },
+        { "art": "moran-catawissa", "line": "Autumn spills down the valley." },
+        { "art": "moran-lake-superior", "line": "Rock, water and weather." },
+        { "art": "hill-yosemite-falls", "line": "A thread of water down a granite wall." },
+        { "art": "keith-sentinel-rock", "line": "The cliff keeps watch over the valley." },
+        { "art": "inness-old-roadway", "line": "A road you have walked in a dream." },
+        { "art": "inness-sunset-river", "line": "The river holds the last of the sun." },
+        { "art": "johnson-cranberry-pickers", "line": "A whole town out in the bog." },
+        { "art": "tait-tight-fix", "line": "The hunt turns." },
+        { "art": "tanner-good-shepherd", "line": "Dusk, and a shepherd counting." }
+      ]
+    },
+    {
+      "id": "bridge-gallery", "no": "IV", "name": "Modern Art Bridge", "latin": "1880 – 1920", "en": "The Gallery Bridge",
+      "intro": "A copper roof hung from cables over the lower pond; glass walls lean out over the water.",
+      "accent": "#7fb4d8", "wall": "#1d2734", "panel": "#263344", "floor": "#8b5a32", "fog": "#b8c8d4", "lightColor": "#cfe4ff", "frameStyle": "dark",
+      "works": [
+        { "art": "sargent-stevenson", "line": "A restless writer, caught mid-stride." },
+        { "art": "hassam-paris-twilight", "line": "Gaslight comes on along the boulevard." },
+        { "art": "chase-seaside-flowers", "line": "Salt air and summer colour." },
+        { "art": "cassatt-reader", "line": "A page turns in a quiet room." },
+        { "art": "robinson-columbian", "line": "A white city built for a single summer." },
+        { "art": "twachtman-september", "line": "The light thins toward autumn." },
+        { "art": "ryder-misty-moonlight", "line": "Moon, mist and a small boat." }
+      ]
+    },
+    {
+      "id": "early-twentieth", "no": "V", "name": "Lower North Gallery", "latin": "1900 – 1940", "en": "Early Twentieth Century",
+      "intro": "A low, tight gallery before the bridge opens out over the pond.",
+      "accent": "#e8a25a", "wall": "#4a4239", "panel": "#5a5044", "floor": "#8b5a32", "fog": "#d4cbb8", "lightColor": "#ffeed2", "frameStyle": "gold",
+      "works": [
+        { "art": "bellows-excavation", "line": "Night work on a hole in the city." },
+        { "art": "sloan-bleecker", "line": "Saturday night on the street." },
+        { "art": "hartley-mountain-king", "line": "Mountains stacked like music." },
+        { "art": "remington-cowpuncher", "line": "A night-herder sings to the cattle." },
+        { "art": "bluemner-montville", "line": "A village made of hard colour." }
+      ]
+    },
+    {
+      "id": "contemporary", "no": "VI", "name": "Contemporary Art", "latin": "1940s TO NOW", "en": "Contemporary Galleries",
+      "intro": "Higher ceilings and a long curved wall. The contemporary works are still in copyright, so their frames hang empty with their labels; earlier works from the collection fill the long wall.",
+      "accent": "#b7a98c", "wall": "#2a211c", "panel": "#39302a", "floor": "#8b5a32", "fog": "#c5d2c8", "lightColor": "#ffe2b8", "frameStyle": "float",
+      "works": [
+        { "placeholder": true, "title": "Rosie the Riveter", "artist": "Norman Rockwell", "year": "1943", "aspect": 0.72 },
+        { "placeholder": true, "title": "Dolly Parton", "artist": "Andy Warhol", "year": "1985", "aspect": 0.8 },
+        { "placeholder": true, "title": "No. 210/No. 211 (Orange)", "artist": "Mark Rothko", "year": "1960", "aspect": 0.86, "verify": true },
+        { "placeholder": true, "title": "Untitled", "artist": "Kerry James Marshall", "year": "—", "aspect": 1.2, "verify": true },
+        { "art": "ulrich-glass-engraver", "line": "A craftsman bent to the wheel, light in the glass." },
+        { "art": "johnson-at-the-camp", "line": "Stories and shavings around the fire." },
+        { "art": "brush-indian-lily", "line": "A canoe drifts; a hand reaches for a flower." },
+        { "art": "richards-along-the-shore", "wide": true, "line": "Surf breaking on an empty beach." },
+        { "art": "stanley-buffalo-hunt", "line": "Dust, speed and the open plains." },
+        { "art": "pettit-union-refugees", "line": "A family on the road with what they could carry." }
+      ],
+      "rooms": [
+        { "room": "infinity-room", "placeholder": true, "title": "Infinity Mirrored Room", "artist": "Yayoi Kusama", "year": "—", "verify": true }
+      ]
+    },
+    {
+      "id": "corridor", "no": "VII", "name": "Great Hall Corridor", "latin": "CORRIDOR", "en": "The Great Hall Corridor",
+      "intro": "A curved glass colonnade along the upper pond; reflections from the water ripple over the walls.",
+      "accent": "#b7a98c", "wall": "#2a211c", "panel": "#39302a", "floor": "#8b5a32", "fog": "#c5d2c8", "lightColor": "#ffe2b8", "frameStyle": "dark",
+      "works": []
+    },
+    {
+      "id": "great-hall", "no": "VIII", "name": "Great Hall", "latin": "GREAT HALL", "en": "The Great Hall",
+      "intro": "A cable-hung roof over a hall that stands in the upper pond, with water on three sides.",
+      "accent": "#b7a98c", "wall": "#2a211c", "panel": "#39302a", "floor": "#8b5a32", "fog": "#c5d2c8", "lightColor": "#ffe2b8", "frameStyle": "dark",
+      "works": []
+    },
+    {
+      "id": "eleven", "no": "IX", "name": "Eleven", "latin": "ELEVEN", "en": "The Restaurant Bridge",
+      "intro": "The restaurant bridge spans the weir between the two ponds. Its floor is green quartzite, matched to the colour of the water.",
+      "accent": "#b7a98c", "wall": "#2a211c", "panel": "#39302a", "floor": "#4a5e54", "fog": "#c5d2c8", "lightColor": "#ffe2b8", "frameStyle": "dark",
+      "works": [],
+      "plinths": [
+        { "placeholder": true, "title": "Hanging Heart (Gold/Magenta)", "artist": "Jeff Koons", "year": "1994–2006", "verify": true }
+      ]
+    },
+    {
+      "id": "library", "no": "X", "name": "Library", "latin": "LIBRARY", "en": "The Library",
+      "intro": "More than sixty thousand volumes, with one of the best views over the upper pond.",
+      "accent": "#b7a98c", "wall": "#2a211c", "panel": "#39302a", "floor": "#8b5a32", "fog": "#c5d2c8", "lightColor": "#ffe2b8", "frameStyle": "dark",
+      "works": []
+    },
+    {
+      "id": "expansion", "no": "XI", "name": "West Galleries (2026)", "latin": "2026 EXPANSION", "en": "The 2026 Expansion",
+      "intro": "Opened in June 2026: new galleries under long-span southern yellow pine beams. Public-domain works from the collection hang beside stand-ins for works still in copyright.",
+      "accent": "#e8a25a", "wall": "#4a4239", "panel": "#5a5044", "floor": "#8b5a32", "fog": "#d4cbb8", "lightColor": "#ffeed2", "frameStyle": "float",
+      "works": [
+        { "art": "twachtman-yellowstone", "line": "White water dropping into a yellow canyon." },
+        { "art": "chase-the-song", "line": "A pause before the first note." },
+        { "art": "metcalf-pool", "line": "Still water under spring trees." },
+        { "art": "dewing-fortune-teller", "line": "Cards on the table, faces in shadow." },
+        { "art": "mcentee-winter-country", "line": "Bare trees, low sun, snow on the fields." },
+        { "art": "taylor-classical-landscape", "line": "Evening settles over an imagined countryside." },
+        { "placeholder": true, "standIn": true, "title": "Silver Upper White River", "artist": "Maya Lin", "year": "—", "aspect": 2.2, "verify": true },
+        { "placeholder": true, "standIn": true, "title": "Gallery wall (stand-in)", "artist": "Original stand-in art", "year": "", "aspect": 1.3 },
+        { "placeholder": true, "standIn": true, "title": "Gallery wall (stand-in)", "artist": "Original stand-in art", "year": "", "aspect": 0.8 }
+      ]
+    },
+    {
+      "id": "expansion-bridge", "no": "XII", "name": "Bridge Gallery (2026)", "latin": "BRIDGE GALLERY", "en": "The 2026 Bridge Gallery",
+      "intro": "A glass bridge over the new pond, with a forty-seat café at its midpoint.",
+      "accent": "#7fb4d8", "wall": "#1d2734", "panel": "#263344", "floor": "#8b5a32", "fog": "#b8c8d4", "lightColor": "#cfe4ff", "frameStyle": "dark",
+      "works": []
+    }
+  ],
+  "outdoor": [
+    { "placeholder": true, "title": "Two-Headed Figure", "artist": "Keith Haring", "year": "1986", "at": [12.6, -7, -281.7], "verify": true },
+    { "placeholder": true, "title": "Maman", "artist": "Louise Bourgeois", "year": "1999", "at": [62, 0, -226], "verify": true }
+  ]
+}

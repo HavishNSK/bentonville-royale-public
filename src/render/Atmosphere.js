@@ -35,9 +35,9 @@
  *   atmosphere.stormLevel    the smoothed storm intensity actually being rendered (0..1)
  *   atmosphere.fogColor      THREE.Color currently used for fog + horizon (live, do not mutate)
  *
- * Look (cartoon pass): saturated sky, cel-shaded puffy clouds (smooth ellipsoid normals, hard
- * sun terminator), crisp PCF shadows (radius 0.8), strong sky-tinted hemisphere fill so the
- * toon materials' dark sides stay colourful. Post-processing flags (outline / bloom /
+ * Look: a clear Ozark afternoon with restrained blue sky, warm direct sun and neutral
+ * ground bounce. The character/effects retain the shared cartoon shading, while exterior
+ * materials keep readable, natural colours. Post-processing flags (outline / bloom /
  * renderScale) live in config.js QUALITY and are applied by render/Post.js, not here.
  * Tone mapping: on the plain path (low) the renderer tone-maps lit materials while the sky,
  * clouds, wall and fog colour are display-referred (toneMapped: false). On the post path the
@@ -58,6 +58,8 @@
  */
 import * as THREE from 'three';
 
+const _intTmp = new THREE.Color();
+
 const TAU = Math.PI * 2;
 
 const QUALITY = {
@@ -71,22 +73,22 @@ const QUALITY = {
 const SUN_DIRECTION = new THREE.Vector3(-0.42, 0.74, 0.52).normalize();
 
 // Clear-day and storm palettes. Colours are authored in sRGB hex; THREE converts to linear.
-// Cartoon palette: deep saturated zenith, bright cyan-white horizon, warm sun and a strong
-// sky-tinted fill so cel-shaded dark sides stay colourful instead of muddy.
+// Natural clear-day palette. Sun/fill contrast gives facades depth without
+// turning shaded concrete blue or washing pale stone into featureless white.
 const CLEAR = {
-  zenith: 0x1565e8,
-  mid: 0x46a2ff,
-  horizon: 0xc2e8ff,
-  fogDensity: 0.00085, // FogExp2: ~1% at 100 m, ~33% at 750 m, ~90% at 1800 m
-  sunColor: 0xfff0cf,
+  zenith: 0x4b7fae,
+  mid: 0x89b2cc,
+  horizon: 0xd2dce0,
+  fogDensity: 0.00065,
+  sunColor: 0xfff1da,
   sunDisc: 0xfffcec,
-  sunIntensity: 2.45,
-  hemiSky: 0xc6e0ff,
-  hemiGround: 0xd8c39a,
-  hemiIntensity: 2.5,
-  sunGlow: 1.0,
-  cloudLit: 0xffffff,
-  cloudShade: 0xb9cdf2,
+  sunIntensity: 2.1,
+  hemiSky: 0xcbd9e2,
+  hemiGround: 0xb4aa95,
+  hemiIntensity: 1.8,
+  sunGlow: 0.7,
+  cloudLit: 0xfffcf5,
+  cloudShade: 0xb9c7cf,
 };
 const STORM = {
   zenith: 0x1f1447,
@@ -736,6 +738,7 @@ export class Atmosphere {
     this._storm += (target - this._storm) * k;
     if (Math.abs(target - this._storm) < 1e-4) this._storm = target;
     this._applyMood(this._storm);
+    this._applyInterior();
 
     // time-based animation (clamped so a background-tab hitch does not teleport things)
     const adt = dt > 0.25 ? 0.25 : dt;
@@ -760,6 +763,40 @@ export class Atmosphere {
 
     if (focus) this._focus.copy(focus);
     this._placeShadowBox();
+  }
+
+  /**
+   * Interior gallery mood (Crystal Bridges): k 0..1 blends fog, hemisphere and sun toward a
+   * musewalk wing palette { fog, floor, lightColor } (hex strings). Applied after the storm mood
+   * every update(); k = 0 leaves the outdoor look untouched. Cheap; call every frame.
+   */
+  setInterior(k, pal) {
+    this._interiorK = k > 0 ? Math.min(1, k) : 0;
+    if (pal && pal !== this._interiorPal) {
+      this._interiorPal = pal;
+      if (!this._intCol) this._intCol = { fog: new THREE.Color(), floor: new THREE.Color(), light: new THREE.Color() };
+      this._intCol.fog.set(pal.fog || '#c5d2c8');
+      this._intCol.floor.set(pal.floor || '#0d0a08');
+      this._intCol.light.set(pal.lightColor || '#ffe2b8');
+    }
+  }
+
+  _applyInterior() {
+    const k = this._interiorK || 0;
+    if (k <= 0.001 || !this._intCol) return;
+    const c = this._intCol;
+    // musewalk halls: Fog(hall.fog, 10, 64) and HemisphereLight(light * 0.5, floor, 1.1). Kept
+    // lighter than musewalk's black box: the real galleries are daylit through the glass.
+    // Exp2 density 0.0095 keeps a 70 m gallery readable end to end (~8% haze at 30 m, ~36% at
+    // 70 m; the old 0.036 washed it out to ~70% at 30 m) and the warm hemisphere fill keeps the
+    // rooms bright instead of flat grey.
+    this._fog.color.lerp(_intTmp.copy(c.fog).lerp(c.light, 0.3), k * 0.8);
+    this._fog.density = this._fog.density + (0.0095 - this._fog.density) * k;
+    this._uniforms.uFogDensity.value = this._fog.density;
+    this._hemi.color.lerp(_intTmp.copy(c.light).multiplyScalar(0.95), k);
+    this._hemi.groundColor.lerp(_intTmp.copy(c.floor).lerp(c.light, 0.35), k);
+    this._hemi.intensity *= 1 + 0.15 * k;
+    this._sun.intensity *= 1 - 0.55 * k;
   }
 
   /**

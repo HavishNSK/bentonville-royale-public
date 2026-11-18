@@ -11,6 +11,7 @@ import { createAccount } from './net/Account.js';
 import { createMeta } from './ui/meta.js';
 import { RANKED_NOTE } from './core/config.js';
 import { lookString, parseLook } from './game/Cosmetics.js';
+import { sameWorld } from './net/worldIdentity.js';
 import { createAds, pickPlatform } from './net/Ads.js';
 
 // Ads (src/net/Ads.js): CrazyGames SDK in the portal build, AdSense H5 when VITE_ADSENSE_CLIENT is
@@ -104,7 +105,18 @@ const menus = createMenus(uiRoot, {
       game.startMatch(undefined, { freeBuild: true });
     } catch (err) {
       console.error(err);
-      showError('Could not start free build: ' + (err && err.message ? err.message : err));
+      showError('Could not start sandbox: ' + (err && err.message ? err.message : err));
+      menus.showTitle();
+    }
+  },
+  onMuseum: async () => {
+    try {
+      closeMultiplayer();
+      await ensureLoaded();
+      game.startMatch(undefined, { freeBuild: true, museum: true });
+    } catch (err) {
+      console.error(err);
+      showError('Could not open the museum: ' + (err && err.message ? err.message : err));
       menus.showTitle();
     }
   },
@@ -373,13 +385,12 @@ async function joinMultiplayer(code, name, match = null) {
         session = new ClientSession(conn, game); // queues match messages until begin()
         await ensureLoaded();
         if (mp !== me) return session.dispose(game);
-        // the host plays a different map file (one of us has a stale build): don't play on it.
-        // Hosts from before this check send no map id: allow.
-        if (msg.map && game.mapId && msg.map !== game.mapId) {
+        // Refuse missing/legacy IDs too: matching map dates do not prove matching terrain.
+        if (!sameWorld(game.mapId, msg.map)) {
           session.dispose(game);
           game.combat.authoritative = true;
           closeMultiplayer();
-          menus.showNotice('Your game files are out of date \u2014 refresh the page.');
+          menus.showNotice('Your map or terrain differs from the host. Both players should refresh and try again.');
           return;
         }
         game.net = session;

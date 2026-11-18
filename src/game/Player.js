@@ -45,7 +45,7 @@ const clientNet = (g) => (g && g.net && g.net.isClient ? g.net : null);
  * Positions `camera` behind `pivot` on an orbit (heading/pitch), pulled in
  * when world geometry is in the way. Shared by the player and spectating.
  */
-export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, shoulder, rise = CAMERA.rise) {
+export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, shoulder, rise = CAMERA.rise, ease = null, dt = 0) {
   const cp = Math.cos(pitch);
   _fwd.set(Math.sin(heading) * cp, Math.sin(pitch), -Math.cos(heading) * cp);
   _right.set(Math.cos(heading), 0, Math.sin(heading));
@@ -53,10 +53,57 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
   _cam.y += rise;
   // pull in when something is between the pivot and the camera
   _v.copy(_fwd).multiplyScalar(-1);
-  const hit = world ? world.raycast(_cam.x, _cam.y, _cam.z, _v.x, _v.y, _v.z, dist + 0.3, null) : null;
-  const d = hit ? Math.max(0.6, hit.t - 0.3) : dist;
+  // a "thick" boom: the centre ray plus two a little to each side, so an edge (a ramp's side, a
+  // wall corner) is felt slightly before the lens reaches it instead of flipping on one ray
+  let d = dist;
+  if (world) {
+    for (let k = -1; k <= 1; k++) {
+      const ox = _right.x * k * 0.3;
+      const oz = _right.z * k * 0.3;
+      const hit = world.raycast(_cam.x + ox, _cam.y, _cam.z + oz, _v.x, _v.y, _v.z, dist + 0.45, null);
+      if (hit) d = Math.min(d, Math.max(0.7, hit.t - 0.45));
+    }
+  }
+  const startY = _cam.y;
+  // Keep the boom above walkable slabs (museum oak, roofs), not raw ravine terrain.
+  // Shorten the orbit instead of sliding onto the floor — that used to plant the camera in the boards.
+  // (only surfaces below the boom's start count: a ramp or floor overhead is not a floor)
+  const floorHint = world && world.groundHeight ? world.groundHeight(_cam.x, _cam.z, startY, 0) : 0;
+  const floorY = floorHint + 0.45;
+  if (_v.y < -1e-4 && startY + d * _v.y < floorY) {
+    d = Math.max(0.7, (floorY - startY) / _v.y);
+  }
+  // `ease` ({ d }): pull in at once when something blocks the view, but let back out smoothly,
+  // so passing a pole or a tree does not pop the camera in and out
+  // Pull-in is fast (a few frames) rather than one-frame: a lens that snapped from 4 m to 0.7 m
+  // and eased back out each time you looked across a ramp's edge read as a flicker.
+  if (ease) {
+    if (!(ease.d > 0) || !(dt > 0)) ease.d = d;
+    else if (d < ease.d) ease.d = Math.max(d, damp(ease.d, d, 26, dt));
+    else ease.d = Math.min(d, damp(ease.d, d, 7, dt));
+    d = ease.d;
+  }
   _cam.addScaledVector(_v, d);
-  if (_cam.y < 0.3) _cam.y = 0.3;
+  // Floor and ceiling nudges are measured from the camera's own height and kept small. Measured
+  // from the player's height, a ramp or floor over the camera counted as the floor (pushing the
+  // camera up through it) while the ceiling rule pushed it back under: under a ramp the camera
+  // flicked up and down by metres every frame. The boom raycast above already keeps it out of
+  // walls, ramps and floors; these only stop it resting in a slab.
+  let lift = 0;
+  if (world && world.groundHeight) {
+    // the ground itself only (terrain, the museum ravine): built ramps and floors are left to the
+    // boom ray. Counting them lifted the lens up onto a ramp behind you, so you looked down on
+    // the stair, or into its wood.
+    const gy = (world.surfaceHeight ? world.surfaceHeight(_cam.x, _cam.z) : world.groundHeight(_cam.x, _cam.z, _cam.y, 0.5)) + 0.45;
+    if (_cam.y < gy && gy - _cam.y < 1) lift = gy - _cam.y;
+    if (world.ceilingAbove) {
+      const ceil = world.ceilingAbove(_cam.x, _cam.z, _cam.y - 1); // a slab the lens is inside of
+      if (Number.isFinite(ceil) && _cam.y > ceil - 0.35 && _cam.y - (ceil - 0.35) < 1) lift = Math.max(gy, ceil - 0.35) - _cam.y;
+    }
+  }
+  // (eased too: the nudge itself changes in steps as the lens crosses a slab's edge)
+  if (ease && dt > 0) lift = ease.lift = damp(ease.lift || 0, lift, 20, dt);
+  _cam.y += lift;
   camera.position.copy(_cam);
   _v.copy(_cam).add(_fwd);
   camera.lookAt(_v);
@@ -106,6 +153,15 @@ export class Player {
     this.fallSpeed = 0;
     this.camDist = CAMERA.distance;
     this.fovMul = 1;
+    // camera feel (updateCamera): eased pivot height / crouch, collision ease-out, recoil that
+    // recovers, a small FOV punch on big guns, a dip on hard landings
+    this._camY = null;
+    this._camCrouch = 0;
+    this._camCol = { d: 0 };
+    this.recoil = 0;
+    this.fovKick = 0;
+    this._camDip = 0;
+    this._airT = 0;
     this.scopeT = 0; // 0..1 raise-to-eye progress on a scoped gun
     this.scopeView = false; // true while looking through the scope (first person + HUD overlay)
     this.objBar = null; // { collider, until, point }
@@ -149,6 +205,11 @@ export class Player {
     this.revivingTarget = null;
     this.reviveLocalT = 0;
     this.swimming = false;
+    this.recoil = 0;
+    this.fovKick = 0;
+    this._camDip = 0;
+    this._camY = null;
+    this._airT = 0;
     this.rebootVan = null; // reboot van we hold interact at (Reboot.js)
     this.rebootLocalT = 0;
     this._wasDown = false;
@@ -304,69 +365,8 @@ export class Player {
       if (this.mantle) g.sfx.play('jump', { volume: 0.35 });
     }
 
-    if (this.mantle) {
-      // scripted climb: rise to the ledge first, then step over onto it
-      const m = this.mantle;
-      m.t = Math.min(1, m.t + dt / m.dur);
-      const ku = Math.min(1, m.t / 0.6);
-      const kf = Math.max(0, (m.t - 0.3) / 0.7);
-      p.y = m.y0 + (m.y1 - m.y0) * (1 - (1 - ku) * (1 - ku));
-      p.x = m.x0 + (m.x1 - m.x0) * kf * kf * (3 - 2 * kf);
-      p.z = m.z0 + (m.z1 - m.z0) * kf * kf * (3 - 2 * kf);
-      v.set(0, 0, 0);
-      this.grounded = false;
-      if (m.t >= 1) {
-        this.mantle = null;
-        p.y = world.groundHeight(p.x, p.z, p.y + 0.1);
-        this.grounded = true;
-      }
-    } else {
-    // ---- integrate
-    const ox = p.x;
-    const oz = p.z;
-    const oy = p.y;
-    // a floor / ramp already above us (where we stand now) can't be stepped or snapped onto
-    const cap = world.builtAbove(ox, oz, oy);
-    p.x += v.x * dt;
-    p.z += v.z * dt;
-    if (!this.airborneDrop || p.y - groundY < 20) world.resolveCircle(p, this.radius, this.height);
-    const b = world.bounds;
-    p.x = clamp(p.x, b.minX + 2, b.maxX - 2);
-    p.z = clamp(p.z, b.minZ + 2, b.maxZ - 2);
-    // walking into a floor's edge at body height (too high to step onto) blocks like a wall
-    const fa = world.builtAbove(p.x, p.z, oy);
-    if (fa < cap - 0.01 && fa - oy > STEP_UP && fa - FLOOR_UNDER < oy + this.height) {
-      p.x = ox;
-      p.z = oz;
-    } else if (this.grounded && fa < Infinity && (p.x !== ox || p.z !== oz)) {
-      // ground rising under a floor: stop where the head would push into it
-      const ng = world.groundHeight(p.x, p.z, oy, undefined, cap);
-      if (ng > oy + 0.02 && fa - FLOOR_UNDER - ng < this.height * 0.8) {
-        p.x = ox;
-        p.z = oz;
-      }
-    }
-
-    const wasGrounded = this.grounded;
-    const prevVy = v.y;
-    p.y += v.y * dt;
-    const gy = world.groundHeight(p.x, p.z, Math.max(p.y, p.y - v.y * dt), undefined, cap);
-    if (wasGrounded && v.y <= 0 && p.y > gy && p.y - gy < 0.75) p.y = gy; // stick to ramps / steps
-    const ceil = world.ceilingAbove(p.x, p.z, Math.min(oy, p.y));
-    // head bump whenever we rose (jump, ramp snap, step-up), not only while jumping
-    if ((v.y > 0 || p.y > oy) && p.y + this.height > ceil) {
-      p.y = Math.max(Math.min(gy, oy), ceil - this.height);
-      if (v.y > 0) v.y = 0;
-    }
-    if (p.y <= gy) {
-      p.y = gy;
-      if (!wasGrounded) this._land(prevVy, g);
-      v.y = 0;
-      this.grounded = true;
-    } else {
-      this.grounded = false;
-    }
-    }
+    if (this.mantle) this._advanceMantle(world, dt);
+    else this._integrateMovement(world, dt, g);
     this.surface = world.surface;
     // ---- swimming: on the terrain inside a water area (World.inWater)
     const wasSwim = this.swimming;
@@ -409,11 +409,14 @@ export class Player {
       c.root.visible = !this.scopeView; // first person through the scope: don't draw our own body
       c.setDowned(down);
       c.setSwim(this.swimming);
+      c.setCrouch(this.crouching);
+      // the air pose after a moment off the ground (not on every stair edge or ramp seam)
+      this._airT = this.grounded ? 0 : this._airT + dt;
       c.update(dt, {
         fwd: hspeed > 0.1 ? (v.x * sh - v.z * ch) / hspeed : 0,
         side: hspeed > 0.1 ? (v.x * ch + v.z * sh) / hspeed : 0,
         speed: hspeed,
-        grounded: this.grounded || this.mode === 'ground',
+        grounded: this.grounded || (this.mode === 'ground' && this._airT < 0.14),
         gliding: this.mode === 'glide',
         heading: this.heading,
         pitch: this.pitch,
@@ -445,6 +448,106 @@ export class Player {
       }
     }
     void inv;
+  }
+
+  /** Resolve the whole travelled path, not just the endpoint of a slow frame. */
+  _integrateMovement(world, dt, g) {
+    const p = this.pos;
+    const v = this.vel;
+    const spacing = Math.min(0.2, this.radius * 0.5);
+    const speed = Math.max(Math.hypot(v.x, v.z), Math.abs(v.y), 1);
+    // Bound work during a stalled frame. Excess time is discarded rather than
+    // enlarging steps and allowing a body to jump through thin geometry.
+    const elapsed = Math.min(Math.max(dt, 0), 128 / 60, 128 * spacing / speed);
+    const count = Math.max(1, Math.ceil(Math.max(elapsed * 60, speed * elapsed / spacing)));
+    const stepDt = elapsed / count;
+    for (let i = 0; i < count; i++) this._movementStep(world, stepDt, g);
+  }
+
+  _movementStep(world, dt, g) {
+    const p = this.pos;
+    const v = this.vel;
+    // ---- integrate
+    const ox = p.x;
+    const oz = p.z;
+    const oy = p.y;
+    // a floor / ramp already above us (where we stand now) can't be stepped or snapped onto
+    const cap = world.builtAbove(ox, oz, oy);
+    p.x += v.x * dt;
+    p.z += v.z * dt;
+    world.resolveCircle(p, this.radius, this.height);
+    const b = world.bounds;
+    p.x = clamp(p.x, b.minX + 2, b.maxX - 2);
+    p.z = clamp(p.z, b.minZ + 2, b.maxZ - 2);
+    // walking into a floor's edge at body height (too high to step onto) blocks like a wall
+    const fa = world.builtAbove(p.x, p.z, oy);
+    if (fa < cap - 0.01 && fa - oy > STEP_UP && fa - FLOOR_UNDER < oy + this.height) {
+      p.x = ox;
+      p.z = oz;
+    } else if (this.grounded && fa < Infinity && (p.x !== ox || p.z !== oz)) {
+      // ground rising under a floor: stop where the head would push into it
+      const ng = world.groundHeight(p.x, p.z, oy, undefined, cap);
+      if (ng > oy + 0.02 && fa - FLOOR_UNDER - ng < this.height * 0.8) {
+        p.x = ox;
+        p.z = oz;
+      }
+    }
+
+    const wasGrounded = this.grounded;
+    const prevVy = v.y;
+    p.y += v.y * dt;
+    const gy = world.groundHeight(p.x, p.z, Math.max(p.y, p.y - v.y * dt), undefined, cap);
+    if (wasGrounded && v.y <= 0 && p.y > gy && p.y - gy < 0.75) p.y = gy; // stick to ramps / steps
+    const ceil = world.ceilingAbove(p.x, p.z, Math.min(oy, p.y));
+    // head bump whenever we rose (jump, ramp snap, step-up), not only while jumping
+    if ((v.y > 0 || p.y > oy) && p.y + this.height > ceil) {
+      p.y = Math.max(Math.min(gy, oy), ceil - this.height);
+      if (v.y > 0) v.y = 0;
+    }
+    if (p.y <= gy) {
+      p.y = gy;
+      if (!wasGrounded) this._land(prevVy, g);
+      v.y = 0;
+      this.grounded = true;
+    } else {
+      this.grounded = false;
+    }
+  }
+
+  /** A planned climb must remain clear if a player builds or destroys geometry mid-climb. */
+  _advanceMantle(world, dt) {
+    const m = this.mantle;
+    const end = Math.min(1, m.t + Math.max(0, dt) / m.dur);
+    const count = Math.max(1, Math.ceil((end - m.t) * Math.max(60, Math.hypot(m.x1 - m.x0, m.z1 - m.z0) / 0.05)));
+    const start = m.t;
+    this.vel.set(0, 0, 0);
+    this.grounded = false;
+    for (let i = 1; i <= count; i++) {
+      const t = start + (end - start) * i / count;
+      const ku = Math.min(1, t / 0.6);
+      // Finish lifting before crossing the ledge's vertical face.
+      const kf = Math.max(0, (t - 0.6) / 0.4);
+      const x = m.x0 + (m.x1 - m.x0) * kf * kf * (3 - 2 * kf);
+      const y = m.y0 + (m.y1 - m.y0) * (1 - (1 - ku) * (1 - ku));
+      const z = m.z0 + (m.z1 - m.z0) * kf * kf * (3 - 2 * kf);
+      const ceil = world.ceilingAbove(x, z, Math.min(this.pos.y, y), 0.05);
+      _mv.set(x, y, z);
+      world.resolveCircle(_mv, this.radius, this.height);
+      if (y + this.height > ceil + 0.001 || Math.hypot(_mv.x - x, _mv.z - z) > 0.03) {
+        this.mantle = null;
+        return;
+      }
+      this.pos.copy(_mv);
+      m.t = t;
+    }
+    if (end >= 1) {
+      this.mantle = null;
+      const floor = world.groundHeight(this.pos.x, this.pos.z, this.pos.y + 0.1);
+      if (Math.abs(this.pos.y - floor) < 0.2) {
+        this.pos.y = floor;
+        this.grounded = true;
+      }
+    }
   }
 
   /**
@@ -492,6 +595,9 @@ export class Player {
       if (g.onPlayerLanded) g.onPlayerLanded(this);
     } else if (vy < -8) {
       g.sfx.play('land', { volume: clamp(-vy / 20, 0.3, 1) });
+      const k = clamp((-vy - 8) / 14, 0, 1);
+      this._camDip = Math.max(this._camDip, 0.1 + 0.28 * k);
+      if (this.character) this.character.land(k);
       if (vy < -22 && !this.god) {
         const net = clientNet(g);
         if (net) net.action({ k: 'fall', d: Math.round((-vy - 22) * 4) });
@@ -642,7 +748,7 @@ export class Player {
     this.placeCooldown -= dt;
 
     // equipped model on the character
-    const eqId = this.buildPiece ? 'pickaxe' : cur ? (cur.type === 'weapon' ? cur.id : cur.id === 'grenade' ? 'grenade' : 'none') : 'pickaxe';
+    const eqId = this.buildPiece ? 'pickaxe' : cur ? (cur.type === 'weapon' ? cur.id : CONSUMABLES[cur.id] && CONSUMABLES[cur.id].throwable ? cur.id : 'none') : 'pickaxe';
     if (eqId !== this.lastEquipped) {
       if (this.lastEquipped !== null) g.sfx.play('weapon_switch', { volume: 0.5 });
       this.lastEquipped = eqId;
@@ -947,6 +1053,20 @@ export class Player {
       if (input.actionHit('interact')) this.interactWith(rec, g);
       return;
     }
+    // Crystal Bridges south / library sliding doors (the main colonnade stays open)
+    const siteDoor = g.world && g.world.siteDoors && !this.airborneDrop ? g.world.siteDoors.near(this.pos) : null;
+    if (siteDoor) {
+      g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] ' + (siteDoor.open ? 'Close' : 'Open') + ' door');
+      if (input.actionHit('interact')) {
+        const net = clientNet(g);
+        if (net) net.action({ k: 'md', id: siteDoor.id });
+        else {
+          g.world.siteDoors.toggle(siteDoor.id);
+          if (g.sfx) g.sfx.play('build_metal', { x: siteDoor.cx, y: siteDoor.y0 + 1.2, z: siteDoor.cz, volume: 0.35 });
+        }
+      }
+      return;
+    }
     // doors cut into built walls: anyone can open / close them, swinging away from them
     const st = g.structures;
     const door = st && st.doorNear && !this.airborneDrop ? st.doorNear(this.pos) : null;
@@ -957,13 +1077,14 @@ export class Player {
         if (net) net.action({ k: 'dr', key: door.piece.key, c: door.c, s: door.sign });
         else st.toggleDoor(door.piece, door.c, door.sign);
       }
-    } else g.hud.prompt(null);
+    } else if (!(g.cbGallery && g.cbGallery.interact(this, input, g.hud))) g.hud.prompt(null);
   }
 
   /** Opens / takes a loot record (see Loot.nearest). */
   interactWith(rec, g) {
     const loot = g.loot;
     if (!loot || !rec) return false;
+    if (this.character && rec.kind !== 'ammo' && !(rec.kind === 'item' && rec.item && rec.item.type === 'ammo')) this.character.pickup();
     const net = clientNet(g);
     if (net) {
       net.action({ k: 'int', id: rec.id }, true);
@@ -1067,7 +1188,13 @@ export class Player {
     const net = clientNet(g);
     if (net) net.sendFire(this, it, this.aimOrigin, g.combat.lastDirs, res);
     // recoil
-    this.pitch = clamp(this.pitch + (w.kind === 'sniper' || w.kind === 'launcher' ? 0.05 : w.kind === 'shotgun' ? 0.04 : 0.008), CAMERA.minPitch, CAMERA.maxPitch);
+    // the view kicks up and settles back (updateCamera); a little of it stays, so sustained fire
+    // still climbs
+    const big = w.kind === 'sniper' || w.kind === 'launcher';
+    const kick = big ? 0.05 : w.kind === 'shotgun' ? 0.04 : 0.008;
+    this.recoil = Math.min(0.16, this.recoil + kick * 0.75);
+    this.pitch = clamp(this.pitch + kick * 0.25, CAMERA.minPitch, CAMERA.maxPitch);
+    if (big || w.kind === 'shotgun') this.fovKick = 0.03;
     if (it.mag <= 0) this.startReload(g);
     return res;
   }
@@ -1122,15 +1249,16 @@ export class Player {
     if (this.cooldown > 0 || !g.grenades) return false;
     this._cancelReload();
     const slot = this.inventory.selected;
+    const kind = it.id;
     if (!this.inventory.useConsumable()) return false;
     this.cooldown = GRENADE.cooldown;
-    if (this.character) this.character.swing();
+    if (this.character) this.character.throwItem();
     const o = this.throwOrigin(_v);
     const d = this.aimDir;
     const net = clientNet(g);
     // a client asks the host, which throws it and echoes the flight to everyone
     if (net) net.action({ k: 'gr', s: slot, o: [o.x, o.y, o.z], d: [d.x, d.y, d.z] }, true);
-    else g.grenades.throw(this, o, d);
+    else g.grenades.throw(this, o, d, kind);
     return true;
   }
 
@@ -1196,7 +1324,7 @@ export class Player {
     if (!st || !this.buildPiece) return null;
     if (!this.placement) this.placement = st.plan(this.buildPiece, this.pos, this.heading, this.pitch);
     const pl = this.placement;
-    this.placeCooldown = 0.12;
+    this.placeCooldown = 0.07; // hold-to-build: ~14 pieces a second
     if (!pl || !pl.valid) return null;
     const mats = this.inventory.mats;
     this._autoMaterial(g);
@@ -1335,20 +1463,30 @@ export class Player {
     const want = this.airborneDrop ? 8.5 : this.ads ? CAMERA.distance * 0.55 : CAMERA.distance;
     this.camDist = scoped ? 1.2 : damp(this.camDist, want, 10, dt);
     this.fovMul = scoped ? zoom : damp(this.fovMul, zoom, 14, dt);
-    const fov = baseFov * this.fovMul;
+    this.fovKick = damp(this.fovKick, 0, 9, dt);
+    this.recoil = damp(this.recoil, 0, 6.5, dt);
+    if (this.recoil < 1e-4) this.recoil = 0;
+    const fov = baseFov * this.fovMul * (1 + this.fovKick);
     if (Math.abs(camera.fov - fov) > 0.01) {
       camera.fov = fov;
       camera.updateProjectionMatrix();
     }
-    const crouchDrop = this.crouching ? 0.45 : 0;
-    _pivot.set(this.pos.x, this.pos.y + CAMERA.pivotHeight - crouchDrop, this.pos.z);
+    // pivot height: eased, so stairs, ramp seams, step-ups and mantles glide instead of stepping
+    // (a big jump in height, like a teleport or leaving the bus, snaps)
+    const onFoot = this.mode === 'ground' && !this.airborneDrop;
+    if (this._camY == null || !onFoot || Math.abs(this.pos.y - this._camY) > 3) this._camY = this.pos.y;
+    else this._camY = damp(this._camY, this.pos.y, 18, dt);
+    this._camCrouch = damp(this._camCrouch, this.crouching ? 0.45 : 0, 12, dt);
+    this._camDip = damp(this._camDip, 0, 7, dt);
+    _pivot.set(this.pos.x, this._camY + CAMERA.pivotHeight - this._camCrouch - this._camDip, this.pos.z);
+    const viewPitch = clamp(this.pitch + this.recoil, CAMERA.minPitch, CAMERA.maxPitch);
     if (scoped) {
       // first person: the eye sits at the pivot and looks straight down the aim direction
-      const cp = Math.cos(this.pitch);
-      _fwd.set(Math.sin(this.heading) * cp, Math.sin(this.pitch), -Math.cos(this.heading) * cp);
+      const cp = Math.cos(viewPitch);
+      _fwd.set(Math.sin(this.heading) * cp, Math.sin(viewPitch), -Math.cos(this.heading) * cp);
       camera.position.copy(_pivot);
       camera.lookAt(_v.copy(_pivot).add(_fwd));
-    } else placeOrbitCamera(camera, world, _pivot, this.heading, this.pitch, this.camDist, this.airborneDrop ? 0 : CAMERA.shoulder);
+    } else placeOrbitCamera(camera, world, _pivot, this.heading, viewPitch, this.camDist, this.airborneDrop ? 0 : CAMERA.shoulder, CAMERA.rise, this._camCol, dt);
 
     // aim ray: from the camera through the screen centre, starting level with the player
     camera.getWorldDirection(this.aimDir);

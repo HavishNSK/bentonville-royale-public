@@ -23,7 +23,7 @@
 import * as THREE from 'three';
 import { flattenModel } from '../core/assets.js';
 import { toToon } from '../render/Toon.js';
-import { grenadeModel } from './Grenades.js';
+import { grenadeModel, smokeGrenadeModel } from './Grenades.js';
 import {
   WEAPONS, WEAPON_IDS, weaponStats, clampWeaponRarity, CONSUMABLES, AMMO, MATERIALS, MATERIAL_COLOR, RARITIES, MATCH,
   DROP_ZONES, STORM, QUALITY, TAU,
@@ -33,6 +33,7 @@ import {
 export const LOOT = {
   floorRarity: [40, 30, 18, 9, 3], // weights for common..legendary
   chestRarity: [10, 32, 33, 18, 7],
+  highChestRarity: [0, 0, 25, 45, 30], // hard-to-reach landmark chests (world.fixedLoot tier 'high')
   weaponWeights: Object.fromEntries(WEAPON_IDS.map((id) => [id, WEAPONS[id].lootWeight ?? 10])),
   floorMix: { weapon: 0.45, consumable: 0.25, ammo: 0.2, material: 0.1 },
   matPickup: 30,
@@ -149,7 +150,10 @@ export function itemLabel(item) {
 /** Random loot rolls (exported for bots/tests). */
 export function rollWeapon(rng, rarityTable = LOOT.floorRarity) {
   const id = pickWeighted(rng, LOOT.weaponWeights);
-  const rarity = clampWeaponRarity(id, rollRarity(rng, rarityTable));
+  let rarity = clampWeaponRarity(id, rollRarity(rng, rarityTable));
+  // per-gun nudge after the roll (WEAPONS[id].rarityShift: { rarity: [to, chance] })
+  const shift = WEAPONS[id].rarityShift && WEAPONS[id].rarityShift[rarity];
+  if (shift && rng() < shift[1]) rarity = clampWeaponRarity(id, shift[0]);
   const st = weaponStats(id, rarity);
   return { type: 'weapon', id, rarity, mag: (st && st.mag) || WEAPONS[id].mag };
 }
@@ -158,7 +162,10 @@ export function ammoFor(weaponId) {
   return { type: 'ammo', ammo: kind, count: AMMO[kind].pickup };
 }
 export function rollConsumable(rng) {
-  if (rng() < LOOT.grenadeShare) return { type: 'consumable', id: 'grenade', count: CONSUMABLES.grenade.pickup };
+  if (rng() < LOOT.grenadeShare) {
+    const id = rng() < 0.4 ? 'smoke' : 'grenade';
+    return { type: 'consumable', id, count: CONSUMABLES[id].pickup };
+  }
   const id = rng() < 0.55 ? 'medkit' : 'tonic';
   return { type: 'consumable', id, count: id === 'medkit' ? 1 : 1 + (rng() < 0.3 ? 1 : 0) };
 }
@@ -247,8 +254,17 @@ class Batch {
     this.mesh.count = this.n;
     this.mesh.visible = this.n > 0;
     if (this.n) {
-      this.mesh.instanceMatrix.needsUpdate = true;
-      if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+      // upload only the instances in use, not the whole buffer (hundreds of KB a frame)
+      const im = this.mesh.instanceMatrix;
+      im.clearUpdateRanges();
+      im.addUpdateRange(0, this.n * 16);
+      im.needsUpdate = true;
+      const ic = this.mesh.instanceColor;
+      if (ic) {
+        ic.clearUpdateRanges();
+        ic.addUpdateRange(0, this.n * 3);
+        ic.needsUpdate = true;
+      }
     }
   }
   dispose() {
@@ -295,6 +311,7 @@ export class Loot {
       medkit: new Batch(g, prepFlat(m.medkit, () => boxFlat(0.22, 0.29, 0.14, 0xd83a3a)), CAP.consumable, { name: 'medkit' }),
       potion: new Batch(g, prepFlat(m.potion, () => boxFlat(0.2, 0.4, 0.2, 0x3b9cff)), CAP.consumable, { name: 'potion' }),
       grenade: new Batch(g, grenadeModel(true), CAP.consumable, { name: 'grenade' }),
+      smoke: new Batch(g, smokeGrenadeModel(true), CAP.consumable, { name: 'smoke' }),
       crate: new Batch(g, prepFlat(m.crate, () => boxFlat(0.5, 0.5, 0.5, 0xffffff)), CAP.crate, { colored: true, name: 'crate' }),
     };
     for (const id of WEAPON_KEYS) {
@@ -639,6 +656,7 @@ export class Loot {
     if (!w.inBounds(x, z, 20)) return false;
     if (w.blockedAt(x, z, clearance)) return false;
     if (w.areaAt && w.areaAt(x, z) === 'water') return false;
+    if (w.reservedAt && w.reservedAt(x, z)) return false; // bespoke landmark: it places its own loot
     return true;
   }
 
@@ -687,7 +705,7 @@ export class Loot {
       const z = c.minZ + rng() * (c.maxZ - c.minZ);
       if (w.interiorAt(x, z) !== c) continue;
       if (w.blockedAt(x, z, clearance, true)) continue;
-      return { x, z, y: Math.max(b.floorY, w.terrainHeight(x, z)), yaw: rng() * TAU, b, level: 0 };
+      return { x, z, y: Math.max(b.floorY, w.surfaceHeight(x, z)), yaw: rng() * TAU, b, level: 0 };
     }
     return null;
   }
@@ -763,11 +781,11 @@ export class Loot {
         const x = F.ox + la * F.ux + lb * F.vx;
         const z = F.oz + la * F.uz + lb * F.vz;
         if (w.interiorAt(x, z) !== c || w.blockedAt(x, z, clearance, true)) continue;
-        return { x, z, y: Math.max(L.y, w.terrainHeight(x, z)), yaw, b, level: 0 };
+        return { x, z, y: Math.max(L.y, w.surfaceHeight(x, z)), yaw, b, level: 0 };
       }
     }
     if (w.interiorAt(sp.x, sp.z) !== c || w.blockedAt(sp.x, sp.z, clearance, true)) return null;
-    return { x: sp.x, z: sp.z, y: Math.max(L ? L.y : b.floorY, w.terrainHeight(sp.x, sp.z)), yaw, b, level: 0 };
+    return { x: sp.x, z: sp.z, y: Math.max(L ? L.y : b.floorY, w.surfaceHeight(sp.x, sp.z)), yaw, b, level: 0 };
   }
 
   /** Most spots of `kind` one building may hold (by its walkable floor area over every storey). */
@@ -875,6 +893,19 @@ export class Loot {
       item: opts.floorLoot ?? MATCH.floorLoot,
     };
     let indoorChests = 0;
+    // fixed spots authored by bespoke landmarks (world.fixedLoot: { kind, x, y, z, yaw, tier?, item? })
+    for (const f of w.fixedLoot || []) {
+      if (area && Math.hypot(f.x - area.x, f.z - area.z) > area.r) continue;
+      if (f.kind === 'item') {
+        const mix = pickWeighted(rng, LOOT.floorMix);
+        const item = mix === 'weapon' ? rollWeapon(rng, LOOT.floorRarity) : mix === 'consumable' ? rollConsumable(rng) : rollAmmo(rng);
+        this._add('item', f.x, f.y, f.z, f.yaw || 0, item);
+        continue;
+      }
+      const rec = this._add(f.kind === 'ammoBox' ? 'ammoBox' : 'chest', f.x, f.y, f.z, f.yaw || 0, null);
+      if (f.tier === 'high') rec.tier = 'high';
+      if (rec.kind === 'chest') indoorChests++;
+    }
     const pois = play.disks.filter((d) => d.poi);
     for (const kind of ['chest', 'ammoBox', 'item']) {
       const pIn = PLACE.indoor[kind];
@@ -907,7 +938,7 @@ export class Loot {
             ? w.interiorAt(ax, az) === s.b.collider && !w.blockedAt(ax, az, 0.3, true)
             : !w.blockedAt(ax, az, 0.3);
           const px = ok ? ax : s.x, pz = ok ? az : s.z;
-          const py = s.b ? (s.level > 0 ? s.y : Math.max(s.b.floorY, w.terrainHeight(px, pz))) : w.groundHeight(px, pz, 0.3);
+          const py = s.b ? (s.level > 0 ? s.y : Math.max(s.b.floorY, w.surfaceHeight(px, pz))) : w.groundHeight(px, pz, 0.3);
           this._add('item', px, py, pz, s.yaw, ammoFor(item.id));
         }
       }
@@ -966,7 +997,7 @@ export class Loot {
     const rng = this._rng;
     const items = [];
     if (rec.kind === 'chest') {
-      const wpn = rollWeapon(rng, LOOT.chestRarity);
+      const wpn = rollWeapon(rng, rec.tier === 'high' ? LOOT.highChestRarity : LOOT.chestRarity);
       items.push(wpn, ammoFor(wpn.id));
       items.push(rng() < 0.65 ? rollConsumable(rng) : rollAmmo(rng));
       items.push({ type: 'material', mat: 'wood', count: LOOT.chestMats });
@@ -981,6 +1012,19 @@ export class Loot {
       const d = 1.4 + rng() * 0.6;
       this._spawnItem(items[i], rec.x, fy, rec.z, rec.x + Math.sin(a) * d, rec.z + Math.cos(a) * d, rec.y);
     }
+    return true;
+  }
+
+  /**
+   * Explosion: dump the chest / ammo box (same spill as `open`) then remove the container
+   * so the mesh is gone. An already-open container is removed without spilling again.
+   */
+  smash(id) {
+    const rec = this.byId.get(id);
+    if (!rec || rec.kind === 'item') return false;
+    if (!rec.opened) this.open(id);
+    const gone = this.byId.get(id);
+    if (gone) this._remove(gone);
     return true;
   }
 
@@ -1141,8 +1185,8 @@ export class Loot {
             sc = S.w;
             break;
           case 'consumable':
-            batch = it.id === 'medkit' ? B.medkit : it.id === 'grenade' ? B.grenade : B.potion;
-            sc = it.id === 'medkit' ? S.medkit : it.id === 'grenade' ? S.grenade : S.potion;
+            batch = it.id === 'medkit' ? B.medkit : it.id === 'grenade' ? B.grenade : it.id === 'smoke' ? B.smoke : B.potion;
+            sc = it.id === 'medkit' ? S.medkit : it.id === 'grenade' || it.id === 'smoke' ? S.grenade : S.potion;
             break;
           case 'ammo':
             batch = B.crate;

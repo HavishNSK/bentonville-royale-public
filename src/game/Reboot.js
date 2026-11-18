@@ -28,6 +28,7 @@ import { buildRebootVan, buildRebootCard, REBOOT_VAN } from '../render/RebootVan
 import { sameTeam } from './Teams.js';
 
 const CARD_COLOR = 0x38e1ff;
+const VAN_DRAW_DIST = 320; // metres
 
 /** Small deterministic RNG from a string (same van spots on every machine). */
 function seeded(str) {
@@ -86,7 +87,7 @@ export class Reboot {
         col.hp = col.maxHp = Infinity; // can't be harvested or destroyed
         col.rebootVan = true;
       }
-      const y = world.terrainHeight ? world.terrainHeight(spot.x, spot.z) : 0;
+      const y = world.surfaceHeight ? world.surfaceHeight(spot.x, spot.z) : 0;
       const van = {
         i: this.vans.length,
         key: zone.key,
@@ -252,7 +253,10 @@ export class Reboot {
     if (!mate) return null;
     // cards the victim carried fall where they died
     for (const c of this.cardsOf(victim)) this._dropHeld(c, victim.pos);
-    return this._addCard({ v: victim.id, name: victim.name, team: victim.team, x: victim.pos.x, y: victim.pos.y, z: victim.pos.z, until: this.time + REBOOT.cardTime });
+    // the card lands on the ground under them (eliminated mid-air, mid-jump or up on builds it
+    // used to hang where they died, out of reach)
+    const p = victim.pos;
+    return this._addCard({ v: victim.id, name: victim.name, team: victim.team, x: p.x, y: this._groundY(p.x, p.y, p.z), z: p.z, until: this.time + REBOOT.cardTime });
   }
 
   /** Host / solo: `actor` takes `card`. */
@@ -266,10 +270,18 @@ export class Reboot {
     return true;
   }
 
+  /** The walkable surface at or below (x, y, z): terrain, a floor, a roof or a build. */
+  _groundY(x, y, z) {
+    const w = this.world;
+    if (!w || !w.groundHeight) return y;
+    const g = w.groundHeight(x, z, y + 0.3);
+    return Number.isFinite(g) && g <= y + 0.35 ? g : y;
+  }
+
   _dropHeld(card, pos) {
     card.holder = null;
     card.x = pos.x;
-    card.y = pos.y;
+    card.y = this._groundY(pos.x, pos.y, pos.z);
     card.z = pos.z;
     card.until = Math.max(card.until, this.time + 30);
     this._showCard(card);
@@ -476,6 +488,12 @@ export class Reboot {
       c.mesh.position.y = c.y + 1.1 + Math.sin(c.spin * 1.3) * 0.12;
     }
     for (const v of this.vans) {
+      // far vans are not drawn (the map is ~1 km across; the minimap still shows them)
+      if (v.mesh && this.viewer) {
+        const far = (v.x - this.viewer.x) ** 2 + (v.z - this.viewer.z) ** 2 > VAN_DRAW_DIST * VAN_DRAW_DIST;
+        v.mesh.visible = !far;
+        if (far) continue;
+      }
       if (v.mesh && v.mesh.userData.update) v.mesh.userData.update(dt, this.viewer);
       const set = v.mesh && v.mesh.userData.setBeacon;
       if (!set) continue;

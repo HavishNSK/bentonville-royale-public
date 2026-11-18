@@ -32,7 +32,7 @@ const PREDICT_MS = 3000; // a locally placed build the host has not echoed by th
 function equipIdOf(p) {
   if (p.buildPiece) return 'pickaxe';
   const it = p.inventory && p.inventory.current();
-  return it ? (it.type === 'weapon' ? it.id : it.id === 'grenade' ? 'grenade' : 'none') : 'pickaxe';
+  return it ? (it.type === 'weapon' ? it.id : it.id === 'grenade' || it.id === 'smoke' ? it.id : 'none') : 'pickaxe';
 }
 
 function lerpAngle(a, b, t) {
@@ -133,6 +133,7 @@ export class Puppet {
     const far = viewer && (this.pos.x - viewer.x) ** 2 + (this.pos.z - viewer.z) ** 2 > cd2;
     c.root.visible = this.seen && !this.inBus && !far;
     c.setDowned(this.downed);
+    c.setCrouch(this.crouching && this.alive);
     const w = this.game && this.game.world;
     c.setSwim(!!w && !!w.inWater && this.alive && !this.downed && !!(this.flags & FLAG.grounded) && w.inWater(this.pos.x, this.pos.z, this.pos.y));
     if (!c.root.visible) return;
@@ -299,6 +300,12 @@ export class ClientSession {
     );
     // sniper rounds from this trigger pull carry the action seq, so a later hit claim names them
     for (const pj of this.game.combat.lastProjectiles || []) pj.netSeq = this.seq;
+  }
+
+  /** Crystal Bridges painting portal: the host validates (range, cooldown, storm) and allows the jump. */
+  portal(i) {
+    this._tpUntil = performance.now() + 1500;
+    this.action({ k: 'ptl', i: i | 0 });
   }
 
   /** QA: teleports must be announced so the host's speed check lets them through. */
@@ -538,13 +545,13 @@ export class ClientSession {
           }
           return;
         }
-        g.grenades.spawn(e.id, a, _v.set(e.p[0], e.p[1], e.p[2]), _v2.set(e.v[0], e.v[1], e.v[2]));
+        g.grenades.spawn(e.id, a, _v.set(e.p[0], e.p[1], e.p[2]), _v2.set(e.v[0], e.v[1], e.v[2]), { smoke: !!e.s });
         sfx.play('grenade_throw', { x: e.p[0], y: e.p[1], z: e.p[2], volume: 0.7 });
         if (a && a !== g.player && a.character) a.character.swing();
         return;
       }
       case 'gx':
-        if (g.grenades) g.grenades.explodeAt(e.id, _v.set(e.p[0], e.p[1], e.p[2]), !!e.r);
+        if (g.grenades) g.grenades.explodeAt(e.id, _v.set(e.p[0], e.p[1], e.p[2]), !!e.r, !!e.s);
         return;
       case 'la': {
         const loot = g.loot;
@@ -572,6 +579,12 @@ export class ClientSession {
         _v.set(rec.x, rec.y, rec.z);
         if (fx) rec.kind === 'chest' ? fx.chestOpen(_v) : fx.pickupBurst(_v, 'common');
         sfx.play('chest_open', { x: rec.x, y: rec.y, z: rec.z });
+        return;
+      }
+      case 'lx': {
+        const loot = g.loot;
+        const rec = loot && loot.byId.get(e.id);
+        if (rec && rec.kind !== 'item') loot._remove(rec);
         return;
       }
       case 'sp': {
@@ -606,6 +619,11 @@ export class ClientSession {
         const st = g.structures;
         const piece = st && st.slots.get(e.key);
         if (piece && st.setDoor) st.setDoor(piece, e.c | 0, e.v | 0);
+        return;
+      }
+      case 'md': {
+        const doors = g.world && g.world.siteDoors;
+        if (doors && doors.setOpen) doors.setOpen(e.id, !!e.o);
         return;
       }
       case 'sx': {
@@ -681,6 +699,7 @@ export class ClientSession {
     const g = this.game;
     const p = g.player;
     const victim = this.actorById(e.v);
+    if (victim && victim.character && !e.st && e.d >= 8 && victim.alive) victim.character.flinch(); // hit reaction
     if (victim && victim !== p) {
       if (e.dn) victim.downHp = e.hp;
       else victim.health = e.hp;
@@ -806,6 +825,13 @@ export class ClientSession {
     const g = this.game;
     const w = g.world;
     let found = null;
+    if (e.ty === 'b') {
+      // architecture box (Crystal Bridges glass): ids are assigned in build order, equal on every client
+      const b = Number.isInteger(e.id) && w.boxById ? w.boxById(e.id) : null;
+      if (!b || !b.alive || !(b.maxHp < 1e6)) return; // only breakable boxes (glass, furniture), never the building
+      g.combat._destroyCollider(b, new THREE.Vector3(b.cx, (b.y0 + b.y1) / 2, b.cz));
+      return;
+    }
     w._each(e.x - 1, e.z - 1, e.x + 1, e.z + 1, false, (cell) => {
       const list = e.ty === 'p' ? cell.polys : cell.circles;
       for (const c of list) {

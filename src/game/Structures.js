@@ -96,6 +96,12 @@ const GROUND_SNAP = 0.1;
 const GROUND_TOL = 0.75;
 // Feet this close to the terrain count as "standing on the ground" for planning.
 const ON_GROUND = 0.6;
+/** The level grid's offset (0..LEVEL) for a surface at height y, to the cm. */
+function levelPhase(y) {
+  if (!Number.isFinite(y)) return 0;
+  const m = Math.round((((y % LEVEL) + LEVEL) % LEVEL) * 100) / 100;
+  return m >= LEVEL - 0.01 ? 0 : m;
+}
 // A piece may start this far below a roof top and clip into it: roofs are not on the 3 m grid,
 // so on a 4 m roof the nearest level (3 m) would otherwise always be refused.
 const ROOF_CLIP = LEVEL * 0.5;
@@ -123,9 +129,13 @@ function wallGeometry() {
   return g;
 }
 
+// Floor tops sit FLOOR_LIFT above their level: a ground-level floor would otherwise share a
+// plane with the ground (y = 0) and flicker against it (z-fighting). Collision is unchanged.
+const FLOOR_LIFT = 0.02;
+
 function floorGeometry() {
   const g = new THREE.BoxGeometry(CELL, FLOOR_THICK, CELL);
-  g.translate(0, -FLOOR_THICK / 2, 0);
+  g.translate(0, -FLOOR_THICK / 2 + FLOOR_LIFT, 0);
   return g;
 }
 
@@ -218,7 +228,7 @@ export function doorColumns(edit) {
 /** Geometry of one tile of an edited piece, centred on its local tile origin (see TILE_LOCAL). */
 const TILE_GEOMETRY = {
   wall: (s = 1, t = 1) => new THREE.BoxGeometry(TILE_W * s, TILE_H * s, WALL_THICK * t),
-  floor: (s = 1, t = 1) => new THREE.BoxGeometry(HALF * s, FLOOR_THICK * t, HALF * s).translate(0, (-FLOOR_THICK * t) / 2, 0),
+  floor: (s = 1, t = 1) => new THREE.BoxGeometry(HALF * s, FLOOR_THICK * t, HALF * s).translate(0, (-FLOOR_THICK * t) / 2 + FLOOR_LIFT, 0),
   cone: () => coneQuarterGeometry(), // edit overlay only
   // edit overlay only: a quarter of the ramp slab, laid on the slope
   ramp: (s = 1, t = 1) =>
@@ -334,11 +344,27 @@ function makeMaterial(kind, mat) {
     roughness: mat === 'metal' ? 0.45 : 0.85,
     metalness: mat === 'metal' ? 0.55 : 0,
     side: kind === 'cone' ? THREE.DoubleSide : THREE.FrontSide,
+    // a small pull toward the camera: far-away floors lying 2 cm over the ground stay clear of
+    // it even where the depth buffer is too coarse to tell them apart
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -2,
   });
   m.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nattribute float aDmg;\nvarying float vDmg;\nvarying vec2 vCrackUv;')
-      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvDmg = aDmg;\nvCrackUv = uv;');
+      // World-space texture mapping (one texture per 4 m x 3 m of wall, 4 m x 4 m of floor):
+      // an edited piece is drawn as separate tiles, and with per-tile UVs every tile repeated
+      // the whole texture (a 3x3 grid of mini planks / bricks). Mapping by world position keeps
+      // the pattern continuous across tiles and neighbouring pieces, and unstretched on edges.
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\nvDmg = aDmg;\nvCrackUv = uv;\n' +
+        '#ifdef USE_INSTANCING\n' +
+        '  vec4 sWp = modelMatrix * instanceMatrix * vec4(position, 1.0);\n' +
+        '  vec3 sWn = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);\n' +
+        '  vec2 sUv = abs(sWn.y) > 0.5 ? sWp.xz / ' + CELL.toFixed(1) + ' : (abs(sWn.x) > abs(sWn.z) ? vec2(sWp.z / ' + CELL.toFixed(1) + ', sWp.y / ' + LEVEL.toFixed(1) + ') : vec2(sWp.x / ' + CELL.toFixed(1) + ', sWp.y / ' + LEVEL.toFixed(1) + '));\n' +
+        '  vCrackUv = sUv;\n' +
+        '  #ifdef USE_MAP\n    vMapUv = sUv;\n  #endif\n' +
+        '#endif');
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', '#include <common>\nvarying float vDmg;\nvarying vec2 vCrackUv;\n' +
         'float crackLine(vec2 p, float f, float s){ float w = sin(p.x * f + sin(p.y * f * 0.7 + s) * 2.3) * sin(p.y * f * 1.3 + sin(p.x * f * 0.6 + s * 1.7) * 2.1); return 1.0 - smoothstep(0.0, 0.07, abs(w)); }')
@@ -348,7 +374,7 @@ function makeMaterial(kind, mat) {
         '  diffuseColor.rgb *= 1.0 - clamp(c, 0.0, 1.0) * 0.75;\n' +
         '}');
   };
-  m.customProgramCacheKey = () => 'structure-crack';
+  m.customProgramCacheKey = () => 'structure-crack-worlduv';
   // cel-shaded; the crack patch hooks <map_fragment>, which MeshToonMaterial also has
   return toToon(m, { dispose: true });
 }
@@ -735,9 +761,22 @@ export class Structures {
     const fz = -Math.cos(heading);
     // the level the feet are on; a player standing on the terrain builds at the ground
     // level of the target cell instead (so pieces sit on slopes, not float off them)
-    const kFeet = Math.floor(pos.y / LEVEL + 0.34);
     const w = this.world;
-    const onGround = !!(w && w.terrainHeight) && pos.y - w.terrainHeight(pos.x, pos.z) < ON_GROUND && !this._onBuild(pos);
+    const standOn = this._onBuild(pos);
+    // a landmark slab (the museum's floors sit 0.45 m above the clamped terrain under them) is
+    // not the terrain: build on its own grid, flush with it
+    const surf = w && w.groundHeight ? w.groundHeight(pos.x, pos.z, pos.y + 0.3) : -Infinity;
+    const onSlab = !!(w && w.terrainHeight) && surf > w.terrainHeight(pos.x, pos.z) + 0.15;
+    const onGround = !!(w && w.terrainHeight) && pos.y - w.terrainHeight(pos.x, pos.z) < ON_GROUND && !standOn && !onSlab;
+    // off the terrain the level grid follows what the feet stand on: a built piece keeps its own
+    // grid, and a landmark slab (the museum's floors at -7 / -11, its roofs) starts a grid at
+    // its surface, so the first piece sits flush instead of 1 m above or below the floor
+    // In the air over a built piece (jumping on a ramp), the surface below is the ramp's slope
+    // at some odd height: its own base keeps the grid instead (the slope height shifted every
+    // piece off the levels for the length of the jump)
+    const under = !onGround && !standOn && Number.isFinite(surf) ? this._pieceAtSurface(pos.x, pos.z, surf) : null;
+    const phase = onGround ? 0 : standOn ? levelPhase(standOn.y) : under ? levelPhase(under.y) : levelPhase(Number.isFinite(surf) ? surf : 0);
+    const kFeet = Math.floor((pos.y - phase) / LEVEL + 0.34);
     let dk = 0;
     let x;
     let z;
@@ -799,13 +838,13 @@ export class Structures {
     // standing on a ramp in a box and ramping again: that spot is taken by the ramp we are on,
     // so the new one goes up a level (keeps climbing, like a ramp rush in a box)
     if (kind === 'ramp' && dk >= 0) {
-      const here = this.slots.get(slotKey('ramp', x, k * LEVEL, z, rot));
-      if (here && here.alive && pos.y > k * LEVEL + 0.4) k += 1;
+      const here = this.slots.get(slotKey('ramp', x, phase + k * LEVEL, z, rot));
+      if (here && here.alive && pos.y > phase + k * LEVEL + 0.4) k += 1;
     }
 
     out.kind = kind;
     out.x = x;
-    out.y = k * LEVEL;
+    out.y = Math.round((phase + k * LEVEL) * 100) / 100;
     out.z = z;
     out.rot = rot;
     out.level = k;
@@ -865,24 +904,39 @@ export class Structures {
   }
 
   /** Are the feet on a built surface (floor / ramp / cone surface, or the top of a wall)? */
+  /** The live built piece the feet stand on (a floor / ramp top, or the top of a wall), or null. */
   _onBuild(pos) {
     const set = this._grid.get(Math.floor(pos.x / CELL) + ',' + Math.floor(pos.z / CELL));
-    if (!set) return false;
+    if (!set) return null;
     for (const q of set) {
       if (!q.alive) continue;
       if (q.surf) {
         if (pos.x < q.minX || pos.x > q.maxX || pos.z < q.minZ || pos.z > q.maxZ) continue;
-        if (Math.abs(q.surf(pos.x, pos.z) - pos.y) < 0.35) return true;
+        if (Math.abs(q.surf(pos.x, pos.z) - pos.y) < 0.35) return q;
       } else if (q.seg && Math.abs(q.y1 - pos.y) < 0.35) {
         const s = q.seg;
         const ex = s[2] - s[0];
         const ez = s[3] - s[1];
         const l2 = ex * ex + ez * ez || 1;
         const t = clamp(((pos.x - s[0]) * ex + (pos.z - s[1]) * ez) / l2, 0, 1);
-        if (Math.hypot(pos.x - s[0] - ex * t, pos.z - s[1] - ez * t) < 0.6) return true;
+        if (Math.hypot(pos.x - s[0] - ex * t, pos.z - s[1] - ez * t) < 0.6) return q;
       }
     }
-    return false;
+    return null;
+  }
+
+  /** The built piece whose top is the surface `y` at (x, z) (within 5 cm), or null. */
+  _pieceAtSurface(x, z, y) {
+    const set = this._grid.get(Math.floor(x / CELL) + ',' + Math.floor(z / CELL));
+    if (!set) return null;
+    for (const q of set) {
+      if (!q.alive) continue;
+      if (q.surf) {
+        if (x < q.minX || x > q.maxX || z < q.minZ || z > q.maxZ) continue;
+        if (Math.abs(q.surf(x, z) - y) < 0.05) return q;
+      } else if (q.seg && Math.abs(q.y1 - y) < 0.05) return q;
+    }
+    return null;
   }
 
   /** Ground level (grid level index) of the terrain at (x, z). */
@@ -1436,7 +1490,10 @@ export class Structures {
   _grounded(p) {
     const w = this.world;
     // terrain: any sample under the piece within GROUND_TOL of its base (or above it)
-    const th = w && w.terrainHeight ? (x, z) => w.terrainHeight(x, z) : () => 0;
+    // ground = the terrain or any walkable world surface (the museum's floors, slabs and roofs)
+    const th = w && w.groundHeight
+      ? (x, z) => Math.max(w.terrainHeight(x, z), w.groundHeight(x, z, p.y0 + 0.3))
+      : w && w.terrainHeight ? (x, z) => w.terrainHeight(x, z) : () => 0;
     const lo = p.y0 - GROUND_TOL;
     if (p.seg) {
       const s = p.seg;

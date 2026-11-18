@@ -16,7 +16,7 @@
 // Room kinds used here beyond the Phase 1 list: gallery auditorium classroom gym cafeteria
 // library courtroom stall bar cafe studio brewhouse.
 
-import { leaf, cut } from './layout.js';
+import { leaf, cut, row } from './layout.js';
 import { RECIPES } from './archetypes.js';
 
 // ------------------------------------------------------------------ helpers
@@ -114,7 +114,7 @@ function nameFromPois(tree, f, re) {
  */
 function landmark(id, L, W, front, build, tol = 2) {
   return (f) => {
-    if (Math.abs(f.L - L) > tol || Math.abs(f.W - W) > tol || f.front !== front) {
+    if (Math.abs(f.L - L) > tol || Math.abs(f.W - W) > tol || (front && f.front !== front)) {
       const fb = LANDMARK_IDS[id] ? LANDMARK_IDS[id].fallback : 'hall';
       return (RECIPES[fb] || RECIPES.hall)(f);
     }
@@ -139,8 +139,13 @@ const def = (id, L, W, front, build, tol) => {
 // lobby side). Moshe Safdie's pavilions around the spring-fed ponds: galleries in a row on both
 // sides of a gallery walk, main lobby by the entrance with the museum store and coffee bar, Eleven
 // in the bridge pavilion by the lobby, the glass-walled Great Hall, library.
+// Public programme rechecked 2026-11-17: https://crystalbridges.org/faq
+// (library, store, glass hall, Eleven in a bridge, coffee near the lobby). Room dimensions
+// and the generated upper floors remain gameplay approximations, not published floor plans.
 // Sources: crystalbridges.org/faq, crystalbridges.org/venue-rentals/venue-info-maps,
 // en.wikipedia.org/wiki/Crystal_Bridges_Museum_of_American_Art, arkansas.com (Crystal Bridges).
+// tol=20: the planner's rectangular frame for the irregular pavilion complex often
+// differs from the reference by 5–15 m; a 2 m default causes silent fallback to 'hall'.
 def(8240824, 332.2, 118.1, 'b', () => {
   const ground = cut(
     'a',
@@ -188,7 +193,7 @@ def(8240824, 332.2, 118.1, 'b', () => {
       cut('a', { abs: 276 }, R('open', 'Great Hall Balcony'), R('gallery', 'Bridge Gallery Upper'))
     );
   return { levels: [ground, upper(1), upper(2)], stairs: [{ a: 190, b: 30, dir: 'a' }, { a: 60, b: 56, dir: 'a' }] };
-});
+}, 20);
 
 // The Momentary (896842916; 108 x 93 m, main door on the west side). Contemporary art space in
 // the former Kraft cheese plant: white-box galleries, Fermentation Hall (black box in the old
@@ -530,6 +535,34 @@ def(799259121, 26.3, 21.9, 'a', () =>
   cut('b', { abs: 8 }, cut('a', { abs: 13 }, R('sales', 'Block Street Records'), R('storage', 'Record Stock Room')), cut('a', { abs: 18.5 }, R('cafe', 'Onyx Coffee Lab'), cut('b', { abs: 15 }, R('lobby', 'Side Entrance'), R('bar', 'Coffee Bar'))))
 );
 
+// Bentonville Community Center (751973534; 104.7 x 86.4 m). Multi-use recreation centre:
+// aquatic center, fitness center, main gymnasium, commons/meeting rooms, administration.
+// Programme source, checked 2026-11-17: https://www.bentonville.ar.gov/359/Community-Center
+// The city confirms aquatic/fitness/gym spaces, commons, banquet/meeting rooms and offices;
+// exact room geometry and upper-floor allocation below remain playable approximations.
+// Percentage layout adapts to either road-selected frontage rather than silently becoming
+// the generic hall when map/entrance alignment changes.
+def(751973534, 104.7, 86.4, null, (f) => ({
+  levels: [
+    cut(f.front, '15%', leaf('lobby', 'Welcome Lobby'), cut(f.side, '52%',
+      cut(f.front, '45%',
+        leaf('open', 'Aquatic Center'),
+        leaf('gym', 'Fitness Center'),
+      ),
+      leaf('gym', 'Main Gymnasium'),
+    )),
+    cut(f.front, '50%',
+      row('a', [[0.25, leaf('lobby', 'Lobby')], [0.75, leaf('hall', 'Commons')]]),
+      row('a', [[0.5, leaf('classroom', 'Meeting Room A')], [0.5, leaf('classroom', 'Meeting Room B')]]),
+    ),
+    cut(f.front, '50%',
+      leaf('office', 'Administration'),
+      leaf('storage', 'Storage'),
+    ),
+  ],
+  stairs: [{ a: f.L / 2, b: f.W / 2, dir: 'a' }],
+}));
+
 // Ids of the landmark buildings and the generic recipe each falls back to.
 export const LANDMARK_IDS = {
   8240824: { key: 'crystal_bridges', fallback: 'hall' },
@@ -548,6 +581,7 @@ export const LANDMARK_IDS = {
   912573722: { key: 'wrights_barbecue', fallback: 'shop' },
   799259120: { key: 'food_theater', fallback: 'shop' },
   799259121: { key: 'onyx_block_street_records', fallback: 'storefront_2' },
+  751973534: { key: 'community_center', fallback: 'hall' },
 };
 
 // The ordinary buildings of the current map (by OSM id).
@@ -570,6 +604,7 @@ put('greenhouse', [896842910]);
 put('garage', [912478100]);
 put('pavilion', [912514431]);
 put('shelter', [583054984]);
+put('bike_shop', [799257711]);
 
 /** pois: the POIs inside this building's footprint ({ k, ... }). area: footprint m^2. */
 export function classify(bd, pois, area = bd.a || 0) {
@@ -592,5 +627,8 @@ export function classify(bd, pois, area = bd.a || 0) {
   if (t === 'office' || has(/^office=/)) return lv >= 2 || area > 400 ? 'office_block' : 'office_small';
   if (area > 1000) return area > 1500 ? 'hall' : 'retail_block';
   if (lv >= 2 && area < 240) return 'storefront_2';
+  if (has(/amenity=restaurant|amenity=fast_food/)) return 'restaurant';
+  if (has(/shop=bicycle/)) return 'bike_shop';
+  if (has(/craft=brewery|amenity=bar/)) return 'brewpub';
   return 'shop';
 }
