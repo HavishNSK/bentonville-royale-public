@@ -23,6 +23,7 @@
 import * as THREE from 'three';
 import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, CONSUMABLES, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
 import { canSandboxLoadout, canCreativeMap, giveSandboxWeapon, sandboxBotStatus, spawnSandboxBot, clearSandboxBots, purgeSandboxBodies } from './sandboxLoadout.js';
+import { canHostTools, hostBotStatus, spawnHostBot, clearHostBots, dropHostLoot } from './hostTools.js';
 import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
 import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
@@ -518,6 +519,8 @@ export class Game {
       this._error('bots.spawn', err);
     }
     this.totalActors = 1 + (net ? net.remotes.size : 0) + this.bots.list.length;
+    this._hostBotSeq = 0; // private-match host tools (hostTools.js): names and ids restart each match
+    this._hostBotLastId = 0;
     this._setupTeam();
 
     if (freeBuild) {
@@ -642,6 +645,7 @@ export class Game {
 
   /** Sandbox weapons overlay: put any gun or grenades on the hotbar. No-op in a match. */
   giveSandboxGun(id) {
+    if (canHostTools(this)) return this._dropHostLoot(id);
     if (!canSandboxLoadout(this) || !this.player) return null;
     const item = giveSandboxWeapon(this.player.inventory, id, 'legendary');
     if (item && this.hud && this.hud.toast) {
@@ -663,7 +667,7 @@ export class Game {
     let bot = null;
     let reason = null;
     try {
-      ({ bot, reason } = spawnSandboxBot(this, d));
+      ({ bot, reason } = canHostTools(this) ? spawnHostBot(this, d) : spawnSandboxBot(this, d));
     } catch (err) {
       this._error('sandbox.spawnBot', err);
     }
@@ -674,7 +678,7 @@ export class Game {
 
   /** Sandbox BOTS: remove every sandbox bot (alive or dead). Returns how many went. */
   clearSandboxBots() {
-    const n = clearSandboxBots(this);
+    const n = canHostTools(this) ? clearHostBots(this) : clearSandboxBots(this);
     this._syncSandboxBots();
     return n;
   }
@@ -686,7 +690,27 @@ export class Game {
 
   /** Push the BOTS section's count / cap / disabled state to the overlay. */
   _syncSandboxBots() {
-    if (this.hud && this.hud.setSandboxBots) this.hud.setSandboxBots(sandboxBotStatus(this));
+    const host = canHostTools(this);
+    if (this.hud && this.hud.setSandboxToolsMode) this.hud.setSandboxToolsMode(host ? 'host' : 'sandbox');
+    if (this.hud && this.hud.setSandboxBots) this.hud.setSandboxBots(host ? hostBotStatus(this) : sandboxBotStatus(this));
+  }
+
+  /**
+   * Private-match host WEAPONS: the chosen gun (+ ammo) or grenades land on the floor in front
+   * of the host as ordinary loot, so every client sees it and anyone can grab it (hostTools.js).
+   */
+  _dropHostLoot(id) {
+    let ids = [];
+    try {
+      ids = dropHostLoot(this, id);
+    } catch (err) {
+      this._error('hostTools.loot', err);
+    }
+    if (this.hud && this.hud.toast) {
+      const name = WEAPONS[id] ? WEAPONS[id].name : CONSUMABLES[id] ? CONSUMABLES[id].name : id;
+      this.hud.toast(ids.length ? `${name} dropped` : 'Could not drop that');
+    }
+    return ids.length ? ids : null;
   }
 
   /**
@@ -1422,6 +1446,13 @@ export class Game {
           this._sandboxTick = 0;
           if (this._purgeSandboxBodies() || this.sandboxLoadoutOpen || this.sandboxBotsOpen) this._syncSandboxBots();
         }
+      } else if (this.sandboxBotsOpen) {
+        // private-match host BOTS panel: keep its live count fresh (bots die in the match)
+        this._sandboxTick = (this._sandboxTick || 0) + dt;
+        if (this._sandboxTick >= 1) {
+          this._sandboxTick = 0;
+          this._syncSandboxBots();
+        }
       }
     }
 
@@ -1729,7 +1760,7 @@ export class Game {
         damage: a.damageDealt || 0,
         state: !a.alive ? 'out' : a.downed ? 'down' : 'alive',
       }));
-      hud.setMapStats(rows);
+      hud.setMapStats(rows, { tools: canHostTools(this) });
     }
     // no loot clutter: only chests you could hear (close by), then teammates, markers, pings
     const blips = this._blips || (this._blips = []);
@@ -2073,7 +2104,7 @@ export class Game {
     on = on === undefined ? !this.sandboxLoadoutOpen : !!on;
     if (on === !!this.sandboxLoadoutOpen) return;
     if (on) {
-      if (!canSandboxLoadout(this) || this.paused) return;
+      if (!(canSandboxLoadout(this) || canHostTools(this)) || this.paused) return;
       if (!this.fullMapOpen) this.toggleFullMap(true);
       if (!this.fullMapOpen) return;
       this.toggleSandboxBots(false); // one panel at a time
@@ -2092,7 +2123,7 @@ export class Game {
     on = on === undefined ? !this.sandboxBotsOpen : !!on;
     if (on === !!this.sandboxBotsOpen) return;
     if (on) {
-      if (!canSandboxLoadout(this) || this.paused) return;
+      if (!(canSandboxLoadout(this) || canHostTools(this)) || this.paused) return;
       if (!this.fullMapOpen) this.toggleFullMap(true);
       if (!this.fullMapOpen) return;
       this.toggleSandboxLoadout(false); // one panel at a time

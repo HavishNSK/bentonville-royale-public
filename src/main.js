@@ -308,7 +308,7 @@ function startHostedMatch() {
   if (!me || me.role !== 'host' || !me.room || me.room.closed || me.room.started) return;
   if (!me.room.allReady()) return;
   const mode = normalizeMode(me.room.mode);
-  return runHostedMatch(me, { fill: me.room.fill, mode, humanTeams: joinOrderTeams(me.room.players, mode) });
+  return runHostedMatch(me, { fill: me.room.fill, mode, humanTeams: joinOrderTeams(me.room.players, mode), privateMatch: true });
 }
 
 async function runHostedMatch(me, sessionOpts) {

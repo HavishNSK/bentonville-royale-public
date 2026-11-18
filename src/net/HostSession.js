@@ -7,7 +7,7 @@
 // (trusted within a speed bound); its actions arrive as reliable messages and
 // are validated and applied here.
 //
-//   const s = new HostSession(room, game, { fill, mode, humanTeams });
+//   const s = new HostSession(room, game, { fill, mode, humanTeams, privateMatch });
 //   (mode 'solo'|'duo'|'trio'|'squad'; humanTeams [{ ids, allowBots }] groups room slot ids,
 //   host = 0, into teams; see src/game/Teams.js packHumans / assignTeams)
 //   game.net = s; game.startMatch(seed)   // Game calls the hooks below
@@ -137,11 +137,12 @@ export class RemoteActor {
 }
 
 export class HostSession {
-  constructor(room, game, { fill = true, mode = 'solo', humanTeams = null } = {}) {
+  constructor(room, game, { fill = true, mode = 'solo', humanTeams = null, privateMatch = false } = {}) {
     this.room = room;
     this.game = game;
     this.isHost = true;
     this.isClient = false;
+    this.privateMatch = !!privateMatch; // lobby room code match (not matchmade): host tools (hostTools.js)
     this.fill = fill;
     this.mode = normalizeMode(mode);
     this.humanTeams = humanTeams;
@@ -222,10 +223,8 @@ export class HostSession {
     const roster = [{ id: 0, n: game.player.name, k: 'player', c: HUMAN_CANOPY[0], h: 1, tm: game.player.team, sk: game.skin, px: game.pickaxe, bb: game.backbling }];
     for (const a of this.remotes.values()) roster.push({ id: a.id, n: a.name, k: 'player', c: HUMAN_CANOPY[a.id % HUMAN_CANOPY.length], h: 1, tm: a.team, sk: a.skin || null, px: a.pickaxeCos || null, bb: a.backbling || null });
     const idBase = game.bots.list.length ? game.bots.list[0].id : 0;
-    for (const b of game.bots.list) {
-      const i = b.id - idBase;
-      roster.push({ id: b.id, n: b.name, k: BOT_KITS[i % BOT_KITS.length], c: BOT_CANOPY[i % BOT_CANOPY.length], h: 0, tm: b.team });
-    }
+    this._botIdBase = idBase;
+    for (const b of game.bots.list) roster.push(this._botRosterEntry(b));
     const s = game.storm;
     const loot = [];
     for (const r of game.loot ? game.loot.records : []) loot.push([r.id, r.kind, rnd(r.x), rnd(r.y), rnd(r.z), rnd(r.yaw, 3), r.opened ? 1 : 0, r.item || 0]);
@@ -249,6 +248,23 @@ export class HostSession {
     // per-client byte counters measure the match from here on (the start message is reported separately)
     for (const c of this.room.clients.values()) c.bytesOut = 0;
     this.stats.t0 = performance.now();
+  }
+
+  _botRosterEntry(b) {
+    const i = Math.max(0, b.id - (this._botIdBase || 0));
+    return { id: b.id, n: b.name, k: BOT_KITS[i % BOT_KITS.length], c: BOT_CANOPY[i % BOT_CANOPY.length], h: 0, tm: b.team };
+  }
+
+  /** Private-match host tools: a bot added mid-match. Clients make a puppet for it ('ab'). */
+  announceSpawnedBot(b) {
+    if (!this.started || !b) return;
+    this.events.push({ e: 'ab', ...this._botRosterEntry(b), tot: this.game.totalActors });
+  }
+
+  /** Private-match host tools: host-spawned bots removed mid-match ('rb'). */
+  removeSpawnedBots(ids) {
+    if (!this.started || !ids || !ids.length) return;
+    this.events.push({ e: 'rb', ids: ids.slice() });
   }
 
   // ---------------------------------------------------------------- wrapping host modules to capture events
