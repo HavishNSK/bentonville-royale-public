@@ -766,8 +766,12 @@ export class Structures {
     // a landmark slab (the museum's floors sit 0.45 m above the clamped terrain under them) is
     // not the terrain: build on its own grid, flush with it
     const surf = w && w.groundHeight ? w.groundHeight(pos.x, pos.z, pos.y + 0.3) : -Infinity;
-    const onSlab = !!(w && w.terrainHeight) && surf > w.terrainHeight(pos.x, pos.z) + 0.15;
-    const onGround = !!(w && w.terrainHeight) && pos.y - w.terrainHeight(pos.x, pos.z) < ON_GROUND && !standOn && !onSlab;
+    // inside an enterable building the storey floor is the surface: the ground storey's floor is
+    // the lowest terrain under the footprint, not on the 3 m lattice, so start the grid there
+    const shellC = w && w.polyAt ? w.polyAt(pos.x, pos.z) : null;
+    const indoors = !!(shellC && shellC.shell && pos.y >= shellC.shell.floor - 0.5 && pos.y < shellC.shell.ceil);
+    const onSlab = !!(w && w.terrainHeight) && (indoors || surf > this._ground(pos.x, pos.z) + 0.15);
+    const onGround = !!(w && w.terrainHeight) && pos.y - this._ground(pos.x, pos.z) < ON_GROUND && !standOn && !onSlab;
     // off the terrain the level grid follows what the feet stand on: a built piece keeps its own
     // grid, and a landmark slab (the museum's floors at -7 / -11, its roofs) starts a grid at
     // its surface, so the first piece sits flush instead of 1 m above or below the floor
@@ -941,9 +945,15 @@ export class Structures {
 
   /** Ground level (grid level index) of the terrain at (x, z). */
   _groundLevel(x, z) {
+    return Math.floor(this._ground(x, z) / LEVEL + GROUND_SNAP);
+  }
+
+  /** The ground players stand on: graded terrain (World.surfaceHeight: foundations cut in), else raw terrain. */
+  _ground(x, z) {
     const w = this.world;
-    const h = w && w.terrainHeight ? w.terrainHeight(x, z) : 0;
-    return Math.floor(h / LEVEL + GROUND_SNAP);
+    if (!w) return 0;
+    if (w.surfaceHeight) return w.surfaceHeight(x, z);
+    return w.terrainHeight ? w.terrainHeight(x, z) : 0;
   }
 
   /**
@@ -973,7 +983,7 @@ export class Structures {
     const pts = pl.kind === 'wall'
       ? (Math.abs(Math.sin(pl.rot)) < 0.5 ? [[-e, 0], [0, 0], [e, 0]] : [[0, -e], [0, 0], [0, e]])
       : [[-e, -e], [e, -e], [e, e], [-e, e], [0, 0]];
-    for (const [ox, oz] of pts) if (w.terrainHeight(pl.x + ox, pl.z + oz) < top - 0.1) return false;
+    for (const [ox, oz] of pts) if (this._ground(pl.x + ox, pl.z + oz) < top - 0.1) return false;
     return true;
   }
 

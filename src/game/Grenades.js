@@ -778,9 +778,15 @@ export class Grenades {
         }
       });
       const reach2 = (R + 0.6) * (R + 0.6);
+      // an intact slab shields what is on its far side: the floor / roof the blast sits on (a
+      // grenade on a roof used to break walls one and two storeys down) and the ceiling over it.
+      // The slab's own tiles (kind 'floor') still take the blast, so a hole can still be blown.
+      const slabUnder = this.world.groundHeight ? this.world.groundHeight(c.x, c.z, c.y) : -Infinity;
+      const slabOver = this.world.ceilingAbove ? this.world.ceilingAbove(c.x, c.z, c.y) : Infinity;
       for (const bld of buildings) {
         for (const pn of bld.shell.panels) {
           if (!pn.alive) continue;
+          if (pn.kind !== 'floor' && (pn.y1 < slabUnder - 0.05 || pn.y0 > slabOver + 0.05)) continue;
           const yGap = c.y < pn.y0 ? pn.y0 - c.y : c.y > pn.y1 ? c.y - pn.y1 : 0;
           const dx = pn.x - c.x;
           const dz = pn.z - c.z;

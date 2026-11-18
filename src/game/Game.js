@@ -53,6 +53,7 @@ import { Player, placeOrbitCamera, itemLabel } from './Player.js';
 import * as StormMod from './Storm.js';
 import * as LootMod from './Loot.js';
 import * as InvMod from './Inventory.js';
+import { heldSlot } from './Inventory.js';
 import * as StructMod from './Structures.js';
 import * as BotsMod from './Bots.js';
 import { createFpsMeter } from '../ui/fpsMeter.js';
@@ -1501,7 +1502,7 @@ export class Game {
         this._specDist = damp(this._specDist == null ? CAMERA.distance : this._specDist, CAMERA.distance, 10, dt);
         const crouchDrop = t.crouching ? 0.45 : 0;
         _v.set(t.pos.x, t.pos.y + CAMERA.pivotHeight - crouchDrop, t.pos.z);
-        placeOrbitCamera(cam, this.world, _v, this._specH, this._specP, this._specDist, CAMERA.shoulder);
+        placeOrbitCamera(cam, this.world, _v, this._specH, this._specP, this._specDist, CAMERA.shoulder, CAMERA.rise, null, 0, t.pos.y);
         const baseFov = this.settings.fov || CAMERA.fov;
         if (Math.abs(cam.fov - baseFov) > 0.01) {
           cam.fov = baseFov;
@@ -1510,7 +1511,7 @@ export class Game {
       } else if (!p.alive) {
         _v.set(p.pos.x, p.pos.y + 1.2, p.pos.z);
         this._specH = (this._specH == null ? p.heading : this._specH) + dt * 0.15;
-        placeOrbitCamera(cam, this.world, _v, this._specH, -0.35, 7, 0);
+        placeOrbitCamera(cam, this.world, _v, this._specH, -0.35, 7, 0, CAMERA.rise, null, 0, p.pos.y);
       } else if (!(this.cbGallery && this.cbGallery.cameraOverride(cam, dt))) p.updateCamera(cam, dt, this.world, this.settings.fov || CAMERA.fov);
     }
     // grenade aim arc, from the fresh aim ray
@@ -2572,14 +2573,8 @@ function rebootLoadout() {
 }
 
 /** Hotbar slot an actor is holding (-1 = pickaxe): bots select a slot, remote humans report what they hold. */
-export function heldSlot(a, inv) {
-  const eq = a.equipId || null;
-  if (!eq) return a.buildPiece ? -1 : inv.selected;
-  if (eq === 'pickaxe') return -1;
-  const cur = inv.slots[inv.selected];
-  if (cur && (cur.id === eq || (eq === 'none' && cur.type === 'consumable'))) return inv.selected;
-  return inv.slots.findIndex((s) => s && (s.id === eq || (eq === 'none' && s.type === 'consumable')));
-}
+// moved to Inventory.js (pure; netcode imports it without the UI layer); re-exported for old importers
+export { heldSlot };
 
 const NO_INPUT = {
   dx: 0,

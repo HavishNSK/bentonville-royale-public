@@ -378,7 +378,7 @@ async function joinMultiplayer(code, name, match = null) {
   const me = { role: 'client', conn: null, name, match };
   mp = me;
   const shown = String(code || '').toUpperCase();
-  if (!match) menus.showLobby({ isHost: false, code: shown, players: [], max: 16, fill: true, status: 'Joining…', canStart: false });
+  if (!match) menus.showLobby({ isHost: false, code: shown, players: [], max: 16, fill: true, status: 'Joining…', canStart: false, joining: true });
   try {
     const [{ joinRoom }, { ClientSession }] = await Promise.all([import('./net/Net.js'), import('./net/ClientSession.js')]);
     const conn = await joinRoom(code, match ? { name, token: match.token, retryMs: 10000 } : { name });

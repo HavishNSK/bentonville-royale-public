@@ -46,7 +46,7 @@ const clientNet = (g) => (g && g.net && g.net.isClient ? g.net : null);
  * Positions `camera` behind `pivot` on an orbit (heading/pitch), pulled in
  * when world geometry is in the way. Shared by the player and spectating.
  */
-export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, shoulder, rise = CAMERA.rise, ease = null, dt = 0) {
+export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, shoulder, rise = CAMERA.rise, ease = null, dt = 0, feet = null) {
   const cp = Math.cos(pitch);
   _fwd.set(Math.sin(heading) * cp, Math.sin(pitch), -Math.cos(heading) * cp);
   _right.set(Math.cos(heading), 0, Math.sin(heading));
@@ -70,10 +70,16 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
     }
   }
   const startY = _cam.y;
+  // The slab over the player's feet caps every floor probe below: groundHeight is probed from the
+  // pivot (feet + pivotHeight), so at a jump apex it would otherwise reach the next storey's floor
+  // and plant the camera upstairs (same cap the movement code passes; World.builtAbove).
+  // feet: the followed body's feet (the pivot drops when crouching / for the death cam)
+  const feetY = feet != null ? feet : pivot.y - CAMERA.pivotHeight;
+  const capAt = (x, z) => (world && world.builtAbove ? world.builtAbove(x, z, feetY) : Infinity);
   // Keep the boom above walkable slabs (museum oak, roofs), not raw ravine terrain.
   // Shorten the orbit instead of sliding onto the floor — that used to plant the camera in the boards.
   // (only surfaces below the boom's start count: a ramp or floor overhead is not a floor)
-  const floorHint = world && world.groundHeight ? world.groundHeight(_cam.x, _cam.z, startY, 0) : 0;
+  const floorHint = world && world.groundHeight ? world.groundHeight(_cam.x, _cam.z, startY, 0, capAt(_cam.x, _cam.z)) : 0;
   const floorY = floorHint + 0.45;
   if (_v.y < -1e-4 && startY + d * _v.y < floorY) {
     d = Math.max(0.7, (floorY - startY) / _v.y);
@@ -109,6 +115,14 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
   // (eased too: the nudge itself changes in steps as the lens crosses a slab's edge)
   if (ease && dt > 0) lift = ease.lift = damp(ease.lift || 0, lift, 20, dt);
   _cam.y += lift;
+  // indoors the storey slab over the player caps the lens, so a jump apex or a boom that ends over
+  // a stairwell hole doesn't rise to the next storey (builtAbove is a slab's top; its underside
+  // sits FLOOR_UNDER lower)
+  const inShell = world && world.polyAt ? world.polyAt(pivot.x, pivot.z) : null;
+  if (inShell && inShell.shell) {
+    const overHead = capAt(pivot.x, pivot.z) - FLOOR_UNDER - 0.35;
+    if (_cam.y > overHead) _cam.y = Math.max(overHead, feetY + 0.3);
+  }
   camera.position.copy(_cam);
   _v.copy(_cam).add(_fwd);
   camera.lookAt(_v);
@@ -1678,7 +1692,9 @@ export class Player {
       camera.lookAt(_v.copy(_pivot).add(_fwd));
     } else {
       placeOrbitCamera.ignoreCar = this.vehicle;
-      placeOrbitCamera(camera, world, _pivot, this.heading, viewPitch, this.camDist, this.airborneDrop || inCar ? 0 : CAMERA.shoulder, CAMERA.rise, this._camCol, dt);
+      // feet: in a car the pivot follows the car, not the stored foot position
+      const feet = inCar ? null : this.pos.y;
+      placeOrbitCamera(camera, world, _pivot, this.heading, viewPitch, this.camDist, this.airborneDrop || inCar ? 0 : CAMERA.shoulder, CAMERA.rise, this._camCol, dt, feet);
       placeOrbitCamera.ignoreCar = null;
     }
 

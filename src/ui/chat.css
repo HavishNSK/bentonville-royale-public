@@ -153,6 +153,11 @@
 .br-chat.is-collapsed .br-chat-err {
   display: none;
 }
+/* the title screen's PRIVATE MATCH panel (room code + JOIN) sits where the docked chat is on
+   screens shorter than ~1080 px; while that panel is open the lobby chat steps aside */
+body:has(.mn-title.is-on .mn-private:not([hidden])) .br-chat:not(.is-match) {
+  display: none;
+}
 .br-chat-unread {
   min-width: 18px;
   padding: 0 5px;

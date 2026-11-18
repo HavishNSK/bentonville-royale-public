@@ -19,6 +19,15 @@
 - A private match with bots turned off pays no coins and does not add a win or eliminations, even when the host is on Hard.
 - Hard matches that include bots still pay coins and count.
 
+## [2026-11-18] — Bug fixes from the deep test
+- Fixed a GPU memory leak between matches: every character's animation skeleton (one per bot and player, about 100 a match) kept a texture on the graphics card after the match ended. Playing many matches in a row without reloading no longer slowly fills video memory, which mattered most on Chromebooks.
+- Fixed the PRIVATE MATCH room-code box and JOIN button being covered by the global chat panel on screens shorter than 1080 px (including 1366x768 Chromebooks), which made it impossible to join a friend's room by code. The lobby chat now steps aside while the private-match panel is open and comes back when it closes.
+- Fixed built walls, floors, ramps and cones inside buildings sinking up to 2.7 m through the floor or floating above it (so walls looked like different sizes). Pieces built indoors now start flush with the floor you stand on, and pieces near buildings follow the levelled ground instead of the raw hillside.
+- Fixed seeing the whole upstairs when jumping inside multi-storey buildings (Bentonville High, Compton Gardens houses, the courthouse annex and others): the camera no longer rises through the ceiling at the top of a jump or up through a stairwell behind you. It stays inside the room you are in, also when crouching, spectating or on the elimination camera.
+- Fixed grenades and rockets breaking walls through intact floors and roofs: one grenade on a roof used to knock out walls one and two storeys below. An intact floor or roof now shields the storey on the other side; blowing a hole in the floor tile under the blast still works.
+- Fixed READY doing nothing in a private-match lobby when clicked while it still said "Joining…" (the host kept showing you as not ready). The button now stays greyed out until you are connected.
+- Parked school buses can now be destroyed like parked cars: bullets, the pickaxe (metal) and explosives break them (twice a car's health). They come back at the start of the next match.
+
 ## [2026-11-17] — v0.15.1: much stricter, kid-friendly global chat
 - `src/net/chatFilter.js` rewritten: a message that breaks a rule is refused (not masked with ****) and the sender sees which rule. Categories: profanity (including acronyms like stfu, gtfo, kys, fml), slurs and hate phrases, bullying ("ur so gay"), sexual talk, real-world threats, self-harm, drugs, and personal-info / off-app requests ("whats ur snap", "how old r u", "where do u live").
 - Sees through leetspeak, look-alike letters from other alphabets, fancy/fullwidth/circled letters, accents, stretched letters, symbols inside words, spaced-out letters, words split in two and some reversed spellings. Normal game talk ("i will kill you", "clap them", "45s left", "sus") still goes through.
