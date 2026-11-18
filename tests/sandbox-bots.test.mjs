@@ -8,7 +8,7 @@ import { Structures } from '../src/game/Structures.js';
 import { Bots } from '../src/game/Bots.js';
 import { DIFFICULTY, makeRng } from '../src/core/config.js';
 import {
-  SANDBOX_BOT_CAP, SANDBOX_BOT_TEAM, canSandboxBots, sandboxBotStatus, spawnSandboxBot, clearSandboxBots, purgeSandboxBodies, sandboxBotLoadout,
+  SANDBOX_BOT_CAP, SANDBOX_BOT_DIST, SANDBOX_BOT_TEAM, canSandboxBots, sandboxBotStatus, spawnSandboxBot, clearSandboxBots, purgeSandboxBodies, sandboxBotLoadout,
 } from '../src/game/sandboxLoadout.js';
 
 function sandbox(over = {}) {
@@ -36,12 +36,12 @@ test('spawning is sandbox-only: not in a match, not in Museum Mode, not with a n
   assert.equal(spawnSandboxBot(sandbox().game, 'insane').bot, null, 'unknown difficulty');
 });
 
-test('a spawned bot stands on open ground 9-15 m in front of the player, armed, on the sandbox team', () => {
+test('a spawned bot stands on open ground 25 m (+-1) in front of the player, armed, on the sandbox team', () => {
   const { game, player } = sandbox();
   const { bot } = spawnSandboxBot(game, 'normal');
   assert.ok(bot && bot.alive && bot.sandbox && bot.isBot);
   const d = Math.hypot(bot.pos.x - player.pos.x, bot.pos.z - player.pos.z);
-  assert.ok(d >= 9 - 1e-6 && d <= 15 + 1e-6, `distance ${d}`);
+  assert.ok(d >= SANDBOX_BOT_DIST - 1 - 1e-6 && d <= SANDBOX_BOT_DIST + 1 + 1e-6, `distance ${d}`);
   assert.ok(bot.pos.z < 0, 'in front (heading 0 = north = -z)');
   assert.equal(bot.team, SANDBOX_BOT_TEAM);
   assert.equal(bot._bot.state, 'wander');

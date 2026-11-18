@@ -275,7 +275,7 @@ function hudHTML() {
         <h3 class="br-sandbox-bots-h" id="br-sandbox-bots-h">SPAWN</h3>
         <span class="br-sandbox-bots-count" data-ref="sandboxBotsCount" aria-live="polite">0 / 0</span>
       </div>
-      <p class="br-sandbox-bots-sub">Spawns in front of you and hunts you. You can't be eliminated in Sandbox.</p>
+      <p class="br-sandbox-bots-sub">Spawns 25 m in front of you and hunts you. You can't be eliminated in Sandbox.</p>
       <div class="br-sandbox-bots-row" role="group" aria-label="Spawn a bot">
         <button type="button" class="br-sandbox-bot" data-diff="easy" data-ref="sandboxBotEasy" aria-label="Spawn an easy bot">EASY</button>
         <button type="button" class="br-sandbox-bot" data-diff="normal" data-ref="sandboxBotNormal" aria-label="Spawn a normal bot">NORMAL</button>

@@ -63,6 +63,7 @@ export function giveSandboxWeapon(inv, id, rarity = 'rare') {
 // their builds); dead ones free their slot and their bodies are removed shortly after.
 
 export const SANDBOX_BOT_CAP = 12;
+export const SANDBOX_BOT_DIST = 25; // metres in front of you a new bot appears (+-1 m so they don't stack)
 export const SANDBOX_BOT_DIFFS = Object.freeze(['easy', 'normal', 'hard']);
 export const SANDBOX_BOT_TEAM = -77; // every sandbox bot is on one team: they all hunt the player
 export const SANDBOX_CORPSE_TIME = 6; // s a dead sandbox bot's body stays before it is removed
@@ -126,11 +127,11 @@ export function spawnSandboxBot(game, d) {
   if (!p || !bots || !bots.addBot || !world) return { bot: null, reason: 'Sandbox not ready' };
   purgeSandboxBodies(game, true); // make room: bodies go before a new bot comes in
   const rng = game.rng || Math.random;
-  let x = p.pos.x + Math.sin(p.heading) * 12;
-  let z = p.pos.z - Math.cos(p.heading) * 12;
+  let x = p.pos.x + Math.sin(p.heading) * SANDBOX_BOT_DIST;
+  let z = p.pos.z - Math.cos(p.heading) * SANDBOX_BOT_DIST;
   for (let i = 0; i < 16; i++) {
     const a = p.heading + (rng() - 0.5) * 1.4;
-    const r = 9 + rng() * 6;
+    const r = SANDBOX_BOT_DIST - 1 + rng() * 2;
     const cx = p.pos.x + Math.sin(a) * r;
     const cz = p.pos.z - Math.cos(a) * r;
     if (world.inBounds && !world.inBounds(cx, cz, 20)) continue;
