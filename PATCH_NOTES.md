@@ -7,7 +7,7 @@
 - **Removed:** Log in with Clever. Use a username and password (or Google, where it works).
 - **Security:** a security log of sign-ins, origin checks on the account API and sockets, and browser security headers (`vercel.json`). The internal matchmaker endpoints are closed to the internet.
 - **DEV panel:** developers get a DEV button in the lobby to give or remove titles and to ban (pick the length: 1 hour, 1 day, 1 week, 1 month or permanent), warn, unban, and see reports and history, without typing commands.
-- **Titles:** developers can give a player a custom title with `/title name TITLE #colour` and remove it with `/untitle name`. Titles can't look like staff titles and grant no powers.
+- **Titles:** developers can give a player a custom title with `/title name TITLE #colour` and remove it with `/untitle name`. Staff-style titles like MOD are allowed, but titles never grant powers.
 - **Report a player:** signed-in players can report someone from the lobby ONLINE list or the pause menu, with a reason and a note. Reports are private. Developers read them with `/reports` or `/history <user>`, then `/ban` (which clears them) or `/dismiss <user>`. Limits: one report per player per day, and 10 a day per reporter.
 - Developers can `/warn`, `/ban`, `/unban`, `/history`, `/resetstats` and `/flags` from global chat. The account server re-checks developer rights, and only the developer sees the result.
 - Bans escalate per offence: 1 hour, 1 day, 1 week, 1 month, then permanent. A developer can also set the length (`/ban name perm reason`). Timed bans lift on their own; unbanning keeps the offence count.

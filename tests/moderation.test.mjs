@@ -252,19 +252,18 @@ test('/title and /untitle parse; the title is upper-cased and the colour optiona
   assert.match(parseModCommand('/title foo').error, /title/);
 });
 
-test('customTitleProblem: letters/digits/spaces, 1-14 chars, no staff titles', async () => {
+test('customTitleProblem: letters/digits/spaces, 1-14 chars; staff titles are allowed (owner decision)', async () => {
   const { customTitleProblem } = await import('../src/net/devs.js');
   assert.equal(customTitleProblem('BRIDGE KING'), null);
   assert.match(customTitleProblem('<B>HI</B>'), /letters/);
   assert.match(customTitleProblem('A'.repeat(15)), /14/);
-  for (const t of ['DEV', 'ADMIN', 'MOD', 'DEVELOPER', 'STAFF', 'OWNER', 'MODERATOR', 'THE DEV'])
-    assert.match(customTitleProblem(t), /staff/, t);
+  for (const t of ['DEV', 'ADMIN', 'MOD', 'DEVELOPER', 'STAFF', 'OWNER', 'MODERATOR', 'HEAD MOD']) assert.equal(customTitleProblem(t), null, t);
 });
 
 test('accountGrants: a stored custom title shows, a code title wins, and neither grants dev powers', async () => {
   const { accountGrants } = await import('../src/net/devs.js');
   assert.deepEqual(accountGrants('SomeoneElse', { title: 'BRIDGE KING', color: '#ffaa00' }), { dev: false, shown: 'SomeoneElse', title: 'BRIDGE KING', titleColor: '#ffaa00' });
   assert.equal(accountGrants('TheChosenOne', { title: 'OTHER', color: null }).title, 'CHULDE');
-  assert.deepEqual(accountGrants('SomeoneElse', { title: 'DEV', color: null }), { dev: false, shown: '', title: '', titleColor: '' }, 'staff titles from storage are ignored');
+  assert.deepEqual(accountGrants('SomeoneElse', { title: 'MOD', color: '#ff5d4a' }), { dev: false, shown: 'SomeoneElse', title: 'MOD', titleColor: '#ff5d4a' }, 'a staff title is only a tag: dev stays false');
   assert.deepEqual(accountGrants('SomeoneElse', { title: '<script>', color: 'red' }), { dev: false, shown: '', title: '', titleColor: '' });
 });

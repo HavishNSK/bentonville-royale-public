@@ -56,16 +56,15 @@ export function parseModCommand(text) {
   return { cmd, name, duration, reason };
 }
 
-// Titles that would look like staff; a dev-made title can never use them (only real dev accounts
-// get [DEV], from DEV_NAMES).
-const STAFF_WORDS = /\b(DEV|DEVS|DEVELOPER|ADMIN|ADMINISTRATOR|MOD|MODS|MODERATOR|STAFF|OWNER)\b/;
-
-/** Why a dev-made title is not allowed, or null. (The account server also runs the swear filter.) */
+/**
+ * Why a dev-made title is not allowed, or null. (The account server also runs the swear filter.)
+ * Staff-looking titles (DEV, MOD, ADMIN...) are allowed by the owner's choice: a title is only a name
+ * tag. Powers (bans, dev tools) still come only from DEV_NAMES, checked by the account server.
+ */
 export function customTitleProblem(title) {
   const t = typeof title === 'string' ? title.trim() : '';
   if (t.length > 14) return 'Titles are at most 14 characters.';
   if (!/^[A-Z0-9][A-Z0-9 ]{0,13}$/.test(t)) return 'Titles use letters, numbers and spaces only.';
-  if (STAFF_WORDS.test(t)) return 'That looks like a staff title. Pick something else.';
   return null;
 }
 
