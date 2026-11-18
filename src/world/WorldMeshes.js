@@ -1394,7 +1394,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     if (!trees.has(name)) name = TREE_NAMES.find((t) => trees.has(t));
     if (!name) return false;
     const s = 0.8 + rng() * 0.55;
-    const rec = trees.add(name, x, z, rng() * 6.28, s, null, world.terrainHeight(x, z));
+    const rec = trees.add(name, x, z, rng() * 6.28, s, null, world.surfaceHeight(x, z)); // same ground as its collider (addCircle), not the raw DEM
     const h = TREE_H[name] * s;
     world.addCircle(x, z, 0.32 + h * 0.022, h * 0.8, 'tree', 'wood', 200, [rec]);
     harvestables.trees++;
