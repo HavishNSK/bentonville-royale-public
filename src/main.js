@@ -727,7 +727,7 @@ try {
     guestOnly: PLATFORM === 'crazygames', // portals: no outside sign-in (CrazyGames rules)
     adCoins: { can: canWatchAdForCoins, watch: () => watchAdForCoins('shop-coins') },
     partyCode: () => (party && party.party ? party.party.code : null),
-    partyMembers: () => (party && party.party ? party.party.members.map((m) => ({ name: m.name, ...parseLook(m.skin), you: m.id === party.you })) : []),
+    partyMembers: () => (party && party.party ? party.party.members.map((m) => ({ name: m.name, ...parseLook(m.skin), you: m.id === party.you, ready: !!(m.ready || m.leader) })) : []),
     onJoinParty: (code) => {
       if (game.state !== 'menu') return;
       joinParty(code);
