@@ -945,6 +945,9 @@ export function createMenus(root, opts = {}) {
       });
       const readyBtn = lobby.querySelector('[data-act=lobby-ready]');
       readyBtn.hidden = !!info.isHost;
+      // still connecting: a READY click would have nowhere to go (main.js has no connection yet)
+      readyBtn.disabled = !!info.joining;
+      readyBtn.classList.toggle('is-disabled', !!info.joining);
       LB.readyLabel.textContent = info.ready ? 'UNREADY' : 'READY';
       readyBtn.dataset.kind = info.ready ? 'unready' : 'ready';
       LB.fill.checked = !!info.fill;
