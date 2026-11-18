@@ -53,33 +53,54 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
   _cam.y += rise;
   // pull in when something is between the pivot and the camera
   _v.copy(_fwd).multiplyScalar(-1);
-  const hit = world ? world.raycast(_cam.x, _cam.y, _cam.z, _v.x, _v.y, _v.z, dist + 0.45, null) : null;
-  let d = hit ? Math.max(0.7, hit.t - 0.45) : dist;
+  // a "thick" boom: the centre ray plus two a little to each side, so an edge (a ramp's side, a
+  // wall corner) is felt slightly before the lens reaches it instead of flipping on one ray
+  let d = dist;
+  if (world) {
+    for (let k = -1; k <= 1; k++) {
+      const ox = _right.x * k * 0.3;
+      const oz = _right.z * k * 0.3;
+      const hit = world.raycast(_cam.x + ox, _cam.y, _cam.z + oz, _v.x, _v.y, _v.z, dist + 0.45, null);
+      if (hit) d = Math.min(d, Math.max(0.7, hit.t - 0.45));
+    }
+  }
   const startY = _cam.y;
   // Keep the boom above walkable slabs (museum oak, roofs), not raw ravine terrain.
   // Shorten the orbit instead of sliding onto the floor — that used to plant the camera in the boards.
-  const floorHint = world && world.groundHeight ? world.groundHeight(_cam.x, _cam.z, pivot.y) : 0;
+  // (only surfaces below the boom's start count: a ramp or floor overhead is not a floor)
+  const floorHint = world && world.groundHeight ? world.groundHeight(_cam.x, _cam.z, startY, 0) : 0;
   const floorY = floorHint + 0.45;
   if (_v.y < -1e-4 && startY + d * _v.y < floorY) {
     d = Math.max(0.7, (floorY - startY) / _v.y);
   }
   // `ease` ({ d }): pull in at once when something blocks the view, but let back out smoothly,
   // so passing a pole or a tree does not pop the camera in and out
+  // Pull-in is fast (a few frames) rather than one-frame: a lens that snapped from 4 m to 0.7 m
+  // and eased back out each time you looked across a ramp's edge read as a flicker.
   if (ease) {
-    if (!(ease.d > 0) || d <= ease.d) ease.d = d;
+    if (!(ease.d > 0) || !(dt > 0)) ease.d = d;
+    else if (d < ease.d) ease.d = Math.max(d, damp(ease.d, d, 26, dt));
     else ease.d = Math.min(d, damp(ease.d, d, 7, dt));
     d = ease.d;
   }
   _cam.addScaledVector(_v, d);
+  // Floor and ceiling nudges are measured from the camera's own height and kept small. Measured
+  // from the player's height, a ramp or floor over the camera counted as the floor (pushing the
+  // camera up through it) while the ceiling rule pushed it back under: under a ramp the camera
+  // flicked up and down by metres every frame. The boom raycast above already keeps it out of
+  // walls, ramps and floors; these only stop it resting in a slab.
+  let lift = 0;
   if (world && world.groundHeight) {
-    const gy = world.groundHeight(_cam.x, _cam.z, pivot.y) + 0.45;
-    if (_cam.y < gy) _cam.y = gy;
+    const gy = world.groundHeight(_cam.x, _cam.z, _cam.y, 0.5) + 0.45; // ground up to 0.5 m over the lens
+    if (_cam.y < gy && gy - _cam.y < 1) lift = gy - _cam.y;
+    if (world.ceilingAbove) {
+      const ceil = world.ceilingAbove(_cam.x, _cam.z, _cam.y - 1); // a slab the lens is inside of
+      if (Number.isFinite(ceil) && _cam.y > ceil - 0.35 && _cam.y - (ceil - 0.35) < 1) lift = Math.max(gy, ceil - 0.35) - _cam.y;
+    }
   }
-  if (world && world.ceilingAbove) {
-    const gy = world.groundHeight ? world.groundHeight(_cam.x, _cam.z, pivot.y) + 0.45 : _cam.y;
-    const ceil = world.ceilingAbove(_cam.x, _cam.z, gy);
-    if (Number.isFinite(ceil) && _cam.y > ceil - 0.35) _cam.y = Math.max(gy, ceil - 0.35);
-  }
+  // (eased too: the nudge itself changes in steps as the lens crosses a slab's edge)
+  if (ease && dt > 0) lift = ease.lift = damp(ease.lift || 0, lift, 20, dt);
+  _cam.y += lift;
   camera.position.copy(_cam);
   _v.copy(_cam).add(_fwd);
   camera.lookAt(_v);

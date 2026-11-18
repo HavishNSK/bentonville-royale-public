@@ -35,6 +35,7 @@ export const PATCH_NOTES = [
         items: [
           'The camera glides over stairs, ramps and ledges instead of stepping.',
           'It no longer pops in and out when you pass poles and trees.',
+          'Building a ramp over yourself no longer makes the camera flicker up and down or snap in and out.',
           'Recoil kicks the view up and then settles back. Shotguns and snipers have a little extra punch.',
           'Hard landings dip the camera.',
         ],
