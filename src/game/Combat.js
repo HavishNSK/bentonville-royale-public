@@ -225,6 +225,11 @@ export class Combat {
     return !!c && c.type !== 'piece' && Number.isFinite(c.hp) && c.hp > 0 && Array.isArray(c.ref);
   }
 
+  /** Breakable but gives no materials (landmark glass panes: World.addBox colliders with `breakable`). */
+  _isBreakable(c) {
+    return !!c && c.breakable === true && c.alive && c.hp > 0;
+  }
+
   /** The alive breakable wall panel a world.raycast() result hit, or null (resolve before the next raycast). */
   _panelOf(hit) {
     if (!hit || hit.kind !== 'building' || !this.world.panelHit) return null;
@@ -387,7 +392,7 @@ export class Combat {
         this.structures.damage(c, dmg, _pt);
       } else if (res.hit.panel) {
         this.damagePanel(c, res.hit.panel, dmg * BUILDING_WALL.bulletMult, _pt); // no mats from bullets
-      } else if (this._isHarvestable(c)) {
+      } else if (this._isHarvestable(c) || this._isBreakable(c)) {
         c.hp -= dmg;
         if (c.hp <= 0) this._destroyCollider(c, _pt);
       }
@@ -597,6 +602,10 @@ export class Combat {
     let t = hit ? hit.t : range;
     const copy = hit ? { t: hit.t, nx: hit.nx, ny: hit.ny, nz: hit.nz, collider: hit.collider, kind: hit.kind, panel: this._panelOf(hit) } : null;
     const ah = this.rayActors(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, t, shooter);
+    const smokeT = this.grenades && this.grenades.blockT ? this.grenades.blockT(origin, dir, t) : null;
+    if (smokeT != null && smokeT < t && (!ah || smokeT < ah.t)) {
+      return { t: smokeT, actor: null, hit: { t: smokeT, nx: -dir.x, ny: -dir.y, nz: -dir.z, collider: null, kind: 'smoke' }, surface: 'none' };
+    }
     if (ah) return { t: ah.t, actor: ah.actor, hit: null };
     return { t, actor: null, hit: copy, surface: this._surfaceOf(copy) };
   }
@@ -633,6 +642,20 @@ export class Combat {
       return out;
     }
     if (hitCopy && hitCopy.panel) return this._swingPanel(shooter, c, hitCopy.panel, point, out);
+    if (this._isBreakable(c)) {
+      // glass: the pickaxe smashes it (no materials)
+      if (this.fx) this.fx.impact(point, _n.set(hitCopy.nx, hitCopy.ny, hitCopy.nz), 'metal');
+      if (this.sfx) this.sfx.play('bullet_impact', { x: point.x, y: point.y, z: point.z, volume: 0.7, surface: 'metal' });
+      out.collider = c;
+      out.point = point.clone();
+      if (!this.authoritative) return out;
+      c.hp -= PICKAXE.harvest;
+      if (c.hp <= 0) {
+        out.destroyed = true;
+        this._destroyCollider(c, point);
+      }
+      return out;
+    }
     if (!this._isHarvestable(c)) {
       // forgiving probe for trees / rocks / props near the swing
       const probe = this.world.probeCircle(origin.x, origin.z, _dir.x, _dir.z, PICKAXE.range, 0.6);

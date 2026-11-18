@@ -42,12 +42,49 @@ export const PATCH_NOTES = [
       {
         heading: 'Fixes',
         items: [
+          'Back to the flat map: the hills and the photo ground are gone. They let players and bots fall under the ground and slip into buildings.',
+          'Roads, sidewalks and grass look the way they did before the hills.',
           'Floors you build on the ground no longer flicker.',
           'Edited walls and floors keep one clean texture instead of turning into a grid of mini planks or bricks.',
           'The grass no longer shows a repeating block pattern from the air, and wooden walls no longer shimmer with stripes in the distance.',
           'Thin dotted lines on floors and ceilings inside buildings are gone.',
           'The big map has a fainter grid with square cells.',
-          'Firing the rocket launcher no longer causes an error.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.17.0',
+    date: '2026-11-17',
+    title: 'BOMBS and Bridges',
+    sections: [
+      {
+        heading: 'Bombs',
+        items: [
+          'Rocket Launcher fixed: a bug stopped rockets from launching. They fire every time now.',
+          'Epic Rocket Launchers drop far more often; legendary ones are rarer.',
+          'Grenades and rockets rip holes in the Crystal Bridges roof, from above or below. Bullets and the pickaxe break roof panels too.',
+        ],
+      },
+      {
+        heading: 'Crystal Bridges',
+        items: [
+          '30 stone statues: dragons, guardians, gargoyles and obelisks at the entrances and in every gallery.',
+          '15 more paintings on the walls, and the galleries are bright and clear (the heavy fog is gone).',
+          'Chests sit on benches, tables, counters and the gift-shop case, plus a few hidden spots.',
+          'No more gaps in the roof, and the paths to every entrance are smooth instead of steep.',
+          'You can build inside the museum and on its roofs: pieces sit flush on the floors.',
+          'The museum sits in the new real-world hills around it.',
+        ],
+      },
+      {
+        heading: 'Fixes and changes',
+        items: [
+          "Catfish Ken's reboot van: a reboot card always lands on the ground, even if your teammate went down in the air. No more \"bring a reboot card\" while you are holding one.",
+          'Rebooting takes 5 seconds (was 8).',
+          'Building costs 5 materials per piece (was 10) and you can place pieces faster.',
+          'Hard bots miss a bit more up close, build smarter, box you in and peek with window edits, and edit or pickaxe their way out of their own boxes.',
+          'When shot, bots now put up a wall toward where they think the shots came from, and sometimes guess wrong.',
         ],
       },
     ],

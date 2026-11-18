@@ -5,6 +5,7 @@
 import './hud.css';
 import { icon, hasIcon } from './icons.js';
 import { CROSSHAIR_COLORS, sanitizeSettings } from './settings.js';
+import { sandboxWeapons } from '../game/sandboxLoadout.js';
 
 /**
  * Applies the crosshair settings to a `.br-xhair` element (the HUD's, or the settings preview).
@@ -247,13 +248,23 @@ function hudHTML() {
       <div class="br-fullmap-sub">ARKANSAS</div>
       <div class="br-mapstats" data-ref="mapStats"></div>
       <ul class="br-fullmap-keys">
-        <li><kbd class="br-key">LMB</kbd>Place marker</li>
-        <li><kbd class="br-key">RMB</kbd>Remove marker</li>
+        <li class="br-map-hint-marker"><kbd class="br-key">LMB</kbd>Place marker</li>
+        <li class="br-map-hint-travel"><kbd class="br-key">LMB</kbd>Travel to a POI</li>
+        <li class="br-map-hint-marker"><kbd class="br-key">RMB</kbd>Remove marker</li>
         <li><kbd class="br-key" data-ref="pingKey">MMB</kbd>Ping in the world</li>
+        <li class="br-map-hint-sandbox"><kbd class="br-key" data-ref="creativeMapKey">N</kbd>Sandbox map</li>
         <li><kbd class="br-key" data-ref="mapKey">M</kbd>Close map</li>
       </ul>
       <div class="br-fullmap-credit">Map data &copy; OpenStreetMap contributors</div>
     </aside>
+  </div>
+</div>
+<div class="br-sandbox-loadout" data-ref="sandboxLoadout" hidden>
+  <div class="br-sandbox-loadout-card">
+    <div class="br-sandbox-loadout-h">${icon('rifle')}WEAPONS</div>
+    <p class="br-sandbox-loadout-sub">Click a gun or grenade — it lands on your hotbar</p>
+    <div class="br-sandbox-loadout-guns" data-ref="sandboxLoadoutGuns"></div>
+    <button type="button" class="br-sandbox-loadout-close" data-ref="sandboxLoadoutClose">Close</button>
   </div>
 </div>`;
 }
@@ -868,6 +879,7 @@ export function buildHud(root) {
     fullMapOn = v;
     r.fullmap.classList.toggle('is-on', v);
     hud.classList.toggle('has-fullmap', v);
+    if (!v) showSandboxLoadout(false);
   }
   /**
    * Sizes the full-map canvas to the map's width/height ratio (meta.bounds). The short side
@@ -938,6 +950,114 @@ export function buildHud(root) {
       box.appendChild(el);
     }
   }
+
+  let lastTravelKey = '';
+  let onTravel = null;
+  let onWeapons = null;
+  let onSandboxGun = null;
+  let onSandboxLoadoutClose = null;
+  function setMapTravelHandler(fn) {
+    onTravel = typeof fn === 'function' ? fn : null;
+  }
+  function setMapWeaponsHandler(fn) {
+    onWeapons = typeof fn === 'function' ? fn : null;
+  }
+  function setSandboxLoadoutHandler(fn) {
+    onSandboxGun = typeof fn === 'function' ? fn : null;
+  }
+  function setSandboxLoadoutClose(fn) {
+    onSandboxLoadoutClose = typeof fn === 'function' ? fn : null;
+  }
+  /** Free-build POI list in the map side panel. `null` restores match stats. */
+  function setMapTravel(targets, hereKey) {
+    r.fullmap.dataset.travel = targets ? '1' : '';
+    if (!targets) {
+      lastTravelKey = '';
+      return;
+    }
+    lastStatsKey = '';
+    const key = targets.map((t) => t.key).join(',') + '|' + (hereKey || '') + '|w';
+    if (key === lastTravelKey) return;
+    lastTravelKey = key;
+    const box = r.mapStats;
+    box.replaceChildren();
+    const wep = document.createElement('button');
+    wep.type = 'button';
+    wep.className = 'br-map-weapons';
+    wep.setAttribute('aria-label', 'Weapons');
+    const wepIco = document.createElement('span');
+    wepIco.className = 'br-map-weapons-ico';
+    wepIco.innerHTML = icon('rifle');
+    const wepLab = document.createElement('span');
+    wepLab.textContent = 'WEAPONS';
+    wep.append(wepIco, wepLab);
+    wep.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (onWeapons) onWeapons();
+    });
+    box.appendChild(wep);
+    const head = document.createElement('div');
+    head.className = 'br-mapstats-row br-mapstats-head';
+    const label = document.createElement('span');
+    label.textContent = 'TRAVEL';
+    head.appendChild(label);
+    box.appendChild(head);
+    for (const t of targets) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'br-travel';
+      if (t.key === hereKey) b.classList.add('is-here');
+      b.textContent = t.label;
+      b.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (onTravel) onTravel(t.key);
+      });
+      box.appendChild(b);
+    }
+  }
+
+  function fillSandboxLoadout() {
+    const box = r.sandboxLoadoutGuns;
+    if (!box || box.childElementCount) return;
+    for (const w of sandboxWeapons()) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'br-sandbox-gun';
+      b.dataset.id = w.id;
+      const pic = document.createElement('span');
+      pic.className = 'br-sandbox-gun-pic';
+      if (hasIcon(w.icon)) pic.innerHTML = icon(w.icon);
+      const name = document.createElement('span');
+      name.className = 'br-sandbox-gun-name';
+      name.textContent = w.name;
+      b.append(pic, name);
+      b.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (onSandboxGun) onSandboxGun(w.id);
+      });
+      box.appendChild(b);
+    }
+  }
+
+  let sandboxLoadoutOn = false;
+  function showSandboxLoadout(on) {
+    const v = !!on;
+    if (v) fillSandboxLoadout();
+    if (v === sandboxLoadoutOn) return;
+    sandboxLoadoutOn = v;
+    r.sandboxLoadout.hidden = !v;
+    r.sandboxLoadout.classList.toggle('is-on', v);
+    hud.classList.toggle('has-sandbox-loadout', v);
+  }
+  r.sandboxLoadoutClose.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onSandboxLoadoutClose) onSandboxLoadoutClose();
+    else showSandboxLoadout(false);
+  });
 
   let emoteOn = false;
   function setEmoteHint(on) {
@@ -1120,6 +1240,7 @@ export function buildHud(root) {
     for (let i = 0; i < 5; i++) set(`.br-slot[data-slot="${i}"] .br-slot-key`, 'slot' + (i + 1));
     set('.br-slot-pick .br-slot-key', 'pickaxe');
     set('.br-minimap-key .br-key, .br-fullmap-keys [data-ref=mapKey]', 'map');
+    set('.br-fullmap-keys [data-ref=creativeMapKey]', 'creativeMap');
     set('.br-fullmap-keys [data-ref=pingKey]', 'ping');
     set('.br-emote .br-key', 'emote');
     set('.br-mats-key .br-key', 'cycleMaterial');
@@ -1160,6 +1281,12 @@ export function buildHud(root) {
     getFullMapCanvas: () => r.fullmapCanvas,
     setFullMapAspect,
     setMapStats,
+    setMapTravel,
+    setMapTravelHandler,
+    setMapWeaponsHandler,
+    setSandboxLoadoutHandler,
+    setSandboxLoadoutClose,
+    showSandboxLoadout,
     showFullMap,
     setEmoteHint,
     setLocation,
@@ -1178,6 +1305,7 @@ export function buildHud(root) {
       setSpectating(null);
       setObjectBar(null);
       showFullMap(false);
+      showSandboxLoadout(false);
       setRevive(null);
       setDowned(null);
       setSpectate(null);

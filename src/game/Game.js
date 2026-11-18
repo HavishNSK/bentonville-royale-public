@@ -21,13 +21,15 @@
 // storm, bots, storm damage and the win check are left to the host.
 
 import * as THREE from 'three';
-import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
+import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, CONSUMABLES, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
+import { canSandboxLoadout, canCreativeMap, giveSandboxWeapon } from './sandboxLoadout.js';
 import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
 import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
 import { World } from '../world/World.js';
 import { buildWorldMeshes } from '../world/WorldMeshes.js';
 import { INTERIOR_VERSION } from '../world/Interiors.js';
+import { worldIdentity } from '../net/worldIdentity.js';
 import { Atmosphere } from '../render/Atmosphere.js';
 import { Effects } from '../render/Effects.js';
 import { Post } from '../render/Post.js';
@@ -39,6 +41,7 @@ import { Minimap } from '../ui/Minimap.js';
 import { CharacterKit, Character, registerKits } from './Character.js';
 import { skinDef, emoteDef, pickaxeDef, DEFAULT_EQUIPPED, PICKAXES, BACKBLINGS } from './Cosmetics.js';
 import { Combat, rayActor } from './Combat.js';
+import { canFastTravel, poiTargets, nearestPoi, landAt } from './fastTravel.js';
 import { Pings } from './Pings.js';
 import { Reboot } from './Reboot.js';
 import { Grenades, launcherModel } from './Grenades.js';
@@ -129,6 +132,7 @@ export class Game {
     this.errors = [];
     this.net = null; // HostSession | ClientSession while in a multiplayer match
     this.inventoryOpen = false; // inventory screen (pointer unlocked, no pause)
+    this.sandboxLoadoutOpen = false; // sandbox weapons overlay on the map
 
     // MSAA only where it is the anti-aliasing: presets with post-processing end in FXAA (MSAA on
     // the backbuffer would be paid for and thrown away), and performance mode runs without.
@@ -215,10 +219,24 @@ export class Game {
     this.fx = new Effects({ scene: this.scene, camera: this.camera, quality: graphicsQuality(this.settings) });
     this.hud = buildHud(this.uiRoot);
     this.hud.setVisible(false);
+    if (this.hud.setMapTravelHandler) this.hud.setMapTravelHandler((key) => this.fastTravelTo(key));
+    if (this.hud.setMapWeaponsHandler) this.hud.setMapWeaponsHandler(() => this.toggleSandboxLoadout(true));
+    if (this.hud.setSandboxLoadoutHandler) this.hud.setSandboxLoadoutHandler((id) => this.giveSandboxGun(id));
+    if (this.hud.setSandboxLoadoutClose) this.hud.setSandboxLoadoutClose(() => this.toggleSandboxLoadout(false));
     const mb = mapData && mapData.meta && mapData.meta.bounds;
     if (mb && this.hud.setFullMapAspect) this.hud.setFullMapAspect((mb.maxX - mb.minX) / (mb.maxZ - mb.minZ));
     this.minimap = new Minimap({ mapData, miniCanvas: this.hud.getMinimapCanvas(), fullCanvas: this.hud.getFullMapCanvas() });
     this.pings = new Pings(this.hud.el);
+    // Crystal Bridges galleries (musewalk-style art, focus mode, portals, ambience): optional
+    if (this.view && this.view.crystalBridges) {
+      try {
+        const { createGallery } = await import('../world/crystal-bridges/gallery/index.js');
+        this.cbGallery = await createGallery({ game: this, site: this.view.crystalBridges.site, sfx });
+      } catch (err) {
+        console.warn('Crystal Bridges gallery failed to load:', err);
+        this.cbGallery = null;
+      }
+    }
     // full map: left click places your marker, right click removes it
     const fc = this.hud.getFullMapCanvas();
     fc.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -230,6 +248,10 @@ export class Game {
       if (e.button !== 0) return;
       const w = this.minimap.fullClientToWorld(e.clientX, e.clientY);
       if (!w || !w.inBounds) return;
+      if (canFastTravel(this)) {
+        const hit = nearestPoi(poiTargets(this.world.landmarks), w.x, w.z);
+        if (hit) return this.fastTravelTo(hit.key);
+      }
       const mk = this.pings.markerOf(this.player.id);
       // clicking your own marker again removes it
       if (mk && this.minimap.worldToFullCanvas) {
@@ -262,12 +284,14 @@ export class Game {
     this.combat.onStats = (a) => this._statDirty.add(a);
 
     this.grenades = new Grenades({ scene: this.scene, world: this.world, combat: this.combat, structures: this.structures, fx: this.fx, sfx });
+    this.combat.grenades = this.grenades;
     this.combat.launchProjectile = (shooter, w, muzzle, origin, dir) => this.grenades.fireRocket(shooter, muzzle, origin, dir, w.damage);
     models.rocket_launcher = { scene: launcherModel() }; // no .glb: built in code
 
     const lootModels = {};
     for (const k of [...LOOT_MODELS, ...WEAPON_MODELS, 'rocket_launcher']) lootModels[k] = models[k];
     this.loot = LootMod.Loot ? new LootMod.Loot({ scene: this.scene, world: this.world, models: lootModels, fx: this.fx, sfx }) : null;
+    if (this.grenades) this.grenades.loot = this.loot;
 
     const StormCls = StormMod.Storm || StaticStorm;
     this.storm = new StormCls({ world: this.world });
@@ -398,6 +422,8 @@ export class Game {
     // free build is a solo sandbox; a multiplayer host never gets it
     const freeBuild = !!opts.freeBuild && !(this.net && this.net.isHost);
     this.freeBuild = freeBuild;
+    // Museum Mode: a free-build session that starts in the Crystal Bridges lobby (no bots, no storm)
+    this.museumMode = freeBuild && !!opts.museum && !!(this.cbGallery || (this.view && this.view.crystalBridges));
     // bot difficulty this match was played on; only 'hard' matches count toward the ranks
     this.matchDifficulty = freeBuild ? null : this.settings.difficulty;
     this.seed = seed;
@@ -407,6 +433,7 @@ export class Game {
     this.result = null;
     this._matchEndPosted = false;
     this.paused = false;
+    this.sandboxLoadoutOpen = false;
     this._endTimer = 0;
     this._stormTick = 0;
     this.spectating = null;
@@ -491,22 +518,9 @@ export class Game {
     if (net) net.matchStarted(this);
   }
 
-  /**
-   * Identity of the loaded map file (multiplayer start check): meta.generated, else a short
-   * hash of meta.composition. null before the map loads or when it carries neither.
-   */
+  /** Actual map, terrain and generated collision layout (null until world loading finishes). */
   get mapId() {
-    const meta = this.mapData && this.mapData.meta;
-    if (!meta) return null;
-    // '+i<version>.<hash>': building interiors are generated on every client, so their version
-    // and plan hash are part of the map (catches stale builds and any nondeterministic layout)
-    const iv = '+i' + INTERIOR_VERSION + (this.world && this.world.interiorHash ? '.' + this.world.interiorHash : '');
-    if (meta.generated) return String(meta.generated) + iv;
-    if (!meta.composition) return null;
-    const str = JSON.stringify(meta.composition);
-    let h = 0x811c9dc5;
-    for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
-    return 'c' + (h >>> 0).toString(16) + iv;
+    return worldIdentity(this.mapData, this.world, INTERIOR_VERSION);
   }
 
   /** Puts the local player aboard the Drop Bus flying `route`. */
@@ -528,6 +542,7 @@ export class Game {
   _enterBusPhase() {
     this.state = 'drop';
     this.fullMapOpen = false;
+    this.sandboxLoadoutOpen = false;
     if (!this.inventoryOpen && this.input) this.input.trap = false;
     this.hud.setVisible(true);
     this.hud.showFullMap(false);
@@ -565,6 +580,25 @@ export class Game {
     if (this.dropBus) this.dropBus.root.visible = false;
     let x = lm.x;
     let z = lm.z;
+    if (this.museumMode) {
+      // the Garrison Lobby, facing the Early American galleries
+      p.pos.set(26, this.world.groundHeight(26, -258, -6.5), -258);
+      p.heading = 0;
+      p.vel.set(0, 0, 0);
+      p.mode = 'ground';
+      p.grounded = true;
+      if (p.character) p.character.root.visible = true;
+      this.state = 'play';
+      this.hud.setVisible(true);
+      this.hud.showFullMap(false);
+      this._setFullMapInteractive(false);
+      this.menus.hideAll();
+      this.menus.showDropBanner(false);
+      this.hud.announce('CRYSTAL BRIDGES', 'Museum mode: [E] views a painting, walk into a portal painting to travel. Esc > Leave to exit', 5000);
+      sfx.stopMusic();
+      this.input.lock();
+      return;
+    }
     for (let i = 0; i < 40; i++) {
       const pt = this.world.randomOpenPoint(this.rng, lm.x, lm.z, 40, 6);
       if (!this.world.polyAt(pt.x, pt.z) && !this.world.blockedAt(pt.x, pt.z, 6)) {
@@ -584,7 +618,7 @@ export class Game {
     this._setFullMapInteractive(false);
     this.menus.hideAll();
     this.menus.showDropBanner(false);
-    this.hud.announce('FREE BUILD', 'No bots, no storm, unlimited mats. Esc > Leave to exit', 3500);
+    this.hud.announce('SANDBOX', `[${this.input.label('creativeMap') || 'N'}] opens the sandbox map — click Weapons for guns, or a POI to travel.`, 4500);
     sfx.stopMusic();
     this.input.lock();
   }
@@ -592,6 +626,17 @@ export class Game {
   _refillMats() {
     const mats = this.player.inventory.mats;
     for (const m of MATERIALS) mats[m] = PLAYER.matCap;
+  }
+
+  /** Sandbox weapons overlay: put any gun or grenades on the hotbar. No-op in a match. */
+  giveSandboxGun(id) {
+    if (!canSandboxLoadout(this) || !this.player) return null;
+    const item = giveSandboxWeapon(this.player.inventory, id, 'legendary');
+    if (item && this.hud && this.hud.toast) {
+      const name = WEAPONS[item.id] ? WEAPONS[item.id].name : CONSUMABLES[item.id] ? CONSUMABLES[item.id].name : item.id;
+      this.hud.toast(name);
+    }
+    return item;
   }
 
   /**
@@ -611,6 +656,7 @@ export class Game {
     this.result = null;
     this._matchEndPosted = false;
     this.paused = false;
+    this.sandboxLoadoutOpen = false;
     this._endTimer = 0;
     this._stormTick = 0;
     this.spectating = null;
@@ -903,6 +949,7 @@ export class Game {
     if (p.character) p.character.root.visible = true;
     this.state = 'play';
     this.fullMapOpen = false;
+    this.sandboxLoadoutOpen = false;
     if (!this.inventoryOpen && this.input) this.input.trap = false;
     this.hud.showFullMap(false);
     this._setFullMapInteractive(false);
@@ -921,9 +968,11 @@ export class Game {
     this.paused = on;
     if (on) {
       this.closeInventory(false);
+      this.toggleSandboxLoadout(false);
+      if (this.fullMapOpen) this.toggleFullMap(false);
       this.input.unlock();
       this.input.releaseAll();
-      this.menus.showPause();
+      this.menus.showPause({ sandbox: this.freeBuild });
     } else {
       this.menus.hideAll();
       if (this.state === 'drop') this._showBusBanner();
@@ -1184,11 +1233,15 @@ export class Game {
 
     input.inMatch = this.state === 'play' && !this.paused;
     this._inventoryInput(input);
-    if (this.fullMapOpen && input.hit('Escape')) {
+    if (this.sandboxLoadoutOpen && input.hit('Escape')) {
+      input.consume('Escape');
+      this.toggleSandboxLoadout(false);
+    } else if (this.fullMapOpen && input.hit('Escape')) {
       input.consume('Escape'); // Escape closes the map, not the game
       this.toggleFullMap(false);
     }
     if (input.hit('Escape') && !input.locked && (this.state === 'play' || this.state === 'drop')) this.pause(!this.paused);
+    if (input.actionHit('creativeMap') && canCreativeMap(this)) this.toggleFullMap(!this.fullMapOpen);
     if (input.actionHit('map') && (this.state === 'play' || this.state === 'drop') && !this.paused) this.toggleFullMap(!this.fullMapOpen);
     if (input.actionHit('ping') && this.state === 'play' && !this.paused && !this.inventoryOpen && !this.fullMapOpen) this.pingAim();
 
@@ -1423,7 +1476,7 @@ export class Game {
         _v.set(p.pos.x, p.pos.y + 1.2, p.pos.z);
         this._specH = (this._specH == null ? p.heading : this._specH) + dt * 0.15;
         placeOrbitCamera(cam, this.world, _v, this._specH, -0.35, 7, 0);
-      } else p.updateCamera(cam, dt, this.world, this.settings.fov || CAMERA.fov);
+      } else if (!(this.cbGallery && this.cbGallery.cameraOverride(cam, dt))) p.updateCamera(cam, dt, this.world, this.settings.fov || CAMERA.fov);
     }
     // grenade aim arc, from the fresh aim ray
     if (this.grenades) {
@@ -1436,6 +1489,10 @@ export class Game {
 
     // the Drop Bus keeps flying its route after everyone has jumped
     if (this.dropBus) this.dropBus.update(this.busRoute, this.busT, dt, inMatch && !this.freeBuild && !!this.busRoute);
+
+    // bespoke landmark animation (Crystal Bridges water, gallery lighting) every frame
+    if (this.view && this.view.frame) this.view.frame(dt, { camera: cam, player: p, game: this });
+    if (this.cbGallery) this.cbGallery.update(dt);
 
     // world culling a few times a second
     this._cullT = (this._cullT || 0) - dt;
@@ -1580,7 +1637,12 @@ export class Game {
         H
       );
     }
-    if (fullOpen && hud.setMapStats) {
+    if (fullOpen && this.freeBuild && hud.setMapTravel) {
+      const travel = poiTargets(this.world.landmarks);
+      const here = nearestPoi(travel, p.pos.x, p.pos.z, 160);
+      hud.setMapTravel(travel, here && here.key);
+    } else if (fullOpen && hud.setMapStats) {
+      if (hud.setMapTravel) hud.setMapTravel(null);
       const rows = [p, ...(this.teamMode ? this.mates || [] : [])].map((a) => ({
         name: a === p ? p.name || 'You' : a.name,
         you: a === p,
@@ -1765,6 +1827,8 @@ export class Game {
   openInventory() {
     if (this.inventoryOpen || !this._canOpenInventory() || !this.invPanel) return false;
     this.inventoryOpen = true; // set before unlock(): _onLockChange must not pause
+    this.sandboxLoadoutOpen = false;
+    if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(false);
     this.fullMapOpen = false;
     this._setFullMapInteractive(false);
     this.input.trap = true;
@@ -1915,10 +1979,29 @@ export class Game {
       this.input.unlock();
       this._setFullMapInteractive(true);
     } else {
+      this.sandboxLoadoutOpen = false;
+      if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(false);
       this.input.trap = false;
       this._setFullMapInteractive(false);
       if ((this.state === 'play' || this.state === 'drop') && !this.paused) this.input.lock();
     }
+  }
+
+  /** Sandbox map overlay: pick any gun. No-op in a match. */
+  toggleSandboxLoadout(on) {
+    on = on === undefined ? !this.sandboxLoadoutOpen : !!on;
+    if (on === !!this.sandboxLoadoutOpen) return;
+    if (on) {
+      if (!canSandboxLoadout(this) || this.paused) return;
+      if (!this.fullMapOpen) this.toggleFullMap(true);
+      if (!this.fullMapOpen) return;
+      this.sandboxLoadoutOpen = true;
+      if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(true);
+      sfx.play('ui_click');
+      return;
+    }
+    this.sandboxLoadoutOpen = false;
+    if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(false);
   }
 
   /** Your team colour slot (0..3). */
@@ -2022,7 +2105,27 @@ export class Game {
     const c = this.hud && this.hud.getFullMapCanvas();
     if (!c) return;
     c.style.pointerEvents = on ? 'auto' : '';
-    c.style.cursor = on ? 'crosshair' : '';
+    c.style.cursor = on ? (this.freeBuild ? 'pointer' : 'crosshair') : '';
+  }
+
+  /** Free build only: stand on the named POI and close the map. */
+  fastTravelTo(key) {
+    if (!canFastTravel(this)) return false;
+    const t = poiTargets(this.world.landmarks).find((p) => p.key === key);
+    if (!t) return false;
+    const land = landAt(this.world, t.x, t.z, this.rng);
+    const p = this.player;
+    p.pos.set(land.x, land.y, land.z);
+    p.vel.set(0, 0, 0);
+    if (p.airborneDrop) {
+      p.mode = 'ground';
+      sfx.stopLoop('glide_wind');
+    }
+    p.grounded = true;
+    this.toggleFullMap(false);
+    this.hud.announce(String(t.label).toUpperCase(), 'Free build travel', 1800);
+    sfx.play('ui_click');
+    return true;
   }
 
   _error(where, err) {
@@ -2072,7 +2175,7 @@ export class Game {
         if (typeof what === 'string') {
           if (WEAPONS[what]) item = { type: 'weapon', id: what, rarity, mag: WEAPONS[what].mag };
           else if (what === 'medkit' || what === 'tonic') item = { type: 'consumable', id: what, count: 3 };
-          else if (what === 'grenade') item = { type: 'consumable', id: 'grenade', count: 6 };
+          else if (what === 'grenade' || what === 'smoke') item = { type: 'consumable', id: what, count: CONSUMABLES[what].stack };
           else if (what === 'wood' || what === 'brick' || what === 'metal') item = { type: 'material', mat: what, count: 300 };
           else if (what === 'ammo') {
             for (const a of Object.keys(AMMO)) p.inventory.add({ type: 'ammo', ammo: a, count: 120 });

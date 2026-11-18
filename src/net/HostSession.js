@@ -80,6 +80,7 @@ export function debugItem(what, rarity = 'rare') {
   if (WEAPONS[what]) return { type: 'weapon', id: what, rarity, mag: WEAPONS[what].mag };
   if (what === 'medkit' || what === 'tonic') return { type: 'consumable', id: what, count: 3 };
   if (what === 'grenade') return { type: 'consumable', id: 'grenade', count: 6 };
+  if (what === 'smoke') return { type: 'consumable', id: 'smoke', count: CONSUMABLES.smoke.stack };
   if (MATERIALS.includes(what)) return { type: 'material', mat: what, count: 300 };
   return null;
 }
@@ -265,8 +266,10 @@ export class HostSession {
     keep(game.combat, 'swingPickaxe');
     keep(game.grenades, 'onThrow');
     keep(game.grenades, 'onExplode');
-    for (const k of ['_add', 'take', 'open']) keep(game.loot, k);
+    for (const k of ['_add', 'take', 'open', 'smash']) keep(game.loot, k);
     for (const k of ['place', 'damage', '_destroy', 'edit', 'setDoor']) keep(game.structures, k);
+    const siteDoors = game.world && game.world.siteDoors;
+    if (siteDoors) keep(siteDoors, 'setOpen');
     const ev = (e) => this.started && !this._spawning && this.events.push(e);
     const combat = game.combat;
     combat.onFire = (shooter, wid, origin, records, dirs, ballistic) => {
@@ -286,7 +289,8 @@ export class HostSession {
       ev({ e: 'sh', a: shooter ? shooter.id : -1, w: wid, o: [rnd(origin.x), rnd(origin.y), rnd(origin.z)], p, k });
     };
     combat.onColliderDestroyed = (c) => {
-      if (c.type === 'poly') ev({ e: 'cx', ty: 'p', x: c.minX, z: c.minZ });
+      if (c.type === 'box') ev({ e: 'cx', ty: 'b', id: c.id, x: c.cx, z: c.cz }); // museum glass: by box id
+      else if (c.type === 'poly') ev({ e: 'cx', ty: 'p', x: c.minX, z: c.minZ });
       else ev({ e: 'cx', ty: 'c', x: c.x, z: c.z });
     };
     // building wall panels (keyed by building map id + panel index; never the `cx` event, which
@@ -319,8 +323,8 @@ export class HostSession {
     // grenades: clients replay the flight from the throw and wait for the blast
     if (game.grenades) {
       game.grenades.onThrow = (gr) =>
-        ev({ e: 'gr', id: gr.id, a: gr.owner ? gr.owner.id : -1, p: [rnd(gr.pos.x), rnd(gr.pos.y), rnd(gr.pos.z)], v: [rnd(gr.vel.x), rnd(gr.vel.y), rnd(gr.vel.z)], r: gr.rocket ? 1 : 0 });
-      game.grenades.onExplode = (gr) => ev({ e: 'gx', id: gr.id, p: [rnd(gr.pos.x), rnd(gr.pos.y), rnd(gr.pos.z)], r: gr.rocket ? 1 : 0 });
+        ev({ e: 'gr', id: gr.id, a: gr.owner ? gr.owner.id : -1, p: [rnd(gr.pos.x), rnd(gr.pos.y), rnd(gr.pos.z)], v: [rnd(gr.vel.x), rnd(gr.vel.y), rnd(gr.vel.z)], r: gr.rocket ? 1 : 0, s: gr.smoke ? 1 : 0 });
+      game.grenades.onExplode = (gr) => ev({ e: 'gx', id: gr.id, p: [rnd(gr.pos.x), rnd(gr.pos.y), rnd(gr.pos.z)], r: gr.rocket ? 1 : 0, s: gr.smoke ? 1 : 0 });
     }
 
     const loot = game.loot;
@@ -343,6 +347,14 @@ export class HostSession {
         if (ok) ev({ e: 'lo', id });
         return ok;
       };
+      if (loot.smash) {
+        const smash = loot.smash.bind(loot);
+        loot.smash = (id) => {
+          const ok = smash(id);
+          if (ok) ev({ e: 'lx', id });
+          return ok;
+        };
+      }
     }
 
     const st = game.structures;
@@ -382,6 +394,14 @@ export class HostSession {
           return destroy(piece, ...rest);
         };
       }
+    }
+    if (siteDoors && siteDoors.setOpen) {
+      const setOpen = siteDoors.setOpen.bind(siteDoors);
+      siteDoors.setOpen = (id, open) => {
+        const ok = setOpen(id, open);
+        if (ok) ev({ e: 'md', id, o: open ? 1 : 0 });
+        return ok;
+      };
     }
   }
 
@@ -669,9 +689,10 @@ export class HostSession {
       busPosAt(route, Math.min(this.time, route.tClose), a.pos); // riding: wherever the bus is
     } else if (a.carriedBy) {
       // on a teammate's shoulder: the host owns where they are (Combat.tickCarry)
-    } else if (inBounds && (fromBus || a.allowJump || dist <= cap || was === 'bus')) {
+    } else if (inBounds && (fromBus || a.allowJump || dist <= cap || was === 'bus' || this._portalOk(a, s))) {
       a.pos.set(s.x, s.y, s.z);
       a.allowJump = false;
+      a.portalTo = null;
     } else if (this.time - (a.lastCorrect || -9) > 0.5) {
       a.lastCorrect = this.time;
       this.room.sendTo(a.id, { t: 'cor', x: a.pos.x, y: a.pos.y, z: a.pos.z });
@@ -804,6 +825,14 @@ export class HostSession {
         st.edit(piece, m.ed | 0);
         return;
       }
+      case 'md': {
+        const doors = g.world && g.world.siteDoors;
+        if (!doors || a.inBus || a.airborneDrop) return;
+        const d = doors.near(a.pos);
+        if (!d || d.id !== m.id) return;
+        doors.toggle(m.id);
+        return;
+      }
       case 'dr': {
         // open / close a door cut into a built wall (anyone may)
         const st = g.structures;
@@ -893,7 +922,7 @@ export class HostSession {
         if (!used) return;
         a.lastThrow = this.time;
         if (a.character) a.character.swing();
-        g.grenades.throw(a, _o, _d.normalize());
+        g.grenades.throw(a, _o, _d.normalize(), used.id);
         return;
       }
       case 'mv': {
@@ -975,6 +1004,14 @@ export class HostSession {
         if (d > 0) g.combat.applyDamage(a, d, { fall: true, source: null, storm: true });
         return;
       }
+      case 'ptl': {
+        // Crystal Bridges painting portal (peer input is untrusted: the gallery checks range, cooldown, storm)
+        const gal = g.cbGallery;
+        const to = gal && Number.isInteger(m.i) ? gal.validatePortal(a, m.i) : null;
+        if (!to) return;
+        a.portalTo = { x: to[0], z: to[2], until: this.time + 2 }; // only a jump to THIS destination
+        return;
+      }
       case 'tp':
         // QA teleport (dev builds only): the next state packet may jump anywhere
         if (!DEV) return;
@@ -991,6 +1028,12 @@ export class HostSession {
         return;
       default:
     }
+  }
+
+  /** A Crystal Bridges portal jump the host approved: lands at the approved destination, soon. */
+  _portalOk(a, s) {
+    const p = a.portalTo;
+    return !!p && this.time < p.until && Math.hypot(s.x - p.x, s.z - p.z) < 3;
   }
 
   _onLeave(c) {

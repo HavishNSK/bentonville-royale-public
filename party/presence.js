@@ -28,7 +28,7 @@
 import { Server } from 'partyserver';
 import { validMode } from './modes.js';
 import { cleanChat, nameIsClean } from '../src/net/chatFilter.js';
-import { isDevName, parseDevChat } from '../src/net/devs.js';
+import { parseDevChat, accountGrants } from '../src/net/devs.js';
 
 export const ROOM = 'global';
 const MAX_CONNECTIONS = 2000; // well past what a prototype sees; refuses floods
@@ -89,7 +89,7 @@ export function snapshot(players) {
     .slice()
     .sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.since - b.since)
     .slice(0, MAX_LISTED)
-    .map((p) => ({ name: p.name, status: p.status, mode: p.mode }));
+    .map((p) => (p.title ? { name: p.name, status: p.status, mode: p.mode, title: p.title, color: p.titleColor } : { name: p.name, status: p.status, mode: p.mode }));
   return { t: 'online', count: all.length, searching, inMatch, players: list };
 }
 
@@ -133,6 +133,8 @@ export class Presence extends Server {
       name: cleanName(url.searchParams.get('name')),
       dev: false,
       devName: '',
+      title: '', // verified account title (devs.js PLAYER_TITLES) and its name colour
+      titleColor: '',
       devFor: '',
       devCheck: null,
       status: cleanStatus(url.searchParams.get('status')),
@@ -156,6 +158,8 @@ export class Presence extends Server {
     if (!acct) {
       p.dev = false;
       p.devName = '';
+      p.title = '';
+      p.titleColor = '';
       p.devFor = '';
       p.devCheck = null;
       return Promise.resolve();
@@ -164,23 +168,31 @@ export class Presence extends Server {
     p.devFor = acct;
     p.dev = false;
     p.devName = '';
-    p.devCheck = this._lookupDev(acct)
+    p.title = '';
+    p.titleColor = '';
+    p.devCheck = this._lookupAccountName(acct)
       .then((name) => {
         if (p.acct !== acct) return;
-        p.dev = !!name;
-        p.devName = name || '';
-        if (name) p.name = name;
+        const g = accountGrants(name);
+        p.dev = g.dev;
+        p.devName = g.shown;
+        p.title = g.title;
+        p.titleColor = g.titleColor;
+        if (p.devName) p.name = p.devName; // a verified name: the typed nickname cannot take it over
       })
       .catch(() => {
         if (p.acct === acct) {
           p.dev = false;
           p.devName = '';
+          p.title = '';
+          p.titleColor = '';
         }
       });
     return p.devCheck;
   }
 
-  async _lookupDev(acct) {
+  /** The signed-in account's username (verified by the Accounts object), or null. */
+  async _lookupAccountName(acct) {
     if (!this.env || !this.env.Accounts) return null;
     const id = this.env.Accounts.idFromName('global');
     const stub = this.env.Accounts.get(id);
@@ -194,7 +206,7 @@ export class Presence extends Server {
     if (!res.ok) return null;
     const data = await res.json();
     const name = data && data.profile && data.profile.name;
-    return isDevName(name) ? String(name).slice(0, 16) : null;
+    return typeof name === 'string' && name ? name : null;
   }
 
   _chatLimits(p) {
@@ -258,7 +270,11 @@ export class Presence extends Server {
     lim.last = now;
     lim.times.push(now);
     lim.lastText = r.text.toLowerCase();
-    const m = { id: ++this.chatSeq, name: p.dev ? p.devName : p.name, text: r.text, at: now, dev: !!p.dev, announce: !!parsed.announce };
+    const m = { id: ++this.chatSeq, name: p.devName || p.name, text: r.text, at: now, dev: !!p.dev, announce: !!parsed.announce };
+    if (p.title) {
+      m.title = p.title;
+      m.color = p.titleColor;
+    }
     this.chat.push(m);
     if (this.chat.length > CHAT_KEEP) this.chat.shift();
     this.broadcast(JSON.stringify({ t: 'chat', m }));
@@ -294,7 +310,7 @@ export class Presence extends Server {
     if (!msg || msg.t !== 'status') return;
     p.status = cleanStatus(msg.status);
     p.mode = cleanMode(msg.mode);
-    if (msg.name != null && !p.dev) p.name = cleanName(msg.name);
+    if (msg.name != null && !p.devName) p.name = cleanName(msg.name);
     this._schedule();
   }
 

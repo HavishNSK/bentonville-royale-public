@@ -323,7 +323,7 @@ export class Character {
     this.gunKey = WEAPONS[id] && this.guns[WEAPONS[id].model] ? WEAPONS[id].model : id;
     for (const k in this.guns) this.guns[k].visible = k === this.gunKey;
     if (this.pickaxe) this.pickaxe.visible = id === 'pickaxe' && this._swim < 0.5;
-    this.grenade.visible = id === 'grenade' && this._swim < 0.5;
+    this.grenade.visible = (id === 'grenade' || id === 'smoke') && this._swim < 0.5;
   }
 
   _oneShot(key, speed = 1) {

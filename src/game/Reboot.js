@@ -87,7 +87,7 @@ export class Reboot {
         col.hp = col.maxHp = Infinity; // can't be harvested or destroyed
         col.rebootVan = true;
       }
-      const y = world.terrainHeight ? world.terrainHeight(spot.x, spot.z) : 0;
+      const y = world.surfaceHeight ? world.surfaceHeight(spot.x, spot.z) : 0;
       const van = {
         i: this.vans.length,
         key: zone.key,
@@ -253,7 +253,10 @@ export class Reboot {
     if (!mate) return null;
     // cards the victim carried fall where they died
     for (const c of this.cardsOf(victim)) this._dropHeld(c, victim.pos);
-    return this._addCard({ v: victim.id, name: victim.name, team: victim.team, x: victim.pos.x, y: victim.pos.y, z: victim.pos.z, until: this.time + REBOOT.cardTime });
+    // the card lands on the ground under them (eliminated mid-air, mid-jump or up on builds it
+    // used to hang where they died, out of reach)
+    const p = victim.pos;
+    return this._addCard({ v: victim.id, name: victim.name, team: victim.team, x: p.x, y: this._groundY(p.x, p.y, p.z), z: p.z, until: this.time + REBOOT.cardTime });
   }
 
   /** Host / solo: `actor` takes `card`. */
@@ -267,10 +270,18 @@ export class Reboot {
     return true;
   }
 
+  /** The walkable surface at or below (x, y, z): terrain, a floor, a roof or a build. */
+  _groundY(x, y, z) {
+    const w = this.world;
+    if (!w || !w.groundHeight) return y;
+    const g = w.groundHeight(x, z, y + 0.3);
+    return Number.isFinite(g) && g <= y + 0.35 ? g : y;
+  }
+
   _dropHeld(card, pos) {
     card.holder = null;
     card.x = pos.x;
-    card.y = pos.y;
+    card.y = this._groundY(pos.x, pos.y, pos.z);
     card.z = pos.z;
     card.until = Math.max(card.until, this.time + 30);
     this._showCard(card);

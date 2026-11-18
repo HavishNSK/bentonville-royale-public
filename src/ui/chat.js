@@ -200,9 +200,12 @@ export function createChat({ onSend = () => false, onBlocked = () => {}, onTypin
     },
     add(m) {
       const dev = !!m.dev;
-      const row = el('div', 'br-chat-msg' + (me && m.name === me ? ' is-me' : '') + (dev ? ' is-dev' : '') + (m.announce ? ' is-announce' : ''));
+      const titled = !dev && !!m.title; // a verified account title (devs.js PLAYER_TITLES)
+      const row = el('div', 'br-chat-msg' + (me && m.name === me ? ' is-me' : '') + (dev ? ' is-dev' : '') + (titled ? ' has-title' : '') + (m.announce ? ' is-announce' : ''));
       if (m.announce) row.append(el('span', 'br-chat-ann', 'ANNOUNCEMENT'));
-      row.append(el('span', 'br-chat-name', dev ? `[DEV] ${m.name}` : m.name), document.createTextNode(m.text));
+      const name = el('span', 'br-chat-name', dev ? `[DEV] ${m.name}` : titled ? `[${m.title}] ${m.name}` : m.name);
+      if (titled && m.color) name.style.color = m.color; // #rrggbb, checked in Presence.js
+      row.append(name, document.createTextNode(m.text));
       push(row);
       if (collapsed && mode === 'lobby') {
         unreadN++;

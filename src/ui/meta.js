@@ -35,6 +35,7 @@ const seenPatch = () => {
 
 import { partyHost, isLocal } from '../net/Net.js';
 import { nameIsClean } from '../net/chatFilter.js';
+import { createUpdateFlyer } from './updateFlyer.js';
 
 // GIS / Clever buttons in renderAuth(); Account.loginWithGoogle / Clever OAuth redirect.
 const GOOGLE_CLIENT_ID =
@@ -318,7 +319,9 @@ export function createMeta(menus, account, opts = {}) {
       const row = h('div', 'mt-friend is-online' + (p.status === 'queued' ? ' is-queued' : p.status === 'match' ? ' is-busy' : ''));
       const info = h('span', 'mt-friend-info');
       const what = p.status === 'queued' ? `Searching · ${MODE_LABEL[p.mode]}` : p.status === 'match' ? 'In a match' : 'In the lobby';
-      info.append(h('b', null, p.name), h('small', null, what));
+      const who = h('b', null, p.title ? `[${p.title}] ${p.name}` : p.name);
+      if (p.title && p.color) who.style.color = p.color; // verified account title (devs.js PLAYER_TITLES)
+      info.append(who, h('small', null, what));
       row.append(h('i', 'mt-dot'), info);
       panelBody.appendChild(row);
     }
@@ -1180,13 +1183,31 @@ export function createMeta(menus, account, opts = {}) {
   renderEmoteBar();
   checkRename();
 
+  // the update flyer: opens by itself the first time the title screen shows after an update
+  // (once per version), never behind the loading screen or a match
+  const flyer = createUpdateFlyer(document.body, {
+    onClick: click,
+    onNotes: () => {
+      newsTab = 'notes';
+      openPanel('news');
+    },
+  });
+  let flyerTries = 0;
+  const flyerWhenVisible = () => {
+    if (titleEl.offsetParent !== null && titleEl.getBoundingClientRect().height > 0) flyer.maybeShow();
+    else if (++flyerTries < 120) setTimeout(flyerWhenVisible, 1000);
+  };
+  setTimeout(flyerWhenVisible, 700);
+
   return {
+    flyer,
     refresh() {
       lineUp();
       if (open === 'friends') render();
     },
     setActive(on) {
       showcase.setActive(on);
+      if (!on) flyer.hide(); // never over a match
       if (!on && open) closePanel();
     },
     matchReward(n, note) {

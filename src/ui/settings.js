@@ -36,6 +36,7 @@ export const ACTIONS = Object.freeze([
   { id: 'cycleMaterial', label: 'Switch material', group: 'Building', def: 'KeyG' },
   { id: 'edit', label: 'Edit piece', group: 'Building', def: 'KeyT' },
   { id: 'map', label: 'Full map', group: 'Other', def: 'KeyM' },
+  { id: 'creativeMap', label: 'Sandbox map', group: 'Other', def: 'KeyN' },
   { id: 'emote', label: 'Emote', group: 'Other', def: 'KeyB' },
 ]);
 

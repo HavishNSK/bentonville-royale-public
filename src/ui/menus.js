@@ -4,7 +4,7 @@
 //   const menus = createMenus(root, {
 //     settings,                       // current settings object (src/ui/settings.js shape)
 //     onPlay(), onSettings(settings), onResume(), onLeave(), onPlayAgain(),
-//     onFreeBuild(name),                           // solo sandbox: no bots, no storm, full mats
+//     onFreeBuild(name),                           // SANDBOX: no bots, no storm, full mats, gun menu
 //     onHost(name), onJoin(code, name),           // private match (main.js lazy-loads src/net)
 //     onLobbyStart(), onLobbyLeave(), onLobbyFill(on), onLobbyMode(mode), onLobbyReady(on),
 //     onPartyReady(on), onPartyCancel(), onPartyMode(mode), onPartyFill(on),   // party lobby (title)
@@ -100,20 +100,12 @@ function el(tag, cls, html) {
   return e;
 }
 
-function hillsSVG() {
-  return `<svg class="mn-hills" viewBox="0 0 1600 420" preserveAspectRatio="none" aria-hidden="true">
-  <path d="M0 250 C 180 170 320 210 470 160 C 640 105 760 200 930 150 C 1100 100 1260 170 1400 130 C 1490 105 1560 120 1600 112 L1600 420 L0 420Z" fill="#5d4fb8" opacity=".55"/>
-  <path d="M0 300 C 160 250 300 290 450 250 C 620 205 760 280 940 240 C 1120 200 1250 260 1420 225 C 1500 210 1560 220 1600 214 L1600 420 L0 420Z" fill="#3c2f8f" opacity=".8"/>
-  <path d="M0 350 C 200 320 360 352 560 330 C 760 308 900 350 1100 328 C 1300 306 1450 340 1600 322 L1600 420 L0 420Z" fill="#221a5c"/>
-</svg>`;
-}
-
 export function createMenus(root, opts = {}) {
   let settings = sanitizeSettings(opts.settings);
   const wrap = el('div', 'br-menus');
   root.appendChild(wrap);
 
-  const bg = el('div', 'mn-bg', `<div class="mn-sun"></div>${hillsSVG()}`);
+  const bg = el('div', 'mn-bg');
   wrap.appendChild(bg);
 
   // ---------------------------------------------------------------- title
@@ -157,7 +149,8 @@ export function createMenus(root, opts = {}) {
      </div>
      <div class="mn-title-side">
        <div class="mn-stack mn-stack-row">
-         <button class="mn-btn mn-btn-small" data-act="freebuild">${icon('wall')}<span>FREE BUILD</span></button>
+         <button class="mn-btn mn-btn-small" data-act="freebuild">${icon('pencil')}<span>SANDBOX</span></button>
+         <button class="mn-btn mn-btn-small" data-act="museum" title="Walk the Crystal Bridges galleries: no bots, no storm">${icon('star')}<span>VISIT THE MUSEUM</span></button>
          <button class="mn-btn mn-btn-small" data-act="private" aria-expanded="false" data-ref="privBtn">${icon('people')}<span>PRIVATE MATCH</span></button>
          <button class="mn-btn mn-btn-small" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
        </div>
@@ -364,14 +357,17 @@ export function createMenus(root, opts = {}) {
   const pause = el(
     'section',
     'mn-screen mn-pause',
-    `<div class="mn-card mn-card-narrow">
+    `<div class="mn-card mn-card-narrow" data-ref="pauseCard">
        <h2 class="mn-h br-ol">PAUSED</h2>
        <button class="mn-btn mn-btn-hero" data-act="resume">${icon('play')}<span>RESUME</span></button>
        <button class="mn-btn" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
-       <button class="mn-btn mn-btn-danger" data-act="leave">${icon('home')}<span>LEAVE MATCH</span></button>
+       <button class="mn-btn mn-btn-danger" data-act="leave">${icon('home')}<span data-ref="leaveLabel">LEAVE MATCH</span></button>
      </div>`
   );
   wrap.appendChild(pause);
+  const P = {};
+  pause.querySelectorAll('[data-ref]').forEach((e) => (P[e.dataset.ref] = e));
+  let pauseSandbox = false;
 
   // ---------------------------------------------------------------- result
   const result = el(
@@ -671,6 +667,7 @@ export function createMenus(root, opts = {}) {
         } else if (act === 'lobby-ready') {
           if (lobbyInfo && !lobbyInfo.isHost && opts.onLobbyReady) opts.onLobbyReady(!lobbyInfo.ready);
         } else if (act === 'freebuild') opts.onFreeBuild && opts.onFreeBuild(name());
+        else if (act === 'museum') opts.onMuseum && opts.onMuseum(name());
         else if (act === 'host') opts.onHost && opts.onHost(name());
         else if (act === 'join') {
           if (T.code.value.length !== 4) {
@@ -992,8 +989,11 @@ export function createMenus(root, opts = {}) {
       L.pct.textContent = Math.round(p * 100) + '%';
       if (label) L.label.textContent = label;
     },
-    showPause() {
+    showPause(info) {
       api.showDropBanner(false);
+      pauseSandbox = !!(info && info.sandbox);
+      P.pauseCard.classList.toggle('mn-card-sandbox', pauseSandbox);
+      P.leaveLabel.textContent = pauseSandbox ? 'LEAVE SANDBOX' : 'LEAVE MATCH';
       show(pause, false);
     },
     showResult(r) {

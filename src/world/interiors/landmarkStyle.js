@@ -25,6 +25,31 @@ const LIMESTONE = Object.freeze({ wall: CONCRETE, floor: 0xc5c0b5, ceiling: CEIL
 const BRIDGE = Object.freeze({ ...GALLERY, wall: 0xbecac0 });
 
 export const LANDMARK_STYLE = Object.freeze({
+  751973534: Object.freeze({
+    kinds: Object.freeze({
+      gym:       Object.freeze({ wall: 0xd0ccca, floor: 0xc8a84a, ceiling: 0xe4e0dc }),
+      lobby:     Object.freeze({ wall: 0xe0dcd8, floor: 0xb0a898, ceiling: 0xeae6e2 }),
+      classroom: Object.freeze({ wall: 0xe8e4e0, floor: 0x9a9490, ceiling: 0xeeedea }),
+      open:      Object.freeze({ wall: 0xcce4f0, floor: 0x8ab0c0, ceiling: 0xe0eef4 }),
+    }),
+  }),
+  952075842: Object.freeze({
+    kinds: Object.freeze({
+      corridor:   Object.freeze({ wall: 0xd4c8b4, floor: 0x8a7458, ceiling: 0xe4ddd0 }),
+      classroom:  Object.freeze({ wall: 0xe8e2d8, floor: 0x9a7a52, ceiling: 0xeae5da }),
+      gym:        Object.freeze({ wall: 0xd0ccca, floor: 0xc8a84a, ceiling: 0xe4e0dc }),
+      cafeteria:  Object.freeze({ wall: 0xe2ddd5, floor: 0x9a9490, ceiling: 0xe4e0d8 }),
+      auditorium: Object.freeze({ wall: 0x8a3030, floor: 0x5c4030, ceiling: 0x3a2a28 }),
+    }),
+  }),
+  651787776: Object.freeze({
+    kinds: Object.freeze({
+      corridor:   Object.freeze({ wall: 0xdde0e4, floor: 0x9098a4, ceiling: 0xeaecee }),
+      classroom:  Object.freeze({ wall: 0xe4e6e8, floor: 0x8890a0, ceiling: 0xecedef }),
+      gym:        Object.freeze({ wall: 0xe0dcda, floor: 0xc8a84a, ceiling: 0xe8e4e2 }),
+      auditorium: Object.freeze({ wall: 0x1a3a5c, floor: 0x2a3040, ceiling: 0x0e2040 }),
+    }),
+  }),
   8240824: Object.freeze({
     kinds: Object.freeze({ gallery: GALLERY, lobby: LIMESTONE, hall: LIMESTONE, corridor: LIMESTONE, open: LIMESTONE }),
     labels: Object.freeze({
