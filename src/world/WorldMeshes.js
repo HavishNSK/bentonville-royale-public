@@ -931,6 +931,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
 
   // ---- ground
   progress(0.02, 'Laying out the ground');
+  const TERRAIN_SKIRT = 160; // m of real terrain drawn past the playable bounds (see the terrain mesh)
   const margin = 2600;
   const gw = b.maxX - b.minX + margin * 2;
   const gd = b.maxZ - b.minZ + margin * 2;
@@ -1068,19 +1069,29 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // ---- terrain displaced mesh (deferred until buildings are registered so we can flatten under them)
   if (world.terrain) {
     const T = world.terrain;
-    const tCols = Math.ceil((b.maxX - b.minX) / T.cell) + 2;
-    const tRows = Math.ceil((b.maxZ - b.minZ) / T.cell) + 2;
-    const tGeo = new THREE.PlaneGeometry(b.maxX - b.minX, b.maxZ - b.minZ, tCols - 1, tRows - 1);
+    // the real terrain runs TERRAIN_SKIRT m past the playable edge so the map never ends in a void
+    const tW = b.maxX - b.minX + TERRAIN_SKIRT * 2;
+    const tD = b.maxZ - b.minZ + TERRAIN_SKIRT * 2;
+    const tCols = Math.ceil(tW / T.cell) + 2;
+    const tRows = Math.ceil(tD / T.cell) + 2;
+    const tGeo = new THREE.PlaneGeometry(tW, tD, tCols - 1, tRows - 1);
     tGeo.rotateX(-Math.PI / 2);
+    gTex.repeat.set(tW / 48, tD / 48); // same texel size as before over the larger mesh
     const tPos = tGeo.attributes.position;
+    let tMin = Infinity;
     for (let i = 0; i < tPos.count; i++) {
       const wx = tPos.getX(i) + cx0;
       const wz = tPos.getZ(i) + cz0;
       // Flatten terrain under building footprints to that building's floor level so walls
       // don't appear to sink into hillsides.
-      tPos.setY(i, world.surfaceHeight(wx, wz));
+      const y = world.surfaceHeight(wx, wz);
+      tPos.setY(i, y);
+      if (y < tMin && wx >= b.minX && wx <= b.maxX && wz >= b.minZ && wz <= b.maxZ) tMin = y;
     }
     tPos.needsUpdate = true;
+    // The flat horizon fill sits under the lowest playable terrain: at y = 0 it sliced through
+    // every valley below sea-level zero and hid ~11% of the map (parks, ponds, The Momentary).
+    if (Number.isFinite(tMin) && tMin < 0) outerMesh.position.y = tMin - 0.5;
     if (cb) {
       // the Crystal Bridges tile draws its own ravine terrain: drop this mesh's triangles there
       const idx = tGeo.index.array;
