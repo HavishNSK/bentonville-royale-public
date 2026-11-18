@@ -114,8 +114,8 @@ const BLIP_KINDS = ['chest', 'loot', 'enemy', 'drop', 'mate0', 'mate1', 'mate2',
 const MATE_COLORS = ['#ffc21f', '#5ec8ff', '#7dff6b', '#ff5d8f']; // = Teams.js TEAM_COLORS
 /** Blips that stay pinned to the minimap edge at any distance. */
 const isPinnedBlip = (kind, label) => kind === 'enemy' || kind === 'drop' || kind === 'card' || kind === 'vanHot' || (!!label && kind.startsWith('van')) || kind.startsWith('mate') || kind.startsWith('pin');
-// full-map grid: lettered columns, numbered rows (call-outs like "C4")
-const GRID_N = 10;
+// full-map grid: lettered columns, numbered rows (call-outs like "C4"), square cells this wide
+const GRID_M = 100; // metres
 const LABEL_FONT = '"Lilita One", "Arial Rounded MT Bold", "Trebuchet MS", system-ui, sans-serif';
 const DASH_GUIDE = [7, 6];
 const DASH_NONE = [];
@@ -1179,33 +1179,41 @@ export class Minimap {
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
-    // ---- call-out grid: A-J across, 1-10 down, faint lines over the map
+    // ---- call-out grid: square GRID_M-metre cells centred on the map (letters across, numbers
+    // down), drawn faintly so it never competes with roads and names
     const b = this._bounds;
     const gx0 = b.minX * this._fs + this._fox;
     const gy0 = b.minZ * this._fs + this._foz;
     const gw = (b.maxX - b.minX) * this._fs;
     const gh = (b.maxZ - b.minZ) * this._fs;
-    ctx.strokeStyle = 'rgba(16, 28, 20, 0.28)';
-    ctx.lineWidth = 1.4 * k;
+    const cell = GRID_M * this._fs; // one cell in canvas pixels (same both ways: square)
+    const cols = Math.max(1, Math.round((b.maxX - b.minX) / GRID_M));
+    const rows = Math.max(1, Math.round((b.maxZ - b.minZ) / GRID_M));
+    const ox0 = gx0 + (gw - cols * cell) / 2;
+    const oy0 = gy0 + (gh - rows * cell) / 2;
+    ctx.strokeStyle = 'rgba(16, 28, 20, 0.16)';
+    ctx.lineWidth = 1 * k;
     ctx.beginPath();
-    for (let i = 1; i < GRID_N; i++) {
-      const x = Math.round(gx0 + (gw * i) / GRID_N) + 0.5;
-      const y = Math.round(gy0 + (gh * i) / GRID_N) + 0.5;
+    for (let i = 0; i <= cols; i++) {
+      const x = Math.round(ox0 + cell * i) + 0.5;
+      if (x <= gx0 + 1 || x >= gx0 + gw - 1) continue;
       ctx.moveTo(x, gy0);
       ctx.lineTo(x, gy0 + gh);
+    }
+    for (let i = 0; i <= rows; i++) {
+      const y = Math.round(oy0 + cell * i) + 0.5;
+      if (y <= gy0 + 1 || y >= gy0 + gh - 1) continue;
       ctx.moveTo(gx0, y);
       ctx.lineTo(gx0 + gw, y);
     }
     ctx.stroke();
-    ctx.font = `400 ${Math.round(17 * k)}px ${LABEL_FONT}`;
+    ctx.font = `400 ${Math.round(13 * k)}px ${LABEL_FONT}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    for (let i = 0; i < GRID_N; i++) {
-      const cx = gx0 + (gw * (i + 0.5)) / GRID_N;
-      const cy = gy0 + (gh * (i + 0.5)) / GRID_N;
-      haloText(ctx, String.fromCharCode(65 + i), cx, gy0 + 14 * k, '#ffffff', 'rgba(14, 21, 28, 0.85)', 4.5 * k);
-      haloText(ctx, String(i + 1), gx0 + 14 * k, cy, '#ffffff', 'rgba(14, 21, 28, 0.85)', 4.5 * k);
-    }
+    ctx.globalAlpha = 0.8;
+    for (let i = 0; i < cols; i++) haloText(ctx, String.fromCharCode(65 + (i % 26)), ox0 + cell * (i + 0.5), gy0 + 11 * k, '#ffffff', 'rgba(14, 21, 28, 0.8)', 3.5 * k);
+    for (let i = 0; i < rows; i++) haloText(ctx, String(i + 1), gx0 + 11 * k, oy0 + cell * (i + 0.5), '#ffffff', 'rgba(14, 21, 28, 0.8)', 3.5 * k);
+    ctx.globalAlpha = 1;
 
     // ---- POI names: big, bold, upper-case, white with a heavy dark outline. The named
     // drop zones are large; minor landmarks smaller. Simple collision avoidance.

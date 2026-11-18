@@ -302,7 +302,7 @@ export class Combat {
     if (w.projectile) {
       _dir.copy(dirs ? dirs[0] : dir).normalize();
       this.lastDirs = [_dir.clone()];
-      if (this.authoritative && this.launchProjectile) this.launchProjectile(shooter, w, _from, origin, _dir);
+      if (this.authoritative && this.launchProjectile) this.launchProjectile(shooter, w, _from, origin, _dir); // (was an undefined `auth`: firing a launcher threw)
       return out;
     }
 

@@ -7,6 +7,56 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.18.0',
+    date: '2026-11-18',
+    title: 'Smoother everything',
+    sections: [
+      {
+        heading: 'Performance',
+        items: [
+          'The game runs much faster, especially on slower computers. In our test of a 100-player match on a slowed-down computer, it went from 26 to 55 frames per second.',
+          'Chromebooks and older laptops now start on faster graphics settings automatically the first time you play. You can still change them in Settings.',
+          'Building interiors are only drawn when you are near them, and far-away players no longer slow the game down.',
+        ],
+      },
+      {
+        heading: 'Animations',
+        items: [
+          'Characters walk when moving slowly instead of running in slow motion: aiming, crouching and backing up no longer slide.',
+          'Crouching is a real crouch now, and you can see other players crouch.',
+          'Jumps show in the air, landings dip, and getting hit makes characters flinch.',
+          'Pistols have their own reload, grenades are thrown overhand, and you reach out when you open or grab loot.',
+          'Sprinting lowers your gun, and characters lean into turns and strafes.',
+          'Swing combos blend from one move to the next instead of snapping.',
+        ],
+      },
+      {
+        heading: 'Camera and controls',
+        items: [
+          'The camera glides over stairs, ramps and ledges instead of stepping.',
+          'It no longer pops in and out when you pass poles and trees.',
+          'Building a ramp over yourself no longer makes the camera flicker up and down or snap in and out.',
+          'A ramp built behind you no longer lifts the camera on top of it or into the wood.',
+          'Recoil kicks the view up and then settles back. Shotguns and snipers have a little extra punch.',
+          'Hard landings dip the camera.',
+        ],
+      },
+      {
+        heading: 'Fixes',
+        items: [
+          'Back to the flat map: the hills and the photo ground are gone. They let players and bots fall under the ground and slip into buildings.',
+          'Roads, sidewalks and grass look the way they did before the hills.',
+          'Floors you build on the ground no longer flicker.',
+          'Jumping while building on a ramp no longer shifts your pieces halfway between levels.',
+          'Edited walls and floors keep one clean texture instead of turning into a grid of mini planks or bricks.',
+          'The grass no longer shows a repeating block pattern from the air, and wooden walls no longer shimmer with stripes in the distance.',
+          'Thin dotted lines on floors and ceilings inside buildings are gone.',
+          'The big map has a fainter grid with square cells.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.17.0',
     date: '2026-11-17',
     title: 'BOMBS and Bridges',

@@ -463,10 +463,10 @@ export const DIFFICULTY = {
 // renderScale multiplies the device pixel ratio (internal resolution).
 export const QUALITY = {
   // Chromebook / weak GPU: half-res, no post, short draw distances.
-  performance: { pixelRatio: 1, renderScale: 0.5, outline: false, bloom: false, msaa: false, buildingDist: 420, treeDist: 160, propDist: 70, charDist: 80 },
-  low: { pixelRatio: 1, renderScale: 1, outline: false, bloom: false, buildingDist: 1100, treeDist: 380, propDist: 160, charDist: 160 },
-  medium: { pixelRatio: 1.5, renderScale: 1, outline: true, bloom: true, buildingDist: 1700, treeDist: 620, propDist: 260, charDist: 240 },
-  high: { pixelRatio: 2, renderScale: 1, outline: true, bloom: true, buildingDist: 2400, treeDist: 950, propDist: 380, charDist: 320 },
+  performance: { pixelRatio: 1, renderScale: 0.5, outline: false, bloom: false, msaa: false, buildingDist: 420, interiorDist: 60, treeDist: 160, propDist: 70, charDist: 80 },
+  low: { pixelRatio: 1, renderScale: 1, outline: false, bloom: false, buildingDist: 1100, interiorDist: 90, treeDist: 300, propDist: 120, charDist: 160 },
+  medium: { pixelRatio: 1.25, renderScale: 1, outline: true, bloom: true, buildingDist: 1700, interiorDist: 130, treeDist: 450, propDist: 200, charDist: 240 },
+  high: { pixelRatio: 2, renderScale: 1, outline: true, bloom: true, buildingDist: 2400, interiorDist: 180, treeDist: 700, propDist: 320, charDist: 320 },
 };
 
 // Drop zones: each match the first circle is centred near one of these.

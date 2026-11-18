@@ -22,6 +22,7 @@ import { configUrl, sanitizeConfig, DEFAULT_PALETTE, interiorBlend } from './con
 
 export { configUrl, sanitizeConfig };
 
+const ART_DRAW_RADIUS = 260; // metres from the museum's centre (0, -300): paintings drawn inside this
 const SPOT_POOL = 3; // real lights moved onto the nearest works (fixed count: no shader recompiles)
 const FOCUS_RANGE = 4.2;
 const PORTAL_COOLDOWN = 10;
@@ -149,10 +150,13 @@ export async function createGallery({ game, site, sfx = null }) {
 
   // ---- spot pool (musewalk per-painting SpotLight values) + beams
   const spots = [];
+  const spotTargets = new Set();
+  let artShown = true;
   for (let i = 0; i < SPOT_POOL; i++) {
     const s = new THREE.SpotLight(0xffd9a8, 0, 17, 0.6, 0.78, 1.7);
     s.castShadow = false;
     group.add(s, s.target);
+    spotTargets.add(s.target);
     spots.push(s);
   }
   const beams = [];
@@ -306,6 +310,13 @@ export async function createGallery({ game, site, sfx = null }) {
       const p = game.player;
       if (!p) return;
       const cam = game.camera;
+      // the ~400 paintings, frames and labels are only drawn near the museum (they cost every
+      // frame from anywhere on the map); the spot lights stay so no shader has to recompile
+      const nearArt = Math.hypot(cam.position.x, cam.position.z + 300) < ART_DRAW_RADIUS;
+      if (nearArt !== artShown) {
+        artShown = nearArt;
+        for (const c of group.children) if (!c.isLight && !spotTargets.has(c) && !beams.includes(c)) c.visible = nearArt;
+      }
       // interior factor: inside a pavilion, below its roof
       const pv = pavilionAt(p.pos.x, p.pos.z, p.pos.y);
       inside = !!pv && !(game.state !== 'play' && game.state !== 'over');

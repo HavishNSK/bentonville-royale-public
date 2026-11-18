@@ -13,13 +13,16 @@ import { Combat } from '../src/game/Combat.js';
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url)));
 const lock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url)));
 
-test('the flyer is for the newest version, named BOMBS and Bridges', () => {
-  assert.equal(FLYER.version, LATEST_VERSION);
+test('the flyer is for a released version, named BOMBS and Bridges; package versions match', () => {
+  // the flyer shows once per FLYER.version (updateFlyer.js), so a later patch without a flyer of
+  // its own keeps showing it to players who have not seen it yet
+  const notes = PATCH_NOTES.find((n) => n.version === FLYER.version);
+  assert.ok(notes, 'flyer version has patch notes');
+  assert.equal(notes.title, 'BOMBS and Bridges');
+  assert.equal(FLYER.title.join(' '), 'BOMBS and Bridges');
   assert.equal(pkg.version, LATEST_VERSION);
   assert.equal(lock.version, LATEST_VERSION);
   assert.equal(lock.packages[''].version, LATEST_VERSION);
-  assert.equal(PATCH_NOTES[0].title, 'BOMBS and Bridges');
-  assert.equal(FLYER.title.join(' '), 'BOMBS and Bridges');
 });
 
 test('every flyer image is shipped in public/ and has alt text', () => {

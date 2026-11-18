@@ -10,11 +10,13 @@ import { createCrystalBridges, hasCrystalBridges } from './crystal-bridges/index
 import { TILE as CB_TILE } from './crystal-bridges/site.js';
 import { makeRng } from '../core/config.js';
 import { flattenModel } from '../core/assets.js';
-import { pointInPoly, loadTerrainData } from './World.js';
-import { addInteriorGeometry } from './InteriorMeshes.js';
+import { pointInPoly } from './World.js';
+import { addInteriorGeometry, addRoofGeometry } from './InteriorMeshes.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { schoolBusParts, schoolBusMaterials, SCHOOL_BUS } from '../render/SchoolBus.js';
 
+const CB_DETAIL_DIST = 160; // metres from Crystal Bridges' centre: statues, frames, furniture
+const CB_SHADOW_DIST = 80; // ...and statue shadows
 const CHUNK = 256;
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -261,7 +263,8 @@ function noiseTexture(size, base, spread) {
     for (let x = 0; x < size; x++) {
       const u = x / size;
       const v = y / size;
-      const nse = sample(l1, 8, u, v) * 0.65 + sample(l2, 32, u, v) * 0.35 + (rng() - 0.5) * 0.12;
+      // (only a trace of per-pixel grain: more of it sparkles at grazing angles)
+      const nse = sample(l1, 8, u, v) * 0.65 + sample(l2, 32, u, v) * 0.35 + (rng() - 0.5) * 0.03;
       const k = base + (nse - 0.5) * spread;
       const i = (y * size + x) * 4;
       img.data[i] = img.data[i + 1] = img.data[i + 2] = Math.max(0, Math.min(255, k * 255));
@@ -272,48 +275,6 @@ function noiseTexture(size, base, spread) {
   const tex = new THREE.CanvasTexture(cv);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.NoColorSpace;
-  tex.anisotropy = 4;
-  return tex;
-}
-
-function groundTexture() {
-  // Multi-color natural ground: dark green → mid green → yellow-green → tan → dirt
-  const size = 512;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = size;
-  const ctx = cv.getContext('2d');
-  const img = ctx.createImageData(size, size);
-  const rng = makeRng(8831);
-  const lattice = (n) => { const a = new Float32Array(n * n); for (let i = 0; i < a.length; i++) a[i] = rng(); return a; };
-  const l1 = lattice(4), l2 = lattice(16), l3 = lattice(64);
-  const sample = (l, n, u, v) => {
-    const x = u * n, y = v * n;
-    const x0 = Math.floor(x) % n, y0 = Math.floor(y) % n;
-    const x1 = (x0 + 1) % n, y1 = (y0 + 1) % n;
-    let fx = x - Math.floor(x), fy = y - Math.floor(y);
-    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
-    return (l[y0 * n + x0] * (1 - fx) + l[y0 * n + x1] * fx) * (1 - fy) + (l[y1 * n + x0] * (1 - fx) + l[y1 * n + x1] * fx) * fy;
-  };
-  // earthy palette: deep green, mid green, bright green, yellow-green, tan, bare dirt
-  const pal = [[0x45,0x50,0x36],[0x5a,0x69,0x43],[0x76,0x83,0x55],[0x8b,0x91,0x64],[0xa0,0x95,0x70],[0x8e,0x7d,0x60]];
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const u = x / size, v = y / size;
-      const n = sample(l1, 4, u, v) * 0.50 + sample(l2, 16, u, v) * 0.30 + sample(l3, 64, u, v) * 0.20;
-      const t = Math.max(0, Math.min(1, n + (rng() - 0.5) * 0.07)) * (pal.length - 1);
-      const idx = Math.min(pal.length - 2, Math.floor(t));
-      const f = t - idx;
-      const r = Math.round(pal[idx][0] * (1 - f) + pal[idx + 1][0] * f);
-      const g = Math.round(pal[idx][1] * (1 - f) + pal[idx + 1][1] * f);
-      const b = Math.round(pal[idx][2] * (1 - f) + pal[idx + 1][2] * f);
-      const i = (y * size + x) * 4;
-      img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-  tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
   return tex;
 }
@@ -377,12 +338,19 @@ function buildingMaterial() {
           float gx = floor(vWall.x / 1.3);
           float gz = floor(vWall.y / 1.1);
           float grime = fract(sin(gx * 91.7 + gz * 47.3 + vWall.w * 1.7) * 43758.5453);
-          diffuseColor.rgb *= 1.0 - 0.05 * grime * near;
+          // (faded out before the 1.3 m blocks shrink to a few pixels: no checker shimmer)
+          float grimeVis = 1.0 - smoothstep(0.08, 0.3, max(fwidth(vWall.x), fwidth(vWall.y)) / 1.1);
+          diffuseColor.rgb *= 1.0 - 0.05 * grime * near * grimeVis;
           // darker toward the ground (fake AO)
           diffuseColor.rgb *= mix(0.86, 1.0, smoothstep(0.0, 2.5, vWall.y));
           if (style < 0.5) {
-            float l = smoothstep(0.0, 0.1, fract(vWall.y / 0.4));
-            diffuseColor.rgb *= mix(1.0, mix(0.9, 1.0, l), near);
+            // siding lines every 0.4 m: anti-aliased by their own screen-space size and faded
+            // to their average shade before they get thinner than a pixel (no moire stripes)
+            float sy = vWall.y / 0.4;
+            float sa = fwidth(sy);
+            float l = smoothstep(0.0, 0.1 + sa, fract(sy));
+            float sVis = 1.0 - smoothstep(0.2, 0.55, sa);
+            diffuseColor.rgb *= mix(0.995, mix(0.9, 1.0, l), near * sVis);
           } else if (style < 1.5) {
             // Running-bond masonry in metres, antialiased away at distance. A
             // restrained mortar joint gives brick a scale without new textures.
@@ -467,9 +435,10 @@ function hcap(chunk, pts, tris, y, dir, hex, h, litDir = dir) {
  * door openings, the wall thickness (an inner face), door jambs and lintels, an
  * interior floor and ceiling. Geometry sits on y = 0 like the rest of the map.
  */
-export function appendBuildingGeometry(chunk, b, tint, collider) {
+export function appendBuildingGeometry(chunk, b, tint, collider, roomChunk = chunk) {
   const shell = collider?.shell;
   const start = chunk.buf.pos.length;
+  const roomStart = roomChunk.buf.pos.length;
   const pts = b.p;
   const n = pts.length;
   const h = b.h;
@@ -496,7 +465,7 @@ export function appendBuildingGeometry(chunk, b, tint, collider) {
   const i0 = chunk.buf.idx.length;
   let roofDrawn = false;
   if (shell) {
-    roofDrawn = addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roofHex);
+    roofDrawn = addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roofHex, roomChunk);
   } else {
     for (let i = 0; i < n; i++) {
       const a = pts[i];
@@ -543,6 +512,7 @@ export function appendBuildingGeometry(chunk, b, tint, collider) {
   // same foundation used by World collision. Shader facade heights remain local.
   const baseY = collider?.y0 || 0;
   for (let i = start + 1; i < buf.pos.length; i += 3) buf.pos[i] += baseY;
+  if (roomChunk !== chunk) for (let i = roomStart + 1; i < roomChunk.buf.pos.length; i += 3) roomChunk.buf.pos[i] += baseY;
 }
 
 /**
@@ -556,7 +526,7 @@ export function appendBuildingGeometry(chunk, b, tint, collider) {
  * roof tile grid (shell.roof) the roof and the top ceiling are drawn by InteriorMeshes; returns
  * true then (the caller skips its whole-footprint roof cap).
  */
-function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roofHex) {
+function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roofHex, roomChunk = chunk) {
   const pts = b.p;
   const n = pts.length;
   const h = b.h;
@@ -667,8 +637,11 @@ function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roofHex) {
   // painted ceiling instead of picking up the dim ground hemisphere colour (with a roof tile
   // grid InteriorMeshes draws it around the tiles)
   if (!roofGrid) hcap(chunk, inner, tris, ceilTop, -1, CEILING_COLOR, h, 1);
-  // interior partitions + room floors (InteriorMeshes.js), and the roof with its breakable tiles
-  if (shell.plan) addInteriorGeometry(chunk, shell, h, { quad, hcapFlat, roof: roofGrid ? { outer: pts, hex: roofHex, ceiling: CEILING_COLOR } : null });
+  // the roof with its breakable tiles is part of the shell: seen from afar, so the shell chunk
+  if (roofGrid) addRoofGeometry(chunk, shell, h, { quad, hcapFlat, roof: { outer: pts, hex: roofHex, ceiling: CEILING_COLOR } });
+  // interior partitions + room floors (InteriorMeshes.js)
+  // (into `roomChunk`: the building's own interior mesh, drawn only from nearby, see view.update)
+  if (shell.plan) addInteriorGeometry(roomChunk, shell, h, { quad, hcapFlat });
   return roofGrid;
 }
 
@@ -774,12 +747,12 @@ export class Scatter {
   }
 
   cull(cam, dist) {
-    const lim = dist + CHUNK * 0.75;
-    const lim2 = lim * lim;
     for (const m of this.meshes) {
       const dx = m.userData.cx - cam.x;
       const dz = m.userData.cz - cam.z;
-      m.visible = dx * dx + dz * dz < lim2;
+      // the bucket's own size, not a whole chunk: small clusters drop out sooner
+      const lim = dist + (m.boundingSphere ? m.boundingSphere.radius : CHUNK * 0.75);
+      m.visible = dx * dx + dz * dz < lim * lim;
     }
   }
 }
@@ -941,14 +914,13 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   root.name = 'world';
   scene.add(root);
 
-  progress(0.01, 'Loading terrain');
-  const terrainExtras = await loadTerrainData('/data/').catch(() => ({ terrain: null, trees: null, groundImage: null }));
-  if (terrainExtras.terrain) world.setTerrain(terrainExtras.terrain.meta, terrainExtras.terrain.heights);
-  const groundImage = terrainExtras.groundImage;
+  // The map is flat: the USGS heightfield and aerial ground photo (public/data/bentonville-
+  // terrain.*, bentonville-ground.webp) are not loaded. With them players and bots fell under the
+  // ground and slipped into buildings. World.terrain stays null, so terrainHeight is 0.
 
-  // ---- Crystal Bridges (bespoke landmark): registered right after the map terrain and before
-  // every other collider. It lays its ravine over the terrain (World.setTerrainOverlay: the hills
-  // ease down to street level around the tile) and reserves its site (src/world/crystal-bridges/)
+  // ---- Crystal Bridges (bespoke landmark): registered before every other collider. It lays its
+  // ravine into the ground (World.setTerrainOverlay; the edges ease back to street level) and
+  // reserves its site (src/world/crystal-bridges/)
   const cb = hasCrystalBridges(data) ? createCrystalBridges(world, data) : null;
   const skipFlat = (pts, k) => !!cb && cb.skipFlat(pts, k);
 
@@ -959,63 +931,66 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const gd = b.maxZ - b.minZ + margin * 2;
   const cx0 = (b.minX + b.maxX) / 2;
   const cz0 = (b.minZ + b.maxZ) / 2;
+  // Flat ground (the USGS hills and photo ground were taken back out: players fell under them
+  // and slipped into buildings). The Crystal Bridges tile is cut out: its ravine draws its own.
+  const groundTex = noiseTexture(256, 0.92, 0.22);
+  groundTex.repeat.set(gw / 70, gd / 70);
+  const groundMat = new THREE.MeshLambertMaterial({ color: 0x7daf58, map: groundTex });
+  // The 70 m noise tile alone repeats ~14 times across town and reads as a grid of identical
+  // blocks from the air. A second read of the same texture, turned 90 degrees at an unrelated
+  // scale, breaks the repeat: the two patterns only line up again far beyond the map.
+  groundMat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <map_fragment>',
+      `#ifdef USE_MAP
+        vec4 gA = texture2D(map, vMapUv);
+        vec4 gB = texture2D(map, vec2(vMapUv.y, -vMapUv.x) * 0.283 + vec2(0.37, 0.61));
+        diffuseColor.rgb *= gA.rgb * gB.rgb / 0.92;
+      #endif`
+    );
+  };
+  groundMat.customProgramCacheKey = () => 'br-ground-v2';
+  const ground = new THREE.Mesh(cb ? groundWithHole(b, margin, CB_TILE) : new THREE.PlaneGeometry(gw, gd), groundMat);
+  ground.rotation.x = -Math.PI / 2;
+  if (!cb) ground.position.set(cx0, 0, cz0);
+  ground.receiveShadow = true;
+  ground.renderOrder = -2;
+  root.add(ground);
 
-  // Natural procedural ground texture (better than satellite photo at walking level)
-  const gTex = groundTexture();
-  gTex.repeat.set((b.maxX - b.minX) / 48, (b.maxZ - b.minZ) / 48);
-  const groundMat = new THREE.MeshLambertMaterial({ map: gTex });
-  // Outer margin (always flat, behind everything — horizon fill). The Crystal Bridges tile is
-  // cut out of it: the ravine dips below y = 0 and draws its own terrain mesh.
-  const outerGeo = cb ? groundWithHole(b, margin, CB_TILE) : new THREE.PlaneGeometry(gw, gd);
-  const outerMesh = new THREE.Mesh(outerGeo, new THREE.MeshLambertMaterial({ color: 0x65744e }));
-  outerMesh.rotation.x = -Math.PI / 2;
-  if (!cb) outerMesh.position.set(cx0, 0, cz0);
-  outerMesh.renderOrder = -3;
-  root.add(outerMesh);
-  // The displaced terrain mesh is created after buildings are registered so building
-  // footprints can be flattened to their floor level (prevents terrain from piercing walls).
-
-  // ---- flat layers: land cover, sidewalks, paths, roads, centre lines (painter's order in one mesh)
-  // When terrain is loaded each overlay vertex follows the terrain surface so roads/parks
-  // don't float above or sink into hills.
-  // Areas use a terrain height function so addPolygon subdivides large polygons (every 4 m)
-  // giving interior vertices that faithfully follow hills. Heights are then overwritten at
-  // line 999 with surfaceHeight (which includes building foundation grading) so sidewalks
-  // and road approaches share the collision surface.
-  // Roads already subdivide via ribbonSamples; they still use 0 here and get corrected.
-  // Each flat layer gets a distinct Y offset so they depth-separate cleanly even on
-  // GPUs where painter's-order-within-a-draw-call is not guaranteed. Offsets must stay
-  // below the building interior floor overlay at +0.05 (InteriorMeshes.js line 68).
+  // ---- flat layers: land cover, sidewalks, paths, roads, centre lines. One mesh on the ground
+  // (y = 0), drawn after it in painter's order (no depth writes, a small polygon offset), so
+  // later layers cover earlier ones without any of them floating above the ground.
   const yGround = 0;
-  const areaY = world.terrain ? (x, z) => world.terrainHeight(x, z) : 0;
   const flat = new Buf();
   for (const a of data.areas) {
     if (!AREA_COLOR[a.k] || skipFlat(a.p, a.k)) continue;
-    addPolygon(flat, a.p, areaY, AREA_COLOR[a.k]);
+    addPolygon(flat, a.p, 0, AREA_COLOR[a.k]);
     world.addArea(a.p, a.k);
   }
-  const flatAreaEnd = flat.n;
   for (const w of data.waterways || []) if (!skipFlat(w.p)) addRibbon(flat, w.p, w.k === 'river' ? 5 : 1.6, yGround, AREA_COLOR.water);
-  const flatWaterwayEnd = flat.n;
   // roads that would float over the Crystal Bridges ravine are left out (its paths replace them)
   const roads = cb ? data.roads.filter((r) => !skipFlat(r.p)) : data.roads;
   await tick();
   for (const r of roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2 + 1.7, yGround, 0xb7b3a8);
-  const flatShoulderEnd = flat.n;
   for (const r of roads) {
     if (!PATHS.has(r.k)) continue;
     const hex = r.k === 'path' || r.k === 'track' ? 0xb7a27a : r.k === 'pedestrian' ? 0xd9d1bd : r.k === 'cycleway' ? 0xc4bda8 : 0xcdc5b0;
     addRibbon(flat, r.p, r.w / 2, yGround, hex);
   }
-  const flatPathEnd = flat.n;
   for (const r of roads) if (r.k === 'service') addRibbon(flat, r.p, r.w / 2, yGround, 0x64686d);
-  const flatServiceEnd = flat.n;
   for (const r of roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2, yGround, MAJOR.has(r.k) ? 0x484c52 : 0x53575c);
-  const flatSurfaceEnd = flat.n;
   for (const r of roads) if (MAJOR.has(r.k)) addRibbon(flat, r.p, 0.14, yGround, 0xe3c545);
   for (const r of roads) {
     for (let i = 0; i + 1 < r.p.length; i++) world.addRoadSegment(r.p[i][0], r.p[i][1], r.p[i + 1][0], r.p[i + 1][1], r.w, r.k);
   }
+  const flatMesh = new THREE.Mesh(
+    flat.geometry(),
+    new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 })
+  );
+  flatMesh.receiveShadow = true;
+  flatMesh.renderOrder = -1;
+  flatMesh.frustumCulled = false;
+  root.add(flatMesh);
   progress(0.15, 'Raising buildings');
   await tick();
 
@@ -1062,80 +1037,14 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // doors need every building and road registered first (road-facing, not into a neighbour)
   world.finishBuildings();
   await tick();
-
-  // Raise each flat layer to its own height above the terrain surface so overlapping
-  // road / area layers resolve cleanly via the depth buffer on every GPU.
-  // Layer order (lowest→highest): areas, waterways, shoulders, paths, service, surfaces, centrelines.
-  const liftFlat = (startV, endV, dy) => {
-    for (let i = startV * 3; i < endV * 3; i += 3)
-      flat.pos[i + 1] = world.surfaceHeight(flat.pos[i], flat.pos[i + 2]) + dy;
-  };
-  liftFlat(0,               flatAreaEnd,     0.010); // land cover (lowest)
-  liftFlat(flatAreaEnd,     flatWaterwayEnd, 0.015); // waterways
-  liftFlat(flatWaterwayEnd, flatShoulderEnd, 0.020); // road shoulders
-  liftFlat(flatShoulderEnd, flatPathEnd,     0.025); // paths / footways
-  liftFlat(flatPathEnd,     flatServiceEnd,  0.028); // service roads
-  liftFlat(flatServiceEnd,  flatSurfaceEnd,  0.034); // road surfaces (above shoulders)
-  liftFlat(flatSurfaceEnd,  flat.n,          0.040); // centre lines (top)
-  const flatGeometry = flat.geometry();
-  flatGeometry.computeVertexNormals();
-  const flatMesh = new THREE.Mesh(
-    flatGeometry,
-    new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 })
-  );
-  flatMesh.receiveShadow = true;
-  flatMesh.renderOrder = -1;
-  flatMesh.frustumCulled = false;
-  root.add(flatMesh);
-
-  // ---- terrain displaced mesh (deferred until buildings are registered so we can flatten under them)
-  if (world.terrain) {
-    const T = world.terrain;
-    const tCols = Math.ceil((b.maxX - b.minX) / T.cell) + 2;
-    const tRows = Math.ceil((b.maxZ - b.minZ) / T.cell) + 2;
-    const tGeo = new THREE.PlaneGeometry(b.maxX - b.minX, b.maxZ - b.minZ, tCols - 1, tRows - 1);
-    tGeo.rotateX(-Math.PI / 2);
-    const tPos = tGeo.attributes.position;
-    for (let i = 0; i < tPos.count; i++) {
-      const wx = tPos.getX(i) + cx0;
-      const wz = tPos.getZ(i) + cz0;
-      // Flatten terrain under building footprints to that building's floor level so walls
-      // don't appear to sink into hillsides.
-      tPos.setY(i, world.surfaceHeight(wx, wz));
-    }
-    tPos.needsUpdate = true;
-    if (cb) {
-      // the Crystal Bridges tile draws its own ravine terrain: drop this mesh's triangles there
-      const idx = tGeo.index.array;
-      const keep = [];
-      for (let k = 0; k < idx.length; k += 3) {
-        const mx = (tPos.getX(idx[k]) + tPos.getX(idx[k + 1]) + tPos.getX(idx[k + 2])) / 3 + cx0;
-        const mz = (tPos.getZ(idx[k]) + tPos.getZ(idx[k + 1]) + tPos.getZ(idx[k + 2])) / 3 + cz0;
-        if (mx > CB_TILE.x0 && mx < CB_TILE.x1 && mz > CB_TILE.z0 && mz < CB_TILE.z1) continue;
-        keep.push(idx[k], idx[k + 1], idx[k + 2]);
-      }
-      tGeo.setIndex(keep);
-    }
-    tGeo.computeVertexNormals();
-    const tMesh = new THREE.Mesh(tGeo, groundMat);
-    tMesh.position.set(cx0, 0, cz0);
-    tMesh.receiveShadow = true;
-    tMesh.renderOrder = -2;
-    root.add(tMesh);
-  } else {
-    // No terrain data — simple flat ground
-    const fGeo = cb ? groundWithHole(b, 0, CB_TILE) : new THREE.PlaneGeometry(b.maxX - b.minX, b.maxZ - b.minZ);
-    const fMesh = new THREE.Mesh(fGeo, groundMat);
-    fMesh.rotation.x = -Math.PI / 2;
-    if (!cb) fMesh.position.set(cx0, 0, cz0);
-    fMesh.receiveShadow = true;
-    fMesh.renderOrder = -2;
-    root.add(fMesh);
-  }
-
+  const interiorChunks = [];
   for (let i = 0; i < placed.length; i += 3) {
     const bd = placed[i + 1];
-    appendBuildingGeometry(placed[i], bd, tints.get(bd.id), placed[i + 2]);
+    // rooms, stairs and furniture go in a mesh per building (about half of all the map's
+    // triangles): culled by distance and never drawn into the shadow map
+    const rooms = { buf: new Buf(), wall: [], bh: [], panelRanges: [] };
+    appendBuildingGeometry(placed[i], bd, tints.get(bd.id), placed[i + 2], rooms);
+    if (rooms.buf.idx.length) interiorChunks.push(rooms);
     if ((i / 3) % 600 === 599) {
       progress(0.25 + 0.2 * (i / placed.length), 'Raising buildings');
       await tick();
@@ -1143,8 +1052,10 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   }
   const bMat = buildingMaterial();
   const buildingMeshes = [];
+  const interiorMeshes = [];
   const panelRanges = new Map(); // panel -> { geo, ranges: [start, count, ...], saved, hidden }
-  for (const chunk of chunks.values()) {
+  for (const chunk of [...chunks.values(), ...interiorChunks]) {
+    const isInterior = interiorChunks.includes(chunk);
     const g = chunk.buf.geometry();
     g.setAttribute('aWall', new THREE.Float32BufferAttribute(chunk.wall, 4));
     g.setAttribute('aH', new THREE.Float32BufferAttribute(chunk.bh, 1));
@@ -1155,18 +1066,21 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
       const R = chunk.panelRanges;
       for (let i = 0; i < R.length; i += 3) {
         let rec = panelRanges.get(R[i]);
-        if (!rec) panelRanges.set(R[i], (rec = { geo: g, ranges: [], saved: null, hidden: false }));
-        rec.ranges.push(R[i + 1], R[i + 2]);
+        if (!rec) panelRanges.set(R[i], (rec = { parts: [], hidden: false }));
+        // a roof tile's top is in the shell mesh, its ceiling side in the room mesh
+        let part = rec.parts.find((p) => p.geo === g);
+        if (!part) rec.parts.push((part = { geo: g, ranges: [], saved: null }));
+        part.ranges.push(R[i + 1], R[i + 2]);
       }
     }
     const mesh = new THREE.Mesh(g, bMat);
-    mesh.castShadow = true;
+    mesh.castShadow = !isInterior; // the shell already shades the rooms
     mesh.receiveShadow = true;
     mesh.userData.cx = g.boundingSphere.center.x;
     mesh.userData.cz = g.boundingSphere.center.z;
     mesh.userData.r = g.boundingSphere.radius;
     root.add(mesh);
-    buildingMeshes.push(mesh);
+    (isInterior ? interiorMeshes : buildingMeshes).push(mesh);
   }
   progress(0.48, 'Parking cars');
   await tick();
@@ -1460,6 +1374,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   props.build();
   await tick();
 
+  let cbGroup = null;
   const view = {
     root,
     counts: { buildings: count, hollow: world.counts.hollow || 0, chunks: buildingMeshes.length, cars, schoolBuses, lamps, ...harvestables, treesBy },
@@ -1473,6 +1388,29 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
         const lim = q.buildingDist + m.userData.r;
         m.visible = dx * dx + dz * dz < lim * lim;
       }
+      const iDist = q.interiorDist || 130;
+      for (const m of interiorMeshes) {
+        const dx = m.userData.cx - cam.x;
+        const dz = m.userData.cz - cam.z;
+        const lim = iDist + m.userData.r;
+        m.visible = dx * dx + dz * dz < lim * lim;
+      }
+      // Crystal Bridges: its statues (the dragons alone are ~95k triangles), picture frames and
+      // furniture are drawn only from nearby; the ground, ponds, walls and roofs always are
+      const cbg = cbGroup || (cbGroup = root.getObjectByName('crystal-bridges'));
+      const cbl = world.landmarks && world.landmarks.crystal_bridges;
+      if (cbg && cbl) {
+        const d2 = (cbl.x - cam.x) ** 2 + (cbl.z - cam.z) ** 2;
+        const near = d2 < CB_DETAIL_DIST * CB_DETAIL_DIST;
+        const shadow = d2 < CB_SHADOW_DIST * CB_SHADOW_DIST;
+        for (const c of cbg.children) {
+          const n = c.name || '';
+          if (n.startsWith('cb-statue-') || n === 'cb-frames' || n.startsWith('cb-prop-') || n === 'cb-sign' || n.startsWith('cb-door-')) {
+            c.visible = near;
+            if (n.startsWith('cb-statue-')) c.castShadow = shadow;
+          }
+        }
+      }
     },
     /**
      * Blank / restore a breakable wall panel's triangles (World panel object; `c` = its building
@@ -1482,40 +1420,44 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     hidePanel(c, panel) {
       const rec = panelRanges.get(panel);
       if (!rec || rec.hidden) return false;
-      const idx = rec.geo.index;
-      const arr = idx.array;
-      const R = rec.ranges;
-      if (!rec.saved) {
-        let tot = 0;
-        for (let i = 1; i < R.length; i += 2) tot += R[i];
-        rec.saved = new arr.constructor(tot);
-        let o = 0;
-        for (let i = 0; i < R.length; i += 2) {
-          rec.saved.set(arr.subarray(R[i], R[i] + R[i + 1]), o);
-          o += R[i + 1];
+      for (const part of rec.parts) {
+        const idx = part.geo.index;
+        const arr = idx.array;
+        const R = part.ranges;
+        if (!part.saved) {
+          let tot = 0;
+          for (let i = 1; i < R.length; i += 2) tot += R[i];
+          part.saved = new arr.constructor(tot);
+          let o = 0;
+          for (let i = 0; i < R.length; i += 2) {
+            part.saved.set(arr.subarray(R[i], R[i] + R[i + 1]), o);
+            o += R[i + 1];
+          }
         }
+        for (let i = 0; i < R.length; i += 2) {
+          const v = arr[R[i]];
+          arr.fill(v, R[i], R[i] + R[i + 1]); // degenerate triangles
+          idx.addUpdateRange(R[i], R[i + 1]);
+        }
+        idx.needsUpdate = true;
       }
-      for (let i = 0; i < R.length; i += 2) {
-        const v = arr[R[i]];
-        arr.fill(v, R[i], R[i] + R[i + 1]); // degenerate triangles
-        idx.addUpdateRange(R[i], R[i + 1]);
-      }
-      idx.needsUpdate = true;
       rec.hidden = true;
       return true;
     },
     showPanel(c, panel) {
       const rec = panelRanges.get(panel);
       if (!rec || !rec.hidden) return false;
-      const idx = rec.geo.index;
-      const R = rec.ranges;
-      let o = 0;
-      for (let i = 0; i < R.length; i += 2) {
-        idx.array.set(rec.saved.subarray(o, o + R[i + 1]), R[i]);
-        idx.addUpdateRange(R[i], R[i + 1]);
-        o += R[i + 1];
+      for (const part of rec.parts) {
+        const idx = part.geo.index;
+        const R = part.ranges;
+        let o = 0;
+        for (let i = 0; i < R.length; i += 2) {
+          idx.array.set(part.saved.subarray(o, o + R[i + 1]), R[i]);
+          idx.addUpdateRange(R[i], R[i + 1]);
+          o += R[i + 1];
+        }
+        idx.needsUpdate = true;
       }
-      idx.needsUpdate = true;
       rec.hidden = false;
       return true;
     },

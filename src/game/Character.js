@@ -17,9 +17,18 @@ const TOON_CHAR = { saturate: 1.2 };
 
 // three's GLTFLoader strips dots from node names: "upperarm.l" -> "upperarml"
 const UPPER = new Set(['spine', 'chest', 'head', 'upperarml', 'lowerarml', 'wristl', 'handl', 'handslotl', 'upperarmr', 'lowerarmr', 'wristr', 'handr', 'handslotr']);
-const LOCO = ['idle', 'run', 'back', 'left', 'right', 'air'];
-const LOCO_CLIP = { idle: 'Idle', run: 'Running_A', back: 'Walking_Backwards', left: 'Running_Strafe_Left', right: 'Running_Strafe_Right', air: 'Jump_Idle' };
-const UPPER_CLIP = { aim2: '2H_Ranged_Aiming', aim1: '1H_Ranged_Aiming', shoot2: '2H_Ranged_Shoot', shoot1: '1H_Ranged_Shoot', swing: '2H_Melee_Attack_Chop', use: 'Use_Item', reload: '2H_Ranged_Reload' };
+const LOCO = ['idle', 'walk', 'run', 'back', 'left', 'right', 'air'];
+const LOCO_CLIP = { idle: 'Idle', walk: 'Walking_A', run: 'Running_A', back: 'Walking_Backwards', left: 'Running_Strafe_Left', right: 'Running_Strafe_Right', air: 'Jump_Idle' };
+const UPPER_CLIP = {
+  aim2: '2H_Ranged_Aiming', aim1: '1H_Ranged_Aiming', shoot2: '2H_Ranged_Shoot', shoot1: '1H_Ranged_Shoot', swing: '2H_Melee_Attack_Chop', use: 'Use_Item',
+  reload: '2H_Ranged_Reload', reload1: '1H_Ranged_Reload', hit: 'Hit_A', throw: 'Throw', pickup: 'PickUp',
+};
+// Ground speed (m/s) each gait clip looks right at: the cycle is played faster / slower around
+// it, and forward motion cross-fades walk -> run between WALK_TO_RUN speeds (no foot sliding
+// when aiming, crouching or backing up at walking pace).
+const GAIT_SPEED = { walk: 2.9, run: 6.6, back: 3.0, left: 5.6, right: 5.6 };
+const WALK_TO_RUN = [3.4, 5.4];
+const SPRINT_LOWERS_GUN = 7.6; // m/s: above this the aim pose relaxes (gun carried, not shouldered)
 const FULL_CLIP = { death: 'Death_A', emote: 'Cheer' };
 const HEIGHT = 1.8;
 const GAIT_SECONDS = 0.8; // one run cycle at normal speed (all locomotion loops share its phase)
@@ -155,6 +164,17 @@ const BACK_POSE = {
   Spellbook: { p: [0, 0.15, -0.42], r: [0, Math.PI / 2, 0], s: 1 },
 };
 
+/** Object3D.updateMatrixWorld that does nothing while the object is hidden (Character.root). */
+function skipHiddenMatrixWorld(force) {
+  if (!this.visible) {
+    this._mwStale = true;
+    return;
+  }
+  // first frame visible again: force the whole subtree up to date
+  THREE.Object3D.prototype.updateMatrixWorld.call(this, force || this._mwStale === true);
+  this._mwStale = false;
+}
+
 export class Character {
   /**
    * @param {CharacterKit} kit
@@ -165,6 +185,10 @@ export class Character {
   constructor(kit, opts = {}) {
     this.kit = kit;
     this.root = new THREE.Group();
+    // A hidden character (far away, in the bus, long dead) skips the per-frame world-matrix
+    // pass over its ~110 bones and meshes: with 100 players that pass was the biggest single
+    // CPU cost of a frame. Matrices catch up on the first frame it is shown again.
+    this.root.updateMatrixWorld = skipHiddenMatrixWorld;
     this.model = cloneSkinned(kit.scene);
     this.model.scale.setScalar(kit.scale);
     this.root.add(this.model);
@@ -305,7 +329,13 @@ export class Character {
   _oneShot(key, speed = 1) {
     const a = this.ov[key];
     if (!a) return;
-    if (this.shot && this.shot !== a) this.shot.setEffectiveWeight(0);
+    // the action it replaces fades out over a few frames instead of vanishing (swing combos)
+    if (this.shot && this.shot !== a) {
+      if (this._shotOld && this._shotOld !== this.shot) this._shotOld.setEffectiveWeight(0);
+      this._shotOld = this.shot;
+      this._oldW = this.shotW;
+    }
+    if (this._shotOld === a) this._shotOld = null;
     a.reset();
     a.setLoop(THREE.LoopOnce, 1);
     a.clampWhenFinished = true;
@@ -342,8 +372,61 @@ export class Character {
   }
 
   reload(seconds) {
-    const a = this.ov.reload;
-    if (a) this._oneShot('reload', a.getClip().duration / Math.max(0.3, seconds));
+    const key = !this.twoHanded && this.ov.reload1 ? 'reload1' : 'reload'; // pistols: one-handed reload
+    const a = this.ov[key];
+    if (a) this._oneShot(key, a.getClip().duration / Math.max(0.3, seconds));
+  }
+
+  /** A short flinch when hit (never over a reload / heal / swing already playing). */
+  flinch() {
+    if (!this.ov.hit || this.mode !== 'alive' || this.downed || (this.shot && this.shotLeft > 0.08)) return;
+    const t = this._clock || 0;
+    if (t - (this._flinchAt || -9) < 0.7) return;
+    this._flinchAt = t;
+    this._oneShot('hit', 1.7);
+  }
+
+  /** Overhand throw (grenades). */
+  throwItem() {
+    if (this.ov.throw) this._oneShot('throw', 2.2);
+    else this.swing();
+  }
+
+  /** Reaching down / forward to open or take loot. */
+  pickup() {
+    if (!this.ov.pickup || (this.shot && this.shotLeft > 0.08)) return;
+    this._oneShot('pickup', 2.4);
+  }
+
+  /** Touchdown after a fall: the body dips and springs back (k: 0..1 by fall speed). */
+  land(k = 0.5) {
+    this._landV = Math.max(this._landV || 0, 0.8 + 1.8 * clamp(k, 0, 1));
+  }
+
+  /** Cast shadows or not (far characters skip the shadow pass: ~10 skinned meshes each). */
+  setShadows(on) {
+    on = !!on;
+    if (this._shadows === on) return;
+    this._shadows = on;
+    this.root.traverse((o) => {
+      if (o.isMesh && o !== this.canopy && o !== this.downRing) o.castShadow = on;
+    });
+  }
+
+  /** Crouched: hips lower and the torso leans in (the gait slows with the lower speed). */
+  setCrouch(on) {
+    this.crouching = !!on;
+  }
+
+  /** Eases the body toward `heading` (also on frames the skeleton is not animated). */
+  turn(dt, heading) {
+    if (this._yaw == null) this._yaw = heading;
+    let dy = heading - this._yaw;
+    dy -= Math.PI * 2 * Math.round(dy / (Math.PI * 2));
+    const step = Math.abs(dy) > 2.6 ? dy : dy * (1 - Math.exp(-20 * dt));
+    this._yaw += step;
+    this._turnRate = dt > 0 ? step / dt : 0;
+    this.root.rotation.y = Math.PI - this._yaw;
   }
 
   cancelOneShot() {
@@ -525,6 +608,12 @@ export class Character {
     this.aim = 0;
     this.downed = false;
     this._down = 0;
+    this._landY = this._landV = 0;
+    this._crouch = 0;
+    this.crouching = false;
+    this._lean = 0;
+    this._shotOld = null;
+    this.model.rotation.z = 0;
     this.downRing.visible = false;
     this.model.rotation.x = 0;
     this.model.position.copy(this._modelPos);
@@ -543,13 +632,10 @@ export class Character {
     this._emoteTick();
     this.heading = s.heading;
     this.pitch = damp(this.pitch, s.pitch || 0, 18, dt);
+    this._clock = (this._clock || 0) + dt;
     // body yaw eases toward the heading (shortest way round): no snapping when a bot or a
     // remote player's heading arrives in steps
-    if (this._yaw == null) this._yaw = s.heading;
-    let dy = s.heading - this._yaw;
-    dy -= Math.PI * 2 * Math.round(dy / (Math.PI * 2));
-    this._yaw += Math.abs(dy) > 2.6 ? dy : dy * (1 - Math.exp(-20 * dt));
-    this.root.rotation.y = Math.PI - this._yaw;
+    this.turn(dt, s.heading);
     this.canopy.visible = !!s.gliding && this.mode !== 'dead';
     // prone blend (runs even when the skeleton is not animated this frame)
     const downT = this.downed ? 1 : 0;
@@ -571,6 +657,20 @@ export class Character {
       // the held item stays in hand: players shoot, swing and build in the water
       this.model.position.y = this._modelPos.y + this._down * 0.22 - this._swim * SWIM.sink;
     }
+    // landing dip: a damped spring kicked by land(); crouch: hips down
+    if (this._landV || this._landY) {
+      // _landY: how far the body is pushed down (m); land() kicks _landV downward
+      const h = Math.min(dt, 1 / 30);
+      let v = (this._landV || 0) + (-120 * (this._landY || 0) - 15 * (this._landV || 0)) * h;
+      const y = clamp((this._landY || 0) + v * h, -0.04, 0.22);
+      if (Math.abs(y) < 0.002 && Math.abs(v) < 0.05) v = 0;
+      this._landY = v === 0 ? 0 : y;
+      this._landV = v;
+    }
+    const crouchT = this.crouching && this.mode === 'alive' && !this.downed && !this.swimming ? 1 : 0;
+    this._crouch = damp(this._crouch || 0, crouchT, 12, dt);
+    if (this._crouch < 0.002 && !crouchT) this._crouch = 0;
+    this.model.position.y = this._modelPos.y + this._down * 0.22 - this._swim * SWIM.sink - (this._landY || 0) - this._crouch * 0.2;
     if (!this.animate) return;
 
     const dead = this.mode === 'dead';
@@ -579,6 +679,7 @@ export class Character {
     // locomotion blend targets
     let ti = 0;
     let tr = 0;
+    let tw = 0;
     let tb = 0;
     let tl = 0;
     let tg = 0;
@@ -597,11 +698,18 @@ export class Character {
         if (sd > 0) tg = (sd / sum) * move;
         else tl = (-sd / sum) * move;
         if (tr + tb + tg + tl < 1e-3) tr = move;
+        // forward: walk at walking pace, run above it
+        if (this.lo.walk) {
+          const runK = clamp((s.speed - WALK_TO_RUN[0]) / (WALK_TO_RUN[1] - WALK_TO_RUN[0]), 0, 1);
+          tw = tr * (1 - runK);
+          tr *= runK;
+        }
       }
     }
     const w = this.w;
     const k = 10;
     w.idle = damp(w.idle, ti, k, dt);
+    w.walk = damp(w.walk ?? 0, tw, k, dt);
     w.run = damp(w.run, tr, k, dt);
     w.back = damp(w.back ?? 0, tb, k, dt);
     w.left = damp(w.left ?? 0, tl, k, dt);
@@ -609,7 +717,9 @@ export class Character {
     w.air = damp(w.air ?? 0, ta, k, dt);
 
     // upper-body override: aim pose while a gun is out, plus one-shots
-    const wantAim = !full && !this.downed && this.equipped && this.equipped !== 'pickaxe' ? 1 : 0;
+    // (relaxed while sprinting: the gun is carried, and comes back up the moment you slow or shoot)
+    const sprinting = s.grounded && s.speed > SPRINT_LOWERS_GUN && !(this.shot && this.shotLeft > 0);
+    const wantAim = !full && !this.downed && !sprinting && this.equipped && this.equipped !== 'pickaxe' ? 1 : 0;
     this.aim = damp(this.aim, wantAim, 14, dt);
     let shotTarget = 0;
     if (this.shot) {
@@ -621,6 +731,13 @@ export class Character {
       }
     }
     this.shotW = damp(this.shotW, shotTarget, 22, dt);
+    if (this._shotOld) {
+      this._oldW = damp(this._oldW || 0, 0, 16, dt);
+      if (this._oldW < 0.02) {
+        this._shotOld.setEffectiveWeight(0);
+        this._shotOld = null;
+      }
+    }
     // full-body actions (emote / death) cross-fade in and out instead of popping
     this._fw = damp(this._fw || 0, full ? 1 : 0, dead ? 14 : 9, dt);
     if (this._fw > 0.999) this._fw = 1;
@@ -640,14 +757,28 @@ export class Character {
     for (const key in this.ov) {
       const a = this.ov[key];
       if (a === this.shot) a.setEffectiveWeight(this.shotW * fullW);
+      else if (a === this._shotOld) a.setEffectiveWeight(this._oldW * (1 - this.shotW) * fullW);
       else if (key === aimKey) a.setEffectiveWeight(this.aim * (1 - this.shotW) * fullW);
       else a.setEffectiveWeight(0);
     }
-    const rateT = this.downed ? 0.45 : clamp(s.speed / 6.6, 0.55, 1.45);
+    // Walk / run / backpedal / strafes share one gait phase so blending between them never
+    // makes the feet stutter. The cycle length and the speed it suits are the blend of the
+    // clips in play, so each gait is played near its natural pace instead of a stretched run.
+    let gw = 0;
+    let gSpeed = 0;
+    let gDur = 0;
+    for (const key in GAIT_SPEED) {
+      const lo = this.lo[key];
+      const wk = lo ? w[key] || 0 : 0;
+      if (wk <= 0) continue;
+      gw += wk;
+      gSpeed += wk * GAIT_SPEED[key];
+      gDur += wk * lo.getClip().duration;
+    }
+    const gait = gw > 1e-3 ? gDur / gw : this.lo.run ? this.lo.run.getClip().duration : GAIT_SECONDS;
+    const ref = gw > 1e-3 ? gSpeed / gw : GAIT_SPEED.run;
+    const rateT = this.downed ? 0.45 : clamp(s.speed / ref, 0.5, 1.5);
     this._rate = damp(this._rate || rateT, rateT, 8, dt);
-    // run / backpedal / strafes share one gait phase so blending between them never makes
-    // the feet slide or stutter
-    const gait = this.lo.run ? this.lo.run.getClip().duration : GAIT_SECONDS;
     this._phase = ((this._phase || 0) + (dt * this._rate) / gait) % 1;
     for (const key of LOCO) {
       const lo = this.lo[key];
@@ -668,6 +799,18 @@ export class Character {
     }
 
     this.mixer.update(dt);
+
+    // procedural touches on top of the clips: lean into strafes and turns, crouch lean
+    if (!dead && !this.downed) {
+      const sp = Math.min(1, s.speed / 8);
+      const leanT = s.grounded ? clamp(-(s.side || 0) * sp * 0.1 - (this._turnRate || 0) * sp * 0.012, -0.14, 0.14) : 0;
+      this._lean = damp(this._lean || 0, leanT, 8, dt);
+      this.model.rotation.z = this._lean;
+      if (this._crouch > 0.01 && this.bones.spine) this.bones.spine.rotateX(this._crouch * 0.38);
+    } else if (this._lean) {
+      this._lean = 0;
+      this.model.rotation.z = 0;
+    }
 
     if (!dead && this.aim > 0.02) {
       // lean the torso with the aim pitch
