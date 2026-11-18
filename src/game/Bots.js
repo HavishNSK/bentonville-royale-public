@@ -81,6 +81,7 @@ const BOX_MEMORY = 10; // seconds a boxed bot keeps fighting a target it cannot 
 const BOX_RANGE = 38; // metres: fights closer than this may be taken from a box
 const BOX_LEAVE = 60; // metres: a target this far away ends the box fight
 const CELL_HALF = BUILD.cell / 2;
+const WALL_EVERY_DMG = 30; // damage taken between two walls toward a guessed shooter (_wallOnHit)
 const TRAP_RANGE = 11; // metres: a hard bot may full-box a target this close (diff.trap)
 const TRAP_TIME = 9; // s a trap is worked before the bot moves on
 const WINDOW = 1 << 4; // wall edit: middle tile (chest / eye height)
@@ -350,31 +351,37 @@ export class Bots {
       b.threat = src;
       b.thinkIn = Math.min(b.thinkIn, 0.05);
       if (!src.isBot) b.lodAt = 0; // a human is on it: back to full rate next frame
-      this._wallOnHit(b, src);
+      // every 30 damage taken: a fresh guess at where it came from, and a wall that way
+      b.hitDmg = Math.min(60, (b.hitDmg || 0) + (amount > 0 ? amount : 0));
+      if (b.hitDmg >= WALL_EVERY_DMG && this._wallOnHit(b, src)) b.hitDmg -= WALL_EVERY_DMG;
     }
   }
 
   /**
-   * Shot at: throw a wall between us and the shooter right away (a box when low), the
-   * first thing a good player does. Skipped mid-build, mid-air, knocked or without mats.
+   * Shot at (every WALL_EVERY_DMG damage taken): throw a wall toward where we GUESS the shots
+   * came from (a box when low), the first thing a good player does. Skipped mid-build, mid-air,
+   * knocked or without mats: returns false then, so the damage keeps counting toward the next.
    */
   _wallOnHit(b, src) {
     const st = this.structures;
     const a = b.actor;
-    const t = this.time;
     const diff = this.diff;
-    if (!st || !diff.wallOnHit || a.downed || !a.grounded || b.bqI < b.bqN || t < (b.hitWallAt || 0)) return;
-    if (st.count >= BUILD.maxPieces * BUILD_ROOM) return;
-    b.hitWallAt = t + 1.2 + this.rng() * 1.5;
-    if (this.rng() > diff.wallOnHit) return;
+    if (!st || !diff.wallOnHit || a.downed || !a.grounded || b.bqI < b.bqN) return false;
+    if (st.count >= BUILD.maxPieces * BUILD_ROOM) return false;
     const mat = bestMat(a.inventory);
-    if (!mat) return;
+    if (!mat) return false;
     const fx = src.pos.x - a.pos.x;
     const fz = src.pos.z - a.pos.z;
-    const hs = (Math.round(Math.atan2(fx, -fz) / (Math.PI / 2)) * Math.PI) / 2;
+    // a guess at where the shots came from: off by guessError, and now and then the wrong side
+    // entirely (misguess), like a player who only heard the hit
+    let ang = Math.atan2(fx, -fz) + gauss(this.rng) * (diff.guessError || 0);
+    if (this.rng() < (diff.misguess || 0)) ang += this.rng() < 0.3 ? Math.PI : (this.rng() < 0.5 ? 1 : -1) * (Math.PI / 2);
+    b.guessedHit = ang;
+    const hs = (Math.round(ang / (Math.PI / 2)) * Math.PI) / 2;
     const low = a.health + a.shield < 60;
-    const n = low && diff.buildPieces >= 5 && this.rng() < diff.boxHeal ? this._queueBox(b, 0, hs) : queueStep(b, 0, 'wall', a.pos.x, a.pos.y, a.pos.z, Math.atan2(fx, -fz), 0);
+    const n = low && diff.buildPieces >= 5 && this.rng() < diff.boxHeal ? this._queueBox(b, 0, hs) : queueStep(b, 0, 'wall', a.pos.x, a.pos.y, a.pos.z, ang, 0);
     this._startQueue(b, n, n > 1 ? 'box' : 'wall', mat, Math.sin(hs), -Math.cos(hs));
+    return true;
   }
 
   /** 1x1 box around the bot's own cell from piece n: front wall, sides, back, then a cone roof. */
@@ -2475,6 +2482,9 @@ export class Bots {
       b.stuck++;
       b.stuckTotal++;
       b.wantJump = true;
+      // walled in by a build (our own box, or someone's trap): edit a door out of our own wall,
+      // else pickaxe through it
+      if (!b.box && !b.trap) this._breakOut(b);
       // in the storm: smash whatever is in the way (builds, building walls) instead of only
       // walking around it, and drop an escape ramp when a wall is in front of us
       if (b.stormUrgent) {
@@ -2512,6 +2522,44 @@ export class Bots {
     b.stuckX = a.pos.x;
     b.stuckZ = a.pos.z;
     b.stuckAt = t + STUCK_WINDOW;
+  }
+
+  /**
+   * Stuck against a built wall on our own cell (a box we sat in, or an enemy's trap): open a
+   * door in our own wall toward where we are going, or pickaxe through one that is not ours
+   * (or already a door that still does not let us out). True when it acted.
+   */
+  _breakOut(b) {
+    const st = this.structures;
+    const a = b.actor;
+    const t = this.time;
+    if (!st || a.downed || t < (b.breakOutAt || 0)) return false;
+    const dx = (b.steerGX ?? b.navX) - a.pos.x;
+    const dz = (b.steerGZ ?? b.navZ) - a.pos.z;
+    if (!(Math.hypot(dx, dz) > 0.5)) return false;
+    // the wall toward the goal, then the other axis' wall toward it (a diagonal goal)
+    const xMajor = Math.abs(dx) >= Math.abs(dz);
+    const sides = [Math.atan2(xMajor ? Math.sign(dx) : 0, xMajor ? 0 : -Math.sign(dz)), Math.atan2(xMajor ? 0 : Math.sign(dx), xMajor ? -Math.sign(dz) : 0)];
+    for (const h of sides) {
+      _bpos.x = a.pos.x;
+      _bpos.y = a.pos.y;
+      _bpos.z = a.pos.z;
+      const pl = st.plan('wall', _bpos, h, 0, _pl);
+      const w = st.slots.get(pl.key);
+      if (!w || !w.alive || Math.abs(w.y - a.pos.y) > 1.5) continue;
+      b.breakOutAt = t + 1.2;
+      if (w.owner === a && (w.edit | 0) !== DOOR && st.edit(w, DOOR)) {
+        b.editsOut = (b.editsOut || 0) + 1;
+        b.thinkIn = 0;
+        return true;
+      }
+      b.smashUntil = t + 3;
+      b.smashX = w.x;
+      b.smashZ = w.z;
+      b.smashes = (b.smashes || 0) + 1;
+      return true;
+    }
+    return false;
   }
 
   /** Re-path: drop the current goal and go somewhere else nearby. */
@@ -2610,6 +2658,9 @@ export class Bots {
       }
     } else if (b.state === 'harvest' && b.harvestReach && b.fireCd <= 0 && b.harvest) {
       this._swingAt(b, b.harvest.x, a.pos.y + 1.0, b.harvest.z, null);
+    } else if (t < (b.smashUntil || 0) && b.fireCd <= 0 && b.healing <= 0) {
+      // breaking out of a box: pickaxe the wall in the way
+      this._swingAt(b, b.smashX, a.pos.y + 1.0, b.smashZ, null);
     } else if (b.stormUrgent && t < (b.breakUntil || 0) && b.fireCd <= 0 && b.healing <= 0) {
       // stuck in the storm: pickaxe toward where we are trying to go
       const dx = (b.steerGX ?? b.navX) - a.pos.x;
@@ -2938,6 +2989,9 @@ function newBrain(actor, target, rng) {
     rbVan: null, // reboot van being headed to
     stormUrgent: false,
     breakUntil: 0,
+    smashUntil: 0, // pickaxing out of a box (_breakOut): until, at smashX / smashZ
+    smashX: 0,
+    smashZ: 0,
     escapeAt: 0,
     steerGX: undefined,
     steerGZ: undefined,

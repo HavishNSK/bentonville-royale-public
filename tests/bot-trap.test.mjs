@@ -87,3 +87,92 @@ test('normal bots do not trap; hard bots scatter shots up close', () => {
   assert.ok(DIFFICULTY.hard.peekClosed < 0.4 && DIFFICULTY.hard.peekOpen < 0.7, 'quick edits');
   assert.ok(DIFFICULTY.hard.rushFloors && DIFFICULTY.hard.buildPieces >= 12, 'stronger build patterns');
 });
+
+// ---- getting out of a box, and guessing where the shots came from
+
+function boxedBot(owner) {
+  const s = setup();
+  const { st, bots, b } = s;
+  const who = owner === 'self' ? b.actor : { id: 99 };
+  for (const h of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+    const pl = st.plan('wall', b.actor.pos, h, 0);
+    assert.ok(pl.valid, 'box wall fits');
+    st.place(pl, 'wood', who);
+  }
+  b.navX = b.actor.pos.x + 30; // wants to go east
+  b.navZ = b.actor.pos.z;
+  return s;
+}
+
+test('a bot stuck in its own box edits a door out toward where it is going', () => {
+  const { st, bots, b } = boxedBot('self');
+  assert.equal(bots._breakOut(b), true);
+  const east = st.pieces.find((p) => p.kind === 'wall' && p.x > b.actor.pos.x + 0.5);
+  assert.ok(east && east.edit, 'the east wall got a door');
+  assert.ok(st.pieces.filter((p) => p !== east).every((p) => !p.edit), 'only that wall');
+  assert.ok(!(b.smashUntil > bots.time), 'no pickaxe needed');
+});
+
+test('a bot in someone else\'s box pickaxes out (it cannot edit their walls)', () => {
+  const { st, bots, b } = boxedBot('enemy');
+  assert.equal(bots._breakOut(b), true);
+  assert.ok(b.smashUntil > bots.time, 'swinging');
+  assert.ok(b.smashX > b.actor.pos.x, 'at the wall toward its goal');
+  assert.ok(st.pieces.every((p) => !p.edit), 'no edit of an enemy wall');
+});
+
+test('a bot that is not walled in does nothing', () => {
+  const { bots, b } = setup();
+  b.navX = 40;
+  b.navZ = 10;
+  assert.equal(bots._breakOut(b), false);
+});
+
+test('walls on hit go roughly toward the shooter, sometimes the wrong way', () => {
+  const { st, bots, b } = setup();
+  let seed = 7;
+  bots.rng = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+  const src = { pos: new THREE.Vector3(b.actor.pos.x, 0, b.actor.pos.z - 30) }; // shooter due north (heading 0)
+  let right = 0;
+  let wrong = 0;
+  for (let i = 0; i < 400; i++) {
+    bots.time += 10;
+    b.bqN = 0;
+    b.bqI = 0;
+    b.hitWallAt = 0;
+    bots._wallOnHit(b, src);
+    if (b.guessedHit === undefined) continue;
+    const off = Math.abs(Math.atan2(Math.sin(b.guessedHit), Math.cos(b.guessedHit)));
+    if (off < Math.PI / 4) right++;
+    else wrong++;
+    b.guessedHit = undefined;
+  }
+  assert.ok(right > wrong * 3, `mostly right: ${right} right, ${wrong} wrong`);
+  assert.ok(wrong > 0, 'but not always');
+});
+
+test('every 30 damage taken: a new guess and a wall that way (damage mid-build still counts)', () => {
+  const { st, bots, b } = setup();
+  b.actor._bot = b;
+  b.actor.team = 1;
+  b.actor.isBot = true;
+  const src = { pos: new THREE.Vector3(b.actor.pos.x + 30, 0, b.actor.pos.z), alive: true, team: 2, isBot: true };
+  let guesses = 0;
+  const hit = (n) => {
+    b.guessedHit = undefined;
+    bots.notifyDamage(b.actor, n, { source: src });
+    if (b.guessedHit !== undefined) guesses++;
+    // finish whatever went up before the next hit
+    for (let i = 0; i < 120 && b.bqI < b.bqN; i++) {
+      bots.time += 1 / 60;
+      bots._buildStep(b);
+    }
+  };
+  for (let i = 0; i < 6; i++) hit(10); // 60 damage in 10s
+  assert.equal(guesses, 2, `walls after 60 damage in tens: ${guesses}`);
+  hit(30);
+  assert.equal(guesses, 3, 'one more at 30');
+  // (standing still, a guess for a side that already has a wall builds nothing new)
+  assert.ok(st.pieces.filter((p) => p.kind === 'wall').length >= 1, 'walls went up');
+  assert.ok(DIFFICULTY.hard.misguess <= 0.05 && DIFFICULTY.hard.guessError <= 0.15, 'hard guesses are sharp');
+});

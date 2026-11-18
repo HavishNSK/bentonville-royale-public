@@ -150,7 +150,10 @@ export function itemLabel(item) {
 /** Random loot rolls (exported for bots/tests). */
 export function rollWeapon(rng, rarityTable = LOOT.floorRarity) {
   const id = pickWeighted(rng, LOOT.weaponWeights);
-  const rarity = clampWeaponRarity(id, rollRarity(rng, rarityTable));
+  let rarity = clampWeaponRarity(id, rollRarity(rng, rarityTable));
+  // per-gun nudge after the roll (WEAPONS[id].rarityShift: { rarity: [to, chance] })
+  const shift = WEAPONS[id].rarityShift && WEAPONS[id].rarityShift[rarity];
+  if (shift && rng() < shift[1]) rarity = clampWeaponRarity(id, shift[0]);
   const st = weaponStats(id, rarity);
   return { type: 'weapon', id, rarity, mag: (st && st.mag) || WEAPONS[id].mag };
 }

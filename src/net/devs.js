@@ -22,3 +22,35 @@ export function parseDevChat(text, dev) {
   if (!body) return { error: 'Write an announcement after /announce.' };
   return { announce: true, text: body };
 }
+
+/**
+ * Special titles for verified accounts (by account username, like DEV_NAMES): shown before the
+ * name in global chat and the online list, with the name in `color`. The presence server
+ * grants them from the signed-in account, never from a typed nickname.
+ */
+export const PLAYER_TITLES = Object.freeze({
+  thechosenone: Object.freeze({ title: 'CHULDE', color: '#facece' }),
+});
+
+export function titleForName(name) {
+  return PLAYER_TITLES[String(name || '').trim().toLowerCase()] || null;
+}
+
+/** A title from the network, shape-checked: { title, color } or null (rendered as text only). */
+export function cleanTitle(title, color) {
+  const t = typeof title === 'string' ? title.trim() : '';
+  if (!/^[A-Z0-9][A-Z0-9 ]{0,13}$/.test(t)) return null;
+  const c = typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : null;
+  return { title: t, color: c };
+}
+
+/**
+ * What a verified account name grants (presence server, after the Accounts lookup): dev rights,
+ * a title, and the name shown in chat (`shown`: '' = keep the player's typed nickname).
+ */
+export function accountGrants(name) {
+  if (typeof name !== 'string' || !name) return { dev: false, shown: '', title: '', titleColor: '' };
+  const dev = isDevName(name);
+  const tt = titleForName(name);
+  return { dev, shown: dev || tt ? name.slice(0, 16) : '', title: tt ? tt.title : '', titleColor: tt ? tt.color : '' };
+}

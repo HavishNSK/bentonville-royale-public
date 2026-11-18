@@ -14,11 +14,13 @@ Implemented systems include:
 - Five weapon types, inventory/hotbar, floor loot, chests, and ammo boxes.
 - Walls, floors, ramps, and cones using wood, brick, or metal; damage and structural collapse.
 - Scripted bots, difficulty settings, storm phases, victory/defeat screens, minimap, and full map.
+- Team modes: an eliminated player drops a reboot card (it lands on the ground under them); a teammate carries it to one of Catfish Ken's reboot vans and holds interact for 5 seconds (`src/game/Reboot.js`, `REBOOT` in `src/core/config.js`).
+- In-game patch notes (`src/data/patchNotes.js`) and an update flyer (`src/data/updateFlyer.js`, `src/ui/updateFlyer.js`) that opens by itself the first time the title screen shows after an update, once per version (`localStorage` key `bentonville-royale.seenFlyer`).
 - Cartoon rendering, quality settings, synthesized audio with recorded sample fallbacks, and saved player preferences.
 - Friend lobbies via PartyServer/WebSocket rooms; optional Google Photorealistic 3D Tiles as a visual layer.
 - Optional accounts (username/password or Google sign-in) for coins, shop, locker, and friends on the Cloudflare Accounts Durable Object.
 
-There is no traditional database, paid checkout, or model-provider integration. Bots are scripted game logic. Additional terrain, canopy, and ground-imagery files exist but are not loaded by the current game.
+There is no traditional database, paid checkout, or model-provider integration. Bots are scripted game logic. The game loads the USGS terrain heightfield (`public/data/bentonville-terrain.*`); canopy and other imagery outputs are not wired into the runtime.
 
 ## Local Setup
 
@@ -83,6 +85,8 @@ Flow: **Log in with Clever** → Clever → Worker callback → one-time `?br_au
 
 Developer chat access is granted by the username allowlist in `src/net/devs.js`, including `Rakkart13`. The presence Worker verifies the signed-in account session before granting the red `[DEV]` chat title and `/announce message` command; changing a display nickname does not grant access. Allowlist changes require deploying the Worker (`npm run party:deploy`), then reconnecting or refreshing while signed in to that account.
 
+Special account titles work the same way: `PLAYER_TITLES` in `src/net/devs.js` maps a username to a title and name colour (`TheChosenOne` shows as `[CHULDE] TheChosenOne` in `#facece`). The presence Worker grants it from the verified signed-in account (`accountGrants`), sends it with that player's chat lines and online-list entry, and the client re-checks it (letters and digits only, `#rrggbb` colours) and renders it as text. A typed nickname never grants a title, and changes need the same Worker deploy.
+
 ### Optional Personal Music
 
 Place a personal track at `local-music/menu.mp3`. The dev/preview middleware serves it locally; the game otherwise uses synthesized music. The folder is ignored by Git and Vercel and is not copied to `dist/`. Do not move personal tracks into `public/`.
@@ -141,6 +145,12 @@ node tools/qa/smoke.mjs --url http://localhost:5173 --script tools/qa/interiors.
 Inspect the final JSON and screenshots. The harness can return success while reporting console errors, failed requests, or a blank canvas. It does not verify audible output or full pointer-lock behavior. `npm test` in the QA package is a failing placeholder, not the smoke-test entry point.
 
 For future gameplay changes, add targeted unit/integration coverage and critical-flow browser checks. Multiplayer verification should include separate host/guest browsers, disconnects, malformed messages, and network failure.
+
+### Releasing an update
+
+1. Add an entry at the top of `src/data/patchNotes.js` and bump `version` in `package.json` and `package-lock.json` to match.
+2. For a flyer, set `FLYER.version` in `src/data/updateFlyer.js` to that version and update its copy. Put its images in `public/ui/news/`: in-game captures with the HUD hidden, JPEG screenshots and transparent PNG item renders, about 600 KB total. Every player sees the flyer once, the first time the title screen shows after the update.
+3. Run `npm test` (`tests/update-flyer.test.mjs` checks the versions match and every image exists) and `npm run build`.
 
 ## Repository Structure
 
@@ -228,10 +238,13 @@ Bots open the south and library doors as they walk up to them. Other exterior do
 These sit in a ravine of three ponds that step down northward over two weirs. The site plan and its sources are in [docs/crystal-bridges-layout.md](docs/crystal-bridges-layout.md) and [docs/crystal-bridges-research.md](docs/crystal-bridges-research.md). Pavilion-to-outline assignments are inferences from schematic plans, not survey data.
 
 **Collision.**
-- **Terrain:** the ravine is a site-only heightfield (`site.js` `bakeTerrain`). It is zero (street level) everywhere off the tile, so the rest of the map is unchanged.
+- **Terrain:** the ravine is a site heightfield (`site.js` `bakeTerrain`) laid over the map's USGS terrain with `World.setTerrainOverlay`: inside the tile it is the terrain, and the surrounding hills ease down to street level (y = 0) over 60 m, so the museum's colliders keep their heights. Without map terrain it is the whole heightfield. Entrance paths and terraces (`PADS`) have 6 m sloped shoulders instead of cliff edges, and grass berms fill the clamped trench along walls that face higher ground.
 - **Architecture:** walls, slabs, roofs and stairs are oriented box colliders (`World.addBox`, `src/world/boxColliders.js`). You can walk under the bridges and stand on the roofs.
 - **Hits and materials:**
-  - The building is indestructible but harvestable for brick (concrete) and wood.
+  - The walls are indestructible but harvestable for brick (concrete) and wood.
+  - The roof is breakable tiles on a shared grid (`build.js` `roofTileLines`, about 4 m, 2 m along curved axes) that overlap so no slit opens between two heights. Bullets, the pickaxe and explosives break them; grenades and rockets do 3x damage to roof tiles over 1.6x / 1.8x their radius (`GRENADE` / `ROCKET` `roofDamageMult`, `roofRadiusMult`). The drawn roof hides a broken tile's patch. The tile under the North Tower high-tier chest stays solid.
+  - Where a taller pavilion opens onto a lower one, a transfer wall closes the gap above the lower roof.
+  - Building works on the museum's floors and roofs: off the terrain the build grid follows the surface you stand on, so pieces sit flush (`Structures.plan`).
   - Glass panes break when shot or swung at, and give no materials.
   - Benches, tables, chairs, counters and shelves break and give wood. Every gallery and the Great Hall Corridor has benches, kept clear of the bot lanes and the loot.
 - **Multiplayer:** breakable boxes sync to clients by box id, and clients ignore destroy events for unbreakable boxes.
@@ -282,7 +295,7 @@ Asset and data credits are maintained in [credits/](credits/). Preserve the exis
 
 ## Design System and Accessibility
 
-The game uses a deliberate cartoon dusk/Ozark visual identity. Shared tokens and fonts live in `src/ui/hud.css`; menus extend them in `src/ui/menus.css`.
+The game uses a deliberate cartoon dusk/Ozark visual identity. Shared tokens and fonts live in `src/ui/hud.css`; menus extend them in `src/ui/menus.css`. The title, friend-lobby, and loading backdrop is the water-tower illustration at `public/ui/lobby-bg.jpg`.
 
 | Token | Value | Role |
 | --- | --- | --- |

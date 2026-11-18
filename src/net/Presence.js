@@ -13,6 +13,7 @@
 // Reconnects on its own with backoff. Everything it receives is untrusted display text.
 
 import { partyUrl, cleanName } from './Net.js';
+import { cleanTitle } from './devs.js';
 
 const ROOM = 'global';
 const RETRY_MIN = 2000;
@@ -21,6 +22,12 @@ const MODES = ['solo', 'duo', 'trio', 'squad'];
 const STATUSES = ['lobby', 'queued', 'match'];
 
 /** Server snapshot -> a well-formed one (drops anything unexpected). */
+/** A verified account title ({ title, color }) off the wire, shape-checked; {} if none. */
+function titleOf(o) {
+  const t = o && cleanTitle(o.title, o.color);
+  return t ? { title: t.title, color: t.color } : {};
+}
+
 function cleanSnap(msg) {
   const n = (v) => (Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
   const searching = {};
@@ -29,6 +36,7 @@ function cleanSnap(msg) {
     name: cleanName(p && p.name),
     status: STATUSES.includes(p && p.status) ? p.status : 'lobby',
     mode: MODES.includes(p && p.mode) ? p.mode : 'solo',
+    ...titleOf(p),
   }));
   return { count: n(msg.count), searching, inMatch: n(msg.inMatch), players };
 }
@@ -91,6 +99,7 @@ export function openPresence({ token, accountToken = '', name, status = 'lobby',
       at: Number(m.at) || Date.now(),
       dev: m.dev === true,
       announce: m.announce === true,
+      ...titleOf(m),
     });
   };
 
