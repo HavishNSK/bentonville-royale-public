@@ -2013,6 +2013,14 @@
   background: var(--br-sun-hi);
   outline: none;
 }
+/* BOTS (Sandbox): its own colour, so it doesn't read as a second WEAPONS button */
+.br-map-bots {
+  background: var(--br-leaf);
+}
+.br-map-bots:hover,
+.br-map-bots:focus-visible {
+  background: #7fe393;
+}
 .br-map-weapons-ico {
   display: grid;
   place-items: center;
