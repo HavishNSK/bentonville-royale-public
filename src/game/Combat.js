@@ -56,6 +56,7 @@
 
 import * as THREE from 'three';
 import { WEAPONS, PICKAXE, PLAYER, KNOCK, SIPHON, ASSIST_DAMAGE, BUILDING_WALL, lerp, weaponStats } from '../core/config.js';
+import { CAR } from './vehicles/cars.js';
 import { sameTeam, teamStanding, aliveTeamCount } from './Teams.js';
 
 const _dir = new THREE.Vector3();
@@ -74,8 +75,9 @@ const SURFACE = { wood: 'wood', brick: 'brick', metal: 'metal' };
 
 /** Ray (o + t d, |d| = 1) vs. an actor's vertical cylinder. Returns t or Infinity. */
 function rayActor(ox, oy, oz, dx, dy, dz, actor, maxT) {
-  const r = (actor.radius || PLAYER.radius) + 0.08;
-  const h = actor.downed ? (actor.height || PLAYER.height) * 0.45 : actor.crouching ? (actor.height || PLAYER.height) * 0.7 : actor.height || PLAYER.height;
+  // sitting in a car: a slimmer cylinder that stays inside the cabin (shots meet the glass first)
+  const r = actor.vehicle && !actor.leaning ? 0.3 : (actor.radius || PLAYER.radius) + 0.08;
+  const h = actor.vehicle && !actor.leaning ? CAR.seatedHeight : actor.downed ? (actor.height || PLAYER.height) * 0.45 : actor.crouching ? (actor.height || PLAYER.height) * 0.7 : actor.height || PLAYER.height;
   const feet = actor.pos.y;
   const fx = ox - actor.pos.x;
   const fz = oz - actor.pos.z;
@@ -215,6 +217,7 @@ export class Combat {
 
   _surfaceOf(hit) {
     if (!hit) return 'dirt';
+    if (hit.kind === 'car') return hit.part === 'window' ? 'glass' : 'metal';
     if (hit.kind === 'ground') return 'dirt';
     if (hit.kind === 'piece') return SURFACE[hit.collider && hit.collider.mat] || 'wood';
     if (hit.panel) return SURFACE[hit.panel.mat] || 'brick';
@@ -284,6 +287,7 @@ export class Combat {
    */
   fireWeapon(shooter, weaponItem, origin, dir, spread = 0, opts = null) {
     if (shooter) shooter.shotAt = performance.now() / 1000; // gunfire is heard (bots third-party it)
+    this._shooter = shooter || null; // for car damage credit (_resolveHit)
     const dirs = opts && opts.dirs;
     const claims = opts && opts.claims;
     const w = weaponStats(weaponItem && WEAPONS[weaponItem.id] ? weaponItem.id : 'pistol', weaponItem && weaponItem.rarity);
@@ -388,6 +392,8 @@ export class Combat {
       const c = res.hit.collider;
       if (!this.authoritative) {
         // client: effects only, the host applies damage
+      } else if (res.hit.kind === 'car' && this.vehicles) {
+        this.vehicles.damage(res.hit.car, dmg, { source: this._shooter || null, weapon: w.id }, res.hit.part, res.hit.idx);
       } else if (c && res.hit.kind === 'piece' && this.structures) {
         this.structures.damage(c, dmg, _pt);
       } else if (res.hit.panel) {
@@ -476,6 +482,7 @@ export class Combat {
       if (pj.path) pj.path.push(_pt.clone());
       if (ended) {
         const actorDamage = new Map();
+        this._shooter = pj.shooter;
         const record = this._resolveHit(pj.w, pj.scale, _dir, pj.travelled, res, actorDamage, true);
         if (this.sfx && actorDamage.size) this.sfx.play('bullet_impact', { x: _pt.x, y: _pt.y, z: _pt.z, volume: 0.6, surface: 'body' });
         this._applyActorDamage(pj.shooter, pj.w, actorDamage);
@@ -600,7 +607,13 @@ export class Combat {
   _trace(shooter, origin, dir, range) {
     const hit = this.world.raycast(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, range, null);
     let t = hit ? hit.t : range;
-    const copy = hit ? { t: hit.t, nx: hit.nx, ny: hit.ny, nz: hit.nz, collider: hit.collider, kind: hit.kind, panel: this._panelOf(hit) } : null;
+    let copy = hit ? { t: hit.t, nx: hit.nx, ny: hit.ny, nz: hit.nz, collider: hit.collider, kind: hit.kind, panel: this._panelOf(hit) } : null;
+    // drivable cars (Vehicles): glass stops a shot until it breaks; the body always does
+    const ch = this.vehicles ? this.vehicles.ray(origin, dir, t, shooter) : null;
+    if (ch) {
+      t = ch.t;
+      copy = { t: ch.t, nx: ch.nx, ny: ch.ny, nz: ch.nz, collider: null, kind: 'car', car: ch.car, part: ch.part, idx: ch.idx, panel: null };
+    }
     const ah = this.rayActors(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, t, shooter);
     const smokeT = this.grenades && this.grenades.blockT ? this.grenades.blockT(origin, dir, t) : null;
     if (smokeT != null && smokeT < t && (!ah || smokeT < ah.t)) {
@@ -629,6 +642,17 @@ export class Combat {
       if (this.authoritative) this.applyDamage(ah.actor, PICKAXE.damage * (shooter && shooter.damageScale != null ? shooter.damageScale : 1), { source: shooter, weapon: 'pickaxe', point: _pt.clone() });
       if (this.fx) this.fx.impact(_pt, _n.copy(_dir).negate(), 'body');
       out.hitActor = ah.actor;
+      return out;
+    }
+
+    // a drivable car in reach: dents it (glass first), no materials
+    const carHit = this.vehicles ? this.vehicles.ray(origin, _dir, hitCopy ? hitCopy.t : range, shooter) : null;
+    if (carHit) {
+      _pt.copy(origin).addScaledVector(_dir, carHit.t);
+      if (this.authoritative) this.vehicles.damage(carHit.car, CAR.pickaxeDamage, { source: shooter, weapon: 'pickaxe' }, carHit.part, carHit.idx);
+      if (this.fx) this.fx.impact(_pt, _n.set(carHit.nx, carHit.ny, carHit.nz), carHit.part === 'window' ? 'glass' : 'metal');
+      if (this.sfx) this.sfx.play('hit_metal', { x: _pt.x, y: _pt.y, z: _pt.z });
+      out.car = carHit.car;
       return out;
     }
 

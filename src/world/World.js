@@ -1350,6 +1350,29 @@ export class World {
   }
 
   /**
+   * A moving box (drivable car body): solid for movement, standing and building like any box,
+   * but skipped by raycast() (`noRay`; Vehicles traces shots so glass can break). Not given an
+   * id (multiplayer destroy events never name it). Move it with moveDynBox.
+   */
+  addDynBox(o) {
+    const c = makeBox({ ...o, id: -1 });
+    c.noRay = true;
+    c.dynBox = true;
+    this._each(c.minX, c.minZ, c.maxX, c.maxZ, true, (cell) => cell.boxes.push(c));
+    return c;
+  }
+
+  /** Re-place a moving box (from addDynBox); `alive: false` boxes stay out until moved back in. */
+  moveDynBox(c, cx, cz, yaw, y0, y1) {
+    if (!c) return;
+    if (c.alive) this.remove(c);
+    const n = makeBox({ cx, cz, hx: c.hx, hz: c.hz, yaw, y0, y1, kind: c.kind, mat: c.mat, id: -1 });
+    for (const k of ['cx', 'cz', 'cos', 'sin', 'y0', 'y1', 'h', 'hgt', 'minX', 'maxX', 'minZ', 'maxZ']) c[k] = n[k];
+    c.alive = true;
+    this._each(c.minX, c.minZ, c.maxX, c.maxZ, true, (cell) => cell.boxes.push(c));
+  }
+
+  /**
    * Reserve a plan polygon ([[x, z], ...]) for a bespoke landmark (Crystal Bridges): generic
    * scatter (trees, rocks, parked cars) and generic loot stay out; the landmark places its own.
    */
@@ -2435,6 +2458,7 @@ export class World {
           const c = boxes[i];
           if (c.stamp === stamp || c === ignore) continue;
           c.stamp = stamp;
+          if (c.noRay) continue; // drivable cars: shots / sight lines are traced by Vehicles (windows)
           const h = boxRay(c, ox, oy, oz, dx, dy, dz, 1e-4, best);
           if (!h) continue;
           best = h.t;

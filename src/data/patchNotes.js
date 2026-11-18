@@ -7,6 +7,56 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.19.0',
+    date: '2026-11-18',
+    title: 'Cars',
+    sections: [
+      {
+        heading: 'Drivable cars',
+        items: [
+          'Three cars you can drive: the Sedan (500 HP), the SUV (650 HP, slower and tougher) and the Pickup (450 HP, the fastest). About 30 are parked in lots and along the main roads, shown on the minimap.',
+          'Press E to get in. You take the wheel if it is free. Drive with WASD, Space for the handbrake, Shift for a short boost, H for the horn, C to change seats, E to get out.',
+          'Every car has 4 seats. Passengers hold aim (or fire) to lean out of their window and shoot, or throw grenades. You can heal in any seat.',
+        ],
+      },
+      {
+        heading: 'Shooting cars',
+        items: [
+          'Bullets hit the car: the body soaks them and the HP bar goes down. Glass stops shots too, until you break it. Then you can hit the people inside through the window.',
+          'At 0 HP the car blows up: everyone inside takes 75 damage and is thrown out, and anyone standing next to it takes a little too. The burnt wreck stays for a while.',
+          'Cars smoke when they are hurt and catch fire when they are about to blow.',
+          'Grenades and rockets hurt cars and blow out their glass. Bots shoot at cars with people in them, and jump out of the way of one driving at them.',
+        ],
+      },
+      {
+        heading: 'Driving',
+        items: [
+          'Running someone over hurts (more the faster you go). Teammates are safe.',
+          'Ramming a build breaks it. Crashing into walls at speed dents the car.',
+          'Cars use fuel. New Gas Can item: use it in or next to a car to refuel. An empty car only crawls.',
+          'Multiplayer: everyone needs to refresh for this update.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.18.1',
+    date: '2026-11-18',
+    title: 'Parties get into the game',
+    sections: [
+      {
+        heading: 'Parties',
+        items: [
+          'Fixed "Match found" not putting the whole party into the game. If you are in Sandbox, the Museum or a results screen when your party finds a match, you now jump straight in.',
+          'Starting Sandbox, the Museum or a bot match on your own un-readies you, so your party never queues without you.',
+          'The leader can\'t press PLAY while a party member is reconnecting, and someone whose connection blipped as the match was found still gets in.',
+          'The leader now sees a countdown ("2/3 here · starting in 9s"). The match starts with whoever made it.',
+          'If the leader\'s match never opens, you get a clear message instead of a stuck screen.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.18.0',
     date: '2026-11-18',
     title: 'Smoother everything',
