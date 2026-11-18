@@ -95,7 +95,10 @@ const _c = new THREE.Color();
 
 // Subdivide a triangle until its longest edge is <= POLYGON_STEP, sampling
 // the height function at every new midpoint so the mesh follows terrain.
-const POLYGON_STEP = 4;
+// 16 m keeps terrain-following accurate for Bentonville's gentle hills while
+// producing ~16x fewer triangles than 4 m (avoids GPU memory exhaustion on
+// city-sized maps where large park / wood polygons dominate the flat mesh).
+const POLYGON_STEP = 16;
 function emitSubTri(buf, ax, ay, az, bx, by, bz, cx, cy, cz, getY, r, g, b) {
   const abLen = Math.hypot(bx - ax, bz - az);
   const bcLen = Math.hypot(cx - bx, cz - bz);
@@ -932,6 +935,9 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // line 999 with surfaceHeight (which includes building foundation grading) so sidewalks
   // and road approaches share the collision surface.
   // Roads already subdivide via ribbonSamples; they still use 0 here and get corrected.
+  // Each flat layer gets a distinct Y offset so they depth-separate cleanly even on
+  // GPUs where painter's-order-within-a-draw-call is not guaranteed. Offsets must stay
+  // below the building interior floor overlay at +0.05 (InteriorMeshes.js line 68).
   const yGround = 0;
   const areaY = world.terrain ? (x, z) => world.terrainHeight(x, z) : 0;
   const flat = new Buf();
@@ -940,16 +946,22 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     addPolygon(flat, a.p, areaY, AREA_COLOR[a.k]);
     world.addArea(a.p, a.k);
   }
+  const flatAreaEnd = flat.n;
   for (const w of data.waterways || []) addRibbon(flat, w.p, w.k === 'river' ? 5 : 1.6, yGround, AREA_COLOR.water);
+  const flatWaterwayEnd = flat.n;
   await tick();
   for (const r of data.roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2 + 1.7, yGround, 0xb7b3a8);
+  const flatShoulderEnd = flat.n;
   for (const r of data.roads) {
     if (!PATHS.has(r.k)) continue;
     const hex = r.k === 'path' || r.k === 'track' ? 0xb7a27a : r.k === 'pedestrian' ? 0xd9d1bd : r.k === 'cycleway' ? 0xc4bda8 : 0xcdc5b0;
     addRibbon(flat, r.p, r.w / 2, yGround, hex);
   }
+  const flatPathEnd = flat.n;
   for (const r of data.roads) if (r.k === 'service') addRibbon(flat, r.p, r.w / 2, yGround, 0x64686d);
+  const flatServiceEnd = flat.n;
   for (const r of data.roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2, yGround, MAJOR.has(r.k) ? 0x484c52 : 0x53575c);
+  const flatSurfaceEnd = flat.n;
   for (const r of data.roads) if (MAJOR.has(r.k)) addRibbon(flat, r.p, 0.14, yGround, 0xe3c545);
   for (const r of data.roads) {
     for (let i = 0; i + 1 < r.p.length; i++) world.addRoadSegment(r.p[i][0], r.p[i][1], r.p[i + 1][0], r.p[i + 1][1], r.w, r.k);
@@ -1000,7 +1012,20 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   world.finishBuildings();
   await tick();
 
-  for (let i = 0; i < flat.pos.length; i += 3) flat.pos[i + 1] = world.surfaceHeight(flat.pos[i], flat.pos[i + 2]) + 0.025;
+  // Raise each flat layer to its own height above the terrain surface so overlapping
+  // road / area layers resolve cleanly via the depth buffer on every GPU.
+  // Layer order (lowest→highest): areas, waterways, shoulders, paths, service, surfaces, centrelines.
+  const liftFlat = (startV, endV, dy) => {
+    for (let i = startV * 3; i < endV * 3; i += 3)
+      flat.pos[i + 1] = world.surfaceHeight(flat.pos[i], flat.pos[i + 2]) + dy;
+  };
+  liftFlat(0,               flatAreaEnd,     0.010); // land cover (lowest)
+  liftFlat(flatAreaEnd,     flatWaterwayEnd, 0.015); // waterways
+  liftFlat(flatWaterwayEnd, flatShoulderEnd, 0.020); // road shoulders
+  liftFlat(flatShoulderEnd, flatPathEnd,     0.025); // paths / footways
+  liftFlat(flatPathEnd,     flatServiceEnd,  0.028); // service roads
+  liftFlat(flatServiceEnd,  flatSurfaceEnd,  0.034); // road surfaces (above shoulders)
+  liftFlat(flatSurfaceEnd,  flat.n,          0.040); // centre lines (top)
   const flatGeometry = flat.geometry();
   flatGeometry.computeVertexNormals();
   const flatMesh = new THREE.Mesh(
