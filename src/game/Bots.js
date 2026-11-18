@@ -105,8 +105,11 @@ const TOWER_LEVELS = 4; // ramps (each: the ramp + a wall on its far edge), mats
 const TOWER_MIN = 3;
 // Bots get their materials like a player: nothing on landing, then harvesting and loot.
 const HARVEST_LOW = 60; // total mats under this: harvesting comes before looting
-const HARVEST_SCAN = 16; // m: how far around a low bot looks for something to harvest
+const HARVEST_SCAN = 30; // m: how far around a low bot looks for something to harvest (trees, rocks, a building wall)
 const FARM_FIGHT_DIST = 35; // m: out of mats, a bot farms mid-fight while the enemy is out of sight or this far
+const FARM_CALM = 3; // s unshot ...
+const FARM_SAFE = 6; // ... with the enemy farther than this (m): farm too
+const FARM_TARGET = 100; // mats a bot that started farming mid-fight keeps going to
 const TOWER_NEAR = 20; // m: closer fights are boxed / trapped instead
 const TOWER_FAR = 120;
 const TOWER_CLOSE = 10; // m: an enemy this close ends a tower (fight it instead)
@@ -2847,10 +2850,50 @@ export class Bots {
     else a.character.setEquipped('pickaxe', true);
   }
 
-  /** Out of mats in a fight, but with a moment to farm (not boxed / trapping, target hidden or far). */
+  /**
+   * Out of mats in a fight, but with a moment to farm (not boxed / trapping): the target is out
+   * of sight or far off, or nobody has shot us for a bit and they are not right on top of us.
+   * Without this a bot that met someone with no mats never built again (it never left the fight).
+   */
   _farmMidFight(b, dist) {
     const a = b.actor;
-    return this._lowMats(a) && !b.box && !b.trap && a.grounded && (!b.targetVisible || dist > FARM_FIGHT_DIST);
+    if (b.box || b.trap || !a.grounded) return false;
+    // starts under HARVEST_LOW; once farming, goes on to FARM_TARGET (a few walls' worth, not 20)
+    const m = a.inventory.mats;
+    const total = (m.wood || 0) + (m.brick || 0) + (m.metal || 0);
+    const farming = b.state === 'harvest' && b.harvest && b.harvest.alive;
+    if (!(total < HARVEST_LOW || (farming && total < FARM_TARGET))) return false;
+    const calm = this.time - (b.hurtAt ?? -Infinity) > FARM_CALM;
+    return !b.targetVisible || dist > FARM_FIGHT_DIST || (calm && dist > FARM_SAFE);
+  }
+
+  /**
+   * The nearest building wall panel within HARVEST_SCAN (chest-high rays all around), as a
+   * harvest target { x, z, r: 0, alive, hp } on the wall's face; null when there is none.
+   */
+  _wallToFarm(b) {
+    const a = b.actor;
+    const w = this.world;
+    const cb = this.combat;
+    if (!w || !w.raycast || !cb || !cb._panelOf) return null;
+    let best = null;
+    let bestT = Infinity;
+    const y = a.pos.y + 1.1;
+    for (let i = 0; i < 12; i++) {
+      const h = a.heading + (i * Math.PI * 2) / 12;
+      const dx = Math.sin(h);
+      const dz = -Math.cos(h);
+      const hit = w.raycast(a.pos.x, y, a.pos.z, dx, 0, dz, HARVEST_SCAN, null);
+      if (!hit || hit.t >= bestT || hit.kind !== 'building') continue;
+      const pn = cb._panelOf(hit);
+      if (!pn || !pn.alive) continue;
+      bestT = hit.t;
+      // the farm spot: on the wall's face (a touch off it), toward us
+      const fx = hit.x - dx * 0.05;
+      const fz = hit.z - dz * 0.05;
+      best = { x: fx, z: fz, r: 0, panel: pn, get alive() { return pn.alive; }, get hp() { return pn.hp; } };
+    }
+    return best;
   }
 
   /** Total build mats under HARVEST_LOW. */
@@ -2879,6 +2922,9 @@ export class Bots {
         c = p;
       }
     }
+    // in town there may be no tree or rock for a long way: farm a building's wall instead (its
+    // panels give mats to the pickaxe, like a player farming a house)
+    if (!c && low) c = this._wallToFarm(b);
     if (!c) {
       if (low) b.harvestCooldown = this.time + 2; // nothing near: look again soon (after moving on)
       return false;

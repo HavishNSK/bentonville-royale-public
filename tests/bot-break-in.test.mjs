@@ -75,3 +75,22 @@ test('out of mats mid-fight with the enemy out of sight, a bot farms the nearest
   const m = bot.inventory.mats;
   assert.ok(m.wood + m.brick + m.metal > 0, 'has mats now');
 });
+
+test('no mats, enemy in plain sight 25 m off but not shooting: it farms (then it can build)', () => {
+  const { world, bots, bot, b, player } = sim('hard');
+  world.addCircle(bot.pos.x - 5, bot.pos.z, 0.6, 6, 'tree', 'wood', 300, []);
+  player.pos.set(bot.pos.x, 0, bot.pos.z - 25);
+  b.target = player;
+  b.state = 'engage';
+  b.targetVisible = true;
+  b.lastSeen = bots.time;
+  bots._los = () => true; // in plain sight the whole time
+  const states = new Set();
+  for (let i = 0; i < 10 * 60; i++) {
+    bots.update(1 / 60, { player });
+    states.add(b.state);
+  }
+  assert.ok(states.has('harvest'), `farmed: ${[...states]}`);
+  const m = bot.inventory.mats;
+  assert.ok(m.wood + m.brick + m.metal > 0, 'has mats now');
+});
