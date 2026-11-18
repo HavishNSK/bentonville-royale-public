@@ -80,6 +80,7 @@ const MEMORY = 4; // seconds a lost target is chased
 // box fighting (DIFFICULTY.boxFight): a full 1x1 box, edit peeks through the wall facing the target
 const BOX_MEMORY = 10; // seconds a boxed bot keeps fighting a target it cannot see
 const BOX_RANGE = 38; // metres: fights closer than this may be taken from a box
+const BOX_MIN = 8; // metres: closer than this a bot boxes the enemy in, never itself
 const BOX_LEAVE = 60; // metres: a target this far away ends the box fight
 const CELL_HALF = BUILD.cell / 2;
 const WALL_EVERY_DMG = 30; // damage taken between two walls toward a guessed shooter (_wallOnHit)
@@ -87,7 +88,7 @@ const TRAP_RANGE = 14; // metres: a bot may full-box a target this close (diff.t
 const TRAP_TIME = 9; // s a trap is worked before the bot moves on
 const TRAP_SEEN = 1.0; // s: a target seen this recently may still be trapped (a closed box peek hides it)
 // normal bots trap now and then (DIFFICULTY.normal has no `trap`); easy never does
-const TRAP_FALLBACK = { normal: 0.15 };
+const TRAP_FALLBACK = { normal: 0.4 };
 // getting shot: how much of DIFFICULTY.reaction is left before the first shot back (notifyDamage)
 const HIT_REACT = { easy: 0.35, normal: 0.12, hard: 0 };
 // grudge (_grudgeTick): an enemy that shot us (or that we shot at) is hunted until it dies,
@@ -944,7 +945,8 @@ export class Bots {
       }
       return true;
     }
-    if (!st || !diff.boxFight || !target || !target.alive || dist > BOX_RANGE || !a.grounded) return false;
+    // up close they get boxed in (_maybeTrap), not us with them
+    if (!st || !diff.boxFight || !target || !target.alive || dist > BOX_RANGE || dist < BOX_MIN || !a.grounded) return false;
     if (t < (b.boxRollAt || 0) || b.bqI < b.bqN) return false;
     b.boxRollAt = t + 3 + this.rng() * 2;
     if (this.rng() > diff.boxFight) return false;
@@ -999,13 +1001,14 @@ export class Bots {
         return;
       }
     }
-    // the enemy is in here with us: no peeks (a window or door in our own wall only opens the
-    // box up and shows nothing), close any that is open and just fight at close range
+    // the enemy came in here with us: no peeks (a window in our own wall shows nothing). Box
+    // THEM in instead: cut a door, step out, shut it behind us and work them from outside (the
+    // exit in the update loop hands over to a trap when it is through)
     const tgIn = b.target && b.target.alive ? b.target : null;
     if (tgIn && Math.hypot(tgIn.pos.x - bx.x, tgIn.pos.z - bx.z) < CELL_HALF + 0.3 && Math.abs(tgIn.pos.y - bx.y) < 2) {
       if (bx.peek === 'open' || bx.editKey) this._closePeek(bx);
       bx.peek = 'closed';
-      bx.peekT = t + 0.3;
+      this._endBox(b, DOOR, true);
       return;
     }
     if (bx.peek === 'open' && bx.blocked > 3 && bx.editKey) {
@@ -1240,7 +1243,24 @@ export class Bots {
   }
 
   /** Leaves the box: closes the peek, or edits a door toward the target to push out. */
-  _endBox(b, mask = 0) {
+  /**
+   * Out of our box with the enemy still inside it: shut the door behind us (the wall goes back
+   * solid) and work them from outside with window peeks, like a trap we built around them.
+   */
+  _sealIn(b, ex) {
+    const st = this.structures;
+    const tg = b.target;
+    const w = st && st.slots.get(ex.seal);
+    if (!w || !w.alive || !tg || !tg.alive) return false;
+    if (Math.hypot(tg.pos.x - ex.cx, tg.pos.z - ex.cz) > CELL_HALF + 0.3 || Math.abs(tg.pos.y - ex.y) > 2) return false;
+    st.edit(w, 0);
+    const t = this.time;
+    b.trap = { x: ex.cx, y: ex.y, z: ex.cz, face: ex.face, since: t, peek: 'closed', peekT: t + 0.25, editKey: null };
+    b.traps = (b.traps || 0) + 1;
+    return true;
+  }
+
+  _endBox(b, mask = 0, seal = false) {
     const bx = b.box;
     if (!bx) return;
     const st = this.structures;
@@ -1252,7 +1272,8 @@ export class Bots {
     if (!mask && inside) mask = DOOR;
     if (mask && st) {
       const tg = b.target && b.target.alive ? b.target : null;
-      const ang = tg ? Math.atan2(tg.pos.x - bx.x, -(tg.pos.z - bx.z)) : a ? a.heading || 0 : 0;
+      // sealing them in: out on our side of the box (away from them), not through them
+      const ang = seal && a ? Math.atan2(a.pos.x - bx.x, -(a.pos.z - bx.z)) : tg ? Math.atan2(tg.pos.x - bx.x, -(tg.pos.z - bx.z)) : a ? a.heading || 0 : 0;
       const face = (Math.round(ang / (Math.PI / 2)) * Math.PI) / 2;
       const d = this._boxWall(b, face);
       // a door that lines up with them (same column as the line out), not always the middle one
@@ -1262,7 +1283,7 @@ export class Bots {
         // walk out through it (the update loop steers straight to the doorway, then outside)
         const ux = Math.sin(face);
         const uz = -Math.cos(face);
-        b.boxExit = { cx: bx.x, cz: bx.z, dx: bx.x + ux * (CELL_HALF - 0.2), dz: bx.z + uz * (CELL_HALF - 0.2), x: bx.x + ux * (CELL_HALF + 1.4), z: bx.z + uz * (CELL_HALF + 1.4), until: this.time + 3 };
+        b.boxExit = { cx: bx.x, cz: bx.z, y: bx.y, face, seal: seal ? d.key : null, dx: bx.x + ux * (CELL_HALF - 0.2), dz: bx.z + uz * (CELL_HALF - 0.2), x: bx.x + ux * (CELL_HALF + 1.4), z: bx.z + uz * (CELL_HALF + 1.4), until: this.time + 3 };
       }
     }
     b.box = null;
@@ -2088,7 +2109,10 @@ export class Bots {
     const ex = b.boxExit;
     if (ex) {
       const inBox = Math.hypot(a.pos.x - ex.cx, a.pos.z - ex.cz) < CELL_HALF + 0.2;
-      if (this.time > ex.until || (!inBox && Math.hypot(a.pos.x - ex.x, a.pos.z - ex.z) < 1.2) || (!inBox && Math.hypot(a.pos.x - ex.cx, a.pos.z - ex.cz) > BUILD.cell)) b.boxExit = null;
+      if (this.time > ex.until || (!inBox && Math.hypot(a.pos.x - ex.x, a.pos.z - ex.z) < 1.2) || (!inBox && Math.hypot(a.pos.x - ex.cx, a.pos.z - ex.cz) > BUILD.cell)) {
+        b.boxExit = null;
+        if (ex.seal && !inBox) this._sealIn(b, ex);
+      }
       else {
         // through the door's middle: to the doorway, then the point outside
         const tx = inBox ? ex.dx : ex.x;

@@ -149,22 +149,26 @@ test('a box fight that ends with the bot inside cuts a door and walks it out', (
   assert.ok(Math.hypot(ex.x - 2, ex.z + 2) > BUILD.cell / 2, 'the exit point is outside the box');
 });
 
-test('a boxed bot does not edit its walls while the enemy is inside the box with it', () => {
+test('an enemy that walks into a bot box gets boxed in: the bot steps out its side, shuts the door and traps them', () => {
   const { bots, st, b } = botAt('hard', 2, -2);
   const a = b.actor;
   Object.assign(a, { heading: 0, height: 1.8, health: 100, shield: 100, inventory: { mats: { wood: 100 }, slots: [] } });
+  a.pos.set(2.9, 0, -2); // the bot on the east half of its cell
   for (const h of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) st.place(st.plan('wall', a.pos, h, 0), 'wood', a);
-  const enemy = { alive: true, pos: new THREE.Vector3(3, 0, -1) }; // same cell
+  const enemy = { alive: true, pos: new THREE.Vector3(1.2, 0, -2) }; // came in on the west half
   Object.assign(b, { state: 'engage', target: enemy, targetVisible: true, bqI: 0, bqN: 0, healing: 0, reloading: 0 });
-  b.box = { x: 2, y: 0, z: -2, peek: 'open', peekT: 0, editKey: null, fixAt: Infinity, checked: true, blocked: 0 };
-  // a window already open in the north wall: it is closed again, and nothing else opens
-  const north = st.pieces.find((p) => Math.abs(p.z + 4) < 0.1);
-  st.edit(north, 1 << 4);
-  b.box.editKey = north.key;
-  for (let i = 0; i < 30; i++) {
-    bots.time += 0.1;
-    bots._boxTick(b);
-  }
-  assert.ok(st.pieces.every((p) => !(p.edit | 0)), `edits: ${st.pieces.map((p) => p.edit | 0)}`);
-  assert.equal(b.box.peek, 'closed');
+  b.box = { x: 2, y: 0, z: -2, peek: 'closed', peekT: 0, editKey: null, fixAt: Infinity, checked: true, blocked: 0 };
+  bots.time = 1;
+  bots._boxTick(b);
+  assert.equal(b.box, null, 'the bot leaves its box');
+  const door = st.pieces.find((p) => p.edit);
+  assert.ok(door && door.x > 3.5, `the door is on the bot's (east) side, away from the enemy: ${door && door.x}`);
+  assert.ok(door.doors.some((v) => v), 'and open');
+  assert.ok(b.boxExit && b.boxExit.seal === door.key);
+  // walked out east: the door shuts behind it and the trap starts on that side
+  a.pos.set(6, 0, -2);
+  assert.ok(bots._sealIn(b, b.boxExit));
+  assert.equal(door.edit | 0, 0, 'the wall is solid again: the enemy is boxed in');
+  assert.ok(b.trap && Math.abs(b.trap.x - 2) < 1e-6 && Math.abs(b.trap.z + 2) < 1e-6, 'trapping the box with them in it');
+  assert.ok(bots._trapWall(b, b.trap.face) === door, 'peeks through the wall on its side');
 });

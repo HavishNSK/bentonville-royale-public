@@ -453,7 +453,7 @@ export const DIFFICULTY = {
     lead: 1, aimError: 0.02, closeMiss: 0.36, guessError: 0.15, misguess: 0.05, reaction: 0.18, burst: 0.92, buildChance: 1, buildPieces: 16, buildCooldown: 0.5, buildRate: 0.06, sight: 150, damageScale: 1,
     wallOnHit: 0.8, boxHeal: 1, pushWeak: 0.95, thirdParty: 0.7, rotateEarly: 1, boxFight: 0.9, peekOpen: 0.6, peekClosed: 0.32, // quick edits (was 0.9 / 0.55)
     peekWindow: true, // edit a window first, even up close (a door only when the window does not line up)
-    trap: 0.55, // chance to full-box a close, grounded target and window-peek it (Bots._maybeTrap)
+    trap: 0.85, // chance to full-box a close, grounded target and window-peek it (Bots._maybeTrap)
     rushFloors: true, // ramp rushes are ramp + wall + floor (cover ahead and overhead)
     highGround: 0.6, // chance to take height on a level target 8-45 m away instead of a lone wall
   },
