@@ -58,6 +58,7 @@
 import * as THREE from 'three';
 import { toToon } from '../render/Toon.js';
 import { BUILD, MATERIALS, MATERIAL_COLOR, clamp } from '../core/config.js';
+import { boxContains } from '../world/boxColliders.js';
 
 const CELL = BUILD.cell;
 const LEVEL = BUILD.level;
@@ -882,18 +883,20 @@ export class Structures {
       }
     }
     let k = (onGround ? this._groundLevel(x, z) : kFeet) + dk;
-    // ground well off the 3 m grid (the Crystal Bridges ravine floor, pond beds and banks sit
-    // at -12 .. -14.1 m): the world grid would sink the piece under even the lowest ground of
-    // its cell, up to 2.7 m, out of sight. Build on a grid through that lowest point instead
-    // (like a landmark slab): flush on flat ground, dug into the high side of a slope, never
-    // floating. Ground near the grid (the flat map at y = 0) keeps the shared world grid.
-    if (onGround) {
-      const low = this._lowGround(x, z);
-      const k0 = k - dk;
-      if (low !== null && low - (phase + k0 * LEVEL) > LOW_SINK) {
-        phase = levelPhase(low);
-        k = Math.round((low - phase) / LEVEL) + dk;
-      }
+    // never under the ground you see: a piece the grid would put below the lowest ground of
+    // its cell (the Crystal Bridges ravine floor, pond beds and banks at -12 .. -14 m, its grass
+    // berms, a raised gallery floor or step next to the one you stand on, a slope) goes on a
+    // grid through that lowest point instead (like a landmark slab): flush on flat ground, dug
+    // into the high side of a slope, never floating. Ground is looked up from just under the next
+    // level, so a floor or roof a level up is not "the ground". Building off your own pieces
+    // keeps their grid; ground near the grid (the flat map at y = 0) keeps the shared grid.
+    // (twice: the first lift can bring a block standing on that ground within reach)
+    for (let pass = 0; pass < 2 && !standOn && !under; pass++) {
+      const yb = phase + k * LEVEL;
+      const low = this._lowGround(x, z, yb + LEVEL - 0.05);
+      if (low === null || low - yb <= LOW_SINK) break;
+      phase = levelPhase(low);
+      k = Math.round((low - phase) / LEVEL);
     }
     rot = ((rot % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
     // standing on a ramp in a box and ramping again: that spot is taken by the ramp we are on,
@@ -1022,19 +1025,47 @@ export class Structures {
   }
 
   /** Ground level (grid level index) of the terrain at (x, z). */
-  /** The lowest terrain around (x, z) (a cell, or both sides of a wall's edge), to the cm. */
-  _lowGround(x, z) {
+  /**
+   * The lowest solid ground around (x, z) (a cell, or both sides of a wall's edge), to the cm,
+   * counting only ground up to topY (just under the next build level). See _solidAt.
+   */
+  _lowGround(x, z, topY = Infinity) {
     const w = this.world;
     if (!w || !w.terrainHeight) return null;
     let lo = Infinity;
     for (let a = -1; a <= 1; a++) {
       for (let b = -1; b <= 1; b++) {
-        const h = w.terrainHeight(x + a * (HALF - 0.1), z + b * (HALF - 0.1));
+        const h = this._solidAt(x + a * (HALF - 0.1), z + b * (HALF - 0.1), topY);
         if (!Number.isFinite(h)) return null;
         lo = Math.min(lo, h);
       }
     }
     return Math.round(lo * 100) / 100;
+  }
+
+  /**
+   * Solid ground at (x, z): the terrain (and building foundations), raised by landmark blocks
+   * that stand on it (the museum's gallery floors, grass berms, steps, plinths; stacked ones
+   * too) up to topY. Bridge decks with room under them and built pieces are not ground.
+   */
+  _solidAt(x, z, topY) {
+    const w = this.world;
+    let y = w.surfaceHeight ? w.surfaceHeight(x, z) : w.terrainHeight(x, z);
+    const cell = Number.isFinite(topY) && w.cellAt ? w.cellAt(x, z) : null;
+    const boxes = cell && cell.boxes;
+    if (!boxes) return y;
+    for (let pass = 0; pass < 3; pass++) {
+      let up = false;
+      for (const c of boxes) {
+        if (c.passable || c.alive === false || c.y1 <= y + 0.01 || c.y1 > topY || c.y0 > y + 0.6) continue;
+        if (boxContains(c, x, z)) {
+          y = c.y1;
+          up = true;
+        }
+      }
+      if (!up) break;
+    }
+    return y;
   }
 
   _groundLevel(x, z) {

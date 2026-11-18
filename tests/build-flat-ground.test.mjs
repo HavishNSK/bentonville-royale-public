@@ -55,3 +55,17 @@ test('on a ravine bank a piece sits at the lowest ground of its cell: never buri
     assert.ok(pl.y <= lo + 0.31 && pl.y >= lo - 0.36, `floor at ${pl.y}, lowest ground ${lo.toFixed(2)}`);
   }
 });
+
+test('building from the ground toward a landmark block (a gallery floor 2.7 m up) puts the piece on top of it, not inside', () => {
+  const { world, st } = setup(() => -13.7);
+  // a floor block filling the cells north of z = 0 (y -14.3 .. -11), resting on the terrain
+  world.addBox({ cx: 0, cz: -20, hx: 30, hz: 20, y0: -14.3, y1: -11, kind: 'museum', mat: 'brick' });
+  const pl = st.plan('floor', { x: 2, y: -13.7, z: 2 }, 0, 0, {}); // facing north, the cell ahead is the block
+  assert.ok(pl.z < 0, 'the cell ahead');
+  assert.ok(Math.abs(pl.y + 11) < 0.011, `on the block at -11, not inside it (${pl.y})`);
+  // a deck with room under it (bottom well above the ground) is not ground: pieces go under it
+  const { world: w2, st: s2 } = setup(() => -13.7);
+  w2.addBox({ cx: 0, cz: -20, hx: 30, hz: 20, y0: -12.2, y1: -11.6, kind: 'museum', mat: 'brick' });
+  const under = s2.plan('floor', { x: 2, y: -13.7, z: 2 }, 0, 0, {});
+  assert.ok(Math.abs(under.y + 13.7) < 0.011, `under the deck on the ground (${under.y})`);
+});
