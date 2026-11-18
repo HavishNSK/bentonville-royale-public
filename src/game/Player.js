@@ -16,7 +16,7 @@
 // from the host (src/net/ClientSession.js). Solo and host play are unchanged.
 
 import * as THREE from 'three';
-import { rampDragQuarter, validEdit } from './Structures.js';
+import { rampDragQuarter, validEdit, simpleEditMask, PRESETS, PRESET_ORDER } from './Structures.js';
 import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, KNOCK, REBOOT, SWIM, clamp, damp, TAU, weaponStats } from '../core/config.js';
 import { sameTeam } from './Teams.js';
 import { placeOnShoulder } from './Combat.js';
@@ -195,6 +195,7 @@ export class Player {
     this.sprinting = false;
     this.ads = false;
     this.buildPiece = null;
+    this.presetIndex = 0; // Simple Build: PRESET_ORDER index
     this.buildMat = 'wood';
     this.editing = null; // { piece, mask, hover, drag } while editing a built piece
     this.cooldown = 0;
@@ -704,6 +705,15 @@ export class Player {
         this.setBuildPiece(PIECE_ACTIONS[a]);
       }
     }
+    // Simple Build (setting): the preset key picks a preset structure, pressed again the next one
+    if (input.actionHit('buildPreset')) {
+      if (g.settings && g.settings.simpleBuild) {
+        this._endEdit(g);
+        if (this.buildPiece === 'preset') this.presetIndex = (this.presetIndex + 1) % PRESET_ORDER.length;
+        this.setBuildPiece('preset');
+        if (g.hud && g.hud.toast) g.hud.toast(PRESETS[PRESET_ORDER[this.presetIndex]].label);
+      } else if (g.hud && g.hud.toast) g.hud.toast('Turn on Simple Build in Settings', 'warn');
+    }
     if (input.actionHit('cycleMaterial')) this.cycleMaterial();
     if (input.actionHit('emote') && this.character && this.grounded && !this._wheel) {
       this._wheel = { t: 0, x: 0, y: 0, sel: -1, done: false };
@@ -763,7 +773,7 @@ export class Player {
   }
 
   setBuildPiece(kind) {
-    this.buildPiece = BUILD.pieces.includes(kind) ? kind : null;
+    this.buildPiece = BUILD.pieces.includes(kind) || kind === 'preset' ? kind : null;
     this._cancelUse();
     this._cancelReload();
   }
@@ -1373,18 +1383,48 @@ export class Player {
     const st = g.structures;
     if (!st || !st.plan) return;
     this._autoMaterial(g);
+    if (this.buildPiece === 'preset') {
+      // Simple Build: a whole preset structure around you, previewed piece by piece
+      const list = st.planPreset(PRESET_ORDER[this.presetIndex] || PRESET_ORDER[0], this.pos, this.heading, this._presetPlan || (this._presetPlan = []));
+      this.placement = null;
+      st.setPresetGhosts(list, this.buildMat);
+      if (lmbClick && this.placeCooldown <= 0) this.placePreset(g, list);
+      return;
+    }
     this.placement = st.plan(this.buildPiece, this.pos, this.heading, this.pitch);
     st.setGhost(this.placement, this.buildMat);
     if ((lmbClick || (lmb && this.placeCooldown <= 0)) && this.placement) this.tryPlace(g);
   }
 
+  /**
+   * Simple Build: place every valid piece of a planned preset, in order, as long as mats last.
+   * Each goes through the normal one-piece path (mats, host check, client prediction).
+   */
+  placePreset(g, list) {
+    let n = 0;
+    for (const pl of list) {
+      if (!pl.valid) continue;
+      if ((this.inventory.mats[this.buildMat] || 0) < BUILD.cost) this._autoMaterial(g);
+      if (this._placeOne(g, pl)) n++;
+      else if ((this.inventory.mats[this.buildMat] || 0) < BUILD.cost) break;
+    }
+    this.placeCooldown = 0.3;
+    if (!n) g.sfx.play('build_denied', { volume: 0.6 });
+    return n;
+  }
+
   /** Places the current ghost if valid and affordable. Returns the piece or null. */
   tryPlace(g) {
     const st = g.structures;
-    if (!st || !this.buildPiece) return null;
+    if (!st || !this.buildPiece || this.buildPiece === 'preset') return null;
     if (!this.placement) this.placement = st.plan(this.buildPiece, this.pos, this.heading, this.pitch);
-    const pl = this.placement;
     this.placeCooldown = 0.07; // hold-to-build: ~14 pieces a second
+    return this._placeOne(g, this.placement);
+  }
+
+  /** One planned piece: placed (or sent to the host) if valid and affordable. */
+  _placeOne(g, pl) {
+    const st = g.structures;
     if (!pl || !pl.valid) return null;
     const mats = this.inventory.mats;
     this._autoMaterial(g);
@@ -1451,6 +1491,13 @@ export class Player {
       return;
     }
     e.hover = st.aimTile(p, this.aimOrigin, this.aimDir);
+    // Simple Edit (setting): one click on a tile makes the common shape for it, right away
+    if (lmbClick && e.hover >= 0 && g.settings && g.settings.simpleEdit) {
+      const m = simpleEditMask(p.kind, e.hover, st.editValue(p), st.resetValue(p));
+      if (m >= 0) this._confirmEdit(g, m);
+      else g.sfx.play('build_denied', { volume: 0.5 });
+      return;
+    }
     if (lmbClick && e.hover >= 0) e.selecting = true;
     if (p.kind === 'ramp') {
       if (lmbClick && e.hover >= 0) e.from = e.hover;

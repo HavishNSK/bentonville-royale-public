@@ -533,7 +533,8 @@ export function buildHud(root) {
 
   // ---- build mode ----------------------------------------------------------------
   function setBuildMode(mode) {
-    const m = mode && pieceEls[mode] ? mode : null;
+    // 'preset' (Simple Build): building, with no single piece highlighted
+    const m = mode && (pieceEls[mode] || mode === 'preset') ? mode : null;
     if (m === lastBuild) return;
     for (const id in pieceEls) pieceEls[id].classList.toggle('is-active', id === m);
     r.build.classList.toggle('is-on', !!m);

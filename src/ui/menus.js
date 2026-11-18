@@ -328,6 +328,8 @@ export function createMenus(root, opts = {}) {
        <div class="mn-pane" data-pane="controls">
          ${toggle('editOnRelease', 'Confirm edit on release', 'Releasing the mouse after selecting tiles confirms the edit.')}
          ${toggle('editWheelReset', 'Reset edit with mouse wheel', 'Scroll while editing to reset the piece (instead of switching slots).')}
+         ${toggle('simpleEdit', 'Simple Edit', 'One click on a tile makes the common edit: door, window, half wall, arch, a floor or cone corner. Click it again to undo.')}
+         ${toggle('simpleBuild', 'Simple Build', 'The Preset build key places a whole structure at once: Box, Ramp + Wall, Tower or Cover. Press it again to switch preset.')}
          <p class="mn-bind-status" data-ref="bindStatus" role="status">Click a key to change it. Esc cancels. Right mouse resets an edit.</p>
          <div class="mn-binds">${bindRows}</div>
          <button type="button" class="mn-btn mn-btn-small" data-ref="bindReset"><span>RESET TO DEFAULTS</span></button>

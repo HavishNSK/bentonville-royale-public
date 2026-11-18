@@ -65,6 +65,7 @@ import {
   BOT_NAMES, DROP_ZONES, STORM, KNOCK, REBOOT, SWIM, angleDelta, clamp, weaponStats,
 } from '../core/config.js';
 import { sameTeam } from './Teams.js';
+import { PRESETS, simpleEditMask } from './Structures.js';
 import { busPosAt, jumpTimeFor } from './DropBus.js';
 import { route as roomRoute } from '../world/Interiors.js';
 
@@ -128,6 +129,11 @@ const SHADOW_DIST = 55; // metres: bots farther than this cast no shadow
 const DEAD_ANIM = 3; // seconds a death animation plays before the pose is frozen
 // building
 const BUILD_Q = 16; // most queued pieces in one build response
+// Simple Build / Simple Edit variety (Structures.PRESETS, simpleEditMask)
+const COVER_ON_HIT = 0.35; // share of hit reactions (x diff.wallOnHit) that raise a cover pocket
+const TOWER_CHANCE = 0.4; // enemy above: tower up instead of a ramp rush
+const COVER_CHANCE = 0.25; // mid range, not hurt: a cover pocket instead of a wall / ramp
+const SIMPLE_EDIT_CHANCE = 0.35; // a peek uses the tile's simple-edit shape when it still lines up
 const HEAR = 160; // metres: gunfire this close can draw a bot in (third party)
 const BUILD_ROOM = 0.85; // bots stop starting builds past this share of BUILD.maxPieces
 const RECLAIM_AT = 0.6; // past this share of BUILD.maxPieces, old bot pieces are taken down (_reclaimPieces)
@@ -870,8 +876,15 @@ export class Bots {
     b.guessedHit = ang;
     const hs = (Math.round(ang / (Math.PI / 2)) * Math.PI) / 2;
     const low = a.health + a.shield < 60;
-    const n = low && diff.buildPieces >= 5 && this.rng() < diff.boxHeal ? this._queueBox(b, 0, hs) : queueStep(b, 0, 'wall', a.pos.x, a.pos.y, a.pos.z, ang, 0);
-    this._startQueue(b, n, n > 1 ? 'box' : 'wall', mat, Math.sin(hs), -Math.cos(hs));
+    let n;
+    let mode = 'wall';
+    if (low && diff.buildPieces >= 5 && this.rng() < diff.boxHeal) {
+      n = this._queueBox(b, 0, hs);
+      mode = 'box';
+    } else if (diff.buildPieces >= 3 && this.rng() < COVER_ON_HIT * (diff.wallOnHit || 0)) {
+      n = this._queuePreset(b, 0, 'cover', hs); // three walls: covered from the shot and both flanks
+    } else n = queueStep(b, 0, 'wall', a.pos.x, a.pos.y, a.pos.z, ang, 0);
+    this._startQueue(b, n, mode, mat, Math.sin(hs), -Math.cos(hs));
     return true;
   }
 
@@ -886,6 +899,20 @@ export class Bots {
     n = queueStep(b, n, 'wall', cx, py, cz, hs - Math.PI / 2, 0);
     n = queueStep(b, n, 'wall', cx, py, cz, hs + Math.PI, 0);
     n = queueStep(b, n, 'cone', cx, py, cz, hs, 1);
+    return n;
+  }
+
+  /**
+   * A Simple Build preset (Structures.PRESETS: box, rampwall, tower, cover) around the bot's own
+   * cell from piece n, facing heading hs: the same structures a player gets from the preset key.
+   */
+  _queuePreset(b, n, name, hs) {
+    const preset = PRESETS[name];
+    if (!preset) return n;
+    const a = b.actor;
+    const cx = (Math.floor(a.pos.x / BUILD.cell) + 0.5) * BUILD.cell;
+    const cz = (Math.floor(a.pos.z / BUILD.cell) + 0.5) * BUILD.cell;
+    for (const [kind, q, pitch] of preset.parts) n = queueStep(b, n, kind, cx, a.pos.y, cz, hs + q * (Math.PI / 2), pitch || 0);
     return n;
   }
 
@@ -977,7 +1004,7 @@ export class Bots {
       const w = this.structures.slots.get(bx.editKey);
       const tg = b.target;
       const dm = w && tg ? this._peekMask(b, w, tg.pos.x, tg.pos.y, tg.pos.z, true) : DOOR;
-      if (w && w.alive && w.edit !== dm) st.edit(w, dm);
+      if (w && w.alive && w.edit !== dm) this._botEdit(b, w, dm);
       bx.blocked = 0;
     }
     const tx = b.targetVisible && b.target ? b.target.pos.x : b.lastSeenX;
@@ -1033,7 +1060,7 @@ export class Bots {
         bx.peekT = t + 0.2;
         return;
       }
-      st.edit(w, w.kind === 'wall' ? this._peekMask(b, w, tx, ty, tz, close && !diff.peekWindow) : this._quarterMask(w, tx, tz)); // hard: window first (door if it does not line up)
+      this._botEdit(b, w, w.kind === 'wall' ? this._peekMask(b, w, tx, ty, tz, close && !diff.peekWindow) : this._quarterMask(w, tx, tz)); // hard: window first (door if it does not line up)
       bx.extraKeys = this._openRestOfLine(b, w, tx, ty, tz); // a trap wall of ours behind it too
       bx.blocked = 0;
       bx.peek = 'open';
@@ -1099,6 +1126,12 @@ export class Bots {
       for (const c of cols) m |= (1 << c) | (1 << (3 + c));
       if (row === 2) for (const c of cols) m |= 1 << (6 + c);
     } else for (const r of rows) for (const c of cols) m |= 1 << (r * 3 + c);
+    // now and then the simple-edit shape for that tile instead (a door, a half wall, an arch):
+    // more varied edits, and still open where the line to the target crosses
+    if (this.rng() < SIMPLE_EDIT_CHANCE) {
+      const s = simpleEditMask('wall', row * 3 + col);
+      if (s > 0 && (s & m) === m) m = s;
+    }
     return m === 0x1ff ? 1 << 4 : m;
   }
 
@@ -1114,10 +1147,28 @@ export class Bots {
       const p = this._ownBlocker(b, tx, ty, tz);
       if (!p || p === first || out.includes(p.key)) break;
       const m = p.kind === 'wall' ? this._peekMask(b, p, tx, ty, tz, false) : this._quarterMask(p, tx, tz);
-      if (!st.edit(p, m)) break;
+      if (!this._botEdit(b, p, m)) break;
       out.push(p.key);
     }
     return out.length ? out : null;
+  }
+
+  /**
+   * Edit one of our pieces, and swing any door that edit makes open, away from us. A door edit
+   * is a closed door until someone opens it (Structures doorColumns: it blocks bodies and shots);
+   * bots used to cut doors and never open them, so a "door" out of a box sealed it.
+   */
+  _botEdit(b, p, mask) {
+    const st = this.structures;
+    if (!st || !st.edit(p, mask)) return false;
+    const dc = p.kind === 'wall' && st.doorColumns ? st.doorColumns(p) : 0;
+    if (dc) {
+      const a = b.actor;
+      // the wall's local +z (Structures: local x = (cos rot, sin rot)); open toward the far side
+      const lz = (a.pos.x - p.x) * -Math.sin(p.rot) + (a.pos.z - p.z) * Math.cos(p.rot);
+      for (let c = 0; c < 3; c++) if (dc & (1 << c)) st.setDoor(p, c, lz < 0 ? 1 : -1);
+    }
+    return true;
   }
 
   /** Reset a peek's edits (the main piece and any opened behind it). */
@@ -1185,12 +1236,25 @@ export class Bots {
     if (!bx) return;
     const st = this.structures;
     this._closePeek(bx);
-    if (mask && st && b.target) {
-      const face = (Math.round(Math.atan2(b.target.pos.x - bx.x, -(b.target.pos.z - bx.z)) / (Math.PI / 2)) * Math.PI) / 2;
+    // still inside when the fight ends (target gone, storm): edit a door out, or the bot is
+    // sealed in its own four walls and roof for good (it bounced around in there)
+    const a = b.actor;
+    const inside = a && Math.hypot(a.pos.x - bx.x, a.pos.z - bx.z) < CELL_HALF + 0.3 && Math.abs(a.pos.y - bx.y) < 2;
+    if (!mask && inside) mask = DOOR;
+    if (mask && st) {
+      const tg = b.target && b.target.alive ? b.target : null;
+      const ang = tg ? Math.atan2(tg.pos.x - bx.x, -(tg.pos.z - bx.z)) : a ? a.heading || 0 : 0;
+      const face = (Math.round(ang / (Math.PI / 2)) * Math.PI) / 2;
       const d = this._boxWall(b, face);
       // a door that lines up with them (same column as the line out), not always the middle one
-      const tg = b.target;
-      if (d) st.edit(d, mask === DOOR ? this._peekMask(b, d, tg.pos.x, tg.pos.y, tg.pos.z, true) : mask);
+      // (from inside: the middle door, so the walk out below goes straight through it)
+      if (d) this._botEdit(b, d, mask === DOOR && tg && !inside ? this._peekMask(b, d, tg.pos.x, tg.pos.y, tg.pos.z, true) : mask);
+      if (d && inside && mask === DOOR) {
+        // walk out through it (the update loop steers straight to the doorway, then outside)
+        const ux = Math.sin(face);
+        const uz = -Math.cos(face);
+        b.boxExit = { cx: bx.x, cz: bx.z, dx: bx.x + ux * (CELL_HALF - 0.2), dz: bx.z + uz * (CELL_HALF - 0.2), x: bx.x + ux * (CELL_HALF + 1.4), z: bx.z + uz * (CELL_HALF + 1.4), until: this.time + 3 };
+      }
     }
     b.box = null;
     b.holdUntil = 0;
@@ -1277,7 +1341,7 @@ export class Bots {
     if (!w) return false; // our side was shot out: fight through the gap like a normal fight
     if (tr.peek === 'closed') {
       const tg = b.target;
-      st.edit(w, tg ? this._peekMask(b, w, tg.pos.x, tg.pos.y, tg.pos.z, false) : WINDOW);
+      this._botEdit(b, w, tg ? this._peekMask(b, w, tg.pos.x, tg.pos.y, tg.pos.z, false) : WINDOW);
       tr.peek = 'open';
       tr.editKey = w.key;
       tr.extraKeys = tg ? this._openRestOfLine(b, w, tg.pos.x, tg.pos.y, tg.pos.z) : null; // our own box wall too
@@ -2011,6 +2075,24 @@ export class Bots {
         }
       }
     }
+    // leaving our own box through the door just cut (_endBox): straight out first
+    const ex = b.boxExit;
+    if (ex) {
+      const inBox = Math.hypot(a.pos.x - ex.cx, a.pos.z - ex.cz) < CELL_HALF + 0.2;
+      if (this.time > ex.until || (!inBox && Math.hypot(a.pos.x - ex.x, a.pos.z - ex.z) < 1.2) || (!inBox && Math.hypot(a.pos.x - ex.cx, a.pos.z - ex.cz) > BUILD.cell)) b.boxExit = null;
+      else {
+        // through the door's middle: to the doorway, then the point outside
+        const tx = inBox ? ex.dx : ex.x;
+        const tz = inBox ? ex.dz : ex.z;
+        const L = Math.hypot(tx - a.pos.x, tz - a.pos.z) || 1;
+        b.mx = (tx - a.pos.x) / L;
+        b.mz = (tz - a.pos.z) / L;
+        b.speed = PLAYER.runSpeed;
+        b.steerGX = tx;
+        b.steerGZ = tz;
+        return;
+      }
+    }
     b.steerGX = gx;
     b.steerGZ = gz;
     this._steer(b, gx, gz, speed, stop);
@@ -2625,6 +2707,14 @@ export class Bots {
       // 1x1 box around the bot's own cell: front wall first, then sides, back, roof
       mode = 'box';
       n = this._queueBox(b, n, hs);
+    } else if (maxN >= 5 && high && d < 30 && this.rng() < TOWER_CHANCE) {
+      // tower preset: boxed in with a ramp up the middle, climbing out above the enemy
+      mode = 'box';
+      n = this._queuePreset(b, n, 'tower', hs);
+    } else if (maxN >= 3 && !high && d > 12 && d < 50 && this.rng() < COVER_CHANCE) {
+      // cover preset: a three-wall pocket facing the enemy, to heal or peek from
+      mode = 'wall';
+      n = this._queuePreset(b, n, 'cover', hs);
     } else if (maxN >= 3 && (high || (d > 18 && this.rng() < 0.45) || (diff.highGround && d > 8 && d < 45 && this.rng() < diff.highGround))) {
       // ramp rush: a chain of rising ramps toward the target, run up while it is built
       mode = 'rush';
@@ -3266,7 +3356,7 @@ export class Bots {
       const w = st.slots.get(pl.key);
       if (!w || !w.alive || Math.abs(w.y - a.pos.y) > 1.5) continue;
       b.breakOutAt = t + 1.2;
-      if (w.owner === a && (w.edit | 0) !== DOOR && st.edit(w, DOOR)) {
+      if (w.owner === a && (w.edit | 0) !== DOOR && this._botEdit(b, w, DOOR)) {
         b.editsOut = (b.editsOut || 0) + 1;
         b.thinkIn = 0;
         return true;
@@ -3287,7 +3377,7 @@ export class Bots {
       if (!hit) continue;
       const p = hit.piece;
       b.breakOutAt = t + 1.2;
-      if (p.kind === 'wall' && p.owner === a && ((p.edit | 0) & DOOR) !== DOOR && st.edit(p, DOOR)) {
+      if (p.kind === 'wall' && p.owner === a && ((p.edit | 0) & DOOR) !== DOOR && this._botEdit(b, p, DOOR)) {
         b.editsOut = (b.editsOut || 0) + 1;
         b.thinkIn = 0;
         return true;

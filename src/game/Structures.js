@@ -277,6 +277,51 @@ export function validEdit(kind, mask) {
   return false;
 }
 
+// ---------------------------------------------------------------- simple build / simple edit
+
+/**
+ * Preset structures (Simple Build): ordinary pieces on the normal grid, around the player's own
+ * cell, placed in this order (walls first, so a roof always has something to rest on).
+ * Each entry: [kind, quarter turns from the facing (walls: which side of the cell), pitch].
+ */
+export const PRESETS = Object.freeze({
+  box: { label: 'Box', parts: [['wall', 0], ['wall', 1], ['wall', 2], ['wall', 3], ['cone', 0, 0.8]] },
+  rampwall: { label: 'Ramp + Wall', parts: [['wall', 0], ['ramp', 0, -1]] },
+  tower: { label: 'Tower', parts: [['wall', 0], ['wall', 1], ['wall', 2], ['wall', 3], ['ramp', 0, -1]] },
+  cover: { label: 'Cover', parts: [['wall', 0], ['wall', 1], ['wall', 3]] },
+});
+export const PRESET_ORDER = Object.freeze(['box', 'rampwall', 'tower', 'cover']);
+
+// Wall tiles are row * 3 + column, row 0 at the bottom, column 0 on the wall's local -x side.
+const W_DOOR = [(1 << 0) | (1 << 3), (1 << 1) | (1 << 4), (1 << 2) | (1 << 5)]; // by column
+const W_WINDOW = [1 << 3, 1 << 4, 1 << 5];
+const W_HALF = (1 << 6) | (1 << 7) | (1 << 8); // top row out: a half wall
+const W_ARCH = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 5); // the middle row and the bottom centre
+
+/**
+ * Simple Edit: the edit one click on `tile` makes (Fortnite's simple edit). Walls: bottom row ->
+ * a door in that column, middle row -> a window, top centre -> a half wall, top corner -> an
+ * arch. Floors / cones: that quarter. Ramps: a quarter turn. Clicking the shape the piece already
+ * has puts it back as placed (`current` = its edit value, `reset` = its value as placed).
+ */
+export function simpleEditMask(kind, tile, current = 0, reset = 0) {
+  if (!Number.isInteger(tile) || tile < 0) return -1;
+  let m = -1;
+  if (kind === 'wall') {
+    if (tile > 8) return -1;
+    const r = Math.floor(tile / 3);
+    const c = tile % 3;
+    m = r === 0 ? W_DOOR[c] : r === 1 ? W_WINDOW[c] : c === 1 ? W_HALF : W_ARCH;
+  } else if (kind === 'floor' || kind === 'cone') {
+    if (tile > 3) return -1;
+    m = 1 << tile;
+  } else if (kind === 'ramp') {
+    return ((current | 0) + 1) % 4;
+  }
+  if (m === current) return reset;
+  return validEdit(kind, m) ? m : -1;
+}
+
 /** Cone face under local offset (dx, dz): 0 = -z, 1 = +x, 2 = +z, 3 = -x. */
 function coneFace(dx, dz) {
   if (Math.abs(dz) >= Math.abs(dx)) return dz < 0 ? 0 : 2;
@@ -869,6 +914,27 @@ export class Structures {
     return out;
   }
 
+  /**
+   * Simple Build: plan a preset (PRESETS) around the actor's own cell. Returns placements in
+   * build order; each is `valid` when it can go there once the pieces before it are up.
+   */
+  planPreset(name, pos, heading, out = []) {
+    out.length = 0;
+    const preset = PRESETS[name];
+    if (!preset) return out;
+    const h0 = Math.round(heading / (Math.PI / 2)) * (Math.PI / 2);
+    const keys = new Set();
+    for (const [kind, q, pitch] of preset.parts) {
+      const pl = this.plan(kind, pos, h0 + q * (Math.PI / 2), pitch || 0, {});
+      if (keys.has(pl.key)) continue;
+      keys.add(pl.key);
+      // a roof or ramp held up by this preset's own walls counts as supported
+      if (!pl.valid && out.length && this.pieces.length + out.length < BUILD.maxPieces && !this.slots.has(pl.key) && this.fits(pl)) pl.valid = true;
+      out.push(pl);
+    }
+    return out;
+  }
+
   _valid(pl) {
     if (this.pieces.length >= BUILD.maxPieces) return false;
     if (this.slots.has(pl.key)) return false;
@@ -1082,7 +1148,40 @@ export class Structures {
   }
 
   /** Show / hide the translucent ghost (blue = valid, red = blocked). `mat` is remembered in this.ghostMaterial. */
+  /** Simple Build preview: one ghost per preset piece (null / [] hides them). */
+  setPresetGhosts(list, mat) {
+    const pool = this._presetGhosts || (this._presetGhosts = []);
+    const n = list ? list.length : 0;
+    let anyOk = false;
+    for (let i = 0; i < Math.max(n, pool.length); i++) {
+      const pl = i < n ? list[i] : null;
+      let g = pool[i];
+      if (pl && (!g || g.userData.kind !== pl.kind)) {
+        if (g) this.group.remove(g);
+        const src = this.ghosts[pl.kind];
+        if (!src) continue;
+        g = pool[i] = src.clone(); // shares the ghost geometry and materials
+        g.userData.kind = pl.kind;
+        this.group.add(g);
+      }
+      if (!g) continue;
+      g.visible = !!pl;
+      if (!pl) continue;
+      g.position.set(pl.x, pl.y, pl.z);
+      g.rotation.set(0, -pl.rot, 0);
+      if (pl.valid) anyOk = true;
+    }
+    if (n) {
+      for (const k in this.ghosts) this.ghosts[k].visible = false;
+      const col = anyOk ? GHOST_OK : GHOST_BAD;
+      this.ghostMat.color.setHex(col);
+      this.ghostLineMat.color.setHex(col);
+    }
+    this.ghostMaterial = mat || null;
+  }
+
   setGhost(placement, mat) {
+    if (this._presetGhosts && this._presetGhosts.length) for (const g of this._presetGhosts) g.visible = false;
     for (const k in this.ghosts) {
       if (!placement || k !== placement.kind) this.ghosts[k].visible = false;
     }

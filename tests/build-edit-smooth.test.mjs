@@ -10,7 +10,7 @@ import { Structures } from '../src/game/Structures.js';
 import { editPath } from '../src/game/Player.js';
 import { Bots } from '../src/game/Bots.js';
 import { ClientSession } from '../src/net/ClientSession.js';
-import { DIFFICULTY } from '../src/core/config.js';
+import { DIFFICULTY, BUILD } from '../src/core/config.js';
 
 const flat = () => new World({ meta: { bounds: { minX: -80, maxX: 80, minZ: -80, maxZ: 80 } }, buildings: [], roads: [], areas: [], pois: [] });
 
@@ -120,4 +120,31 @@ test('a bot under its own roof cone opens the cone quarter toward an enemy above
   assert.equal(bots._quarterMask(cone, tx, tz), 1 << 3, '+x +z quarter');
   assert.equal(bots._quarterMask(cone, cone.x - 3, cone.z - 3), 1 << 0, '-x -z quarter');
   assert.equal(bots._ownBlocker(b, cone.x, cone.y - 3, cone.z + 2), null, 'nothing of ours in the way');
+});
+
+test('a door a bot cuts is opened (away from it): bodies and shots go through', () => {
+  const { bots, st, b } = botAt('hard', 0, 2);
+  const w = st.place(st.plan('wall', new THREE.Vector3(0, 0, 2), 0, 0), 'wood', null);
+  b.actor.pos.set(w.x, 0, w.z + 2);
+  const DOOR = (1 << 1) | (1 << 4);
+  assert.ok(bots._botEdit(b, w, DOOR));
+  assert.notEqual(w.doors[1], 0, 'the door column is open');
+  const hit = st.world.raycast(w.x, 1.2, w.z + 1.5, 0, 0, -1, 3);
+  assert.ok(!hit || hit.collider !== w, 'a chest-high line through the doorway is clear');
+});
+
+test('a box fight that ends with the bot inside cuts a door and walks it out', () => {
+  const { bots, st, b } = botAt('hard', 2, -2);
+  const a = b.actor;
+  Object.assign(a, { heading: 0, height: 1.8 });
+  // a full box around the bot's cell, then the fight ends (target gone)
+  for (const h of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) st.place(st.plan('wall', a.pos, h, 0), 'wood', a);
+  b.box = { x: 2, y: 0, z: -2, peek: 'closed', editKey: null };
+  b.target = null;
+  bots._endBox(b);
+  const opened = st.pieces.filter((p) => p.edit && p.doors.some((v) => v));
+  assert.equal(opened.length, 1, 'one wall got an open door');
+  assert.ok(b.boxExit, 'and the bot has a way out to walk');
+  const ex = b.boxExit;
+  assert.ok(Math.hypot(ex.x - 2, ex.z + 2) > BUILD.cell / 2, 'the exit point is outside the box');
 });
