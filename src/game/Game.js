@@ -43,6 +43,7 @@ import { skinDef, emoteDef, pickaxeDef, DEFAULT_EQUIPPED, PICKAXES, BACKBLINGS }
 import { Combat, rayActor } from './Combat.js';
 import { canFastTravel, poiTargets, nearestPoi, landAt } from './fastTravel.js';
 import { Pings } from './Pings.js';
+import { RebootMarkers, rebootMarkerTargets } from './RebootMarkers.js';
 import { Reboot } from './Reboot.js';
 import { Grenades, launcherModel } from './Grenades.js';
 import { Player, placeOrbitCamera, itemLabel } from './Player.js';
@@ -228,6 +229,7 @@ export class Game {
     if (mb && this.hud.setFullMapAspect) this.hud.setFullMapAspect((mb.maxX - mb.minX) / (mb.maxZ - mb.minZ));
     this.minimap = new Minimap({ mapData, miniCanvas: this.hud.getMinimapCanvas(), fullCanvas: this.hud.getFullMapCanvas() });
     this.pings = new Pings(this.hud.el);
+    this.rebootMarkers = new RebootMarkers(this.pings.layer); // teammates' reboot cards on screen
     // Crystal Bridges galleries (musewalk-style art, focus mode, portals, ambience): optional
     if (this.view && this.view.crystalBridges) {
       try {
@@ -458,6 +460,7 @@ export class Game {
     this.fx.clear();
     this.hud.clearTransient();
     if (this.pings) this.pings.reset();
+    if (this.rebootMarkers) this.rebootMarkers.reset();
 
     // storm, centred toward a random POI (the opening storm is dormant and covers the map;
     // nobody picks a drop spot any more, the Drop Bus decides where people can land)
@@ -722,6 +725,7 @@ export class Game {
     this.fx.clear();
     this.hud.clearTransient();
     if (this.pings) this.pings.reset();
+    if (this.rebootMarkers) this.rebootMarkers.reset();
     this.bots.clear();
 
     const zone = DROP_ZONES.find((z) => z.key === start.zone) || DROP_ZONES[0];
@@ -1048,6 +1052,7 @@ export class Game {
       this.hud.setVisible(false);
       this.hud.clearTransient();
       if (this.pings) this.pings.reset();
+      if (this.rebootMarkers) this.rebootMarkers.reset();
     if (this.pings) this.pings.reset();
       this._setFullMapInteractive(false);
     }
@@ -1677,17 +1682,25 @@ export class Game {
       const cam = this.camera;
       const W = window.innerWidth;
       const H = window.innerHeight;
-      this.pings.update(
-        dt,
-        (v) => {
-          _v2.set(v.x, v.y, v.z).project(cam);
-          if (_v2.z > 1) return null;
-          return { x: (_v2.x * 0.5 + 0.5) * W, y: (-_v2.y * 0.5 + 0.5) * H };
-        },
-        { x: p.pos.x, z: p.pos.z, heading: p.heading },
-        W,
-        H
-      );
+      const project = (v) => {
+        _v2.set(v.x, v.y, v.z).project(cam);
+        if (_v2.z > 1) return null;
+        return { x: (_v2.x * 0.5 + 0.5) * W, y: (-_v2.y * 0.5 + 0.5) * H };
+      };
+      const viewer = { x: p.pos.x, z: p.pos.z, heading: p.heading };
+      this.pings.update(dt, project, viewer, W, H);
+      // teammates' reboot cards (and, carrying one, the nearest van): no need to open the map
+      if (this.rebootMarkers) {
+        const rb = this.reboot;
+        const on = !!rb && this.teamMode && this.state === 'play';
+        const targets = rebootMarkerTargets(
+          on
+            ? { cards: rb.cards.values(), vans: rb.vans, teamMode: true, team: p.team, selfId: p.id, alive: p.alive, carrying: rb.cardsOf(p).length, time: rb.time, self: p.pos }
+            : { teamMode: false },
+          this._rbTargets || (this._rbTargets = [])
+        );
+        this.rebootMarkers.update(targets, project, viewer, W, H);
+      }
     }
     if (fullOpen && this.freeBuild && hud.setMapTravel) {
       const travel = poiTargets(this.world.landmarks);

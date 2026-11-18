@@ -15,6 +15,38 @@
 
 import { TEAM_CSS } from './Teams.js';
 
+/**
+ * Where a world marker sits on screen. sc: the projected point ({ x, y } px, or null behind the
+ * camera); target / viewer: world { x, z } (viewer.heading: radians, 0 = north). On screen (inside
+ * `pad` px of every edge) it stays put; off screen or behind the camera it is pinned to the screen
+ * edge in its direction (behind: by world bearing, on the bottom edge). `angle` points from the
+ * screen centre toward the marker (0 = up, clockwise, radians) for an edge arrow. Pure.
+ */
+export function screenAnchor(sc, target, viewer, W, H, pad = 28, out = {}) {
+  if (sc && sc.x >= pad && sc.x <= W - pad && sc.y >= pad && sc.y <= H - pad) {
+    out.x = sc.x;
+    out.y = sc.y;
+    out.edge = false;
+    out.angle = Math.atan2(sc.x - W / 2, -(sc.y - H / 2));
+    return out;
+  }
+  let dx = sc ? sc.x - W / 2 : 0;
+  let dy = sc ? sc.y - H / 2 : 0;
+  if (!sc) {
+    // behind the camera: use the world bearing, flipped to the bottom edge
+    const ang = Math.atan2(target.x - viewer.x, -(target.z - viewer.z)) - (viewer.heading || 0);
+    dx = Math.sin(ang) * W;
+    dy = H;
+  }
+  if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) dy = 1; // dead centre but out of bounds (pad > half screen)
+  const k = Math.min((W / 2 - pad) / Math.max(1e-3, Math.abs(dx)), (H / 2 - pad) / Math.max(1e-3, Math.abs(dy)));
+  out.x = W / 2 + dx * k;
+  out.y = H / 2 + dy * k;
+  out.edge = true;
+  out.angle = Math.atan2(dx, -dy);
+  return out;
+}
+
 const LIFE = { loc: 9, item: 12, enemy: 4.5 };
 const CSS = `
 .br-pings{position:absolute;inset:0;pointer-events:none;z-index:2;overflow:hidden}
@@ -133,28 +165,10 @@ export class Pings {
         e.z = e.target.pos.z;
       }
       const top = e.y + (e.kind === 'enemy' ? 2.2 : e.type === 'm' ? 0.2 : 0.4);
-      const sc = project({ x: e.x, y: top, z: e.z });
-      let sx;
-      let sy;
-      let edge = false;
-      if (sc && sc.x >= pad && sc.x <= W - pad && sc.y >= pad && sc.y <= H - pad) {
-        sx = sc.x;
-        sy = sc.y;
-      } else {
-        // off screen / behind: pin it to the screen edge in its direction
-        edge = true;
-        let dx = sc ? sc.x - W / 2 : 0;
-        let dy = sc ? sc.y - H / 2 : 0;
-        if (!sc) {
-          // behind the camera: use the world bearing, flipped to the bottom edge
-          const ang = Math.atan2(e.x - viewer.x, -(e.z - viewer.z)) - (viewer.heading || 0);
-          dx = Math.sin(ang) * W;
-          dy = H;
-        }
-        const k = Math.min((W / 2 - pad) / Math.max(1e-3, Math.abs(dx)), (H / 2 - pad) / Math.max(1e-3, Math.abs(dy)));
-        sx = W / 2 + dx * k;
-        sy = H / 2 + dy * k;
-      }
+      const a = screenAnchor(project({ x: e.x, y: top, z: e.z }), e, viewer, W, H, pad);
+      const sx = a.x;
+      const sy = a.y;
+      const edge = a.edge;
       e.el.style.transform = `translate(${Math.round(sx)}px, ${Math.round(sy)}px) translate(-50%, -100%)`;
       e.el.classList.toggle('is-edge', edge);
       const d = Math.round(Math.hypot(e.x - viewer.x, e.z - viewer.z));
