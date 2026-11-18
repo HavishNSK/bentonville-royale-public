@@ -233,7 +233,8 @@ export class HostSession {
       t: 'start',
       seed: game.seed,
       mode: this.mode,
-      diff: game.matchDifficulty || null, // bot difficulty: only 'hard' matches count toward the ranks
+      diff: game.matchDifficulty || null, // bot difficulty: only hard matches with bots count toward the ranks
+      bots: game.bots ? game.bots.list.length : 0,
       roster,
       total: game.totalActors,
       zone: game.dropZone ? game.dropZone.key : null,
