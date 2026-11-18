@@ -999,6 +999,15 @@ export class Bots {
         return;
       }
     }
+    // the enemy is in here with us: no peeks (a window or door in our own wall only opens the
+    // box up and shows nothing), close any that is open and just fight at close range
+    const tgIn = b.target && b.target.alive ? b.target : null;
+    if (tgIn && Math.hypot(tgIn.pos.x - bx.x, tgIn.pos.z - bx.z) < CELL_HALF + 0.3 && Math.abs(tgIn.pos.y - bx.y) < 2) {
+      if (bx.peek === 'open' || bx.editKey) this._closePeek(bx);
+      bx.peek = 'closed';
+      bx.peekT = t + 0.3;
+      return;
+    }
     if (bx.peek === 'open' && bx.blocked > 3 && bx.editKey) {
       // the window does not line up with them: open the full door instead
       const w = this.structures.slots.get(bx.editKey);
