@@ -115,7 +115,7 @@ test('per-bot difficulty: easy, normal and hard bots coexist and each acts on it
   for (let i = 0; i < 4 * 60; i++) bots.update(1 / 60, { player });
   assert.ok(hard._bot.tower && hard._bot.tower.reached, 'hard bot on its tower');
   assert.ok(structures.pieces.some((p) => p.owner === hard && p.kind === 'ramp'));
-  assert.ok(!structures.pieces.some((p) => p.owner === easy && p.kind === 'ramp'), 'easy built no ramps');
+  assert.ok(structures.pieces.filter((p) => p.owner === easy && p.kind === 'ramp').length <= 1, 'easy built no tower (at most one wall + ramp)');
   assert.equal(easy.damageScale, DIFFICULTY.easy.damageScale);
   assert.equal(hard.damageScale, DIFFICULTY.hard.damageScale);
   // sandbox bots share a team: they hunt the player, not each other

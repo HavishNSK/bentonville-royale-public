@@ -445,12 +445,12 @@ export const RANKED_NOTE = 'Only matches on HARD bot difficulty count toward the
 export const DIFFICULTY = {
   easy: { lead: 0.5, aimError: 0.085, closeMiss: 0.7, guessError: 0.6, misguess: 0.35, reaction: 0.9, burst: 0.55, buildChance: 0.35, buildPieces: 2, buildCooldown: 6, buildRate: 0.45, sight: 80, damageScale: 0.6, wallOnHit: 0.25, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0.3 },
   normal: {
-    lead: 0.8, aimError: 0.05, closeMiss: 0.5, guessError: 0.45, misguess: 0.22, reaction: 0.55, burst: 0.7, buildChance: 0.75, buildPieces: 6, buildCooldown: 2.5, buildRate: 0.18, sight: 100, damageScale: 0.8,
+    lead: 0.8, aimError: 0.05, closeMiss: 0.5, guessError: 0.45, misguess: 0.22, reaction: 0.55, burst: 0.7, buildChance: 0.75, buildPieces: 6, buildCooldown: 2.5, buildRate: 0.3, sight: 100, damageScale: 0.8,
     wallOnHit: 0.7, boxHeal: 0.6, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.6, boxFight: 0.35, peekOpen: 1.1, peekClosed: 0.8,
   },
   hard: {
     // aimError 0.017 -> 0.02 and closeMiss: hard bots used to never miss up close
-    lead: 1, aimError: 0.02, closeMiss: 0.36, guessError: 0.15, misguess: 0.05, reaction: 0.18, burst: 0.92, buildChance: 1, buildPieces: 16, buildCooldown: 0.5, buildRate: 0.06, sight: 150, damageScale: 1,
+    lead: 1, aimError: 0.02, closeMiss: 0.36, guessError: 0.15, misguess: 0.05, reaction: 0.18, burst: 0.92, buildChance: 1, buildPieces: 16, buildCooldown: 0.5, buildRate: 0.2, sight: 150, damageScale: 1,
     wallOnHit: 0.8, boxHeal: 1, pushWeak: 0.95, thirdParty: 0.7, rotateEarly: 1, boxFight: 0.9, peekOpen: 0.6, peekClosed: 0.32, // quick edits (was 0.9 / 0.55)
     peekWindow: true, // edit a window first, even up close (a door only when the window does not line up)
     trap: 0.85, // chance to full-box a close, grounded target and window-peek it (Bots._maybeTrap)

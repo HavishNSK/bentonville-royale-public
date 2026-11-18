@@ -77,6 +77,9 @@ const FOV_COS = Math.cos(1.25); // ~72 degrees either side
 const INTERACT = 2.0; // metres to open / take loot
 const LOOT_SCAN = 70; // metres (chests sit ~100 m apart on average)
 const MEMORY = 4; // seconds a lost target is chased
+const BUILT_MEMORY = 20; // s: a target that boxed up / walled off is still hunted this long since last seen
+const BUILT_RANGE = 45; // m: ... when this close
+const BREAK_IN = PICKAXE.range + 0.5; // m from the piece in the way: close enough to pickaxe it
 // box fighting (DIFFICULTY.boxFight): a full 1x1 box, edit peeks through the wall facing the target
 const BOX_MEMORY = 10; // seconds a boxed bot keeps fighting a target it cannot see
 const BOX_RANGE = 38; // metres: fights closer than this may be taken from a box
@@ -85,7 +88,8 @@ const BOX_LEAVE = 60; // metres: a target this far away ends the box fight
 const CELL_HALF = BUILD.cell / 2;
 const WALL_EVERY_DMG = 30; // damage taken between two walls toward a guessed shooter (_wallOnHit)
 const TRAP_RANGE = 14; // metres: a bot may full-box a target this close (diff.trap); was 11
-const TRAP_TIME = 9; // s a trap is worked before the bot moves on
+const TRAP_STAND = BUILD.cell / 2 + 1.3; // m from a trap's centre to where the bot stands (outside its face wall)
+const TRAP_TIME = 20; // s a trap is worked before the bot moves on
 const TRAP_SEEN = 1.0; // s: a target seen this recently may still be trapped (a closed box peek hides it)
 // normal bots trap now and then (DIFFICULTY.normal has no `trap`); easy never does
 const TRAP_FALLBACK = { normal: 0.4 };
@@ -99,7 +103,9 @@ const GRUDGE_REFRESH = { easy: 3, normal: 2, hard: 1 };
 // hard bots shot from range build a ramp-wall tower toward the shooter and hold its top (_towerUp)
 const TOWER_LEVELS = 4; // ramps (each: the ramp + a wall on its far edge), mats permitting
 const TOWER_MIN = 3;
-const LANDING_MATS = { easy: 0, normal: 60, hard: 120 }; // wood a bot holds on landing
+// Bots get their materials like a player: nothing on landing, then harvesting and loot.
+const HARVEST_LOW = 60; // total mats under this: harvesting comes before looting
+const HARVEST_SCAN = 16; // m: how far around a low bot looks for something to harvest
 const TOWER_NEAR = 20; // m: closer fights are boxed / trapped instead
 const TOWER_FAR = 120;
 const TOWER_CLOSE = 10; // m: an enemy this close ends a tower (fight it instead)
@@ -114,6 +120,15 @@ const CB_MIN_FULL = 4; // at least this many in a big lobby (>= CB_FULL bots)
 const CB_FULL = 60;
 const CB_MAX = 8;
 const WINDOW = 1 << 4; // wall edit: middle tile (chest / eye height)
+const BOTTOM_ROW = 0b111; // wall edit: the three bottom tiles
+const PEEK_HOLD = 1.6; // s: a window that showed the target stays open this long at most waiting for the shot
+const SHOOT_BUILD_MIN = 6; // m: farther than this a walled-off target's wall is shot (closer: pickaxe)
+const UNDER_HIGH = 3; // m: a target this far above us on builds may get the piece under it shot out
+const UNDER_CHANCE = 0.45; // ... per roll (every 2-4 s), normal / hard
+const _pieceTgt = { pos: new THREE.Vector3(), vel: null, alive: true }; // a build as a _fireControl aim point
+const _spc = new THREE.Vector3(); // that build's centre
+const _straight = new THREE.Vector3(); // a shot's line before aim error
+const MIDDLE_ROW = 0b111000; // wall edit: the three middle tiles (chest height)
 const DOOR = (1 << 1) | (1 << 4); // wall edit: bottom + middle of the centre column
 const STUCK_WINDOW = 1.4;
 const PLAN_BUDGET = 350; // A* expansions per frame (~0.3-0.6 ms)
@@ -1062,6 +1077,10 @@ export class Bots {
         bx.peekT = t + 0.2;
         return;
       }
+      if (!this._readyToShoot(b)) {
+        bx.peekT = t + 0.08; // open with the gun ready, or the window shows them for nothing
+        return;
+      }
       const close = Math.hypot(tx - a.pos.x, tz - a.pos.z) < 9;
       const ty = b.target ? b.target.pos.y : a.pos.y;
       // edit whatever of ours is actually on the line to them: the roof cone / floor when they
@@ -1078,6 +1097,7 @@ export class Bots {
       bx.peek = 'open';
       bx.editKey = w.key;
       bx.peekT = t + diff.peekOpen * (0.7 + this.rng() * 0.6);
+      if (b.target) this._lookNow(b, b.target);
       // pre-aimed at the spot they were last seen: shoot as soon as the edit opens
       b.reactLeft = Math.min(b.reactLeft, diff.reaction * 0.4);
       b.trackTime = Math.max(b.trackTime, 2.5);
@@ -1193,6 +1213,27 @@ export class Bots {
     }
     pk.editKey = null;
     pk.extraKeys = null;
+  }
+
+  /**
+   * A built piece (anyone's but ours) on the line from our eyes to the target's chest, the first
+   * thing in the way: they are behind a wall / in a box, not gone. Null otherwise.
+   */
+  _builtBlocker(b, tgt) {
+    const a = b.actor;
+    const w = this.world;
+    if (!w || !w.raycast) return null;
+    const ex = a.pos.x;
+    const ey = a.pos.y + EYE;
+    const ez = a.pos.z;
+    const dx = tgt.pos.x - ex;
+    const dy = tgt.pos.y + CHEST - ey;
+    const dz = tgt.pos.z - ez;
+    const L = Math.hypot(dx, dy, dz);
+    if (L < 0.1) return null;
+    const h = w.raycast(ex, ey, ez, dx / L, dy / L, dz / L, L);
+    const c = h && h.collider;
+    return c && c.isStructure && c.alive !== false && c.owner !== a ? c : null;
   }
 
   /** First built piece of this bot's on the line from its eyes to (tx, ty + CHEST, tz), or null. */
@@ -1368,14 +1409,35 @@ export class Bots {
       return true;
     }
     const w = this._trapWall(b, tr.face);
-    if (!w) return false; // our side was shot out: fight through the gap like a normal fight
+    if (!w) {
+      // our side was shot out (often our own pellets around the window): drop this trap and
+      // roll a new one at once, which rebuilds the missing wall (a stale trap froze the bot)
+      this._endTrap(b);
+      b.trapRollAt = t;
+      return false;
+    }
     if (tr.peek === 'closed') {
+      // open only when the gun is ready: a pump shotgun cycles ~1.6 s, and a window that opens
+      // mid-cycle shows them and shuts again without a shot
+      if (!this._readyToShoot(b)) {
+        tr.peekT = t + 0.08;
+        return true;
+      }
       const tg = b.target;
-      this._botEdit(b, w, tg ? this._peekMask(b, w, tg.pos.x, tg.pos.y, tg.pos.z, false) : WINDOW);
+      // windows only: a bottom-row tile is a door, which lets them out (or us in). After a
+      // window that showed nothing, the whole middle row: wide enough to line up from here
+      let m = tg ? this._peekMask(b, w, tg.pos.x, tg.pos.y, tg.pos.z, false) & ~BOTTOM_ROW : WINDOW;
+      if (!m) m = WINDOW;
+      if (tr.blind) m |= MIDDLE_ROW;
+      this._botEdit(b, w, m);
+      tr.sawOpen = false;
       tr.peek = 'open';
       tr.editKey = w.key;
       tr.extraKeys = tg ? this._openRestOfLine(b, w, tg.pos.x, tg.pos.y, tg.pos.z) : null; // our own box wall too
       tr.peekT = t + diff.peekOpen * (0.7 + this.rng() * 0.6);
+      tr.shotsAt = b.shots;
+      tr.openedAt = t;
+      if (tg) this._lookNow(b, tg); // see them through it this frame, not at the next think
       // pre-aimed at the window: shoot the moment it opens
       b.reactLeft = Math.min(b.reactLeft, diff.reaction * 0.4);
       b.trackTime = Math.max(b.trackTime, 2.5);
@@ -1383,10 +1445,75 @@ export class Bots {
       b.burstLeft = 6;
       b.fireCd = Math.min(b.fireCd, 0.06);
     } else {
+      if (!tr.sawOpen && b.targetVisible) tr.sawOpen = true;
+      // seen but not shot yet: hold the window (up to PEEK_HOLD) until the shot goes off
+      if (tr.sawOpen && this._gunOut(b) && b.shots === tr.shotsAt && t - tr.openedAt < PEEK_HOLD && b.target && b.target.alive) {
+        tr.peekT = t + 0.06;
+        return true;
+      }
+      // still nothing in sight: keep it open a beat longer and re-look (a window that opens and
+      // shuts without a shot is useless), then close it and go wide next time
+      if (!tr.sawOpen && b.target && !tr.extended) {
+        tr.extended = true;
+        tr.peekT = t + 0.35;
+        this._lookNow(b, b.target);
+        return true;
+      }
+      tr.blind = !tr.sawOpen;
+      tr.extended = false;
       this._closePeek(tr);
       tr.peek = 'closed';
       tr.peekT = t + diff.peekClosed * (0.7 + this.rng() * 0.8);
     }
+    if (tr.peek === 'open' && b.targetVisible) tr.sawOpen = true;
+    return true;
+  }
+
+  /**
+   * The built piece a visible target stands on, well above us (ramps / a tower), to shoot out
+   * from under them: decided now and then (normal / hard), held a couple of seconds. Else null.
+   */
+  _underTarget(b, tg) {
+    const t = this.time;
+    if (b.shootUnder && b.shootUnder.alive !== false && t < b.shootUnderUntil) return b.shootUnder;
+    b.shootUnder = null;
+    const a = b.actor;
+    if (!tg || !b.targetVisible || this.diffName === 'easy' || t < (b.underRollAt || 0)) return null;
+    if (tg.pos.y - a.pos.y < UNDER_HIGH) return null;
+    b.underRollAt = t + 2 + this.rng() * 2;
+    if (this.rng() > UNDER_CHANCE) return null;
+    const w = this.world;
+    const h = w.raycast(tg.pos.x, tg.pos.y + 0.3, tg.pos.z, 0, -1, 0, 1.5);
+    const c = h && h.collider;
+    if (!c || !c.isStructure || c.alive === false || c.owner === a) return null;
+    b.shootUnder = c;
+    b.shootUnderUntil = t + 2.5;
+    return c;
+  }
+
+  /** Is a gun in hand? */
+  _gunOut(b) {
+    const inv = b.actor.inventory;
+    const it = inv && inv.current && inv.current();
+    return !!it && it.type === 'weapon';
+  }
+
+  /** Can the current gun fire about now (cycled, loaded, not reloading / healing)? */
+  _readyToShoot(b) {
+    const it = b.actor.inventory && b.actor.inventory.current && b.actor.inventory.current();
+    if (!it || it.type !== 'weapon') return true; // nothing to wait for
+    return b.fireCd <= 0.12 && !(b.reloading > 0) && !(b.healing > 0) && it.mag > 0;
+  }
+
+  /**
+   * A peek just opened: check the line to them now (perception otherwise waits for the next
+   * think, and a quick window could close before the bot ever noticed it could shoot).
+   */
+  _lookNow(b, tg) {
+    const a = b.actor;
+    if (!tg || !tg.alive) return false;
+    if (!this._los(a.pos.x, a.pos.y + EYE, a.pos.z, tg.pos.x, tg.pos.y + CHEST, tg.pos.z)) return false;
+    this._see(b, tg);
     return true;
   }
 
@@ -1716,6 +1843,7 @@ export class Bots {
     else if (this._needRotate(b, storm)) state = 'rotate';
     else if (b.harvest && b.harvest.alive && t < b.harvestUntil && !target) state = 'harvest';
     else if (!target && this._hearFight(b, all)) state = 'hunt';
+    else if (this._lowMats(a) && this._pickHarvest(b)) state = 'harvest'; // out of mats: get some first
     else if (this._pickLoot(b)) state = 'loot';
     else if (this._pickHarvest(b)) state = 'harvest';
     else state = 'wander';
@@ -1761,6 +1889,31 @@ export class Bots {
         break;
       }
       case 'engage': {
+        // they boxed up / walled off: go to the piece in the way and pickaxe through it (the
+        // swing itself is in _act: smashUntil), rather than wait or wander off
+        const wb = b.walledBy;
+        if (!b.targetVisible && wb && wb.alive !== false && !b.box && !b.trap) {
+          const wx = wb.x;
+          const wz = wb.z;
+          const wd = Math.hypot(wx - a.pos.x, wz - a.pos.z);
+          gx = wx;
+          gz = wz;
+          speed = wd > 6 ? PLAYER.runSpeed : PLAYER.walkSpeed;
+          stop = BREAK_IN - 0.4;
+          // a gun and some distance: shoot the piece while closing in (_act: shootPiece)
+          const gun = inv.current();
+          b.shootPiece = gun && gun.type === 'weapon' && wd > SHOOT_BUILD_MIN ? wb : null;
+          if (wd < BREAK_IN + 0.6) {
+            b.smashUntil = t + 0.4;
+            b.smashX = wx;
+            b.smashZ = wz;
+            b.faceX = wx;
+            b.faceZ = wz;
+          }
+          break;
+        }
+        // 2. they hold high ground on their builds: now and then take the piece under them out
+        b.shootPiece = this._underTarget(b, target);
         this._chooseWeapon(b, dist);
         const lx = b.targetVisible ? target.pos.x : b.lastSeenX;
         const lz = b.targetVisible ? target.pos.z : b.lastSeenZ;
@@ -1819,11 +1972,15 @@ export class Bots {
           break;
         }
         if (this._maybeTrap(b, target, d)) {
-          // trapping them: stand and work the window edits
-          gx = a.pos.x;
-          gz = a.pos.z;
-          speed = 0;
+          // trapping them: stand square in front of the wall we peek through (a window lines up
+          // with them from there; from a corner the line runs through two walls' edges and the
+          // windows show nothing), and work the window edits
+          const tr = b.trap;
+          gx = tr.x + Math.sin(tr.face) * TRAP_STAND;
+          gz = tr.z - Math.cos(tr.face) * TRAP_STAND;
+          speed = Math.hypot(gx - a.pos.x, gz - a.pos.z) > 0.4 ? PLAYER.walkSpeed : 0;
           stop = 0.15;
+          b.wantJump = false;
           break;
         }
         if (this._boxFight(b, target, d)) {
@@ -2236,7 +2393,14 @@ export class Bots {
         return;
       }
       b.targetVisible = false;
-      if (t - b.lastSeen > (b.box ? BOX_MEMORY : MEMORY)) tgt = b.target = null;
+      // hidden behind builds (they boxed up / walled off): they did not vanish. Keep them and
+      // break in (engage: walk up and pickaxe the piece in the way), instead of forgetting them
+      const wall = t - b.lastSeen < BUILT_MEMORY && d2 < BUILT_RANGE * BUILT_RANGE ? this._builtBlocker(b, tgt) : null;
+      b.walledBy = wall;
+      if (wall) {
+        b.lastSeenX = tgt.pos.x;
+        b.lastSeenZ = tgt.pos.z;
+      } else if (t - b.lastSeen > (b.box ? BOX_MEMORY : MEMORY)) tgt = b.target = null;
     }
 
     // a known attacker is checked first, in any direction
@@ -2680,18 +2844,39 @@ export class Bots {
     else a.character.setEquipped('pickaxe', true);
   }
 
+  /** Total build mats under HARVEST_LOW. */
+  _lowMats(a) {
+    const m = a.inventory && a.inventory.mats;
+    return !!m && (m.wood || 0) + (m.brick || 0) + (m.metal || 0) < HARVEST_LOW;
+  }
+
   _pickHarvest(b) {
     const a = b.actor;
     const m = a.inventory.mats;
     if (m.wood + m.brick + m.metal >= 300 || !this.combat) return false;
     if (this.time < b.harvestCooldown) return false;
-    const fx = Math.sin(a.heading);
-    const fz = -Math.cos(a.heading);
-    const c = this.world.probeCircle(a.pos.x, a.pos.z, fx, fz, 8, 1.5);
-    if (!c || !c.alive || !(c.hp > 0) || c.hp === Infinity) return false;
+    const low = this._lowMats(a);
+    // something harvestable ahead; a bot low on mats looks all around, further, for the nearest
+    let c = null;
+    let best = Infinity;
+    const dirs = low ? 8 : 1;
+    for (let i = 0; i < dirs; i++) {
+      const h = a.heading + (i * Math.PI * 2) / dirs;
+      const p = this.world.probeCircle(a.pos.x, a.pos.z, Math.sin(h), -Math.cos(h), low ? HARVEST_SCAN : 8, 1.5);
+      if (!p || !p.alive || !(p.hp > 0) || p.hp === Infinity) continue;
+      const d = Math.hypot(p.x - a.pos.x, p.z - a.pos.z);
+      if (d < best) {
+        best = d;
+        c = p;
+      }
+    }
+    if (!c) {
+      if (low) b.harvestCooldown = this.time + 2; // nothing near: look again soon (after moving on)
+      return false;
+    }
     b.harvest = c;
     b.harvestUntil = this.time + 7;
-    b.harvestCooldown = this.time + 10;
+    b.harvestCooldown = this.time + (low ? 3 : 10);
     return true;
   }
 
@@ -3524,7 +3709,13 @@ export class Bots {
     let pitch = 0;
     const tgt = b.target;
     const runGun = b.state === 'rotate' && b.stormUrgent && tgt && b.targetVisible && tgt.alive;
-    if (tgt && (b.targetVisible || b.box) && (b.state === 'engage' || runGun)) {
+    const sp = b.state === 'engage' && b.shootPiece && b.shootPiece.alive !== false ? b.shootPiece : null;
+    if (sp) {
+      // aiming at a build to break it (their wall in the way, or the ramp under them)
+      const c = this.structures && this.structures._center ? this.structures._center(sp, _spc) : _spc.set(sp.x, sp.y + 1.5, sp.z);
+      want = Math.atan2(c.x - a.pos.x, -(c.z - a.pos.z));
+      pitch = Math.atan2(c.y - (a.pos.y + EYE), Math.hypot(c.x - a.pos.x, c.z - a.pos.z) || 1);
+    } else if (tgt && (b.targetVisible || b.box) && (b.state === 'engage' || runGun)) {
       const dx = (b.targetVisible ? tgt.pos.x : b.lastSeenX) - a.pos.x;
       const dz = (b.targetVisible ? tgt.pos.z : b.lastSeenZ) - a.pos.z;
       want = Math.atan2(dx, -dz);
@@ -3541,7 +3732,13 @@ export class Bots {
     a.heading += dh > turn ? turn : dh < -turn ? -turn : dh;
     a.pitch += (pitch - a.pitch) * Math.min(1, dt * 10);
 
-    if ((b.state === 'engage' || runGun) && tgt && b.targetVisible) {
+    if (sp) {
+      if (Math.abs(angleDelta(a.heading, want)) < 0.3) {
+        _pieceTgt.pos.copy(_spc);
+        _pieceTgt.pos.y -= CHEST; // _fireControl aims at pos + chest height
+        this._fireControl(b, _pieceTgt);
+      }
+    } else if ((b.state === 'engage' || runGun) && tgt && b.targetVisible) {
       b.trackTime += dt;
       if (b.reactLeft > 0) {
         b.reactLeft -= dt;
@@ -3612,7 +3809,8 @@ export class Bots {
     // origin: muzzle when the character is drawn, else the eye
     const ch = a.character;
     // peeking through an edit: the shot leaves from the eye (aimed down sights), not the hip
-    if (b.box && b.box.peek === 'open') _origin.set(a.pos.x + Math.sin(a.heading) * 0.3, a.pos.y + EYE, a.pos.z - Math.cos(a.heading) * 0.3);
+    const peeking = (b.box && b.box.peek === 'open') || (b.trap && b.trap.peek === 'open');
+    if (peeking) _origin.set(a.pos.x + Math.sin(a.heading) * 0.3, a.pos.y + EYE, a.pos.z - Math.cos(a.heading) * 0.3);
     else if (ch && ch.root.visible) ch.muzzle(_origin);
     else _origin.set(a.pos.x + Math.sin(a.heading) * 0.4, a.pos.y + EYE - 0.15, a.pos.z - Math.cos(a.heading) * 0.4);
     // aim at the chest (head now and then), with drift that shrinks while tracking
@@ -3630,10 +3828,16 @@ export class Bots {
     const near = ((this.diff.closeMiss || 0) * Math.min(1, 10 / len)) / Math.max(1.5, len) * Math.max(0.7, settle);
     const yaw = (b.errYaw + gauss(this.rng) * this.diff.aimError * 0.35) * err + gauss(this.rng) * near;
     const pit = (b.errPitch + gauss(this.rng) * this.diff.aimError * 0.25) * err + gauss(this.rng) * near * 0.6;
+    _straight.copy(_dir);
     rotateDir(_dir, yaw, pit);
-    // never shoot our own build point-blank (a wall just placed / a closed peek): hold fire
-    if (b.builds > 0 || b.box) {
-      const own = this.world.raycast(_origin.x, _origin.y, _origin.z, _dir.x, _dir.y, _dir.z, 4.5, null);
+    // never shoot our own build point-blank (a wall just placed / a closed peek): hold fire.
+    // Peeking through our window, a scattered line that clips the frame goes straight instead.
+    if (b.builds > 0 || b.box || b.trap) {
+      let own = this.world.raycast(_origin.x, _origin.y, _origin.z, _dir.x, _dir.y, _dir.z, 4.5, null);
+      if (peeking && own && own.collider && own.collider.owner === a) {
+        _dir.copy(_straight);
+        own = this.world.raycast(_origin.x, _origin.y, _origin.z, _dir.x, _dir.y, _dir.z, 4.5, null);
+      }
       if (own && own.collider && own.collider.owner === a) {
         b.ownHolds = (b.ownHolds || 0) + 1;
         if (b.box && b.box.peek === 'open') b.box.blocked = (b.box.blocked || 0) + 1;
@@ -3645,7 +3849,7 @@ export class Bots {
     const moving = Math.hypot(a.vel.x, a.vel.z) > 1 ? 1.35 : 1;
     const base = w.hipSpread ? w.hipSpread * 0.5 : w.spread;
     // peeking through an edit: aimed down sights (tight), so the frame is not shot to bits
-    const ads = b.box && b.box.peek === 'open' ? 0.45 : 1;
+    const ads = peeking ? 0.45 : 1;
     const spread = (base + b.bloom) * moving * (a.grounded ? 1 : 1.6) * ads;
     it.mag--;
     b.bloom = Math.min(w.maxBloom, b.bloom + w.bloom);
@@ -3729,10 +3933,6 @@ export class Bots {
         b.state = 'wander';
         a.botState = 'wander';
         b.landedAt = this.time;
-        // a landing stash, so getting shot early can still be answered with walls / a tower
-        // (hard: enough for ~3 towers at BUILD.cost 5); the rest comes from harvesting
-        const stash = LANDING_MATS[this.diffName] || 0;
-        if (stash > 0 && a.inventory && a.inventory.mats) a.inventory.mats.wood = Math.max(a.inventory.mats.wood || 0, stash);
         b.thinkIn = 0.05 + this.rng() * 0.2;
         b.stuckX = pos.x;
         b.stuckZ = pos.z;

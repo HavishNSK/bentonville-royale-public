@@ -114,7 +114,7 @@ test('ramp rush on sloped real terrain: every ramp and its wall land a level apa
     bots.rng = () => 0.1;
     bots._maybeBuild(b, 0, -1, 35);
     assert.equal(b.bqMode, 'rush', 'rushing');
-    for (let i = 0; i < 120 && b.bqN > 0; i++) {
+    for (let i = 0; i < 6 * 60 && b.bqN > 0; i++) { // a piece per buildRate (0.2 s on hard)
       bots.time += 1 / 60;
       bots._buildStep(b);
     }
