@@ -1445,7 +1445,7 @@ export class Game {
         this._specDist = damp(this._specDist == null ? CAMERA.distance : this._specDist, CAMERA.distance, 10, dt);
         const crouchDrop = t.crouching ? 0.45 : 0;
         _v.set(t.pos.x, t.pos.y + CAMERA.pivotHeight - crouchDrop, t.pos.z);
-        placeOrbitCamera(cam, this.world, _v, this._specH, this._specP, this._specDist, CAMERA.shoulder);
+        placeOrbitCamera(cam, this.world, _v, this._specH, this._specP, this._specDist, CAMERA.shoulder, CAMERA.rise, t.pos.y);
         const baseFov = this.settings.fov || CAMERA.fov;
         if (Math.abs(cam.fov - baseFov) > 0.01) {
           cam.fov = baseFov;
@@ -1454,7 +1454,7 @@ export class Game {
       } else if (!p.alive) {
         _v.set(p.pos.x, p.pos.y + 1.2, p.pos.z);
         this._specH = (this._specH == null ? p.heading : this._specH) + dt * 0.15;
-        placeOrbitCamera(cam, this.world, _v, this._specH, -0.35, 7, 0);
+        placeOrbitCamera(cam, this.world, _v, this._specH, -0.35, 7, 0, CAMERA.rise, p.pos.y);
       } else if (!(this.cbGallery && this.cbGallery.cameraOverride(cam, dt))) p.updateCamera(cam, dt, this.world, this.settings.fov || CAMERA.fov);
     }
     // grenade aim arc, from the fresh aim ray

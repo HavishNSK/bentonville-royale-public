@@ -31,6 +31,7 @@ const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _pivot = new THREE.Vector3();
 const _cam = new THREE.Vector3();
+const _start = new THREE.Vector3(); // placeOrbitCamera: the boom origin
 const _v = new THREE.Vector3();
 const _mv = new THREE.Vector3();
 // mantle: climbable ledge height above the feet (m); lower ones are steps, higher ones walls
@@ -45,7 +46,7 @@ const clientNet = (g) => (g && g.net && g.net.isClient ? g.net : null);
  * Positions `camera` behind `pivot` on an orbit (heading/pitch), pulled in
  * when world geometry is in the way. Shared by the player and spectating.
  */
-export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, shoulder, rise = CAMERA.rise) {
+export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, shoulder, rise = CAMERA.rise, feet = null) {
   const cp = Math.cos(pitch);
   _fwd.set(Math.sin(heading) * cp, Math.sin(pitch), -Math.cos(heading) * cp);
   _right.set(Math.cos(heading), 0, Math.sin(heading));
@@ -56,22 +57,40 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
   const hit = world ? world.raycast(_cam.x, _cam.y, _cam.z, _v.x, _v.y, _v.z, dist + 0.45, null) : null;
   let d = hit ? Math.max(0.7, hit.t - 0.45) : dist;
   const startY = _cam.y;
+  // The slab over the player's feet caps every floor probe below: groundHeight is probed from the
+  // pivot (feet + pivotHeight), so at a jump apex it would otherwise reach the next storey's floor
+  // and plant the camera upstairs (same cap the movement code passes; World.builtAbove).
+  // feet: the followed body's feet (the pivot drops when crouching / for the death cam)
+  const feetY = feet != null ? feet : pivot.y - CAMERA.pivotHeight;
+  const capAt = (x, z) => (world && world.builtAbove ? world.builtAbove(x, z, feetY) : Infinity);
   // Keep the boom above walkable slabs (museum oak, roofs), not raw ravine terrain.
   // Shorten the orbit instead of sliding onto the floor — that used to plant the camera in the boards.
-  const floorHint = world && world.groundHeight ? world.groundHeight(_cam.x, _cam.z, pivot.y) : 0;
+  const floorHint = world && world.groundHeight ? world.groundHeight(_cam.x, _cam.z, pivot.y, undefined, capAt(_cam.x, _cam.z)) : 0;
   const floorY = floorHint + 0.45;
   if (_v.y < -1e-4 && startY + d * _v.y < floorY) {
     d = Math.max(0.7, (floorY - startY) / _v.y);
   }
-  _cam.addScaledVector(_v, d);
-  if (world && world.groundHeight) {
-    const gy = world.groundHeight(_cam.x, _cam.z, pivot.y) + 0.45;
+  // indoors the storey slab over the player also caps the camera's probes, so a boom that ends over
+  // a stairwell hole isn't pushed up onto the upper flight (or through the hole) behind them
+  // (inside an enterable building's footprint; interiorAt() is false next to a partition wall)
+  const inShell = world && world.polyAt ? world.polyAt(pivot.x, pivot.z) : null;
+  const overHead = inShell && inShell.shell ? capAt(pivot.x, pivot.z) : Infinity;
+  _start.copy(_cam);
+  // Floor push and ceiling clamp at the boom's end; when they can't both hold (a low ceiling over a
+  // stair flight) shorten the boom toward the player instead of letting the floor push win.
+  for (let k = 0; k < 6; k++) {
+    _cam.copy(_start).addScaledVector(_v, d);
+    if (!world) break;
+    const camCap = Math.min(capAt(_cam.x, _cam.z), overHead);
+    const gy = world.groundHeight ? world.groundHeight(_cam.x, _cam.z, pivot.y, undefined, camCap) + 0.45 : -Infinity;
     if (_cam.y < gy) _cam.y = gy;
-  }
-  if (world && world.ceilingAbove) {
-    const gy = world.groundHeight ? world.groundHeight(_cam.x, _cam.z, pivot.y) + 0.45 : _cam.y;
-    const ceil = world.ceilingAbove(_cam.x, _cam.z, gy);
-    if (Number.isFinite(ceil) && _cam.y > ceil - 0.35) _cam.y = Math.max(gy, ceil - 0.35);
+    if (!world.ceilingAbove) break;
+    // builtAbove returns a slab's top; its underside is up to FLOOR_THICK (0.22) lower
+    const ceil = Math.min(world.ceilingAbove(_cam.x, _cam.z, Math.max(gy, -1e9)), overHead - 0.22);
+    if (!Number.isFinite(ceil) || _cam.y <= ceil - 0.35) break;
+    _cam.y = Math.max(gy, ceil - 0.35);
+    if (gy <= ceil - 0.35 || d <= 0.7) break;
+    d = Math.max(0.7, d * 0.6);
   }
   camera.position.copy(_cam);
   _v.copy(_cam).add(_fwd);
@@ -1418,7 +1437,7 @@ export class Player {
       _fwd.set(Math.sin(this.heading) * cp, Math.sin(this.pitch), -Math.cos(this.heading) * cp);
       camera.position.copy(_pivot);
       camera.lookAt(_v.copy(_pivot).add(_fwd));
-    } else placeOrbitCamera(camera, world, _pivot, this.heading, this.pitch, this.camDist, this.airborneDrop ? 0 : CAMERA.shoulder);
+    } else placeOrbitCamera(camera, world, _pivot, this.heading, this.pitch, this.camDist, this.airborneDrop ? 0 : CAMERA.shoulder, CAMERA.rise, this.pos.y);
 
     // aim ray: from the camera through the screen centre, starting level with the player
     camera.getWorldDirection(this.aimDir);
