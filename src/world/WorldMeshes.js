@@ -927,13 +927,17 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // ---- flat layers: land cover, sidewalks, paths, roads, centre lines (painter's order in one mesh)
   // When terrain is loaded each overlay vertex follows the terrain surface so roads/parks
   // don't float above or sink into hills.
-  // Lay out X/Z first. Heights are assigned after foundations and entrance
-  // grading exist, so sidewalks and road approaches share the collision surface.
+  // Areas use a terrain height function so addPolygon subdivides large polygons (every 4 m)
+  // giving interior vertices that faithfully follow hills. Heights are then overwritten at
+  // line 999 with surfaceHeight (which includes building foundation grading) so sidewalks
+  // and road approaches share the collision surface.
+  // Roads already subdivide via ribbonSamples; they still use 0 here and get corrected.
   const yGround = 0;
+  const areaY = world.terrain ? (x, z) => world.terrainHeight(x, z) : 0;
   const flat = new Buf();
   for (const a of data.areas) {
     if (!AREA_COLOR[a.k]) continue;
-    addPolygon(flat, a.p, yGround, AREA_COLOR[a.k]);
+    addPolygon(flat, a.p, areaY, AREA_COLOR[a.k]);
     world.addArea(a.p, a.k);
   }
   for (const w of data.waterways || []) addRibbon(flat, w.p, w.k === 'river' ? 5 : 1.6, yGround, AREA_COLOR.water);
