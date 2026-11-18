@@ -96,6 +96,9 @@ const GROUND_SNAP = 0.1;
 const GROUND_TOL = 0.75;
 // Feet this close to the terrain count as "standing on the ground" for planning.
 const ON_GROUND = 0.6;
+// Ground the world grid would sink a piece under by more than LOW_SINK (below the lowest
+// terrain of its cell) gets a grid through that lowest point instead (Structures.plan).
+const LOW_SINK = 0.35;
 /** The level grid's offset (0..LEVEL) for a surface at height y, to the cm. */
 function levelPhase(y) {
   if (!Number.isFinite(y)) return 0;
@@ -775,7 +778,7 @@ export class Structures {
     // at some odd height: its own base keeps the grid instead (the slope height shifted every
     // piece off the levels for the length of the jump)
     const under = !onGround && !standOn && Number.isFinite(surf) ? this._pieceAtSurface(pos.x, pos.z, surf) : null;
-    const phase = onGround ? 0 : standOn ? levelPhase(standOn.y) : under ? levelPhase(under.y) : levelPhase(Number.isFinite(surf) ? surf : 0);
+    let phase = onGround ? 0 : standOn ? levelPhase(standOn.y) : under ? levelPhase(under.y) : levelPhase(Number.isFinite(surf) ? surf : 0);
     const kFeet = Math.floor((pos.y - phase) / LEVEL + 0.34);
     let dk = 0;
     let x;
@@ -834,6 +837,19 @@ export class Structures {
       }
     }
     let k = (onGround ? this._groundLevel(x, z) : kFeet) + dk;
+    // ground well off the 3 m grid (the Crystal Bridges ravine floor, pond beds and banks sit
+    // at -12 .. -14.1 m): the world grid would sink the piece under even the lowest ground of
+    // its cell, up to 2.7 m, out of sight. Build on a grid through that lowest point instead
+    // (like a landmark slab): flush on flat ground, dug into the high side of a slope, never
+    // floating. Ground near the grid (the flat map at y = 0) keeps the shared world grid.
+    if (onGround) {
+      const low = this._lowGround(x, z);
+      const k0 = k - dk;
+      if (low !== null && low - (phase + k0 * LEVEL) > LOW_SINK) {
+        phase = levelPhase(low);
+        k = Math.round((low - phase) / LEVEL) + dk;
+      }
+    }
     rot = ((rot % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
     // standing on a ramp in a box and ramping again: that spot is taken by the ramp we are on,
     // so the new one goes up a level (keeps climbing, like a ramp rush in a box)
@@ -940,6 +956,21 @@ export class Structures {
   }
 
   /** Ground level (grid level index) of the terrain at (x, z). */
+  /** The lowest terrain around (x, z) (a cell, or both sides of a wall's edge), to the cm. */
+  _lowGround(x, z) {
+    const w = this.world;
+    if (!w || !w.terrainHeight) return null;
+    let lo = Infinity;
+    for (let a = -1; a <= 1; a++) {
+      for (let b = -1; b <= 1; b++) {
+        const h = w.terrainHeight(x + a * (HALF - 0.1), z + b * (HALF - 0.1));
+        if (!Number.isFinite(h)) return null;
+        lo = Math.min(lo, h);
+      }
+    }
+    return Math.round(lo * 100) / 100;
+  }
+
   _groundLevel(x, z) {
     const w = this.world;
     const h = w && w.terrainHeight ? w.terrainHeight(x, z) : 0;

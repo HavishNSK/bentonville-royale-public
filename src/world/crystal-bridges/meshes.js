@@ -810,7 +810,22 @@ export function buildSiteMeshes({ root, world, site }) {
     group.add(back);
   }
 
-  if (site.statues && site.statues.length) loadStatues(group, site.statues);
+  // statue figures: statue id -> { im, i, mtx } once loaded; broken holds ids broken before then
+  const statueSlots = { slots: new Map(), broken: new Set() };
+  if (site.statues && site.statues.length) loadStatues(group, site.statues, statueSlots);
+  /** A broken statue figure (build.js: its hidden collider): hide or restore its instance. */
+  const setStatue = (c, broken) => {
+    const id = c.part && c.part.hidden ? c.part.statue : null;
+    if (!id) return false;
+    if (broken) statueSlots.broken.add(id);
+    else statueSlots.broken.delete(id);
+    const s = statueSlots.slots.get(id);
+    if (s) {
+      s.im.setMatrixAt(s.i, broken ? zero : s.mtx);
+      s.im.instanceMatrix.needsUpdate = true;
+    }
+    return true;
+  };
 
   // sliding entrance leaves (south / library): separate meshes so they can open
   const doorLeaves = [];
@@ -872,6 +887,7 @@ export function buildSiteMeshes({ root, world, site }) {
     },
     /** A broken pane / prop: hide its instance. Returns true when the collider belongs to the site. */
     hideCollider(c) {
+      if (setStatue(c, true)) return true;
       if (roofQuads.has(c)) return setRoofTile(c, true);
       if (panelVerts.has(c)) return setWallPanel(c, true);
       if (paneIndex.has(c)) {
@@ -893,6 +909,7 @@ export function buildSiteMeshes({ root, world, site }) {
       return false;
     },
     showCollider(c) {
+      if (setStatue(c, false)) return true;
       if (roofQuads.has(c)) return setRoofTile(c, false);
       if (panelVerts.has(c)) return setWallPanel(c, false);
       if (paneIndex.has(c)) {
@@ -989,7 +1006,7 @@ export { WALKER_LANDING };
  * Statues (statues.js): one InstancedMesh per GLB, loaded after the site is up (the plinths are
  * already drawn; the figures pop in). A model that fails to load just leaves its plinths bare.
  */
-async function loadStatues(group, statues) {
+async function loadStatues(group, statues, statueSlots) {
   const { loadGLB, flattenModel } = await import('../../core/assets.js');
   const byModel = new Map();
   for (const s of statues) {
@@ -1010,9 +1027,12 @@ async function loadStatues(group, statues) {
       im.name = 'cb-statue-' + key;
       im.castShadow = true;
       im.receiveShadow = true;
+      const zero = new THREE.Matrix4().makeScale(0, 0, 0);
       list.forEach((s, i) => {
         q.setFromAxisAngle(up, s.yaw);
-        im.setMatrixAt(i, mtx.compose(po.set(s.x, s.y, s.z), q, sc.setScalar(s.s)));
+        const m = mtx.compose(po.set(s.x, s.y, s.z), q, sc.setScalar(s.s)).clone();
+        if (statueSlots) statueSlots.slots.set(s.id, { im, i, mtx: m });
+        im.setMatrixAt(i, statueSlots && statueSlots.broken.has(s.id) ? zero : m);
       });
       im.instanceMatrix.needsUpdate = true;
       im.computeBoundingSphere();

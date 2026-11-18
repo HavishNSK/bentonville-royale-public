@@ -766,6 +766,7 @@ const BUS_HALF_W = SCHOOL_BUS.halfWidth + 0.05;
 const BUS_LANE = 6; // m between lane centres (3 m between parked buses side by side)
 const BUS_GAP = 2.5; // m between a bus's rear and the next one's front bumper
 const BUS_MAX = 10; // per bus loop
+const BUS_HP = 600; // a parked car has 300
 
 /**
  * Parks rows of school buses on every `busloop` area (scripts/compose-map.mjs re-tags a
@@ -778,6 +779,7 @@ function parkSchoolBuses(world, data, root) {
   const loops = data.areas.filter((a) => a.k === 'busloop');
   if (!loops.length) return 0;
   const byMat = {};
+  const buses = []; // { col, pieces }
   const parts = schoolBusParts();
   const m = new THREE.Matrix4();
   let n = 0;
@@ -855,7 +857,12 @@ function parkSchoolBuses(world, data, root) {
       const oz = cz - fz * -BUS_MID;
       const gy = world.surfaceHeight(cx, cz);
       m.makeRotationY(Math.atan2(-fx, -fz)).setPosition(ox, gy + SCHOOL_BUS.groundY, oz);
-      for (const part of parts) (byMat[part.mat] ||= []).push(part.geometry.clone().applyMatrix4(m));
+      const pieces = []; // [material, index in byMat[material]]: its vertex ranges after the merge
+      for (const part of parts) {
+        const list = (byMat[part.mat] ||= []);
+        pieces.push([part.mat, list.length]);
+        list.push(part.geometry.clone().applyMatrix4(m));
+      }
       const corners = [
         [cx + fx * BUS_HALF_LEN + vx * BUS_HALF_W, cz + fz * BUS_HALF_LEN + vz * BUS_HALF_W],
         [cx + fx * BUS_HALF_LEN - vx * BUS_HALF_W, cz + fz * BUS_HALF_LEN - vz * BUS_HALF_W],
@@ -865,6 +872,9 @@ function parkSchoolBuses(world, data, root) {
       const col = world.addPoly(corners, SCHOOL_BUS.groundY + SCHOOL_BUS.top, 'vehicle', 'metal', [], { y0: gy });
       col.x = cx;
       col.z = cz;
+      // breakable and harvestable for metal like a parked car (twice as tough)
+      col.hp = col.maxHp = BUS_HP;
+      buses.push({ col, pieces });
       n++;
     }
   }
@@ -872,12 +882,36 @@ function parkSchoolBuses(world, data, root) {
   const mats = schoolBusMaterials();
   const group = new THREE.Group();
   group.name = 'school-buses';
+  const ranges = {}; // material -> [{ mesh, start, count }] per source geometry, in merge order
   for (const k in byMat) {
     const mesh = new THREE.Mesh(mergeGeometries(byMat[k], false), mats[k]);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     group.add(mesh);
+    let start = 0;
+    ranges[k] = byMat[k].map((g) => {
+      const r = { mesh, start, count: g.attributes.position.count };
+      start += r.count;
+      return r;
+    });
     for (const g of byMat[k]) g.dispose();
+  }
+  // a broken bus collapses its vertices onto one point (view.hideCollider -> col.setHidden)
+  const original = new Map(); // mesh -> positions as merged
+  for (const { col, pieces } of buses) {
+    const parts = pieces.map(([k, i]) => ranges[k] && ranges[k][i]).filter(Boolean);
+    col.setHidden = (hidden) => {
+      for (const { mesh, start, count } of parts) {
+        const attr = mesh.geometry.attributes.position;
+        if (!original.has(mesh)) original.set(mesh, attr.array.slice());
+        const orig = original.get(mesh);
+        for (let v = 0; v < count; v++) {
+          const src = hidden ? start : start + v;
+          attr.setXYZ(start + v, orig[src * 3], orig[src * 3 + 1], orig[src * 3 + 2]);
+        }
+        attr.needsUpdate = true;
+      }
+    };
   }
   for (const part of parts) part.geometry.dispose();
   root.add(group);
@@ -1463,10 +1497,12 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     },
     /** Hide the instances behind a harvested collider. */
     hideCollider(col) {
+      if (col.setHidden) return col.setHidden(true); // merged meshes (school buses)
       if (!Array.isArray(col.ref)) return;
       for (const rec of col.ref) (TREE_H[rec.name] ? trees : props).hide(rec);
     },
     showCollider(col) {
+      if (col.setHidden) return col.setHidden(false);
       if (!Array.isArray(col.ref)) return;
       for (const rec of col.ref) (TREE_H[rec.name] ? trees : props).show(rec);
     },

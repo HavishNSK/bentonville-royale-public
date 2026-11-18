@@ -19,9 +19,9 @@ const site = () => {
   const world = new World({ ...mapData, buildings: [], roads: [] });
   return { world, out: buildSite(world, mapData) };
 };
-const SOLID = (p) => p.floorOf || p.stair || p.berm || p.pier || p.threshold || p.slab || p.plinth || p.tier !== undefined;
+const SOLID = (p) => p.floorOf || p.stair || p.berm || p.pier || p.threshold || p.slab || p.tier !== undefined;
 
-test('every museum wall is a breakable, harvestable panel; floors, stairs and plinths stay solid', () => {
+test('every museum wall is a breakable, harvestable panel; floors and stairs stay solid', () => {
   const { out } = site();
   const walls = out.parts.filter((p) => p.wall || p.abutment || p.room);
   assert.ok(walls.length > 600, `walls ${walls.length}`);
@@ -168,4 +168,42 @@ test('host destroy event (cx by box id) breaks the same wall panel on a client; 
   assert.equal(floor.collider.alive, true, 'clients ignore destroy events for floors');
   cc.restoreWorld();
   assert.equal(cp.collider.alive, true, 'client reset rebuilds it');
+});
+
+test('statue plinths, statue figures and railings break (and give mats); a figure falls with its plinth', () => {
+  const { world, out } = site();
+  const plinths = out.parts.filter((p) => p.plinth);
+  const figures = out.parts.filter((p) => p.statue && p.hidden);
+  const rails = out.parts.filter((p) => p.rail);
+  assert.ok(plinths.length > 10 && figures.length >= plinths.length && rails.length > 0);
+  for (const p of [...plinths, ...figures, ...rails]) {
+    const c = p.collider;
+    assert.ok(c.archPanel && Number.isFinite(c.maxHp) && c.maxHp < 1e6, `${p.plinth || p.statue || 'rail'} is breakable`);
+    assert.ok(Array.isArray(c.ref), 'harvestable: the pickaxe yields mats');
+  }
+  const combat = new Combat({ world });
+  const hidden = [];
+  combat.view = { hideCollider: (c) => hidden.push(c) };
+  const pl = plinths[0];
+  const fig = figures.find((f) => f.statue === pl.plinth);
+  assert.deepEqual(pl.collider.dependents, [fig.collider]);
+  combat._destroyCollider(pl.collider, new THREE.Vector3(pl.cx, pl.y1, pl.cz));
+  assert.ok(!fig.collider.alive && hidden.includes(fig.collider), 'the figure goes with its plinth');
+});
+
+test('the pickaxe gets mats from glass panes and roof tiles it smashes', () => {
+  const { world, out } = site();
+  const combat = new Combat({ world });
+  combat.view = { hideCollider() {} };
+  const harvested = [];
+  combat.onHarvest = (s, c, res) => harvested.push(res.harvested);
+  for (const part of [out.glass[0], out.parts.find((p) => p.roofTile && p.collider.breakable)]) {
+    const c = part.collider;
+    // swing at the part's middle from 1.5 m away along x
+    const y = (c.y0 + c.y1) / 2;
+    const ox = c.minX - 1.5;
+    const res = combat.swingPickaxe({ pos: new THREE.Vector3(ox, y - 1.5, c.cz) }, new THREE.Vector3(ox, y, c.cz), new THREE.Vector3(1, 0, 0));
+    assert.ok(res.harvested && res.harvested.count > 0 && ['wood', 'brick', 'metal'].includes(res.harvested.mat), `${c.kind} ${c.mat}: ${JSON.stringify(res.harvested)}`);
+  }
+  assert.equal(harvested.length, 2);
 });

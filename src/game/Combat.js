@@ -126,6 +126,11 @@ function panelEnds(c, pn) {
   return { ax: ax + ex * pn.f0, az: az + ez * pn.f0, bx: ax + ex * pn.f1, bz: az + ez * pn.f1 };
 }
 
+/** Build material a smashed breakable (glass, frame, roof tile) gives: glass counts as metal. */
+function breakableMat(c) {
+  return c.mat === 'brick' || c.mat === 'wood' ? c.mat : 'metal';
+}
+
 export class Combat {
   constructor({ world, structures, fx, sfx, view }) {
     this.world = world;
@@ -273,6 +278,8 @@ export class Combat {
     this.world.remove(c);
     if (this.view && this.view.hideCollider) this.view.hideCollider(c);
     this.destroyed.push(c);
+    // what stood on it goes too (a statue on its plinth)
+    if (c.dependents) for (const d of c.dependents) if (d.alive) this._destroyCollider(d, point);
     if (this.onColliderDestroyed) this.onColliderDestroyed(c, point);
     if (this.fx && point) this.fx.debris(point, SURFACE[c.mat] || 'wood', { count: 18, size: 0.4, spread: 2.4 });
     if (this.sfx && point) this.sfx.play(c.kind === 'tree' ? 'tree_fall' : 'building_collapse', { x: point.x, y: point.y, z: point.z, volume: 0.7 });
@@ -643,17 +650,24 @@ export class Combat {
     }
     if (hitCopy && hitCopy.panel) return this._swingPanel(shooter, c, hitCopy.panel, point, out);
     if (this._isBreakable(c)) {
-      // glass: the pickaxe smashes it (no materials)
+      // glass panes and frames, museum roof tiles: the pickaxe smashes them and they give mats
+      // like everything else (glass and its steel frames: metal; roof tiles: their material)
       if (this.fx) this.fx.impact(point, _n.set(hitCopy.nx, hitCopy.ny, hitCopy.nz), 'metal');
       if (this.sfx) this.sfx.play('bullet_impact', { x: point.x, y: point.y, z: point.z, volume: 0.7, surface: 'metal' });
+      const bmat = breakableMat(c);
+      out.harvested = { mat: bmat, count: PICKAXE.yield[bmat] };
       out.collider = c;
       out.point = point.clone();
-      if (!this.authoritative) return out;
+      if (!this.authoritative) {
+        out.predicted = true; // client: feedback only; the host owns hp and mats
+        return out;
+      }
       c.hp -= PICKAXE.harvest;
       if (c.hp <= 0) {
         out.destroyed = true;
         this._destroyCollider(c, point);
       }
+      if (this.onHarvest) this.onHarvest(shooter, c, out);
       return out;
     }
     if (!this._isHarvestable(c)) {

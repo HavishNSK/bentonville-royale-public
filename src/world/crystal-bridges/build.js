@@ -10,9 +10,10 @@
 //                  lintels, transfer walls, partitions, the enclosed rooms and their ceiling,
 //                  the bridge abutments) are breakable panels (`archPanel`, WALL_HP, at most
 //                  WALL_PANEL m wide): bullets, the pickaxe (which still yields mats) and
-//                  explosives break them. Floors / plinths, stairs, landings, thresholds, berms,
-//                  piers, outdoor slabs, Walker Landing and statue plinths stay solid
-//                  (hp 1e9: harvestable but they never fall), so nobody drops into the ravine.
+//                  explosives break them, as do statue plinths and figures (a figure falls with
+//                  its plinth) and railings. Floors, stairs, landings, thresholds, berms, piers,
+//                  outdoor slabs and Walker Landing stay solid (hp 1e9: harvestable but they
+//                  never fall), so nobody drops into the ravine.
 //   kind 'glass'   floor-to-ceiling panes: breakable (shoot or swing them out), no mats
 //   kind 'prop'    benches, tables, shelves, display cases: breakable + harvestable (wood)
 
@@ -35,6 +36,8 @@ export const WALL_PANEL = 3; // m: max width of a straight breakable wall panel 
 const ABUTMENT_HP = WALL_HP * 2; // the bridges' cable anchors are one thick block each
 export const GLASS_HP = 70;
 const PROP_HP = 120;
+const RAIL_HP = 150; // a balcony / weir railing section
+const STATUE_HP = WALL_HP; // a statue figure: as tough as a wall panel
 export const ROOF_HP = 300; // a roof tile: ~10 rifle rounds, 6 pickaxe swings, one grenade
 const ROOF_GLASS_HP = 140; // the Garrison Lobby's glass dome
 const ROOF_TILE = 4; // m: roof tile size on a flat axis
@@ -663,9 +666,9 @@ export function buildSite(world, mapData) {
   for (const s of SLABS) {
     rect(s.x0, s.x1, s.z0, s.z1, s.from, s.y, s.mat, 'arch', { slab: s.id });
     if (s.rail) {
-      rect(s.x1 - 0.1, s.x1, s.z0, s.z1, s.y, s.y + 1.05, 'mullion', 'arch', { rail: true });
-      rect(s.x0, s.x1, s.z0, s.z0 + 0.1, s.y, s.y + 1.05, 'mullion', 'arch', { rail: true });
-      rect(s.x0, s.x1, s.z1 - 0.1, s.z1, s.y, s.y + 1.05, 'mullion', 'arch', { rail: true });
+      rect(s.x1 - 0.1, s.x1, s.z0, s.z1, s.y, s.y + 1.05, 'mullion', 'arch', { rail: true, archPanel: true, panelHp: RAIL_HP });
+      rect(s.x0, s.x1, s.z0, s.z0 + 0.1, s.y, s.y + 1.05, 'mullion', 'arch', { rail: true, archPanel: true, panelHp: RAIL_HP });
+      rect(s.x0, s.x1, s.z1 - 0.1, s.z1, s.y, s.y + 1.05, 'mullion', 'arch', { rail: true, archPanel: true, panelHp: RAIL_HP });
     }
   }
   const decks = [];
@@ -702,9 +705,12 @@ export function buildSite(world, mapData) {
     for (const [dx, dz] of [[0, 0], [-r, -r], [r, -r], [-r, r], [r, r]]) g = Math.max(g, world.groundHeight(st.x + dx, st.z + dz, hint + 0.5, STEP_RISE + 0.2));
     if (!Number.isFinite(g)) g = hint;
     const top = g + st.plinth;
-    if (st.plinth > 0) box({ cx: st.x, cz: st.z, hx: r, hz: r, y0: g - 0.5, y1: top, mat: 'stone', plinth: st.id }, 'arch');
+    // plinth and figure break like wall panels (and give mats); a broken plinth takes its
+    // figure with it (collider.dependents, Combat._destroyCollider) so nothing floats
+    const plinth = st.plinth > 0 ? box({ cx: st.x, cz: st.z, hx: r, hz: r, y0: g - 0.5, y1: top, mat: 'stone', plinth: st.id, archPanel: true }, 'arch') : null;
     const fr = model.r * st.s * 0.85;
-    box({ cx: st.x, cz: st.z, hx: fr, hz: fr, y0: top, y1: top + model.h * st.s, mat: 'stone', statue: st.id, hidden: true }, 'arch');
+    const figure = box({ cx: st.x, cz: st.z, hx: fr, hz: fr, y0: top, y1: top + model.h * st.s, mat: 'stone', statue: st.id, hidden: true, archPanel: true, panelHp: STATUE_HP }, 'arch');
+    if (plinth && figure) plinth.collider.dependents = [figure.collider];
     statues.push({ id: st.id, model: st.model, x: st.x, y: top, z: st.z, s: st.s, yaw: Math.atan2(st.face[0], st.face[1]), r, pv: st.near });
   }
   const clearOfStatues = (x, z, r) => statues.every((s) => Math.max(Math.abs(s.x - x), Math.abs(s.z - z)) > s.r + r);
