@@ -22,7 +22,7 @@
 
 import * as THREE from 'three';
 import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, CONSUMABLES, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
-import { canSandboxLoadout, canCreativeMap, giveSandboxWeapon } from './sandboxLoadout.js';
+import { canSandboxLoadout, canCreativeMap, giveSandboxWeapon, sandboxBotStatus, spawnSandboxBot, clearSandboxBots, purgeSandboxBodies } from './sandboxLoadout.js';
 import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
 import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
@@ -216,6 +216,7 @@ export class Game {
     if (this.hud.setMapWeaponsHandler) this.hud.setMapWeaponsHandler(() => this.toggleSandboxLoadout(true));
     if (this.hud.setSandboxLoadoutHandler) this.hud.setSandboxLoadoutHandler((id) => this.giveSandboxGun(id));
     if (this.hud.setSandboxLoadoutClose) this.hud.setSandboxLoadoutClose(() => this.toggleSandboxLoadout(false));
+    if (this.hud.setSandboxBotHandlers) this.hud.setSandboxBotHandlers((d) => this.spawnSandboxBot(d), () => this.clearSandboxBots());
     const mb = mapData && mapData.meta && mapData.meta.bounds;
     if (mb && this.hud.setFullMapAspect) this.hud.setFullMapAspect((mb.maxX - mb.minX) / (mb.maxZ - mb.minZ));
     this.minimap = new Minimap({ mapData, miniCanvas: this.hud.getMinimapCanvas(), fullCanvas: this.hud.getFullMapCanvas() });
@@ -630,6 +631,44 @@ export class Game {
       this.hud.toast(name);
     }
     return item;
+  }
+
+  /**
+   * Sandbox BOTS: one bot of difficulty `d` (easy | normal | hard) on open ground 9-15 m in
+   * front of the player, armed (sandboxBotLoadout), on the shared sandbox bot team (they all
+   * hunt you, not each other). Refused outside the open-world sandbox, with a net session, or
+   * at SANDBOX_BOT_CAP live bots. You stay invulnerable (free build: only Leave ends the session),
+   * so their hits flash / sound but never knock you; your hits on them count as normal.
+   * Returns the new bot or null.
+   */
+  spawnSandboxBot(d) {
+    let bot = null;
+    let reason = null;
+    try {
+      ({ bot, reason } = spawnSandboxBot(this, d));
+    } catch (err) {
+      this._error('sandbox.spawnBot', err);
+    }
+    if (this.hud && this.hud.toast) this.hud.toast(bot ? `${bot.name} spawned` : reason || 'Could not spawn a bot');
+    this._syncSandboxBots();
+    return bot;
+  }
+
+  /** Sandbox BOTS: remove every sandbox bot (alive or dead). Returns how many went. */
+  clearSandboxBots() {
+    const n = clearSandboxBots(this);
+    this._syncSandboxBots();
+    return n;
+  }
+
+  /** Dead sandbox bots leave after SANDBOX_CORPSE_TIME s. */
+  _purgeSandboxBodies() {
+    return purgeSandboxBodies(this);
+  }
+
+  /** Push the BOTS section's count / cap / disabled state to the overlay. */
+  _syncSandboxBots() {
+    if (this.hud && this.hud.setSandboxBots) this.hud.setSandboxBots(sandboxBotStatus(this));
   }
 
   /**
@@ -1331,7 +1370,14 @@ export class Game {
     } else {
       this.matchTime += dt;
       if (!client && !this.freeBuild) this.storm.update(dt); // free build: storm stays dormant
-      if (this.freeBuild) this._refillMats();
+      if (this.freeBuild) {
+        this._refillMats();
+        this._sandboxTick = (this._sandboxTick || 0) + dt;
+        if (this._sandboxTick >= 1) {
+          this._sandboxTick = 0;
+          if (this._purgeSandboxBodies() || this.sandboxLoadoutOpen) this._syncSandboxBots();
+        }
+      }
     }
 
     if (this.state === 'play' || this.state === 'over') {
@@ -1971,6 +2017,7 @@ export class Game {
       if (!this.fullMapOpen) return;
       this.sandboxLoadoutOpen = true;
       if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(true);
+      this._syncSandboxBots();
       sfx.play('ui_click');
       return;
     }

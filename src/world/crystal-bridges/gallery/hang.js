@@ -64,14 +64,20 @@ export function lineLength(L) {
   return L.type === 'line' ? Math.hypot(L.bx - L.ax, L.bz - L.az) : L.b - L.a;
 }
 
+/** How far in front of a frame the view must stay clear (a viewer stands ~3 m back). */
+export const VIEW_CLEAR = 3.4;
+
 function blocked(obstacles, x, z, nx, nz, w) {
-  // the strip in front of the frame: from the wall 1.3 m into the room, frame width + 0.6
+  // the strip in front of the frame: from the wall VIEW_CLEAR into the room, frame width + 0.6
+  // (deep enough that a statue or the Infinity Room standing 3 m out never hides a work)
   const rx = nz;
   const rz = -nx;
-  for (let k = -1; k <= 1; k++) {
-    for (const d of [0.4, 1.2]) {
-      const px = x + nx * d + rx * k * (w / 2 + 0.3);
-      const pz = z + nz * d + rz * k * (w / 2 + 0.3);
+  const half = w / 2 + 0.3;
+  const steps = Math.max(1, Math.ceil(half / 0.5)); // every <= 0.5 m across: a statue can't slip between samples
+  for (let k = -steps; k <= steps; k++) {
+    for (const d of [0.4, 1.2, 2.0, 2.7, VIEW_CLEAR]) {
+      const px = x + nx * d + rx * (k / steps) * half;
+      const pz = z + nz * d + rz * (k / steps) * half;
       for (const o of obstacles) if (px > o.x0 && px < o.x1 && pz > o.z0 && pz < o.z1) return true;
     }
   }
@@ -141,6 +147,8 @@ export function obstaclesFrom(site) {
     return { x0: p.cx - ex, x1: p.cx + ex, z0: p.cz - ez, z1: p.cz + ez };
   };
   for (const p of site.parts) if (p.stair || p.room || p.threshold || p.plinth || p.statue) out.push(rectOf(p));
+  // a small room is solid to the eye as a whole (its walls alone leave the inside looking "clear")
+  for (const pv of PAVILIONS) for (const rm of pv.rooms || []) out.push({ x0: rm.x0 - 0.3, x1: rm.x1 + 0.3, z0: rm.z0 - 0.3, z1: rm.z1 + 0.3 });
   for (const p of site.props) if (p.type === 'shelf' || p.type === 'case' || p.type === 'counter') out.push(rectOf(p));
   return out;
 }

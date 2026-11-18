@@ -54,3 +54,112 @@ export function giveSandboxWeapon(inv, id, rarity = 'rare') {
   }
   return inv.slots.find((s) => s && s.type === 'weapon' && s.id === id) || item;
 }
+
+// ---------------------------------------------------------------- sandbox bots
+// The BOTS section of the sandbox overlay (Game.spawnSandboxBot / clearSandboxBots): spawn an
+// Easy / Normal / Hard bot near the player. Sandbox is solo-only (Game.startMatch never gives a
+// multiplayer host free build), and spawning is refused whenever a net session exists, so no
+// bot ever reaches the network. SANDBOX_BOT_CAP bounds live bots (the bot sim, characters and
+// their builds); dead ones free their slot and their bodies are removed shortly after.
+
+export const SANDBOX_BOT_CAP = 12;
+export const SANDBOX_BOT_DIFFS = Object.freeze(['easy', 'normal', 'hard']);
+export const SANDBOX_BOT_TEAM = -77; // every sandbox bot is on one team: they all hunt the player
+export const SANDBOX_CORPSE_TIME = 6; // s a dead sandbox bot's body stays before it is removed
+
+/** Free build in the open world (not Museum Mode), playing, solo. */
+export function canSandboxBots(game) {
+  return !!(game && game.freeBuild && !game.museumMode && game.state === 'play' && !game.net);
+}
+
+/** Live sandbox bots in `bots` (a Bots instance or its actor list). */
+export function sandboxBotCount(bots) {
+  const list = bots ? bots.list || bots.actors || bots : [];
+  let n = 0;
+  for (const a of list) if (a && a.sandbox && a.alive) n++;
+  return n;
+}
+
+/**
+ * What the BOTS section shows: { count, cap, canSpawn, reason, bodies }. reason is a short line when
+ * spawning is not possible (null otherwise).
+ */
+export function sandboxBotStatus(game) {
+  const count = game && game.bots ? sandboxBotCount(game.bots) : 0;
+  let reason = null;
+  if (!canSandboxBots(game)) reason = game && game.museumMode ? 'Not in Museum Mode' : 'Sandbox only';
+  else if (count >= SANDBOX_BOT_CAP) reason = `Bot limit reached (${SANDBOX_BOT_CAP}) — clear some first`;
+  let bodies = 0;
+  const list = game && game.bots ? game.bots.list || game.bots.actors || [] : [];
+  for (const a of list) if (a && a.sandbox && !a.alive) bodies++;
+  return { count, cap: SANDBOX_BOT_CAP, canSpawn: !reason, reason, bodies };
+}
+
+/** A basic loadout for a sandbox bot of difficulty `d`: a rifle (+ a shotgun above easy), ammo, mats, a medkit. */
+export function sandboxBotLoadout(d) {
+  const rarity = d === 'hard' ? 'epic' : d === 'normal' ? 'rare' : 'common';
+  const items = [{ type: 'weapon', id: 'rifle', rarity, mag: WEAPONS.rifle.mag }];
+  if (d !== 'easy') items.push({ type: 'weapon', id: 'shotgun', rarity: clampWeaponRarity('shotgun', rarity), mag: WEAPONS.shotgun.mag });
+  items.push({ type: 'consumable', id: 'medkit', count: 1 });
+  return {
+    items,
+    ammo: { medium: 240, shells: 30 },
+    mats: { wood: d === 'hard' ? 400 : d === 'normal' ? 200 : 60 },
+    selected: 0,
+  };
+}
+
+/**
+ * Spawns one sandbox bot of difficulty `d` on open ground 9-15 m in front of the player
+ * (game.bots.addBot), armed with sandboxBotLoadout(d), on SANDBOX_BOT_TEAM (they all hunt the
+ * player, not each other). Refused (bot null, reason set) outside the open-world sandbox, with
+ * a net session, for an unknown difficulty, or at SANDBOX_BOT_CAP live bots.
+ * Returns { bot, reason }.
+ */
+export function spawnSandboxBot(game, d) {
+  if (!SANDBOX_BOT_DIFFS.includes(d)) return { bot: null, reason: 'Unknown difficulty' };
+  const status = sandboxBotStatus(game);
+  if (!status.canSpawn) return { bot: null, reason: status.reason };
+  const bots = game.bots;
+  const p = game.player;
+  const world = game.world;
+  if (!p || !bots || !bots.addBot || !world) return { bot: null, reason: 'Sandbox not ready' };
+  purgeSandboxBodies(game, true); // make room: bodies go before a new bot comes in
+  const rng = game.rng || Math.random;
+  let x = p.pos.x + Math.sin(p.heading) * 12;
+  let z = p.pos.z - Math.cos(p.heading) * 12;
+  for (let i = 0; i < 16; i++) {
+    const a = p.heading + (rng() - 0.5) * 1.4;
+    const r = 9 + rng() * 6;
+    const cx = p.pos.x + Math.sin(a) * r;
+    const cz = p.pos.z - Math.cos(a) * r;
+    if (world.inBounds && !world.inBounds(cx, cz, 20)) continue;
+    if (world.blockedAt && world.blockedAt(cx, cz, 1.2)) continue;
+    if (world.areaAt && world.areaAt(cx, cz) === 'water') continue;
+    x = cx;
+    z = cz;
+    break;
+  }
+  game._sandboxBotSeq = (game._sandboxBotSeq || 0) + 1;
+  const bot = bots.addBot(d, x, z, {
+    name: `${d[0].toUpperCase()}${d.slice(1)} Bot ${game._sandboxBotSeq}`,
+    loadout: sandboxBotLoadout(d),
+    team: SANDBOX_BOT_TEAM,
+    heading: Math.atan2(p.pos.x - x, -(p.pos.z - z)),
+    sandbox: true,
+  });
+  return { bot, reason: null };
+}
+
+/** Removes every sandbox bot (alive or dead). Returns how many went. */
+export function clearSandboxBots(game) {
+  const bots = game && game.bots;
+  return bots && bots.removeBots ? bots.removeBots((a) => !!a.sandbox) : 0;
+}
+
+/** Removes dead sandbox bots whose body has lain SANDBOX_CORPSE_TIME s (all: every dead one). */
+export function purgeSandboxBodies(game, all = false) {
+  const bots = game && game.bots;
+  if (!bots || !bots.removeBots) return 0;
+  return bots.removeBots((a) => !!a.sandbox && !a.alive && (all || !a._bot || a._bot.deadTime > SANDBOX_CORPSE_TIME));
+}

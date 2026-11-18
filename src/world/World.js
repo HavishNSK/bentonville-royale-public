@@ -2051,6 +2051,30 @@ export class World {
     return touched;
   }
 
+  /**
+   * Did a body's horizontal move from (ox, oz) to (nx, nz), feet at y, pass THROUGH a solid
+   * architecture box (museum / interior walls, glass, props)? resolveCircle pushes a body out of
+   * a box along the shortest way, and beside a thin wall that way can be through the wall (a
+   * stair 0.2 m from the North Tower's wall, a berm against a gallery wall). Movers undo such a
+   * step. Sampled above step height, so stepping onto stairs or a slab never counts. A body that
+   * starts inside a box gets no hit from it (boxRay ignores origins inside), so being pushed out
+   * of something is never blocked.
+   */
+  crossesSolid(ox, oz, nx, nz, y, height = 1.8) {
+    const dx = nx - ox;
+    const dz = nz - oz;
+    const L = Math.hypot(dx, dz);
+    if (L < 1e-4) return false;
+    const ux = dx / L;
+    const uz = dz / L;
+    for (const h of [STEP + 0.12, height * 0.72]) {
+      const hit = this.raycast(ox, y + h, oz, ux, 0, uz, L);
+      const c = hit && hit.collider;
+      if (c && c.hx !== undefined && !c.passable && hit.t > 1e-3) return true;
+    }
+    return false;
+  }
+
   // ---------------------------------------------------------------- raycast
 
   /**

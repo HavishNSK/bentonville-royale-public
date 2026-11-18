@@ -277,7 +277,7 @@ export class Character {
     this.downRing = ring;
     this.downed = false;
     this._down = 0; // 0..1 blend into the prone pose
-    this.swimming = false; // setSwim(): sunk to the chest, hands (and what they hold) hidden
+    this.swimming = false; // setSwim(): sunk to the chest; the held item stays in hand
     this._swim = 0;
     this._downClock = 0;
 
@@ -298,8 +298,8 @@ export class Character {
     // several guns share one mesh (WEAPONS[id].model), e.g. burst rifle -> rifle
     this.gunKey = WEAPONS[id] && this.guns[WEAPONS[id].model] ? WEAPONS[id].model : id;
     for (const k in this.guns) this.guns[k].visible = k === this.gunKey;
-    if (this.pickaxe) this.pickaxe.visible = id === 'pickaxe' && this._swim < 0.5;
-    this.grenade.visible = (id === 'grenade' || id === 'smoke') && this._swim < 0.5;
+    if (this.pickaxe) this.pickaxe.visible = id === 'pickaxe';
+    this.grenade.visible = id === 'grenade' || id === 'smoke';
   }
 
   _oneShot(key, speed = 1) {
@@ -361,7 +361,7 @@ export class Character {
     if (on) this.cancelOneShot();
   }
 
-  /** Swimming: the body sinks to the chest and the held item is hidden. Idempotent. */
+  /** Swimming: the body sinks to the chest (the held item stays visible). Idempotent. */
   setSwim(on) {
     this.swimming = !!on;
   }
@@ -568,11 +568,8 @@ export class Character {
     if (this._swim !== swimT) {
       this._swim = damp(this._swim, swimT, 7, dt);
       if (Math.abs(this._swim - swimT) < 0.002) this._swim = swimT;
+      // the held item stays in hand: players shoot, swing and build in the water
       this.model.position.y = this._modelPos.y + this._down * 0.22 - this._swim * SWIM.sink;
-      const dry = this._swim < 0.5;
-      this.gunPivot.visible = dry;
-      if (this.pickaxe) this.pickaxe.visible = dry && this.equipped === 'pickaxe' && this.mode !== 'emote';
-      if (this.grenade) this.grenade.visible = dry && this.equipped === 'grenade';
     }
     if (!this.animate) return;
 

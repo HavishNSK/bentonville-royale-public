@@ -49,8 +49,18 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
   const cp = Math.cos(pitch);
   _fwd.set(Math.sin(heading) * cp, Math.sin(pitch), -Math.cos(heading) * cp);
   _right.set(Math.cos(heading), 0, Math.sin(heading));
-  _cam.copy(pivot).addScaledVector(_right, shoulder);
-  _cam.y += rise;
+  // the shoulder offset and the rise are cast too: next to a wall on the right, the old fixed
+  // offset put the boom's start inside (or past) the wall and the view showed its insides
+  _cam.copy(pivot);
+  if (world && rise > 0) {
+    const up = world.raycast(_cam.x, _cam.y, _cam.z, 0, 1, 0, rise + CAM_PAD, null);
+    _cam.y += up ? Math.max(0, up.t - CAM_PAD) : rise;
+  } else _cam.y += rise;
+  if (world && shoulder !== 0) {
+    const sg = Math.sign(shoulder);
+    const side = world.raycast(_cam.x, _cam.y, _cam.z, _right.x * sg, 0, _right.z * sg, Math.abs(shoulder) + CAM_PAD, null);
+    _cam.addScaledVector(_right, side ? sg * Math.max(0, side.t - CAM_PAD) : shoulder);
+  } else _cam.addScaledVector(_right, shoulder);
   // pull in when something is between the pivot and the camera
   _v.copy(_fwd).multiplyScalar(-1);
   const hit = world ? world.raycast(_cam.x, _cam.y, _cam.z, _v.x, _v.y, _v.z, dist + 0.45, null) : null;
@@ -73,9 +83,37 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
     const ceil = world.ceilingAbove(_cam.x, _cam.z, gy);
     if (Number.isFinite(ceil) && _cam.y > ceil - 0.35) _cam.y = Math.max(gy, ceil - 0.35);
   }
+  if (world) keepOffWalls(world, _cam, _right);
   camera.position.copy(_cam);
   _v.copy(_cam).add(_fwd);
   camera.lookAt(_v);
+}
+
+// the camera keeps this far from any surface: more than the near plane's half-width at the
+// widest FOV, so turning beside a wall never slices the near plane into it
+const CAM_PAD = 0.42;
+const _probe = [[1, 0], [-1, 0], [0, 1], [0, -1], [0.7071, 0.7071], [-0.7071, 0.7071], [0.7071, -0.7071], [-0.7071, -0.7071]];
+
+/** Nudge the camera out of walls it sits too close to (a horizontal ring of short probes). */
+function keepOffWalls(world, cam, right) {
+  for (let pass = 0; pass < 2; pass++) {
+    let px = 0;
+    let pz = 0;
+    for (const [a, b] of _probe) {
+      // probe in the camera's own frame (right / back) so the result doesn't depend on heading
+      const dx = right.x * a - right.z * b;
+      const dz = right.z * a + right.x * b;
+      const h = world.raycast(cam.x, cam.y, cam.z, dx, 0, dz, CAM_PAD, null);
+      if (h && h.kind !== 'ground') {
+        const push = CAM_PAD - h.t;
+        px -= dx * push;
+        pz -= dz * push;
+      }
+    }
+    if (px === 0 && pz === 0) return;
+    cam.x += px;
+    cam.z += pz;
+  }
 }
 
 export class Player {
@@ -261,7 +299,7 @@ export class Player {
     const swim = this.swimming; // last frame's (set after the ground resolve below)
     this.crouching = this.mode === 'ground' && !down && !swim && (input.action('crouch') || input.action('crouchAlt'));
     this.sprinting = this.mode === 'ground' && !down && !swim && input.action('sprint') && mf > 0 && !this.ads && !this.crouching && this.useT <= 0;
-    this.ads = this.mode === 'ground' && !down && !swim && !this.carrying && input.action('aim') && !this.buildPiece && !this.editing && !!this._gun();
+    this.ads = this.mode === 'ground' && !down && !this.carrying && input.action('aim') && !this.buildPiece && !this.editing && !!this._gun();
     // scoped guns: a short raise-to-eye, then the view snaps into the scope; lowering is instant
     const scoping = this.ads && !!WEAPONS[this._gun().id].scope;
     this.scopeT = scoping ? Math.min(1, this.scopeT + dt / 0.16) : 0;
@@ -428,6 +466,11 @@ export class Player {
     p.x += v.x * dt;
     p.z += v.z * dt;
     world.resolveCircle(p, this.radius, this.height);
+    // never let a push carry the body through a wall (beside stairs, berms): stay put instead
+    if (world.crossesSolid && world.crossesSolid(ox, oz, p.x, p.z, oy, this.height)) {
+      p.x = ox;
+      p.z = oz;
+    }
     const b = world.bounds;
     p.x = clamp(p.x, b.minX + 2, b.maxX - 2);
     p.z = clamp(p.z, b.minZ + 2, b.maxZ - 2);
@@ -768,13 +811,9 @@ export class Player {
       else this._startEdit(g);
     }
 
-    if (this.swimming) {
-      // in the water: hands are busy swimming (no shots, swings, builds or heals)
-      if (g.structures) g.structures.setGhost(null);
-      this.placement = null;
-      this.buildPiece = null;
-      if (this.editing) this._endEdit(g);
-    } else if (this.editing) {
+    // wading / swimming in a pond does not tie up the hands: shooting, swinging, building,
+    // editing and healing all work in the water (only sprint / jump / crouch are off, above)
+    if (this.editing) {
       if (g.structures) g.structures.setGhost(null);
       this.placement = null;
       this._editMode(input, lmb, lmbClick, g);

@@ -399,8 +399,8 @@ export const KNOCK = {
 };
 
 // Swimming: on the terrain inside a map water area (World.inWater) you swim: slower, no
-// sprint / jump / aim, and no shooting, building or healing until you are out. The body sinks
-// to the chest (Character.setSwim).
+// sprint / jump / crouch. Aiming, shooting, building, editing and healing still work in the
+// water. The body sinks to the chest (Character.setSwim); the held item stays visible.
 export const SWIM = { speed: 0.6, sink: 0.75, strokeT: 0.55 };
 
 // Reboot vans (team modes): an eliminated player drops a reboot card; a teammate picks it up

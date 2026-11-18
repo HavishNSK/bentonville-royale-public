@@ -48,6 +48,25 @@ export function roofTileLines(pv) {
   };
 }
 
+/**
+ * Sides of pv that butt against another pavilion: { n, s, w, e } booleans. meshes.js draws no
+ * eave or fascia there, or the lower roof's overhang pokes through the taller room's joint wall
+ * (the green strip seen from inside the Great Hall over the South Lobby).
+ */
+export function roofNeighborSides(pv) {
+  const eps = 0.8;
+  const ov = (a0, a1, b0, b1) => Math.min(a1, b1) - Math.max(a0, b0) > 0.8;
+  const out = { n: false, s: false, w: false, e: false };
+  for (const o of PAVILIONS) {
+    if (o.id === pv.id) continue;
+    if (Math.abs(o.z1 - pv.z0) < eps && ov(pv.x0, pv.x1, o.x0, o.x1)) out.n = true;
+    if (Math.abs(o.z0 - pv.z1) < eps && ov(pv.x0, pv.x1, o.x0, o.x1)) out.s = true;
+    if (Math.abs(o.x1 - pv.x0) < eps && ov(pv.z0, pv.z1, o.z0, o.z1)) out.w = true;
+    if (Math.abs(o.x0 - pv.x1) < eps && ov(pv.z0, pv.z1, o.z0, o.z1)) out.e = true;
+  }
+  return out;
+}
+
 /** Roof underside (interior ceiling) of pavilion pv at (x, z). */
 export function roofUnder(pv, x, z, unclamped = false) {
   const ceil = pv.floor + pv.height;

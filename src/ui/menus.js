@@ -53,7 +53,7 @@ const TIPS = [
   'The storm hurts more every phase. Watch the timer in the top left.',
   'Chests glow and hum. Listen for them inside buildings.',
   (k) => `Hold ${k('aim')} to aim down sights for tighter shots.`,
-  (k) => `Press ${k('inventory')} to open your inventory, then drag guns and heals to reorder your hotbar.`,
+  (k) => `Press ${k('inventory')} to open your inventory, then drag a gun or heal onto another slot (or click one slot, then another) to reorder your hotbar.`,
   'Headshots deal bonus damage with every weapon.',
   'Rocket Launchers hold one rocket. A clean hit deals 100, and the blast hurts you too if you are close.',
   (k) => `Grenades blow up about 2 seconds after you throw them with ${k('fire')}. They bounce, break builds, and hurt you too.`,

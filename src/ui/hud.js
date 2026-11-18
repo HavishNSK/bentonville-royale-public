@@ -264,6 +264,20 @@ function hudHTML() {
     <div class="br-sandbox-loadout-h">${icon('rifle')}WEAPONS</div>
     <p class="br-sandbox-loadout-sub">Click a gun or grenade — it lands on your hotbar</p>
     <div class="br-sandbox-loadout-guns" data-ref="sandboxLoadoutGuns"></div>
+    <section class="br-sandbox-bots" aria-labelledby="br-sandbox-bots-h">
+      <div class="br-sandbox-bots-top">
+        <h3 class="br-sandbox-bots-h" id="br-sandbox-bots-h">BOTS</h3>
+        <span class="br-sandbox-bots-count" data-ref="sandboxBotsCount" aria-live="polite">0 / 0</span>
+      </div>
+      <p class="br-sandbox-bots-sub">Spawns in front of you and hunts you. You can't be eliminated in Sandbox.</p>
+      <div class="br-sandbox-bots-row" role="group" aria-label="Spawn a bot">
+        <button type="button" class="br-sandbox-bot" data-diff="easy" data-ref="sandboxBotEasy" aria-label="Spawn an easy bot">EASY</button>
+        <button type="button" class="br-sandbox-bot" data-diff="normal" data-ref="sandboxBotNormal" aria-label="Spawn a normal bot">NORMAL</button>
+        <button type="button" class="br-sandbox-bot is-hard" data-diff="hard" data-ref="sandboxBotHard" aria-label="Spawn a hard bot">HARD</button>
+        <button type="button" class="br-sandbox-bot is-clear" data-ref="sandboxBotClear" aria-label="Remove all sandbox bots">CLEAR</button>
+      </div>
+      <p class="br-sandbox-bots-note" data-ref="sandboxBotsNote" role="status" hidden></p>
+    </section>
     <button type="button" class="br-sandbox-loadout-close" data-ref="sandboxLoadoutClose">Close</button>
   </div>
 </div>`;
@@ -1042,6 +1056,39 @@ export function buildHud(root) {
     }
   }
 
+  // ---- sandbox BOTS section (Game.spawnSandboxBot / clearSandboxBots / _syncSandboxBots)
+  let onSandboxBot = null;
+  let onSandboxBotClear = null;
+  function setSandboxBotHandlers(spawn, clear) {
+    onSandboxBot = typeof spawn === 'function' ? spawn : null;
+    onSandboxBotClear = typeof clear === 'function' ? clear : null;
+  }
+  const botButtons = [r.sandboxBotEasy, r.sandboxBotNormal, r.sandboxBotHard];
+  for (const btn of botButtons) {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!btn.disabled && onSandboxBot) onSandboxBot(btn.dataset.diff);
+    });
+  }
+  r.sandboxBotClear.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!r.sandboxBotClear.disabled && onSandboxBotClear) onSandboxBotClear();
+  });
+  /** { count, cap, canSpawn, reason } from sandboxBotStatus. */
+  function setSandboxBots(st) {
+    if (!st) return;
+    r.sandboxBotsCount.textContent = `${st.count} / ${st.cap}`;
+    for (const btn of botButtons) {
+      btn.disabled = !st.canSpawn;
+      btn.setAttribute('aria-disabled', st.canSpawn ? 'false' : 'true');
+    }
+    r.sandboxBotClear.disabled = !(st.count > 0) && !st.bodies;
+    r.sandboxBotsNote.hidden = !st.reason;
+    r.sandboxBotsNote.textContent = st.reason || '';
+  }
+
   let sandboxLoadoutOn = false;
   function showSandboxLoadout(on) {
     const v = !!on;
@@ -1286,6 +1333,8 @@ export function buildHud(root) {
     setMapWeaponsHandler,
     setSandboxLoadoutHandler,
     setSandboxLoadoutClose,
+    setSandboxBotHandlers,
+    setSandboxBots,
     showSandboxLoadout,
     showFullMap,
     setEmoteHint,

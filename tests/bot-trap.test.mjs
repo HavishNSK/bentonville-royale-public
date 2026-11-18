@@ -80,8 +80,9 @@ test('the trap ends when the opponent breaks out of the cell', () => {
   assert.equal(b.trap, null);
 });
 
-test('normal bots do not trap; hard bots scatter shots up close', () => {
-  const { bots, b, target } = setup(DIFFICULTY.normal);
+test('easy bots do not trap (normal: now and then); hard bots scatter shots up close', () => {
+  const { bots, b, target } = setup(DIFFICULTY.easy);
+  bots.diffName = 'easy';
   assert.equal(bots._maybeTrap(b, target, 8), false);
   assert.ok(DIFFICULTY.hard.closeMiss > 0.2, 'hard bots have a close-range miss');
   assert.ok(DIFFICULTY.hard.peekClosed < 0.4 && DIFFICULTY.hard.peekOpen < 0.7, 'quick edits');

@@ -14,7 +14,7 @@
 import * as THREE from 'three';
 import { PAVILIONS, pavilionAt } from '../site.js';
 import { placeArt, obstaclesFrom } from './hang.js';
-import { buildFrame, buildPlaque, buildLightPool, buildBeam, emptyCanvas, standInTexture } from './frames.js';
+import { buildFrame, buildPlaque, buildLightPool, buildBeam, standInTexture } from './frames.js';
 import { createGalleryUI } from './ui.js';
 import { Ambience } from './ambience.js';
 import { runPortal } from './portal.js';
@@ -81,14 +81,12 @@ export async function createGallery({ game, site, sfx = null }) {
       canvasMesh = new THREE.Mesh(new THREE.PlaneGeometry(pl.w, pl.h), new THREE.MeshBasicMaterial({ color: 0x3a342c }));
       canvasMesh.position.z = frame.userData.canvasZ;
       g.add(canvasMesh);
-    } else if (work.standIn) {
+    } else {
+      // copyrighted works and images not downloaded get an original stand-in canvas, never an
+      // empty frame (the plaque says which it is)
       canvasMesh = new THREE.Mesh(new THREE.PlaneGeometry(pl.w, pl.h), new THREE.MeshBasicMaterial({ map: standInTexture(++seed * 7919, wing.accent) }));
       canvasMesh.position.z = frame.userData.canvasZ;
       g.add(canvasMesh);
-    } else {
-      const empty = emptyCanvas(pl.w, pl.h, wing.accent);
-      empty.position.z = frame.userData.canvasZ;
-      g.add(empty);
     }
     const pool = buildLightPool(pl.w, pl.h, wing.lightColor, wing.frameStyle === 'float' ? 0.22 : 0.32);
     pool.position.set(0, 0.25, 0.02);
@@ -99,7 +97,7 @@ export async function createGallery({ game, site, sfx = null }) {
     const title = isArt ? entry.title : work.title || str(cat.title) || 'Untitled';
     const artist = isArt ? entry.artist : work.artist || str(cat.artist);
     const year = isArt ? entry.year : work.year || str(cat.year);
-    const note = isArt ? '' : work.standIn ? 'Stand-in: the real work is in copyright' : work.art ? 'Image not downloaded' : 'In copyright: not reproduced';
+    const note = isArt ? '' : work.art && !work.placeholder ? 'Stand-in: image not downloaded' : 'Stand-in: the real work is in copyright';
     const plq = buildPlaque({ title, artist, year }, wing.accent, { note });
     plq.mesh.position.set(pl.plaque.x + pl.plaque.nx * 0.24, pl.plaque.y, pl.plaque.z + pl.plaque.nz * 0.24);
     plq.mesh.rotation.y = Math.atan2(pl.plaque.nx, pl.plaque.nz);

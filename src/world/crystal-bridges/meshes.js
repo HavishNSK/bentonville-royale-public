@@ -13,7 +13,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { PAVILIONS, LEVEL, TILE, WALKER_LANDING, SLABS } from './site.js';
-import { roofUnder, roofTileLines } from './build.js';
+import { roofUnder, roofTileLines, roofNeighborSides } from './build.js';
 import { STATUE_MODELS } from './statues.js';
 
 const ROOF_T = 0.45;
@@ -370,18 +370,21 @@ function addRoof(pv, roofBufs, soffitBuf, tiles = [], quadsOf = null) {
   const { xs: tx, zs: tz } = roofTileLines(pv);
   const exX0 = longX ? endEave : spanEave;
   const exZ0 = longX ? spanEave : endEave;
-  /** grid lines: eave edge, the tile lines split to <= 1 m, eave edge */
-  const gridLines = (lines, eave) => {
-    const out = [lines[0] - eave];
+  // no overhang where another pavilion butts on: it would poke through that room's joint wall
+  const nbr = roofNeighborSides(pv);
+  /** grid lines: eave edge, the tile lines split to <= 1 m, eave edge (an eave of 0 adds no line) */
+  const gridLines = (lines, eaveLo, eaveHi) => {
+    const out = eaveLo > 0 ? [lines[0] - eaveLo] : [];
     for (let i = 0; i + 1 < lines.length; i++) {
       const n = Math.max(1, Math.ceil(lines[i + 1] - lines[i]));
       for (let s = 0; s < n; s++) out.push(lines[i] + ((lines[i + 1] - lines[i]) * s) / n);
     }
-    out.push(lines[lines.length - 1], lines[lines.length - 1] + eave);
+    out.push(lines[lines.length - 1]);
+    if (eaveHi > 0) out.push(lines[lines.length - 1] + eaveHi);
     return out;
   };
-  const gx = gridLines(tx, exX0);
-  const gz = gridLines(tz, exZ0);
+  const gx = gridLines(tx, nbr.w ? 0 : exX0, nbr.e ? 0 : exX0);
+  const gz = gridLines(tz, nbr.n ? 0 : exZ0, nbr.s ? 0 : exZ0);
   const nx = gx.length - 1;
   const nz = gz.length - 1;
   const P = (i, k, top) => {

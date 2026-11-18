@@ -82,8 +82,35 @@ const BOX_RANGE = 38; // metres: fights closer than this may be taken from a box
 const BOX_LEAVE = 60; // metres: a target this far away ends the box fight
 const CELL_HALF = BUILD.cell / 2;
 const WALL_EVERY_DMG = 30; // damage taken between two walls toward a guessed shooter (_wallOnHit)
-const TRAP_RANGE = 11; // metres: a hard bot may full-box a target this close (diff.trap)
+const TRAP_RANGE = 14; // metres: a bot may full-box a target this close (diff.trap); was 11
 const TRAP_TIME = 9; // s a trap is worked before the bot moves on
+const TRAP_SEEN = 1.0; // s: a target seen this recently may still be trapped (a closed box peek hides it)
+// normal bots trap now and then (DIFFICULTY.normal has no `trap`); easy never does
+const TRAP_FALLBACK = { normal: 0.15 };
+// getting shot: how much of DIFFICULTY.reaction is left before the first shot back (notifyDamage)
+const HIT_REACT = { easy: 0.35, normal: 0.12, hard: 0 };
+// grudge (_grudgeTick): an enemy that shot us (or that we shot at) is hunted until it dies,
+// gets this far away (m), or the storm forces a rotation; the bot "hears" where it is every
+// GRUDGE_REFRESH s while it is out of sight
+const GRUDGE_RANGE = { easy: 90, normal: 130, hard: 220 };
+const GRUDGE_REFRESH = { easy: 3, normal: 2, hard: 1 };
+// hard bots shot from range build a ramp-wall tower toward the shooter and hold its top (_towerUp)
+const TOWER_LEVELS = 4; // ramps (each: the ramp + a wall on its far edge), mats permitting
+const TOWER_MIN = 3;
+const LANDING_MATS = { easy: 0, normal: 60, hard: 120 }; // wood a bot holds on landing
+const TOWER_NEAR = 20; // m: closer fights are boxed / trapped instead
+const TOWER_FAR = 120;
+const TOWER_CLOSE = 10; // m: an enemy this close ends a tower (fight it instead)
+const HIT_FRESH = 4; // s without being hit before a hit counts as a fresh attack (instant cover)
+// enclosure check (_enclosureCheck): walled in on our own cell with nothing to fight
+const ENCLOSED_EVERY = 0.5; // s between checks
+const ENCLOSED_WALLS = 3; // closed walls around our cell that count as boxed in
+// Crystal Bridges (bespoke landmark): a share of the lobby always drops there (_crystalBridgesShare)
+const CB_KEY = 'crystal_bridges';
+const CB_SHARE = 0.07; // ~7 of 99 bots
+const CB_MIN_FULL = 4; // at least this many in a big lobby (>= CB_FULL bots)
+const CB_FULL = 60;
+const CB_MAX = 8;
 const WINDOW = 1 << 4; // wall edit: middle tile (chest / eye height)
 const DOOR = (1 << 1) | (1 << 4); // wall edit: bottom + middle of the centre column
 const STUCK_WINDOW = 1.4;
@@ -102,6 +129,10 @@ const DEAD_ANIM = 3; // seconds a death animation plays before the pose is froze
 const BUILD_Q = 16; // most queued pieces in one build response
 const HEAR = 160; // metres: gunfire this close can draw a bot in (third party)
 const BUILD_ROOM = 0.85; // bots stop starting builds past this share of BUILD.maxPieces
+const RECLAIM_AT = 0.6; // past this share of BUILD.maxPieces, old bot pieces are taken down (_reclaimPieces)
+const RECLAIM_TO = 0.5;
+const RECLAIM_MAX = 40; // pieces per second at most
+const RECLAIM_CLEAR = 40; // m: never near a human player
 // enterable buildings (World collider.shell): door waypoints, see _doorRoute
 const DOOR_OUT = 1.6; // metres in front of a door's outer face: the approach point
 const DOOR_IN = 1.3; // metres behind the outer face: the step inside (wall is 0.4 m)
@@ -214,11 +245,12 @@ export class Bots {
     this.rng = rng;
     this.diffName = DIFFICULTY[opts.difficulty] ? opts.difficulty : 'normal';
     this.diff = DIFFICULTY[this.diffName];
+    this._baseDiffName = this.diffName; // the match's difficulty (per-bot: b.diffName, _useDiff)
     if (opts.quality) this.setQuality(opts.quality);
     const names = shuffled(opts.names || BOT_NAMES, rng);
     // fallback drop area centre: opts.center {x,z} or opts.storm (its first circle), else the origin
     const sc = opts.center || opts.storm || ctxStorm(this._storm);
-    const points = this._dropTargets(count, rng, opts.dropPoints, sc);
+    const points = this._dropTargets(count, rng, opts.dropPoints, sc, opts.teams);
     const idBase = opts.idBase ?? 1;
     this.time = 0;
     // opts.launchWindow (s): bots wait in the "bus" and jump one by one, staggered
@@ -265,6 +297,7 @@ export class Bots {
         if (this.scene) this.scene.add(ch.root);
       }
       const b = newBrain(actor, t, rng);
+      b.diffName = this.diffName;
       if (opts.bus) {
         // Drop Bus: jump where the flight passes closest to the landing spot (+-0.6 s)
         const r = opts.bus;
@@ -283,7 +316,7 @@ export class Bots {
     return this.actors;
   }
 
-  _dropTargets(count, rng, dropPoints, centre) {
+  _dropTargets(count, rng, dropPoints, centre, teams = null) {
     const ccx = centre && Number.isFinite(centre.cx ?? centre.x) ? (centre.cx ?? centre.x) : 0;
     const ccz = centre && Number.isFinite(centre.cz ?? centre.z) ? (centre.cz ?? centre.z) : 0;
     const cr = STORM.startRadius;
@@ -324,7 +357,144 @@ export class Bots {
       }
       out.push(world.randomOpenPoint(rng, cx, cz, r, 1.2, { x: 0, z: 0 }));
     }
+    this._crystalBridgesShare(out, rng, teams);
     return out;
+  }
+
+  /** How many of `count` bots should land at Crystal Bridges (7% of the lobby, 4..8 when full). */
+  static crystalBridgesQuota(count) {
+    if (!(count > 0)) return 0;
+    const lo = count >= CB_FULL ? CB_MIN_FULL : count >= 8 ? 1 : 0;
+    return Math.min(CB_MAX, count, Math.max(lo, Math.round(count * CB_SHARE)));
+  }
+
+  /**
+   * The museum (bespoke POI) drew almost nobody from the spread-out planner: move landing
+   * spots there until crystalBridgesQuota(n) bots land on its site. Team modes move whole teams
+   * (consecutive bots sharing a team id) so a team still lands together. Edits `out` in place.
+   */
+  _crystalBridgesShare(out, rng, teams) {
+    const world = this.world;
+    const lm = world.landmarks && world.landmarks[CB_KEY];
+    if (!lm || !Number.isFinite(lm.x) || !Number.isFinite(lm.z) || !world.randomOpenPoint) return 0;
+    // "at the museum": the inner ravine / pavilions, not the wooded rim of its tile
+    const siteR = clamp(lm.r || 100, 40, 125) * 0.75;
+    const scatter = siteR * 0.9;
+    const at = (p) => p && Math.hypot(p.x - lm.x, p.z - lm.z) < siteR;
+    const want = Bots.crystalBridgesQuota(out.length);
+    let have = 0;
+    for (const p of out) if (at(p)) have++;
+    // groups of bot indices that land together (a team; solo: one bot each), not there yet
+    const groups = [];
+    for (let i = 0; i < out.length; i++) {
+      const same = teams && i > 0 && teams[i] != null && teams[i] === teams[i - 1];
+      if (same) groups[groups.length - 1].push(i);
+      else groups.push([i]);
+    }
+    const free = groups.filter((g) => !g.some((i) => at(out[i])));
+    for (let i = free.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [free[i], free[j]] = [free[j], free[i]];
+    }
+    const spot = { x: 0, z: 0 };
+    for (const g of free) {
+      if (have >= want) break;
+      world.randomOpenPoint(rng, lm.x, lm.z, scatter, 1.2, spot);
+      for (const i of g) out[i] = world.randomOpenPoint(rng, spot.x, spot.z, g.length > 1 ? 4 : 0.5, 1.2, { x: 0, z: 0 });
+      have += g.length;
+    }
+    return have;
+  }
+
+  /**
+   * One more bot, standing at (x, z) right now (no bus, no glide), with its OWN difficulty:
+   * the sandbox spawner (Game.spawnSandboxBot). opts: name, loadout (Inventory.reset),
+   * team (default: its own id), heading, sandbox (tag, default true). Returns the actor.
+   * Existing bots are untouched (spawn() replaces them all).
+   */
+  addBot(diffName, x, z, opts = {}) {
+    const world = this.world;
+    const name = DIFFICULTY[diffName] ? diffName : 'normal';
+    if (!this._baseDiffName) this._baseDiffName = this.diffName || 'normal';
+    let id = opts.id;
+    if (id == null) {
+      id = 9000;
+      for (const o of this.actors) if (o.id >= id) id = o.id + 1;
+    }
+    const y = world.groundHeight ? world.groundHeight(x, z, 1e4) : 0;
+    const actor = {
+      id,
+      name: opts.name || `${name.toUpperCase()} BOT`,
+      isPlayer: false,
+      isBot: true,
+      team: opts.team ?? id,
+      pos: new THREE.Vector3(x, y, z),
+      vel: new THREE.Vector3(),
+      heading: opts.heading || 0,
+      pitch: 0,
+      radius: PLAYER.radius,
+      height: PLAYER.height,
+      health: PLAYER.maxHealth,
+      shield: opts.shield ?? 0,
+      alive: true,
+      kills: 0,
+      inventory: new Inventory(opts.loadout),
+      character: null,
+      gliding: false,
+      grounded: true,
+      inBus: false,
+      damageScale: DIFFICULTY[name].damageScale,
+      botState: 'wander',
+      sandbox: opts.sandbox !== false,
+    };
+    if (this.kits.length) {
+      const kit = this.kits[id % this.kits.length];
+      const ch = new Character(kit, { weapons: this.weaponModels, canopyColor: CANOPY_COLORS[id % CANOPY_COLORS.length], ...botLoadout(id) });
+      ch.root.position.copy(actor.pos);
+      actor.character = ch;
+      if (this.scene) this.scene.add(ch.root);
+      const cur = actor.inventory.current();
+      if (ch.setEquipped) {
+        const wid = cur && cur.type === 'weapon' ? cur.id : 'pickaxe';
+        ch.setEquipped(wid, WEAPONS[wid] ? WEAPONS[wid].twoHanded !== false : true);
+      }
+    }
+    const b = newBrain(actor, { x, z }, this.rng);
+    b.diffName = name;
+    b.sandbox = actor.sandbox;
+    b.state = 'wander';
+    b.launchAt = 0;
+    b.landedAt = this.time;
+    b.thinkIn = 0.05;
+    actor._bot = b;
+    this.actors.push(actor);
+    this.brains.push(b);
+    if (this.combat) this.combat.register(actor);
+    return actor;
+  }
+
+  /** Removes every bot `pred(actor)` accepts (dead or alive). Returns how many went. */
+  removeBots(pred) {
+    let n = 0;
+    for (let i = this.actors.length - 1; i >= 0; i--) {
+      const a = this.actors[i];
+      if (!pred(a)) continue;
+      const b = a._bot;
+      if (b) {
+        if (b.box) this._endBox(b);
+        if (b.trap) this._endTrap(b);
+        this.planner.cancel(b);
+      }
+      if (this.combat) this.combat.unregister(a);
+      if (a.character) a.character.dispose();
+      a.alive = false;
+      a._bot = null;
+      this.actors.splice(i, 1);
+      const k = this.brains.indexOf(b);
+      if (k >= 0) this.brains.splice(k, 1);
+      n++;
+    }
+    return n;
   }
 
   clear() {
@@ -338,23 +508,342 @@ export class Bots {
     this.brains.length = 0;
   }
 
+  /**
+   * Bots build a lot (towers, boxes, traps), and Structures stops at BUILD.maxPieces; bots stop
+   * starting builds at BUILD_ROOM of it, so after a couple of minutes of hard bots nobody could
+   * build at all. Past RECLAIM_AT of the cap, the oldest bot-built pieces that no human is near
+   * (RECLAIM_CLEAR m) and that no bot is still fighting from are taken down, back to RECLAIM_TO.
+   * Player-built pieces are never touched. Runs on the simulating side only (host / solo), so
+   * removals sync to clients like any other destroyed piece.
+   */
+  _reclaimPieces(all) {
+    const st = this.structures;
+    if (!st || !st.pieces || !st.remove) return 0;
+    const cap = BUILD.maxPieces;
+    // hysteresis: once past RECLAIM_AT keep going (RECLAIM_MAX a call) until below RECLAIM_TO
+    if (st.pieces.length >= cap * RECLAIM_AT) this._reclaiming = true;
+    else if (st.pieces.length <= cap * RECLAIM_TO) this._reclaiming = false;
+    if (!this._reclaiming) return 0;
+    const humans = all.filter((x) => x && x.alive && !x.isBot && x.pos).map((x) => x.pos); // (positions: near() reads .x / .z)
+    const busy = this.brains.filter((b) => b.actor.alive && (b.tower || b.box || b.trap || b.bqI < b.bqN)).map((b) => b.actor.pos);
+    const near = (p, pts, r) => pts.some((q) => Math.abs(q.x - p.x) < r && Math.abs(q.z - p.z) < r && Math.hypot(q.x - p.x, q.z - p.z) < r);
+    const want = Math.min(RECLAIM_MAX, st.pieces.length - Math.floor(cap * RECLAIM_TO));
+    const old = st.pieces
+      .filter((p) => p.alive !== false && p.owner && p.owner.isBot && !near(p, humans, RECLAIM_CLEAR) && !near(p, busy, 14))
+      .sort((p, q) => p.id - q.id);
+    let n = 0;
+    for (const p of old) {
+      if (n >= want) break;
+      st.remove(p, false);
+      n++;
+    }
+    this.reclaimed = (this.reclaimed || 0) + n;
+    return n;
+  }
+
   // ------------------------------------------------------------- awareness
 
   /** Hook for combat.onDamage: lets a bot react to who hurt it. */
   notifyDamage(victim, amount, info) {
     const b = victim && victim._bot;
     if (!b || !victim.alive) return;
+    this._useDiff(b);
+    try {
+      this._onDamage(b, victim, amount, info);
+    } finally {
+      this._useDiff(null);
+    }
+  }
+
+  /**
+   * Per-bot difficulty: every brain carries b.diffName (the match's, or its own for sandbox
+   * bots, see addBot); the shared this.diff / this.diffName the brain code reads are switched
+   * to it while that bot thinks / acts, and back to the match's (`null`) afterwards. Brains
+   * without one (hand-built test brains) keep whatever is set.
+   */
+  _useDiff(b) {
+    const name = b ? b.diffName : this._baseDiffName;
+    if (!name || !DIFFICULTY[name] || name === this.diffName) return;
+    this.diffName = name;
+    this.diff = DIFFICULTY[name];
+  }
+
+  _onDamage(b, victim, amount, info) {
     const src = info && info.source;
     if (sameTeam(src, victim)) return;
-    b.alertUntil = this.time + 5;
+    const t = this.time;
+    b.alertUntil = t + 5;
     if (src && src !== victim && src.alive && src.pos) {
+      // a fresh attack (nothing hit us for a while, or someone new): cover goes up right away
+      const fresh = t - (b.lastHitAt ?? -Infinity) > HIT_FRESH || b.lastHitBy !== src;
+      b.lastHitAt = t;
+      b.lastHitBy = src;
+      b.hurtAt = t;
       b.threat = src;
-      b.thinkIn = Math.min(b.thinkIn, 0.05);
+      b.thinkIn = Math.min(b.thinkIn ?? 0, 0.05);
       if (!src.isBot) b.lodAt = 0; // a human is on it: back to full rate next frame
-      // every 30 damage taken: a fresh guess at where it came from, and a wall that way
-      b.hitDmg = Math.min(60, (b.hitDmg || 0) + (amount > 0 ? amount : 0));
-      if (b.hitDmg >= WALL_EVERY_DMG && this._wallOnHit(b, src)) b.hitDmg -= WALL_EVERY_DMG;
+      this._awareOf(b, src);
+      // the first hit of an attack, then every 30 damage taken: a guess at where it came from,
+      // and a wall that way
+      b.hitDmg = Math.min(60, (fresh ? 0 : b.hitDmg || 0) + (amount > 0 ? amount : 0));
+      this._setGrudge(b, src);
+      // (on the same frame: _startQueue places the first piece right away)
+      if (b.tower) {
+        // up on (or climbing) our tower: its walls are the cover
+      } else if (this._tryTower(b, src)) {
+        b.hitDmg = 0; // hard, shot from range: height now (any other build is dropped for it)
+      } else if (fresh) {
+        if (this._wallOnHit(b, src)) b.hitDmg = 0;
+      } else if (b.hitDmg >= WALL_EVERY_DMG && this._wallOnHit(b, src)) b.hitDmg -= WALL_EVERY_DMG;
     }
+  }
+
+  /**
+   * Shot by `src`: know about them NOW (no awareness ramp). The bot targets them, turns toward
+   * them (hard: instantly; others keep TURN_RATE) and shoots back after HIT_REACT of its usual
+   * reaction delay (hard: none). A shooter behind cover is chased to where the shots came from.
+   */
+  _awareOf(b, src) {
+    const a = b.actor;
+    const t = this.time;
+    if (b.state === 'drop' || a.inBus || a.downed) return;
+    const switching = b.target !== src;
+    const react = (this.diff.reaction || 0) * (HIT_REACT[this.diffName] ?? 0.3);
+    if (switching || !b.targetVisible) {
+      b.reactLeft = switching ? react : Math.min(b.reactLeft ?? react, react);
+      b.trackTime = switching ? 0 : b.trackTime || 0;
+      if (switching) b.burstLeft = 0;
+    } else b.reactLeft = Math.min(b.reactLeft ?? react, react);
+    b.target = src;
+    b.lastSeen = t;
+    b.lastSeenX = src.pos.x;
+    b.lastSeenZ = src.pos.z;
+    const ex = a.pos.x;
+    const ey = a.pos.y + EYE;
+    const ez = a.pos.z;
+    b.targetVisible = !this.world || !this.world.clearLine || this._los(ex, ey, ez, src.pos.x, src.pos.y + CHEST, src.pos.z);
+    b.faceX = src.pos.x;
+    b.faceZ = src.pos.z;
+    const want = Math.atan2(src.pos.x - ex, -(src.pos.z - ez));
+    if (this.diffName === 'hard') a.heading = want; // a flick toward the shooter
+    else a.heading += angleDelta(a.heading, want) * (this.diffName === 'normal' ? 0.5 : 0.25);
+    // fight now: think next frame (the state machine moves us into 'engage')
+    b.thinkIn = 0;
+  }
+
+  /** Hunt `e` until it dies / leaves GRUDGE_RANGE / the storm calls (see _grudgeTick). */
+  _setGrudge(b, e) {
+    if (!e || !e.alive || !e.pos || e === b.actor || sameTeam(e, b.actor)) return;
+    const g = b.grudge;
+    if (g && g.actor === e) return;
+    b.grudge = { actor: e, since: this.time, refreshAt: 0 };
+  }
+
+  /**
+   * Think-time grudge upkeep: ends it (enemy dead, out of range, storm pressure), else keeps
+   * the enemy as the target when nothing else is in plain sight (the perception timeouts
+   * drop a lost target; this puts it back) and refreshes where it is while it is hidden.
+   * Returns the hunted enemy or null.
+   */
+  _grudgeTick(b, urgent) {
+    const g = b.grudge;
+    if (!g) return null;
+    const a = b.actor;
+    const e = g.actor;
+    const t = this.time;
+    const range = GRUDGE_RANGE[this.diffName] ?? GRUDGE_RANGE.normal;
+    if (!e || !e.alive || urgent || a.downed || sameTeam(e, a) || Math.hypot(e.pos.x - a.pos.x, e.pos.z - a.pos.z) > range) {
+      b.grudge = null;
+      b.towerLost = false;
+      return null;
+    }
+    if (b.target !== e && !(b.target && b.target.alive && b.targetVisible)) {
+      b.target = e;
+      b.targetVisible = false;
+      g.refreshAt = 0;
+    }
+    if (b.target === e && !b.targetVisible && t >= g.refreshAt) {
+      g.refreshAt = t + (GRUDGE_REFRESH[this.diffName] ?? 2);
+      b.lastSeen = t;
+      b.lastSeenX = e.pos.x;
+      b.lastSeenZ = e.pos.z;
+    }
+    return e;
+  }
+
+  /**
+   * Hard bots shot from TOWER_NEAR..TOWER_FAR m: a ramp-wall tower climbing toward the shooter
+   * (per level: the ramp, then a wall on its far edge), then climb it and hold the top ramp, shooting over the top wall
+   * (_towerTick). Placed one piece per buildRate through _buildStep (mats, slots and
+   * BUILD.maxPieces apply); the first piece goes down on this frame. True when started.
+   */
+  /**
+   * Hard bot shot by `src` from TOWER_NEAR..TOWER_FAR m: clear the way for a tower and start
+   * it. Another build queue in progress is dropped (a box going up while healing is kept), a
+   * box fight ends with a door toward the shooter, and a bot in the air remembers the wish
+   * (b.towerWant) until it lands. True when the tower started.
+   */
+  _tryTower(b, src) {
+    const a = b.actor;
+    const t = this.time;
+    if (this.diffName !== 'hard' || !this.structures || !src || !src.alive || !src.pos || b.tower || b.trap || a.downed || b.stormUrgent) return false;
+    const d = Math.hypot(src.pos.x - a.pos.x, src.pos.z - a.pos.z);
+    if (d < TOWER_NEAR || d > TOWER_FAR) return false;
+    b.towerWant = { src, until: t + 3 };
+    if (!a.grounded) return false; // landing first
+    if (b.box) {
+      if (b.healing > 0) return false;
+      b.target = src;
+      this._endBox(b, DOOR);
+    }
+    if (b.bqI < b.bqN) {
+      if (b.bqMode === 'box' && b.healing > 0) return false;
+      b.bqN = 0;
+      b.bqI = 0;
+      b.rushUntil = 0;
+      b.holdUntil = 0;
+      b.buildCooldown = t;
+    }
+    if (!this._towerUp(b, src)) return false;
+    b.towerWant = null;
+    return true;
+  }
+
+  /**
+   * Think-time: a tower is worked against ITS target. A bot that perceives someone else (the
+   * 99-bot lobby is full of them) swaps back to the tower's target unless that one is dead /
+   * out of range (the tower ends) or the other enemy is within TOWER_CLOSE m (the tower ends:
+   * fight what is in your face).
+   */
+  _towerHold(b) {
+    const tw = b.tower;
+    if (!tw) return;
+    const a = b.actor;
+    const e = tw.target;
+    const range = GRUDGE_RANGE[this.diffName] ?? GRUDGE_RANGE.normal;
+    if (!e || !e.alive || Math.hypot(e.pos.x - a.pos.x, e.pos.z - a.pos.z) > range) {
+      b.tower = null;
+      return;
+    }
+    const o = b.target;
+    if (o === e) return;
+    if (o && o.alive && o.pos && Math.hypot(o.pos.x - a.pos.x, o.pos.z - a.pos.z) < TOWER_CLOSE) {
+      b.tower = null;
+      return;
+    }
+    const t = this.time;
+    b.target = e;
+    b.targetVisible = this._los(a.pos.x, a.pos.y + EYE, a.pos.z, e.pos.x, e.pos.y + CHEST, e.pos.z);
+    if (b.targetVisible) b.lastSeen = t;
+    if (b.targetVisible || t - (b.lastSeen ?? -Infinity) > 1) {
+      b.lastSeen = t;
+      b.lastSeenX = e.pos.x;
+      b.lastSeenZ = e.pos.z;
+    }
+    if (!b.grudge || b.grudge.actor !== e) b.grudge = { actor: e, since: t, refreshAt: 0 };
+  }
+
+  _towerUp(b, src) {
+    const st = this.structures;
+    const a = b.actor;
+    const t = this.time;
+    if (!st || this.diffName !== 'hard' || !src || !src.pos || a.downed || !a.grounded) return false;
+    if (b.box || b.trap || b.tower || b.bqI < b.bqN || t < (b.towerAt || 0) || b.stormUrgent) return false;
+    if (st.count >= BUILD.maxPieces * BUILD_ROOM - TOWER_LEVELS * 3) return false;
+    const dx = src.pos.x - a.pos.x;
+    const dz = src.pos.z - a.pos.z;
+    const d = Math.hypot(dx, dz);
+    if (d < TOWER_NEAR || d > TOWER_FAR) return false;
+    const mat = bestMat(a.inventory);
+    let afford = 0;
+    for (const m of MATERIALS) afford += Math.floor((a.inventory.mats[m] || 0) / BUILD.cost);
+    const levels = Math.min(TOWER_LEVELS, Math.floor(afford / 2), Math.floor((d - 8) / BUILD.cell), Math.floor(BUILD_Q / 3));
+    if (!mat || levels < TOWER_MIN) return false;
+    const hs = (Math.round(Math.atan2(dx, -dz) / (Math.PI / 2)) * Math.PI) / 2;
+    const ux = Math.sin(hs);
+    const uz = -Math.cos(hs);
+    // per level: the ramp, then a wall on its far edge (a wall between us and them on every
+    // level), each placed off the ramp actually built below it (chainStep)
+    // order r0 r1 w0 r2 w1 ... : a ramp's wall goes up only after the next ramp, since
+    // Structures.plan keeps a ramp out of a cell behind a wall (it would stack in place)
+    let n = 0;
+    for (let i = 0; i < levels; i++) {
+      n = chainStep(b, n, 'ramp', hs);
+      if (i > 0) n = chainStep(b, n, 'wall', hs, 0, 1);
+    }
+    n = chainStep(b, n, 'wall', hs);
+    b.chainRamp = null;
+    b.chainRamps = 0;
+    // the top (hold point, top ramp) is known once the ramps are up: _towerTick reads chainRamp
+    b.tower = { target: src, since: t, levels, hs, ux, uz, top: null, topX: 0, topZ: 0, topY: 0, reached: false, checkAt: 0 };
+    b.towers = (b.towers || 0) + 1;
+    b.towerLost = false;
+    this._startQueue(b, n, 'tower', mat, ux, uz);
+    b.rushUntil = t + 0.5;
+    return true;
+  }
+
+  /**
+   * Engage-state hook while a tower is up: climb to its top ramp and hold there (the shooting
+   * is _act's), or drop it when it is broken / the target is gone (b.towerLost: take height
+   * again). Writes the steering goal to _pt; returns false when there is no tower any more.
+   */
+  _towerTick(b, target) {
+    const tw = b.tower;
+    const a = b.actor;
+    const t = this.time;
+    const st = this.structures;
+    if (!st || !tw.target || !tw.target.alive || b.stormUrgent || a.downed) {
+      b.tower = null;
+      return false;
+    }
+    if (target !== tw.target) return false; // this frame's fight is elsewhere (_towerHold decides)
+    const building = b.bqMode === 'tower' && b.bqI < b.bqN;
+    const r = b.bqMode === 'tower' || !tw.top ? b.chainRamp : tw.top;
+    if (r && r.alive && r !== tw.top) {
+      // the highest ramp so far: climb toward its high end (eyes over its wall)
+      tw.top = r;
+      tw.topX = r.x + tw.ux * BUILD.cell * 0.38;
+      tw.topZ = r.z + tw.uz * BUILD.cell * 0.38;
+      tw.topY = r.y + BUILD.level;
+    }
+    // at the hold point itself: from the middle of the top ramp its rising high end still
+    // hides a target below (the eyes must clear the top of the ramp and its wall)
+    const near = tw.top && Math.hypot(a.pos.x - tw.topX, a.pos.z - tw.topZ) < 0.8;
+    if (near && !building && a.pos.y > tw.topY - 1.4) tw.reached = true;
+    let broken = false;
+    if (t >= tw.checkAt) {
+      tw.checkAt = t + 0.3;
+      if (!building && !(tw.top && tw.top.alive)) broken = true; // shot out / never fit
+      if (tw.reached && a.grounded && a.pos.y < tw.topY - 2.8) broken = true; // knocked off it
+      if (!tw.reached && b.bqI >= b.bqN && t - tw.since > tw.levels * 1.5 + 4) broken = true; // could not climb
+      // up top but they are out of sight (moved under / behind something) for a while: come
+      // down and fight from where they are now (a new tower toward them if needed)
+      if (tw.reached && !b.targetVisible) {
+        if (!tw.hiddenSince) tw.hiddenSince = t;
+        else if (t - tw.hiddenSince > 3) broken = true;
+      } else tw.hiddenSince = 0;
+    }
+    if (broken) {
+      b.tower = null;
+      b.towerLost = true;
+      b.towerAt = t + 0.6;
+      b.rushUntil = 0;
+      return false;
+    }
+    if (tw.reached) {
+      _pt.x = a.pos.x;
+      _pt.z = a.pos.z;
+    } else if (!tw.top) {
+      // first ramp not up yet: hold here (it goes up ahead of us)
+      _pt.x = a.pos.x;
+      _pt.z = a.pos.z;
+    } else {
+      _pt.x = tw.topX;
+      _pt.z = tw.topZ;
+      b.rushUntil = t + 0.4; // straight up our own ramps (no avoidance feelers)
+    }
+    return true;
   }
 
   /**
@@ -586,10 +1075,14 @@ export class Bots {
     const a = b.actor;
     const t = this.time;
     if (b.trap) return this._trapTick(b, target, dist);
-    if (!diff.trap || !st || b.box || !target || !target.alive || !b.targetVisible || !a.grounded) return false;
-    if (dist > TRAP_RANGE || dist < 3.2 || b.bqI < b.bqN || t < (b.trapRollAt || 0)) return false;
-    b.trapRollAt = t + 4 + this.rng() * 3;
-    if (this.rng() > diff.trap || target.grounded === false) return false;
+    const chance = diff.trap ?? TRAP_FALLBACK[this.diffName] ?? 0;
+    if (!chance || !st || !target || !target.alive || !a.grounded) return false;
+    // a target behind our own closed box peek is still "seen" for a moment
+    const seen = b.targetVisible || (b.target === target && t - (b.lastSeen ?? -Infinity) < TRAP_SEEN);
+    if (!seen || dist > TRAP_RANGE || dist < 3.2 || b.bqI < b.bqN || t < (b.trapRollAt || 0)) return false;
+    // hard bots look for the trap every ~2 s; others every 4-7 s
+    b.trapRollAt = t + (this.diffName === 'hard' ? 1.2 + this.rng() * 1.2 : 4 + this.rng() * 3);
+    if (this.rng() > chance || target.grounded === false) return false;
     if (st.count >= BUILD.maxPieces * BUILD_ROOM) return false;
     const mat = bestMat(a.inventory);
     let afford = 0;
@@ -599,6 +1092,9 @@ export class Bots {
     const cx = (Math.floor(tp.x / BUILD.cell) + 0.5) * BUILD.cell;
     const cz = (Math.floor(tp.z / BUILD.cell) + 0.5) * BUILD.cell;
     if (Math.floor(a.pos.x / BUILD.cell) === Math.floor(tp.x / BUILD.cell) && Math.floor(a.pos.z / BUILD.cell) === Math.floor(tp.z / BUILD.cell)) return false;
+    // boxed up ourselves (a box fight that closed in): open a door toward them and trap them
+    // (their box is the cover now; a trap used to never start from a box, so it never fired)
+    if (b.box) this._endBox(b, DOOR);
     // the side of their cell that faces us goes up last (it is the one we will edit)
     const face = (Math.round(Math.atan2(a.pos.x - cx, -(a.pos.z - cz)) / (Math.PI / 2)) * Math.PI) / 2;
     let n = 0;
@@ -742,6 +1238,11 @@ export class Bots {
       if (player) all.push(player);
     }
 
+    if (this.time >= (this._reclaimAt || 0)) {
+      this._reclaimAt = this.time + 1;
+      this._reclaimPieces(all);
+    }
+
     // time-sliced path planning for stuck bots
     const done = this.planner.step(PLAN_BUDGET);
     if (done && done.actor.alive && done.planN > 0) {
@@ -775,6 +1276,7 @@ export class Bots {
     for (let i = 0; i < this.brains.length; i++) {
       const b = this.brains[i];
       const a = b.actor;
+      this._useDiff(b);
       if (!a.alive) {
         if (b.state !== 'dead') this._die(b);
         b.deadTime += dt;
@@ -851,6 +1353,7 @@ export class Bots {
       }
       this._present(b, dt, viewer, cd2);
     }
+    this._useDiff(null);
   }
 
   /**
@@ -938,6 +1441,8 @@ export class Bots {
         b.buildCooldown = t + 1;
       }
     }
+    const hunted = this._grudgeTick(b, urgent);
+    this._towerHold(b);
     const target = b.target;
     const dist = target ? Math.hypot(target.pos.x - a.pos.x, target.pos.z - a.pos.z) : Infinity;
     const armed = this._hasGun(inv);
@@ -966,6 +1471,12 @@ export class Bots {
         b.retreatUntil = t + 3 + this.rng() * 2;
       }
       if (t < b.retreatUntil) fight = false;
+      // a grudge: no going back to loot / wander while they live; only the storm (urgent ends
+      // the grudge) or patching up when low with the enemy out of sight breaks it off
+      if (hunted && target === hunted && !urgent && t >= b.retreatUntil && (armed || dist < 6)) {
+        const low = a.health + a.shield < 40 && !b.targetVisible && (findConsumable(inv, 'medkit') >= 0 || findConsumable(inv, 'tonic') >= 0);
+        if (!low) fight = true;
+      }
       if (!fight && !b.targetVisible) b.target = null;
     }
     const mate = this._downedMate(b, all);
@@ -982,6 +1493,7 @@ export class Bots {
     else if (this._pickHarvest(b)) state = 'harvest';
     else state = 'wander';
 
+    if (state !== 'engage' && b.tower) b.tower = null; // left the fight (storm / heal): off the tower
     if (state !== 'heal' && b.healing > 0 && !b.box) this._cancelHeal(b); // boxed bots heal mid-fight
     if (state !== 'revive' && a.revivingTarget && this.combat) this.combat.stopRevive(a);
     if (state !== 'reboot' && a.rebootVan) a.rebootVan = null;
@@ -1057,7 +1569,28 @@ export class Bots {
         stop = 0.2;
         speed = b.targetVisible && !pushing ? PLAYER.runSpeed : PLAYER.sprintSpeed;
         if (pushing) this._chooseWeapon(b, Math.min(d, 8)); // pull the close-range gun while closing in
-        if (!b.targetVisible && d < 1.5) b.target = null; // reached last seen spot
+        // reached the last seen spot (a grudge keeps the target: _grudgeTick says where it went)
+        if (!b.targetVisible && d < 1.5 && !(b.grudge && b.grudge.actor === target)) b.target = null;
+        // hard: take height again when our tower was broken (or after a hit with none up)
+        if (!b.tower && this.diffName === 'hard' && target && target.alive) {
+          const want = b.towerWant && t < b.towerWant.until && b.towerWant.src.alive ? b.towerWant.src : null;
+          if (want || b.towerLost || t - b.hurtAt < 3) this._tryTower(b, want || target);
+          // still waiting for it (landing / just out of reach): do not rush inside tower range
+          if (!b.tower && want && d >= TOWER_NEAR && d < TOWER_NEAR + 10) {
+            gx = a.pos.x;
+            gz = a.pos.z;
+          }
+        }
+        if (b.tower && this._towerTick(b, target)) {
+          gx = _pt.x;
+          gz = _pt.z;
+          // walk the last bit: running momentum carried bots over the top wall and off
+          const left = Math.hypot(gx - a.pos.x, gz - a.pos.z);
+          speed = b.tower.reached ? 0 : left < 2.5 ? PLAYER.walkSpeed : PLAYER.runSpeed;
+          stop = 0.25;
+          b.wantJump = false; // no strafe hops on a tower top
+          break;
+        }
         if (this._maybeTrap(b, target, d)) {
           // trapping them: stand and work the window edits
           gx = a.pos.x;
@@ -1706,6 +2239,8 @@ export class Bots {
     a.heading = heading;
     a.inventory.reset(loadout);
     const b = newBrain(a, { x, z }, this.rng);
+    b.diffName = old.diffName;
+    b.sandbox = old.sandbox;
     b.state = 'wander';
     b.launchAt = 0;
     a.botState = 'wander';
@@ -1965,20 +2500,19 @@ export class Bots {
       // hard bots also roof each ramp with a floor (ramp-wall-floor: no shots from above)
       const floors = !!diff.rushFloors && maxN >= ramps * 3;
       const covered = maxN >= ramps * 2;
+      // chained off the ramps actually built (chainStep): planned up front from absolute
+      // heights, every wall above the first level landed a level off (or did not fit) and
+      // sloped ground broke the chain. A ramp's wall goes up after the next ramp (a wall
+      // between two cells keeps the next ramp out of the cell ahead), the floor goes ahead of
+      // each ramp under the next one (the landing at the top)
       for (let i = 0; i < ramps && n < maxN; i++) {
-        const rx = px + dx * BUILD.cell * i;
-        const ry = py + BUILD.level * i;
-        const rz = pz + dz * BUILD.cell * i;
-        if (covered) {
-          _bpos.x = rx;
-          _bpos.y = ry;
-          _bpos.z = rz;
-          const pl = st.plan('ramp', _bpos, hs, 0, _pl);
-          n = queueStep(b, n, 'wall', pl.x, pl.y, pl.z, hs, 0);
-        }
-        n = queueStep(b, n, 'ramp', rx, ry, rz, hs, 0);
-        if (floors) n = queueStep(b, n, 'floor', rx, ry, rz, hs, 0.6); // over the ramp's high end
+        n = chainStep(b, n, 'ramp', hs);
+        if (floors) n = chainStep(b, n, 'floor', hs, 0.6);
+        if (covered && i > 0) n = chainStep(b, n, 'wall', hs, 0, 1);
       }
+      if (covered) n = chainStep(b, n, 'wall', hs);
+      b.chainRamp = null;
+      b.chainRamps = 0;
     } else if (maxN >= 2 && (d > 25 || this.rng() < (maxN >= 3 ? 0.75 : 0.4))) {
       // wall + ramp: the wall goes on the far edge of the ramp's cell, so it covers the climb
       mode = 'wallramp';
@@ -2005,6 +2539,43 @@ export class Bots {
     this._buildStep(b);
   }
 
+  /**
+   * Where a player would stand to place chain piece `q` (see chainStep), written to `out`:
+   * a ramp from the top of the chain's last ramp (the first from the bot's feet, a fresh
+   * chain), a wall / floor from the middle of that ramp. False when the chain has no ramp.
+   */
+  _chainPos(b, q, out) {
+    const a = b.actor;
+    const r = b.chainRamp;
+    const ux = Math.sin(q.h);
+    const uz = -Math.cos(q.h);
+    if (q.kind === 'ramp' && (!r || !b.chainRamps)) {
+      out.x = a.pos.x;
+      out.y = a.pos.y;
+      out.z = a.pos.z;
+      return true;
+    }
+    if (!r || !r.alive) return false;
+    // on the ramp's surface: near its high end (next ramp) or in its middle (wall / floor);
+    // a "back" piece stands on the ramp below the last one (one cell back, one level down)
+    const back = q.c > 1 ? 1 : 0;
+    const f = q.kind === 'ramp' ? 0.4 : 0;
+    out.x = r.x + ux * BUILD.cell * (f - back);
+    out.z = r.z + uz * BUILD.cell * (f - back);
+    const below = back ? this._rampAt(r.x - ux * BUILD.cell, r.y - BUILD.level, r.z - uz * BUILD.cell, r.rot) : r;
+    if (!below) return false;
+    out.y = below.surf ? below.surf(out.x, out.z) : below.y + BUILD.level * (0.5 + f);
+    return true;
+  }
+
+  /** Our live ramp piece at (x, y, z) with rotation rot, or null. */
+  _rampAt(x, y, z, rot) {
+    for (const p of this.structures.pieces) {
+      if (p.alive && p.kind === 'ramp' && Math.abs(p.x - x) < 0.5 && Math.abs(p.z - z) < 0.5 && Math.abs(p.y - y) < 0.5 && Math.abs(angleDelta(p.rot || 0, rot || 0)) < 0.1) return p;
+    }
+    return null;
+  }
+
   /** Places the next queued piece when its time has come (called every sim frame). */
   _buildStep(b) {
     const t = this.time;
@@ -2016,16 +2587,28 @@ export class Bots {
     const stop = !st || !a.alive || (b.bqMode === 'rush' && (!b.target || !b.target.alive));
     if (!stop) {
       const q = b.bq[b.bqI];
-      _bpos.x = q.x;
-      _bpos.y = q.y;
-      _bpos.z = q.z;
-      const pl = st.plan(q.kind, _bpos, q.h, q.p, _pl);
+      let ok = true;
+      if (q.c) ok = this._chainPos(b, q, _bpos);
+      else {
+        _bpos.x = q.x;
+        _bpos.y = q.y;
+        _bpos.z = q.z;
+      }
+      const pl = ok ? st.plan(q.kind, _bpos, q.h, q.p, _pl) : null;
       const inv = a.inventory;
       let mat = b.bqMat;
       if ((inv.mats[mat] || 0) < BUILD.cost) mat = b.bqMat = bestMat(inv);
       if (pl && pl.valid && mat && inv.spendMats(mat, BUILD.cost)) {
-        if (st.place(pl, mat, a)) b.builds++;
-        else inv.mats[mat] += BUILD.cost;
+        const piece = st.place(pl, mat, a);
+        if (piece) {
+          b.builds++;
+          if (q.c && q.kind === 'ramp') {
+            b.chainRamp = piece;
+            b.chainRamps = (b.chainRamps || 0) + 1;
+          }
+        } else inv.mats[mat] += BUILD.cost;
+      } else if (q.c && q.kind === 'ramp') {
+        b.bqI = b.bqN - 1; // the chain broke: a ramp that did not fit ends it
       }
       b.bqI++;
       b.bqNext = t + diff.buildRate * (0.8 + this.rng() * 0.4);
@@ -2484,7 +3067,7 @@ export class Bots {
       b.wantJump = true;
       // walled in by a build (our own box, or someone's trap): edit a door out of our own wall,
       // else pickaxe through it
-      if (!b.box && !b.trap) this._breakOut(b);
+      if (!b.box && !b.trap && !b.tower) this._breakOut(b);
       // in the storm: smash whatever is in the way (builds, building walls) instead of only
       // walking around it, and drop an escape ramp when a wall is in front of us
       if (b.stormUrgent) {
@@ -2559,7 +3142,69 @@ export class Bots {
       b.smashes = (b.smashes || 0) + 1;
       return true;
     }
+    // no wall on our own cell that way (a ramp / floor edge / the next cell's wall right in
+    // front): whatever built piece blocks the way toward the goal, at knee or chest height
+    const d = Math.hypot(dx, dz);
+    _dir.set(dx / d, 0, dz / d);
+    for (const hy of [0.5, 1.2]) {
+      _origin.set(a.pos.x, a.pos.y + hy, a.pos.z);
+      const hit = st.pickPiece(_origin, _dir, 2.2);
+      if (!hit) continue;
+      const p = hit.piece;
+      b.breakOutAt = t + 1.2;
+      if (p.kind === 'wall' && p.owner === a && ((p.edit | 0) & DOOR) !== DOOR && st.edit(p, DOOR)) {
+        b.editsOut = (b.editsOut || 0) + 1;
+        b.thinkIn = 0;
+        return true;
+      }
+      b.smashUntil = t + 3;
+      b.smashX = a.pos.x + _dir.x * (hit.t + 0.2);
+      b.smashZ = a.pos.z + _dir.z * (hit.t + 0.2);
+      b.smashes = (b.smashes || 0) + 1;
+      return true;
+    }
     return false;
+  }
+
+  /** The closed (not door-edited) wall on our own cell's side `h` at our level, or null. */
+  _cellWall(a, h) {
+    const st = this.structures;
+    _bpos.x = a.pos.x;
+    _bpos.y = a.pos.y;
+    _bpos.z = a.pos.z;
+    const pl = st.plan('wall', _bpos, h, 0, _pl);
+    const w = st.slots.get(pl.key);
+    if (!w || !w.alive || Math.abs(w.y - a.pos.y) > 1.5) return null;
+    return ((w.edit | 0) & DOOR) === DOOR ? null : w;
+  }
+
+  /**
+   * Stuck-in-our-own-box detector (every ENCLOSED_EVERY s): walled in on 3+ sides of our
+   * cell (a panic box from _wallOnHit / _maybeBuild, a box fight that ended, or an enemy trap)
+   * with no enemy in sight and somewhere to go outside the cell. Sliding around inside a box
+   * moves the bot enough that the distance-based _stuckCheck never fired, so it sat there:
+   * now it edits a door in its own wall toward the goal (or pickaxes someone else's).
+   */
+  _enclosureCheck(b) {
+    const st = this.structures;
+    const a = b.actor;
+    const t = this.time;
+    if (!st || !st.count || t < (b.encAt || 0)) return false;
+    b.encAt = t + ENCLOSED_EVERY;
+    if (!a.alive || a.downed || !a.grounded || b.box || b.trap || b.tower || b.bqI < b.bqN || b.healing > 0) return false;
+    if (t < (b.holdUntil || 0) || (b.state === 'engage' && b.targetVisible)) return false;
+    let walls = 0;
+    for (let q = 0; q < 4; q++) if (this._cellWall(a, (q * Math.PI) / 2)) walls++;
+    if (walls < ENCLOSED_WALLS) return false;
+    const dx = (b.steerGX ?? b.navX) - a.pos.x;
+    const dz = (b.steerGZ ?? b.navZ) - a.pos.z;
+    if (!(Math.hypot(dx, dz) > CELL_HALF)) return false; // nowhere to go: staying in is fine
+    // the side toward the goal is already open: just walk out
+    const xMajor = Math.abs(dx) >= Math.abs(dz);
+    const h = Math.atan2(xMajor ? Math.sign(dx) : 0, xMajor ? 0 : -Math.sign(dz));
+    if (!this._cellWall(a, h)) return false;
+    b.boxedIn = (b.boxedIn || 0) + 1;
+    return this._breakOut(b);
   }
 
   /** Re-path: drop the current goal and go somewhere else nearby. */
@@ -2596,6 +3241,7 @@ export class Bots {
 
     if (b.bqI < b.bqN) this._buildStep(b);
     if (b.box) this._boxTick(b);
+    else this._enclosureCheck(b);
     if (b.healing > 0) {
       b.healing -= dt;
       if (b.healing <= 0) this._finishHeal(b);
@@ -2747,6 +3393,7 @@ export class Bots {
     b.bloom = Math.min(w.maxBloom, b.bloom + w.bloom);
     b.burstLeft--;
     b.shots++;
+    if (!b.grudge) this._setGrudge(b, tgt); // we started it: see it through
     b.fireCd = 1 / w.rate + (w.auto ? 0 : 0.12 + this.rng() * 0.2);
     if (ch) ch.fire();
     if (this.combat) this.combat.fireWeapon(a, it, _origin, _dir, spread);
@@ -2824,6 +3471,10 @@ export class Bots {
         b.state = 'wander';
         a.botState = 'wander';
         b.landedAt = this.time;
+        // a landing stash, so getting shot early can still be answered with walls / a tower
+        // (hard: enough for ~3 towers at BUILD.cost 5); the rest comes from harvesting
+        const stash = LANDING_MATS[this.diffName] || 0;
+        if (stash > 0 && a.inventory && a.inventory.mats) a.inventory.mats.wood = Math.max(a.inventory.mats.wood || 0, stash);
         b.thinkIn = 0.05 + this.rng() * 0.2;
         b.stuckX = pos.x;
         b.stuckZ = pos.z;
@@ -2850,11 +3501,18 @@ export class Bots {
     b.wantJump = false;
     if (!a.grounded) vel.y -= PLAYER.gravity * dt;
     const oy = pos.y;
+    const ox = pos.x;
+    const oz = pos.z;
     const cap = world.builtAbove(pos.x, pos.z, oy); // a floor over our head is not a step
     pos.x += vel.x * dt;
     pos.y += vel.y * dt;
     pos.z += vel.z * dt;
     world.resolveCircle(pos, a.radius, a.height);
+    // a push never carries a bot through a museum wall (World.crossesSolid)
+    if (world.crossesSolid && world.crossesSolid(ox, oz, pos.x, pos.z, oy, a.height)) {
+      pos.x = ox;
+      pos.z = oz;
+    }
     // head bump: jumping (or a step-up) never pushes the body up through a floor or ramp
     if (pos.y > oy) {
       const ceil = world.ceilingAbove(pos.x, pos.z, oy);
@@ -3132,6 +3790,7 @@ function bestMat(inv) {
 function queueStep(b, n, kind, x, y, z, h, p) {
   if (n >= BUILD_Q) return n;
   const q = b.bq[n];
+  q.c = 0;
   q.kind = kind;
   q.x = x;
   q.y = y;
@@ -3139,6 +3798,20 @@ function queueStep(b, n, kind, x, y, z, h, p) {
   q.h = h;
   q.p = p;
   return n + 1;
+}
+
+/**
+ * A piece of a ramp chain (tower / ramp rush), placed relative to the chain's last ramp when
+ * its turn comes (Bots._chainPos): a ramp off the top of the previous one (the first: ahead of
+ * where the bot stands then), a wall on that ramp's far edge, a floor past it (pitch p).
+ * Planned up front from absolute heights, the pieces missed their levels on sloped ground:
+ * Structures.plan reads the ground / built surface under the point, like for a player.
+ */
+function chainStep(b, n, kind, h, p = 0, back = 0) {
+  if (n >= BUILD_Q) return n;
+  n = queueStep(b, n, kind, 0, 0, 0, h, p);
+  b.bq[n - 1].c = 1 + back; // back: on the ramp below the chain's last one
+  return n;
 }
 
 function findConsumable(inv, id) {
@@ -3245,6 +3918,17 @@ class Planner {
     b.planGZ = gz;
     if (urgent) this.queue.unshift(b);
     else this.queue.push(b);
+  }
+
+  /** Drops `b`'s queued / running plan (a bot being removed). */
+  cancel(b) {
+    const i = this.queue.indexOf(b);
+    if (i >= 0) this.queue.splice(i, 1);
+    if (this.owner === b) {
+      this.owner = null;
+      this.busy = false;
+    }
+    b.planQueued = false;
   }
 
   cancelAll() {
