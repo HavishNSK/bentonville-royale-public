@@ -1385,7 +1385,8 @@ export class Bots {
       done.pathGoalX = done.planGX;
       done.pathGoalZ = done.planGZ;
       done.pathUntil = this.time + 25;
-      done.stuck = 0;
+      // (the stuck count stays: a plan that does not get the bot moving either escalates to a
+      // new goal (_stuckCheck), instead of being re-planned the same way for ever)
       done.routeHold = 0;
       done.paths++;
     }
@@ -3211,11 +3212,13 @@ export class Bots {
         // plan a way around on a coarse grid toward the current goal (delivered in a later
         // frame; bots near a human jump the queue). Far bots skip A* and just re-goal below.
         this.planner.request(b, a.pos.x, a.pos.z, b.navX, b.navZ, b.lod === 0);
-      } else if (b.stuck >= 3 && b.state !== 'engage' && b.pathN > 0 && b.pathK[b.pathI] && b.lod < 2) {
+      } else if (b.stuck >= 3 && b.state !== 'engage' && b.pathN > 0 && b.lod < 2) {
         // a door / room route that does not get through (a room split by a footprint notch,
-        // a blocked doorway): drop it and let A* (which knows the doors) find a way; hold
-        // door routing off until the plan arrives
-        b.routeFails++;
+        // a blocked doorway), or an open leg that does not either (a landmark route's straight
+        // walk from the ravine floor to a crest entrance runs into the bank under a bridge):
+        // drop it and let A* (which knows the doors) find a way; hold door routing off until
+        // the plan arrives
+        if (b.pathK[b.pathI]) b.routeFails++;
         b.pathN = 0;
         b.routeHold = t + 6;
         this.planner.request(b, a.pos.x, a.pos.z, b.navX, b.navZ, b.lod === 0);
@@ -3655,7 +3658,28 @@ export class Bots {
       }
     }
     // ground from the feet before the move, so a fast fall can't skip a floor
-    const g = world.groundHeight(pos.x, pos.z, Math.max(pos.y, oy), undefined, cap);
+    let g = world.groundHeight(pos.x, pos.z, Math.max(pos.y, oy), undefined, cap);
+    // no headroom there (a bank rising under a bridge deck, the low end of a ramp): it is a
+    // wall to a body, slid along like one. Walking on, the head went into the slab and the
+    // push shoved the bot against the next plinth, wedged under the deck for good. A move
+    // toward more headroom (out of such a spot) is still allowed. Airborne too: a hop onto a
+    // weir under a deck used to be snapped up into the slab.
+    if (pos.x !== ox || pos.z !== oz) {
+      const og = a.grounded ? oy : world.groundHeight(ox, oz, oy, undefined, cap);
+      const was = Math.min(a.height, world.ceilingAbove(ox, oz, og, 0) - og);
+      const fy = Math.max(pos.y, oy);
+      const nx = pos.x;
+      const nz = pos.z;
+      if (headroom(world, nx, nz, fy, cap) < was) {
+        if (headroom(world, nx, oz, fy, cap) >= was) pos.z = oz;
+        else if (headroom(world, ox, nz, fy, cap) >= was) pos.x = ox;
+        else {
+          pos.x = ox;
+          pos.z = oz;
+        }
+        g = world.groundHeight(pos.x, pos.z, fy, undefined, cap);
+      }
+    }
     if (pos.y <= g) {
       pos.y = g;
       if (vel.y < 0) vel.y = 0;
@@ -3757,6 +3781,15 @@ export class Bots {
 }
 
 // ------------------------------------------------------------------ helpers
+
+/**
+ * Clear height over the ground a body at feet fy would stand on at (x, z). Step 0: an
+ * underside lower than a step over the ground (a deck's end over a rising bank) still counts.
+ */
+function headroom(world, x, z, fy, cap) {
+  const g = world.groundHeight(x, z, fy, undefined, cap);
+  return world.ceilingAbove(x, z, g, 0) - g;
+}
 
 function newBrain(actor, target, rng) {
   return {
@@ -4100,6 +4133,9 @@ class Planner {
     this.oz = b.planSZ - (PG * PC) / 2;
     this.gx = b.planGX;
     this.gz = b.planGZ;
+    this.fy = b.actor ? b.actor.pos.y : 0; // the feet: a raised floor above them is a wall (World.ledgeAt)
+    this.sx = b.planSX;
+    this.sz = b.planSZ;
     this.hn = 0;
     this.expanded = 0;
     const cx = Math.floor((b.planSX - this.ox) / PC);
@@ -4136,10 +4172,37 @@ class Planner {
         // door cells are open (and tagged, so _emit lines the path up with the opening)
         const d = this._doorCell(x, z);
         this.doorOf[i] = d;
-        this.occ[i] = d >= 0 || !w.blockedAt(x, z, 0.75, true) ? 1 : 2;
+        // the grid is height-blind: from the bot's own level, a raised museum floor beside a
+        // bridge is a wall (World.ledgeAt) and the bank under a deck's end has no headroom
+        this.occ[i] = d >= 0 || (!w.blockedAt(x, z, 0.75, true) && !this._walledFrom(x, z)) ? 1 : 2;
       }
     }
     return this.occ[i] === 1;
+  }
+
+  /** Blocked for a body with feet at the planning bot's level, though blockedAt says open. */
+  _walledFrom(x, z, r = 0.75) {
+    const w = this.world;
+    if (w.ledgeAt && w.ledgeAt(x, z, r, this.fy)) return true;
+    return !!w.ceilingAbove && headroom(w, x, z, this.fy, Infinity) < PLAYER.height;
+  }
+
+  /**
+   * Can the bot walk straight from where it stands to start-cell neighbour ni? The start cell
+   * is open whatever is in it, so a plinth face or a deck's low end inside it (the bot at the
+   * bank under a bridge) would otherwise be planned straight through.
+   */
+  _leaves(ni) {
+    const x1 = this.ox + ((ni % PG) + 0.5) * PC;
+    const z1 = this.oz + (Math.floor(ni / PG) + 0.5) * PC;
+    const x0 = this.sx;
+    const z0 = this.sz;
+    const n = Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 0.5);
+    for (let k = 1; k <= n; k++) {
+      const t = k / n;
+      if (this._walledFrom(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t, PLAYER.radius)) return false;
+    }
+    return true;
   }
 
   /** Door (index into this.doors) whose opening the cell centre (x, z) straddles, or -1. */
@@ -4264,6 +4327,7 @@ class Planner {
         if (nx < 0 || nz < 0 || nx >= PG || nz >= PG) continue;
         const ni = nz * PG + nx;
         if (st[ni] === stamp || !this._free(ni)) continue;
+        if (cur === this.start && !this._leaves(ni)) continue;
         if (NB[k] !== 0 && NB[k + 1] !== 0 && (!this._free(cz * PG + nx) || !this._free(nz * PG + cx))) continue; // no corner cutting
         const ng = g0 + NB[k + 2] * PC;
         if (st[ni] !== open || ng < g[ni]) {

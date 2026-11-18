@@ -1658,6 +1658,27 @@ export class World {
     return hit;
   }
 
+  /**
+   * A raised floor in the way at (x, z) for a body whose feet are at feetY: a `walkable` box (a
+   * museum floor, which blockedAt treats as open ground) whose top is more than a step above
+   * both the feet and the ground there, and whose underside is below head height over that
+   * ground (a plinth face, or a bridge deck too low to pass under). From the ravine floor the
+   * plinth beside a bridge is a wall, not ground (Bots' height-blind A* planned straight into it).
+   */
+  ledgeAt(x, z, r, feetY, height = 1.8) {
+    const base = Math.max(feetY, this.surfaceHeight(x, z));
+    const top = base + STEP;
+    let hit = false;
+    this._each(x - r, z - r, x + r, z + r, false, (cell) => {
+      const boxes = cell.boxes;
+      for (let i = 0; i < boxes.length && !hit; i++) {
+        const c = boxes[i];
+        if (c.walkable && !c.passable && c.y1 > top && c.y0 < base + height && boxContains(c, x, z, r)) hit = true;
+      }
+    });
+    return hit;
+  }
+
   /** Does a circle (x, z, r) overlap piece `c` in plan, for a piece whose base is below `belowY`? */
   _pieceOverlaps(c, x, z, r, belowY) {
     if (!c.alive || c.y0 >= belowY) return false;
