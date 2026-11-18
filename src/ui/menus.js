@@ -150,7 +150,7 @@ export function createMenus(root, opts = {}) {
      <div class="mn-title-side">
        <div class="mn-stack mn-stack-row">
          <button class="mn-btn mn-btn-small" data-act="freebuild">${icon('pencil')}<span>SANDBOX</span></button>
-         <button class="mn-btn mn-btn-small" data-act="museum" title="Walk the Crystal Bridges galleries: no bots, no storm">${icon('star')}<span>VISIT THE MUSEUM</span></button>
+         <button class="mn-btn mn-btn-small" data-act="museum" title="Walk the Crystal Bridges galleries: no bots, no storm">${icon('star')}<span>MUSEUM</span></button>
          <button class="mn-btn mn-btn-small" data-act="private" aria-expanded="false" data-ref="privBtn">${icon('people')}<span>PRIVATE MATCH</span></button>
          <button class="mn-btn mn-btn-small" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
        </div>
@@ -928,6 +928,7 @@ export function createMenus(root, opts = {}) {
       for (const p of info.players || []) {
         const li = document.createElement('li');
         li.classList.toggle('is-ready', !!p.ready);
+        li.classList.toggle('is-host', !!p.host);
         const nm = document.createElement('span');
         nm.textContent = p.name;
         li.appendChild(nm);
