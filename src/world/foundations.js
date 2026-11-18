@@ -13,7 +13,7 @@ export function foundationBand(c, sample) {
       high = Math.max(high, sample(x, z));
     }
   }
-  return Math.min(32, Math.max(4, (high - c.y0) * 4 + 4));
+  return Math.min(48, Math.max(8, (high - c.y0) * 6 + 8));
 }
 
 /** Point-in-polygon test for a building footprint (ray-casting, same as footprintDistance). */

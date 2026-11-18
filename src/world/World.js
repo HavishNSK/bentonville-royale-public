@@ -69,8 +69,8 @@ const STOREY_MIN = 3.2;
 const STOREY_MAX = 4.5;
 // Footprint filters for hollowing (m^2 / m): tiny sheds stay solid prisms.
 const HOLLOW_MIN_AREA = 30;
-const HOLLOW_MIN_A_OVER_P = 1.0; // area / perimeter; ~ half the narrow width for a rectangle
-const HOLLOW_MAX_VERTS = 220;
+const HOLLOW_MIN_A_OVER_P = 0.65; // area / perimeter; ~ half the narrow width for a rectangle
+const HOLLOW_MAX_VERTS = 350;
 
 function pointInPoly(p, n, x, z) {
   let inside = false;
