@@ -3,17 +3,20 @@
 // "Catfish Ken" lettered down both sides and lime-green rims, and Catfish Ken himself in the
 // driver's seat (teal hair, black shades, orange tee) behind the cab window. He is scenery
 // only: no actor, no collider of his own, nothing can hit him. A small roof beacon shows
-// whether the van can reboot (ready / busy / recharging).
+// whether the van can reboot (ready / busy / recharging), and a big cartoon catfish mascot
+// rides on the roof in front of it, swaying gently (src/render/CatfishMascot.js).
 //
 //   const van = buildRebootVan();      // THREE.Group, ground at y = 0, front at -z, right +x
 //   van.userData.setBeacon(state, k, dt)  // 'ready' | 'busy' | 'cooldown', k = 0..1 progress
-//   van.userData.update(dt, viewerPos)    // Ken: head bob, looks at / waves to people nearby
+//   van.userData.update(dt, viewerPos)    // Ken: head bob, looks at / waves to people nearby;
+//                                         // the roof catfish bobs and sways
 //
 // REBOOT_VAN gives the footprint the collider and the "use" range are measured from.
 
 import * as THREE from 'three';
 import { toToon } from './Toon.js';
 import { mergeMeshes } from './mergeMeshes.js';
+import { buildCatfishMascot } from './CatfishMascot.js';
 
 export const REBOOT_VAN = Object.freeze({
   halfLength: 2.5,
@@ -31,6 +34,7 @@ const HL = REBOOT_VAN.halfLength;
 const W = REBOOT_VAN.halfWidth * 2;
 const ROOF = 2.08;
 const BOTTOM = 0.35;
+const FISH_Z = -0.7; // where the roof catfish's post stands (the beacon is at z = 1.2)
 
 // side silhouette, clockwise (a = along the van, front at -HL; y = up): bumper, short hood,
 // steep windshield, long flat roof, flat back
@@ -373,6 +377,13 @@ export function buildRebootVan() {
   beam.userData.dynamic = true;
   g.add(beam);
 
+  // the catfish mascot on the roof, between the cab and the beacon (one mesh, one draw call);
+  // its tail stays clear of the beacon ring even when the ring grows during a reboot
+  const fish = buildCatfishMascot();
+  fish.position.set(0, ROOF, FISH_Z);
+  fish.userData.dynamic = true;
+  g.add(fish);
+
   // ~70 parts -> one mesh per material (Ken's head and waving arm stay movable)
   ken.head.userData.dynamic = true;
   ken.waveArm.userData.dynamic = true;
@@ -412,6 +423,9 @@ export function buildRebootVan() {
         wave = 1.6;
       } else if (d > 9) greeted = false;
     }
+    fish.position.y = ROOF + Math.sin(clock * 1.7) * 0.03;
+    fish.rotation.y = Math.sin(clock * 0.9) * 0.12;
+    fish.rotation.z = Math.sin(clock * 1.3) * 0.04;
     yaw += (want - yaw) * Math.min(1, dt * 4);
     ken.head.rotation.y = yaw;
     ken.head.position.y = 1.27 + Math.sin(clock * 2.2) * 0.012;

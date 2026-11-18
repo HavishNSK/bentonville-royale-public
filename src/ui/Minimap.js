@@ -54,6 +54,7 @@
  */
 
 import { DROP_ZONES } from '../core/config.js';
+import { drawCatfishMarker } from './catfishIcon.js';
 
 const TAU = Math.PI * 2;
 const TILE_PX = 512;
@@ -484,26 +485,10 @@ function makeBlipSprites(k) {
     g.fill();
     g.stroke();
   });
-  // reboot van: a cyan rounded square with a white "R" (grey while recharging)
+  // reboot van: Catfish Ken's catfish, cyan when ready, grey while recharging, green while
+  // you carry a reboot card (src/ui/catfishIcon.js)
   for (const [key, col] of [['van', '#38e1ff'], ['vanCd', '#8a96a3'], ['vanHot', '#7dff6b']]) {
-    out[key] = makeSprite(24 * k, 24 * k, 12 * k, 12 * k, (g) => {
-      g.fillStyle = col;
-      g.strokeStyle = '#ffffff';
-      g.lineWidth = 2.6 * k;
-      g.beginPath();
-      if (g.roundRect) g.roundRect(2.5 * k, 2.5 * k, 19 * k, 19 * k, 5 * k);
-      else g.rect(2.5 * k, 2.5 * k, 19 * k, 19 * k);
-      g.fill();
-      g.stroke();
-      g.strokeStyle = edge;
-      g.lineWidth = 1.2 * k;
-      g.stroke();
-      g.fillStyle = edge;
-      g.font = `900 ${13 * k}px sans-serif`;
-      g.textAlign = 'center';
-      g.textBaseline = 'middle';
-      g.fillText('R', 12 * k, 12.8 * k);
-    });
+    out[key] = makeSprite(26 * k, 26 * k, 13 * k, 13 * k, (g) => drawCatfishMarker(g, k, col));
   }
   // reboot card: a small cyan card
   out.card = makeSprite(12 * k, 16 * k, 6 * k, 8 * k, (g) => {
