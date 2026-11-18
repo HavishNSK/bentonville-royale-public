@@ -40,9 +40,9 @@ export function createShowcase(parent) {
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
   }
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 50);
-  camera.position.set(0, 1.35, 7.2);
-  camera.lookAt(0, 0.95, 0);
+  const camera = new THREE.PerspectiveCamera(26, 1, 0.1, 50);
+  camera.position.set(0, 1.22, 6.15);
+  camera.lookAt(0, 0.92, 0);
   scene.add(new THREE.HemisphereLight(0xfff1d6, 0x4b2f9a, 1.6));
   const sun = new THREE.DirectionalLight(0xffffff, 2.2);
   sun.position.set(2.5, 5, 4);
@@ -172,7 +172,7 @@ export function createShowcase(parent) {
       renderer.setSize(w, h, false);
       camera.aspect = w / h;
       // keep the line-up framed on narrow canvases
-      camera.position.z = Math.max(6.2, 7.2 / Math.min(1, camera.aspect / 0.75));
+      camera.position.z = Math.max(5.35, 6.15 / Math.min(1, camera.aspect / 0.75));
       camera.updateProjectionMatrix();
     }
     return true;
