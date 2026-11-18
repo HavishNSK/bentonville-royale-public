@@ -10,6 +10,7 @@
 - Fixed about 100 trees floating up to 4 m in the air near buildings where the ground is levelled for foundations. Trees are now drawn on the same ground they collide on.
 - Fixed grenades and rockets breaking walls through intact floors and roofs: one grenade on a roof used to knock out walls one and two storeys below. An intact floor or roof now shields the storey on the other side; blowing a hole in the floor tile under the blast still works.
 - Fixed READY doing nothing in a private-match lobby when clicked while it still said "Joining…" (the host kept showing you as not ready). The button now stays greyed out until you are connected.
+- Parked school buses can now be destroyed like parked cars: bullets, the pickaxe (metal) and explosives break them (twice a car's health). They come back at the start of the next match.
 
 ## [2026-11-17] — v0.15.1: much stricter, kid-friendly global chat
 - `src/net/chatFilter.js` rewritten: a message that breaks a rule is refused (not masked with ****) and the sender sees which rule. Categories: profanity (including acronyms like stfu, gtfo, kys, fml), slurs and hate phrases, bullying ("ur so gay"), sexual talk, real-world threats, self-harm, drugs, and personal-info / off-app requests ("whats ur snap", "how old r u", "where do u live").
