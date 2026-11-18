@@ -106,6 +106,7 @@ const TOWER_MIN = 3;
 // Bots get their materials like a player: nothing on landing, then harvesting and loot.
 const HARVEST_LOW = 60; // total mats under this: harvesting comes before looting
 const HARVEST_SCAN = 16; // m: how far around a low bot looks for something to harvest
+const FARM_FIGHT_DIST = 35; // m: out of mats, a bot farms mid-fight while the enemy is out of sight or this far
 const TOWER_NEAR = 20; // m: closer fights are boxed / trapped instead
 const TOWER_FAR = 120;
 const TOWER_CLOSE = 10; // m: an enemy this close ends a tower (fight it instead)
@@ -1835,6 +1836,8 @@ export class Bots {
     }
     const mate = this._downedMate(b, all);
     if (mate && !urgent) state = 'revive';
+    // out of mats mid-fight with them out of sight or far off: farm what is near, then back to it
+    else if (fight && this._farmMidFight(b, dist) && ((b.harvest && b.harvest.alive && t < b.harvestUntil) || this._pickHarvest(b))) state = 'harvest';
     else if (fight) state = 'engage';
     else if (urgent) state = 'rotate';
     else if (t < b.retreatUntil && target) state = 'retreat';
@@ -2842,6 +2845,12 @@ export class Bots {
     const it = a.inventory.current();
     if (it && it.type === 'weapon') a.character.setEquipped(it.id, WEAPONS[it.id].twoHanded);
     else a.character.setEquipped('pickaxe', true);
+  }
+
+  /** Out of mats in a fight, but with a moment to farm (not boxed / trapping, target hidden or far). */
+  _farmMidFight(b, dist) {
+    const a = b.actor;
+    return this._lowMats(a) && !b.box && !b.trap && a.grounded && (!b.targetVisible || dist > FARM_FIGHT_DIST);
   }
 
   /** Total build mats under HARVEST_LOW. */

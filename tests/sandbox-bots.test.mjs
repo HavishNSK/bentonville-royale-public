@@ -48,7 +48,7 @@ test('a spawned bot stands on open ground 25 m (+-1) in front of the player, arm
   assert.equal(bot.gliding, false);
   const cur = bot.inventory.current();
   assert.ok(cur && cur.type === 'weapon', 'gun in hand');
-  assert.ok(bot.inventory.mats.wood > 0);
+  assert.equal(bot.inventory.mats.wood, 0, 'no free mats: it farms its own');
   assert.equal(bot.damageScale, DIFFICULTY.normal.damageScale);
   assert.equal(sandboxBotLoadout('easy').items.length, 2, 'easy: rifle + medkit');
 });
@@ -98,7 +98,8 @@ test('bodies are purged after a few seconds', () => {
 test('per-bot difficulty: easy, normal and hard bots coexist and each acts on its own', () => {
   const { game, bots, player, structures } = sandbox();
   player.pos.set(0, 0, -40);
-  const mk = (d, x) => bots.addBot(d, x, 0, { loadout: sandboxBotLoadout(d), team: SANDBOX_BOT_TEAM });
+  // (wood given here: this test is about difficulties acting on their own, not farming)
+  const mk = (d, x) => bots.addBot(d, x, 0, { loadout: { ...sandboxBotLoadout(d), mats: { wood: 400 } }, team: SANDBOX_BOT_TEAM });
   const easy = mk('easy', -20);
   const normal = mk('normal', 0);
   const hard = mk('hard', 20);

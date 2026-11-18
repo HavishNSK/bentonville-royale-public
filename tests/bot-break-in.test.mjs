@@ -57,3 +57,21 @@ test('box up mid-fight: the bot keeps after you and pickaxes into the box instea
   assert.ok(walls.some((w) => !w.alive), 'and broke one open');
   assert.ok(sawAgain, 'then it had eyes on them again (and the normal fight takes over)');
 });
+
+test('out of mats mid-fight with the enemy out of sight, a bot farms the nearest tree, then has wood', () => {
+  const { world, bots, bot, b, player, step } = sim('hard');
+  // a tree 5 m from the bot (harvestable circle collider, like Scatter's)
+  const tree = world.addCircle(bot.pos.x + 5, bot.pos.z, 0.6, 6, 'tree', 'wood', 300, []);
+  step(0.2);
+  bots.notifyDamage(bot, 10, { source: player });
+  player.pos.set(150, 0, 150); // far off and out of sight
+  bots._los = () => false;
+  const states = new Set();
+  for (let i = 0; i < 10 * 60; i++) {
+    bots.update(1 / 60, { player });
+    states.add(b.state);
+  }
+  assert.ok(states.has('harvest'), `farmed mid-fight: ${[...states]}`);
+  const m = bot.inventory.mats;
+  assert.ok(m.wood + m.brick + m.metal > 0, 'has mats now');
+});

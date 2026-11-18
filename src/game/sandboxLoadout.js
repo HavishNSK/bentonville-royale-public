@@ -96,7 +96,7 @@ export function sandboxBotStatus(game) {
   return { count, cap: SANDBOX_BOT_CAP, canSpawn: !reason, reason, bodies };
 }
 
-/** A basic loadout for a sandbox bot of difficulty `d`: a rifle (+ a shotgun above easy), ammo, mats, a medkit. */
+/** A basic loadout for a sandbox bot of difficulty `d`: a rifle (+ a shotgun above easy), ammo, a medkit. No mats: it farms. */
 export function sandboxBotLoadout(d) {
   const rarity = d === 'hard' ? 'epic' : d === 'normal' ? 'rare' : 'common';
   const items = [{ type: 'weapon', id: 'rifle', rarity, mag: WEAPONS.rifle.mag }];
@@ -105,7 +105,7 @@ export function sandboxBotLoadout(d) {
   return {
     items,
     ammo: { medium: 240, shells: 30 },
-    mats: { wood: d === 'hard' ? 400 : d === 'normal' ? 200 : 60 },
+    mats: {}, // none: like any bot (and the player in a match) they farm their own
     selected: 0,
   };
 }
