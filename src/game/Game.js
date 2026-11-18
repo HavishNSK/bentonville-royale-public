@@ -49,6 +49,7 @@ import { Player, placeOrbitCamera, itemLabel } from './Player.js';
 import * as StormMod from './Storm.js';
 import * as LootMod from './Loot.js';
 import * as InvMod from './Inventory.js';
+import { heldSlot } from './Inventory.js';
 import * as StructMod from './Structures.js';
 import * as BotsMod from './Bots.js';
 import { createFpsMeter } from '../ui/fpsMeter.js';
@@ -2479,14 +2480,8 @@ function rebootLoadout() {
 }
 
 /** Hotbar slot an actor is holding (-1 = pickaxe): bots select a slot, remote humans report what they hold. */
-export function heldSlot(a, inv) {
-  const eq = a.equipId || null;
-  if (!eq) return a.buildPiece ? -1 : inv.selected;
-  if (eq === 'pickaxe') return -1;
-  const cur = inv.slots[inv.selected];
-  if (cur && (cur.id === eq || (eq === 'none' && cur.type === 'consumable'))) return inv.selected;
-  return inv.slots.findIndex((s) => s && (s.id === eq || (eq === 'none' && s.type === 'consumable')));
-}
+// moved to Inventory.js (pure; netcode imports it without the UI layer); re-exported for old importers
+export { heldSlot };
 
 const NO_INPUT = {
   dx: 0,

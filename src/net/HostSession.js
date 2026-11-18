@@ -27,7 +27,7 @@
 import * as THREE from 'three';
 import { PLAYER, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, MATCH, REBOOT, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
 import { Character } from '../game/Character.js';
-import { heldSlot } from '../game/Game.js';
+import { heldSlot } from '../game/Inventory.js';
 import { SKINS, EMOTES, PICKAXES, BACKBLINGS } from '../game/Cosmetics.js';
 import {
   SNAP_HZ, FLAG, XFLAG, EQUIP, SURF, encodeSnapshot, decodeState, seqNewer, rnd,
