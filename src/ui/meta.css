@@ -3,7 +3,7 @@
 
 /* ---- title grid: logo + side | line-up | party ----------------------------- */
 .mn-title {
-  grid-template-columns: minmax(0, 1fr) minmax(0, calc(var(--u) * 560)) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, calc(var(--u) * 500)) minmax(0, 1fr);
   grid-template-areas: 'logo show party' 'side show party';
   column-gap: calc(var(--u) * 20);
   padding-top: calc(var(--u) * 70);
@@ -36,23 +36,42 @@
 .mn-showcase-canvas:active {
   cursor: grabbing;
 }
+/* name tags: Showcase.js projects each character's feet and moves its tag there */
 .mn-showcase-names {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(var(--u) * 64);
-  height: 0;
+  inset: 0;
   pointer-events: none;
+  overflow: hidden;
 }
 .mn-showcase-names span {
   position: absolute;
-  left: calc(50% + var(--x) * 17%);
-  transform: translateX(-50%);
-  padding: calc(var(--u) * 3) calc(var(--u) * 10);
-  border-radius: 999px;
-  background: var(--br-panel);
-  font-size: calc(var(--u) * 12);
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: calc(var(--u) * 150);
+  padding: calc(var(--u) * 4) calc(var(--u) * 12);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: calc(var(--u) * 10);
+  background: var(--br-ink-2);
+  color: var(--br-cream);
+  line-height: 1.1;
   white-space: nowrap;
+}
+.mn-showcase-names b {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: calc(var(--u) * 15);
+}
+.mn-showcase-names small {
+  font-size: calc(var(--u) * 11);
+  font-weight: 800;
+  color: var(--br-sky-hi);
+}
+.mn-showcase-names span.is-ready small {
+  color: var(--br-leaf);
 }
 .mn-showcase-names span.is-you {
   background: var(--br-sun);
@@ -819,7 +838,7 @@
 }
 
 /* ---- narrow / tall screens: stack, line-up after the logo ---------------------- */
-@media (max-aspect-ratio: 1/1), (max-width: 760px) {
+@media (max-aspect-ratio: 7/5), (max-width: 1023px) {
   .mn-title {
     padding-top: calc(var(--u) * 110);
   }
@@ -864,7 +883,7 @@
 
 /* a panel is open: the line-up takes the left side (logo and buttons step aside) so the
    outfit being tried on stays in view */
-@media (min-aspect-ratio: 1/1) and (min-width: 761px) {
+@media (min-aspect-ratio: 7/5) and (min-width: 1024px) {
   .mn-title.has-meta > .mn-logo,
   .mn-title.has-meta > .mn-title-side {
     visibility: hidden;

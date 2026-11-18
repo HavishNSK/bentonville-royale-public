@@ -295,7 +295,7 @@ Asset and data credits are maintained in [credits/](credits/). Preserve the exis
 
 ## Design System and Accessibility
 
-The game uses a deliberate cartoon dusk/Ozark visual identity. Shared tokens and fonts live in `src/ui/hud.css`; menus extend them in `src/ui/menus.css`. The title, friend-lobby, and loading backdrop is the water-tower illustration at `public/ui/lobby-bg.jpg`.
+The game uses a deliberate cartoon dusk/Ozark visual identity. Shared tokens and fonts live in `src/ui/hud.css`; menus extend them in `src/ui/menus.css`. The title, friend-lobby, and loading backdrop is the flat dusk drawing at `public/ui/lobby-dusk.svg` (brand ink sky, sun-gold sun behind the 3D line-up, town silhouette). The title line-up (`src/ui/Showcase.js`, formation in `src/ui/lineup.js`) refits its camera to the party size so up to eight characters stay fully in frame, each on a plinth with a name and ready nameplate; the private-match roster lists players in two columns so full 16-character names fit. Windows narrower than 1024px or squarer than 7:5 use the stacked title layout.
 
 | Token | Value | Role |
 | --- | --- | --- |

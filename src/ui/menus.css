@@ -1,6 +1,6 @@
 /* BENTONVILLE ROYALE — menu screens (title, settings, loading, pause, result, drop banner).
  * Reuses the tokens, fonts, .br-ol and .br-key from hud.css. Sized in --u like the HUD.
- * Look: water-tower battle art behind the menus — violet ink, sun gold, cream type. */
+ * Look: Bentonville at dusk behind the menus (public/ui/lobby-dusk.svg) — violet ink, sun gold, cream type. */
 
 .br-menus {
   position: fixed;
@@ -34,21 +34,12 @@
   visibility: hidden;
   transition: opacity 0.35s ease, visibility 0s linear 0.35s;
   overflow: hidden;
-  background-color: #062048;
-  background-image:
-    linear-gradient(
-      90deg,
-      rgba(21, 16, 58, 0.5) 0%,
-      rgba(21, 16, 58, 0.12) 18%,
-      transparent 32%,
-      transparent 68%,
-      rgba(21, 16, 58, 0.12) 82%,
-      rgba(21, 16, 58, 0.5) 100%
-    ),
-    url('/ui/lobby-bg.jpg');
+  /* Bentonville at dusk: flat brand colours, the sun sits behind the 3D line-up */
+  background-color: var(--br-ink);
+  background-image: url('/ui/lobby-dusk.svg');
   background-repeat: no-repeat;
-  background-position: center;
-  background-size: 100% 100%, cover;
+  background-position: center bottom;
+  background-size: cover;
 }
 .mn-bg.is-on {
   opacity: 1;
@@ -882,35 +873,47 @@
   text-transform: uppercase;
 }
 .mn-roster {
+  /* two roomy columns: 8 players are four rows, every name shown in full */
   margin: 0;
   padding: 0;
   list-style: none;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(calc(var(--u) * 150), 1fr));
-  gap: calc(var(--u) * 6);
-  max-height: calc(var(--u) * 210);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(var(--u) * 8);
+  max-height: calc(var(--u) * 252);
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .mn-roster li {
   display: flex;
-  justify-content: space-between;
-  gap: calc(var(--u) * 6);
-  padding: calc(var(--u) * 6) calc(var(--u) * 10);
-  border-radius: calc(var(--u) * 10);
-  background: rgba(255, 255, 255, 0.12);
+  flex-direction: column;
+  justify-content: center;
+  gap: calc(var(--u) * 2);
+  min-height: calc(var(--u) * 52);
+  padding: calc(var(--u) * 6) calc(var(--u) * 12);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: calc(var(--u) * 12);
+  background: rgba(255, 246, 220, 0.1);
   font-weight: 800;
   overflow: hidden;
+}
+.mn-roster li.is-ready {
+  background: rgba(70, 207, 99, 0.18);
 }
 .mn-roster li span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: var(--br-display);
+  font-weight: 400;
+  font-size: calc(var(--u) * 17);
 }
 .mn-roster li em {
   flex: none;
   font-style: normal;
   font-size: calc(var(--u) * 11);
-  color: var(--br-sun);
+  letter-spacing: 0.06em;
+  color: rgba(255, 246, 220, 0.72);
 }
 .mn-status {
   margin: 0;
@@ -929,6 +932,18 @@
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
+}
+/* the private lobby card: a little wider for the two-column roster, and it scrolls inside
+   itself instead of running off a short screen */
+.mn-lobby > .mn-card {
+  width: min(calc(var(--u) * 600), 100%);
+  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.mn-lobby > .mn-card > * {
+  flex: none;
 }
 .mn-lobby .mn-btn[hidden] {
   display: none;
@@ -1096,13 +1111,37 @@
   align-items: center;
   gap: calc(var(--u) * 16);
 }
+.mn-title-side .mn-stack-row {
+  /* a tidy 2 x 2 block: never one button per row, so the column stays short */
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(calc(var(--u) * 470), 100%);
+  container-type: inline-size;
+}
 .mn-title-side .mn-stack-row .mn-btn-small {
   margin-top: 0;
+  min-width: 0;
+  padding-left: calc(var(--u) * 10);
+  padding-right: calc(var(--u) * 10);
+  white-space: nowrap;
+  overflow: hidden;
+  /* the label shrinks with the block's width ("PRIVATE MATCH" is ~11em with its icon), so it
+     never spills out of its button however tall the window is */
+  font-size: clamp(12px, calc(4.3cqi - 3px), calc(var(--u) * 18));
+}
+.mn-title-side .mn-stack-row .mn-btn-small .br-ico,
+.mn-title-side .mn-stack-row .mn-btn-small svg {
+  width: 1.3em;
+  height: 1.3em;
+}
+.mn-title-side .mn-stack-row .mn-btn-small span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mn-title-side .mn-controls {
   max-width: calc(var(--u) * 470);
 }
-@media (max-aspect-ratio: 1/1), (max-width: 760px) {
+@media (max-aspect-ratio: 7/5), (max-width: 1023px) {
   .mn-title {
     display: flex;
     justify-content: flex-start;
@@ -1177,36 +1216,32 @@
   color: #fff;
 }
 
-/* four member slots */
+/* four member slots: two wide rows each, so a full 16-letter name always fits */
 .mn-slots {
   margin: 0;
   padding: 0;
   list-style: none;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: calc(var(--u) * 10);
-}
-@media (max-width: 520px) {
-  .mn-slots {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 .mn-slot {
   position: relative;
   width: 100%;
-  min-height: calc(var(--u) * 96);
-  display: flex;
-  flex-direction: column;
+  min-height: calc(var(--u) * 58);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'name you' 'state you';
   align-items: center;
-  justify-content: center;
-  gap: calc(var(--u) * 4);
-  padding: calc(var(--u) * 14) calc(var(--u) * 8) calc(var(--u) * 10);
+  column-gap: calc(var(--u) * 8);
+  row-gap: calc(var(--u) * 2);
+  padding: calc(var(--u) * 8) calc(var(--u) * 14);
   border: calc(var(--u) * 3) solid var(--br-ink);
   border-radius: calc(var(--u) * 14);
   background: rgba(255, 246, 220, 0.1);
   color: var(--br-cream);
   font: inherit;
-  text-align: center;
+  text-align: left;
   cursor: default;
   transition: background-color 0.15s ease, transform 0.12s ease;
 }
@@ -1241,11 +1276,15 @@
   /* menus.js fitNames() shrinks a long name to fit instead of cutting it to "Pla…" */
   font-size: calc(var(--u) * 18);
 }
+.mn-slot-name {
+  grid-area: name;
+}
 .mn-slot.is-empty .mn-slot-name {
-  font-size: calc(var(--u) * 28);
+  font-size: calc(var(--u) * 24);
   line-height: 1;
 }
 .mn-slot-state {
+  grid-area: state;
   font-size: calc(var(--u) * 11);
   letter-spacing: 0.08em;
   opacity: 0.8;
@@ -1259,18 +1298,22 @@
   margin-right: calc(var(--u) * 4);
 }
 .mn-slot em {
+  grid-area: you;
+  padding: calc(var(--u) * 3) calc(var(--u) * 8);
+  border-radius: 999px;
+  background: var(--br-sun);
+  color: var(--br-ink);
   font-style: normal;
   font-size: calc(var(--u) * 10);
   letter-spacing: 0.08em;
-  color: var(--br-sun);
 }
 .mn-slot-crown {
   position: absolute;
-  top: calc(var(--u) * -14);
-  left: 50%;
-  transform: translateX(-50%) rotate(-8deg);
-  width: calc(var(--u) * 28);
-  height: calc(var(--u) * 28);
+  top: calc(var(--u) * -13);
+  left: calc(var(--u) * 6);
+  transform: rotate(-14deg);
+  width: calc(var(--u) * 26);
+  height: calc(var(--u) * 26);
 }
 .mn-slot-crown svg,
 .mn-slot-crown .br-ico {
@@ -1389,6 +1432,9 @@
 }
 .mn-lobby .mn-roster li.is-ready em {
   color: var(--br-leaf);
+}
+.mn-lobby .mn-roster li.is-host em {
+  color: var(--br-sun);
 }
 @media (prefers-reduced-motion: reduce) {
   .mn-slot {
