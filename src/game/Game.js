@@ -12,7 +12,8 @@
 //   game.pause(on) / game.leave()    // back to the menu
 //   game.applySettings(settings)
 //
-// window.__game exposes { state, player, bots, storm, combat, loot, structures, debug } for QA.
+// window.__game exposes { state, player, bots, storm, combat, loot, structures, debug } for QA,
+// in dev builds only (never in the production bundle).
 //
 // Multiplayer (src/net, lazy-loaded by main.js; solo never touches it):
 //   game.net = hostSession;  game.startMatch(seed)       // host: full simulation + remote humans
@@ -21,7 +22,7 @@
 // storm, bots, storm damage and the win check are left to the host.
 
 import * as THREE from 'three';
-import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, CONSUMABLES, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
+import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, CONSUMABLES, isRankedMatch, makeRng, clamp, damp, TAU } from '../core/config.js';
 import { canSandboxLoadout, canCreativeMap, giveSandboxWeapon } from './sandboxLoadout.js';
 import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
 import { loadJSON, loadModels } from '../core/assets.js';
@@ -174,7 +175,9 @@ export class Game {
     requestAnimationFrame(this._loop);
     this._startBackgroundClock();
 
-    this._installDebug();
+    // QA console hooks (teleport, give, damage, raw game access) exist only in `vite` dev builds.
+    // Shipping them let anyone, especially a match host, teleport or give themselves items mid-game.
+    if (import.meta.env && import.meta.env.DEV) this._installDebug();
   }
 
   // ---------------------------------------------------------------- loading
@@ -424,8 +427,9 @@ export class Game {
     this.freeBuild = freeBuild;
     // Museum Mode: a free-build session that starts in the Crystal Bridges lobby (no bots, no storm)
     this.museumMode = freeBuild && !!opts.museum && !!(this.cbGallery || (this.view && this.view.crystalBridges));
-    // bot difficulty this match was played on; only 'hard' matches count toward the ranks
+    // bot difficulty this match was played on; only hard matches that include bots count
     this.matchDifficulty = freeBuild ? null : this.settings.difficulty;
+    this.matchBots = 0;
     this.seed = seed;
     const rng = makeRng(seed);
     this.rng = rng;
@@ -507,6 +511,7 @@ export class Game {
       this._error('bots.spawn', err);
     }
     this.totalActors = 1 + (net ? net.remotes.size : 0) + this.bots.list.length;
+    this.matchBots = this.bots.list.length;
     this._setupTeam();
 
     if (freeBuild) {
@@ -650,6 +655,7 @@ export class Game {
     const net = this.net;
     // the host's bots set the difficulty (sent in the start message)
     this.matchDifficulty = typeof start.diff === 'string' ? start.diff : null;
+    this.matchBots = Number.isFinite(start.bots) ? start.bots | 0 : Array.isArray(start.roster) ? start.roster.filter((r) => r && !r.h).length : 0;
     this.seed = start.seed;
     this.rng = makeRng(start.seed);
     this.matchTime = 0;
@@ -1024,7 +1030,8 @@ export class Game {
       mode: this.mode,
       teams: this.totalTeams || this.totalActors,
       difficulty: this.matchDifficulty || null,
-      ranked: isRankedDifficulty(this.matchDifficulty),
+      bots: this.matchBots | 0,
+      ranked: isRankedMatch(this.matchDifficulty, this.matchBots),
     };
     if (this.net) {
       this.result.mp = true;

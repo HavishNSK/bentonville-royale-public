@@ -13,6 +13,7 @@ import { RANKED_NOTE } from './core/config.js';
 import { lookString, parseLook } from './game/Cosmetics.js';
 import { sameWorld } from './net/worldIdentity.js';
 import { createAds, pickPlatform } from './net/Ads.js';
+import { createReportForm } from './ui/reportForm.js';
 
 // Ads (src/net/Ads.js): CrazyGames SDK in the portal build, AdSense H5 when VITE_ADSENSE_CLIENT is
 // set, else none. While an ad plays the game is muted and ignores input.
@@ -83,22 +84,37 @@ const googleTiles = createGoogleTilesController({
   },
 });
 
+/**
+ * A permanently banned signed-in account can't start or join anything: show the ban notice instead.
+ * (Client-side only: the account server already refuses that account's rewards, shop, friends and chat.)
+ */
+function banLocked() {
+  const b = account.signedIn && account.profile.banned; // only called from clicks, after setup
+  if (!b || !b.permanent) return false;
+  if (meta) meta.openPanel('banned');
+  return true;
+}
+const unlessBanned =
+  (fn) =>
+  (...args) =>
+    banLocked() ? undefined : fn(...args);
+
 const menus = createMenus(uiRoot, {
   settings,
   onClick: () => sfx.play('ui_click'),
   onHover: () => sfx.play('ui_hover', { volume: 0.4 }),
-  onPlay: () => partyPlay(),
+  onPlay: unlessBanned(() => partyPlay()),
   onPartyReady: (on) => party && party.ready(on),
   onPartyCancel: () => party && party.cancel(),
   onPartyMode: (mode) => partySetMode(mode),
   onPartyFill: (on) => partySetFill(on),
   onPartyKick: (id) => party && party.kick(id),
   onPartyPromote: (id) => party && party.promote(id),
-  onPartyJoin: (code) => joinParty(code),
+  onPartyJoin: unlessBanned((code) => joinParty(code)),
   onPartyLeave: () => joinParty(null),
   onPartyRetry: () => joinParty(null),
   onNameChange: (name) => party && party.setName(name),
-  onFreeBuild: async () => {
+  onFreeBuild: unlessBanned(async () => {
     try {
       closeMultiplayer();
       await ensureLoaded();
@@ -108,8 +124,8 @@ const menus = createMenus(uiRoot, {
       showError('Could not start sandbox: ' + (err && err.message ? err.message : err));
       menus.showTitle();
     }
-  },
-  onMuseum: async () => {
+  }),
+  onMuseum: unlessBanned(async () => {
     try {
       closeMultiplayer();
       await ensureLoaded();
@@ -119,13 +135,14 @@ const menus = createMenus(uiRoot, {
       showError('Could not open the museum: ' + (err && err.message ? err.message : err));
       menus.showTitle();
     }
-  },
-  onPlayAgain: async () => {
+  }),
+  onPlayAgain: unlessBanned(async () => {
     if (menus.current === 'result') await ads.interstitial('match-end'); // a natural break, on the player's click
     playLocal(lastLocal.mode, lastLocal.fill);
-  },
+  }),
   onAdReward: () => watchAdForCoins('match-coins').then(() => setTimeout(refreshAdButton, 2500)),
   onResume: () => game && game.pause(false),
+  onReport: () => reportForm.open(),
   onLeave: async () => {
     if (menus.current === 'result') await ads.interstitial('match-end');
     if (game) game.leave();
@@ -133,9 +150,9 @@ const menus = createMenus(uiRoot, {
     sfx.playMusic('menu');
     renderParty();
   },
-  onHost: (name) => hostMultiplayer(name),
-  onJoin: (code, name) => joinMultiplayer(code, name),
-  onLobbyStart: () => startHostedMatch(),
+  onHost: unlessBanned((name) => hostMultiplayer(name)),
+  onJoin: unlessBanned((code, name) => joinMultiplayer(code, name)),
+  onLobbyStart: unlessBanned(() => startHostedMatch()),
   onLobbyFill: (on) => mp && mp.room && mp.room.setFill(on),
   onLobbyMode: (mode) => {
     if (!mp || !mp.room) return;
@@ -480,6 +497,7 @@ async function startPresence() {
     chat.setMode(presenceInMatch ? 'match' : 'lobby');
     presence.onChat = (m) => chat.add(m);
     presence.onChatError = (reason) => chat.error(reason);
+    presence.onModResult = (r) => chat.mod(r.lines, r.ok);
     presence.onUpdate = (snap) => {
       if (meta) meta.setOnline(snap);
       if (chat) chat.setOnline(!!snap);
@@ -537,6 +555,8 @@ function renderParty() {
 // Signed in: profile on the account server (party/accounts.js). Otherwise a guest profile in
 // localStorage. Equipped outfit / emotes go to the Game and to the party line-up.
 const account = createAccount();
+// "Report a player": lobby ONLINE list + pause menu. Private reports for the devs (/reports in chat).
+const reportForm = createReportForm(menus.el, account, { onClick: () => sfx.play('ui_click') });
 let meta = null;
 
 // The party this tab is in survives a page refresh: rejoined with the same tab token, the
@@ -724,6 +744,7 @@ try {
   game.setCosmetics(account.profile.equipped);
   meta = createMeta(menus, account, {
     onClick: () => sfx.play('ui_click'),
+    onReport: (name) => reportForm.open({ name }),
     guestOnly: PLATFORM === 'crazygames', // portals: no outside sign-in (CrazyGames rules)
     adCoins: { can: canWatchAdForCoins, watch: () => watchAdForCoins('shop-coins') },
     partyCode: () => (party && party.party ? party.party.code : null),
@@ -760,30 +781,17 @@ try {
     if (s === 'title') account.setStatus('lobby', code);
     else if (s === null) account.setStatus('match', code); // the HUD took over: in a match
   };
-  // Clever OAuth returns ?br_auth=<ticket>; redeem once then strip from the URL.
-  const authTicket = new URLSearchParams(location.search).get('br_auth');
   const afterAuth = (p) => {
     if (!p.guest) menus.setAccountName(p.name);
   };
-  if (authTicket) {
-    account
-      .redeemAuthTicket(authTicket)
-      .then((p) => {
-        afterAuth(p);
-        try {
-          const u = new URL(location.href);
-          u.searchParams.delete('br_auth');
-          history.replaceState({}, '', u.pathname + u.search + u.hash);
-        } catch {
-          /* ignore */
-        }
-      })
-      .catch(() => account.init().then(afterAuth));
-  } else {
-    account.init().then(afterAuth);
-  }
+  account.init().then(afterAuth);
   // coins + leaderboard stats for every finished match
   game.onMatchEnd = async (r) => {
+    // Humans-only private match: no coins, no rank, no match counted.
+    if ((r.bots | 0) === 0) {
+      if (meta) meta.matchReward(0, 'No rewards. Bots were off, so you get no coins and this match does not count.');
+      return;
+    }
     const players = r.mode && r.mode !== 'solo' ? r.teams : r.total;
     const ranked = !!r.ranked;
     const out = await account.reward({ kills: r.kills | 0, placement: r.placement | 0, players: players | 0, won: !!r.victory, ranked });

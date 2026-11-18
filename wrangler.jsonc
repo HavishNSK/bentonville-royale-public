@@ -21,10 +21,9 @@
     { "tag": "v3", "new_sqlite_classes": ["Accounts"] },
     { "tag": "v4", "new_sqlite_classes": ["Presence"] }
   ],
-  // Public OAuth client IDs (not secrets). Clever secret: `npx wrangler secret put CLEVER_CLIENT_SECRET`.
+  // Public OAuth client ID (not a secret).
   "vars": {
-    "GOOGLE_CLIENT_ID": "938917087479-mktkhe12uc4hmr95cn14uqekohr3tfrl.apps.googleusercontent.com",
-    "CLEVER_CLIENT_ID": ""
+    "GOOGLE_CLIENT_ID": "938917087479-mktkhe12uc4hmr95cn14uqekohr3tfrl.apps.googleusercontent.com"
   },
   "dev": { "port": 1999 }
 }

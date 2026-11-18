@@ -343,8 +343,23 @@
   justify-content: center;
   min-height: calc(var(--u) * 44);
 }
-.mt-clever {
-  width: 100%;
+/* meta.js renderBanned / renderWarning (moderation notices) */
+.mt-ban-reason {
+  margin: 0 0 calc(var(--u) * 8);
+  padding: calc(var(--u) * 10) calc(var(--u) * 12);
+  border-left: calc(var(--u) * 4) solid var(--br-coral);
+  border-radius: calc(var(--u) * 8);
+  background: var(--br-panel-soft);
+  font-size: calc(var(--u) * 15);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.mt-ban-left {
+  margin: 0 0 calc(var(--u) * 10);
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 17);
+  color: var(--br-sun);
+  font-variant-numeric: tabular-nums;
 }
 .mt-signout-actions {
   display: flex;

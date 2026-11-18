@@ -37,22 +37,11 @@ import { partyHost, isLocal } from '../net/Net.js';
 import { nameIsClean } from '../net/chatFilter.js';
 import { createUpdateFlyer } from './updateFlyer.js';
 
-// GIS / Clever buttons in renderAuth(); Account.loginWithGoogle / Clever OAuth redirect.
+// Google (GIS) button in renderAuth(); Account.loginWithGoogle.
 const GOOGLE_CLIENT_ID =
   typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_GOOGLE_CLIENT_ID
     ? String(import.meta.env.VITE_GOOGLE_CLIENT_ID).trim()
     : '';
-const CLEVER_ENABLED =
-  typeof import.meta !== 'undefined' &&
-  import.meta.env &&
-  (import.meta.env.VITE_CLEVER_AUTH === '1' || !!String(import.meta.env.VITE_CLEVER_CLIENT_ID || '').trim());
-
-function cleverStartUrl() {
-  const host = partyHost();
-  const scheme = isLocal(host) ? 'http' : 'https';
-  return `${scheme}://${host}/auth/clever?return=${encodeURIComponent(location.origin)}`;
-}
-
 let gisLoad = null;
 function loadGoogleGis() {
   if (typeof window === 'undefined') return Promise.reject(new Error('no-window'));
@@ -232,9 +221,14 @@ export function createMeta(menus, account, opts = {}) {
     if (f) f.focus();
   }
   // A signed-in name that breaks the username rules: the RENAME panel stays up until it is fixed.
-  const mustRename = () => account.signedIn && !!account.profile.mustRename;
+  // (A banned account can't rename, so the ban notice takes priority.)
+  const mustRename = () => account.signedIn && !!account.profile.mustRename && !account.profile.banned;
+  // A permanent ban locks the account out: the notice can't be closed (only SIGN OUT).
+  const permaBanned = () => account.signedIn && !!account.profile.banned && !!account.profile.banned.permanent;
   function closePanel() {
     if (!open) return;
+    if (open === 'banned' && permaBanned()) return;
+    clearInterval(banTick);
     if (open === 'rename' && mustRename()) return;
     open = null;
     panel.classList.remove('is-open');
@@ -261,6 +255,11 @@ export function createMeta(menus, account, opts = {}) {
     if (!b) return;
     click();
     const act = b.dataset.act;
+    if (permaBanned()) {
+      // SIGN OUT still works from the notice itself; every other button just shows it again
+      openPanel('banned');
+      return;
+    }
     if (mustRename() && act !== 'auth') {
       openPanel('rename');
       return;
@@ -282,11 +281,13 @@ export function createMeta(menus, account, opts = {}) {
   // ---------------------------------------------------------------- renderers
   function render() {
     panelBody.replaceChildren();
-    close.hidden = open === 'rename' && mustRename(); // no way around a forced rename
+    close.hidden = (open === 'rename' && mustRename()) || (open === 'banned' && permaBanned()); // no way around these
     if (open === 'news') renderNews();
     else if (open === 'auth') renderAuth();
     else if (open === 'signout') renderSignOut();
     else if (open === 'rename') renderRename();
+    else if (open === 'banned') renderBanned();
+    else if (open === 'warning') renderWarning();
     else if (open === 'shop') renderShop();
     else if (open === 'locker') renderLocker();
     else if (open === 'leaderboard') renderLeaderboard();
@@ -323,6 +324,16 @@ export function createMeta(menus, account, opts = {}) {
       if (p.title && p.color) who.style.color = p.color; // verified account title (devs.js PLAYER_TITLES)
       info.append(who, h('small', null, what));
       row.append(h('i', 'mt-dot'), info);
+      if (opts.onReport && account.signedIn && p.name !== account.profile.name) {
+        const rep = btn('REPORT', 'mn-chip mt-report');
+        rep.type = 'button';
+        rep.setAttribute('aria-label', `Report ${p.name}`);
+        rep.addEventListener('click', () => {
+          click();
+          opts.onReport(p.name);
+        });
+        row.appendChild(rep);
+      }
       panelBody.appendChild(row);
     }
     if (online.count > online.players.length) panelBody.appendChild(h('p', 'mt-hint', `…and ${online.count - online.players.length} more`));
@@ -550,6 +561,94 @@ export function createMeta(menus, account, opts = {}) {
     });
     row.append(cancel, confirm);
     panelBody.appendChild(row);
+    const all = btn('SIGN OUT ON ALL DEVICES', 'mn-btn mn-btn-small mt-signout-all');
+    all.type = 'button';
+    all.addEventListener('click', async () => {
+      click();
+      all.disabled = true;
+      await account.logoutAll();
+      closePanel();
+    });
+    panelBody.append(h('p', 'mt-hint', 'Lost a device or think someone else signed in? This signs your account out everywhere.'), all);
+  }
+
+  // ---------------------------------------------------------------- moderation notices
+  let banTick = 0;
+  /** "2 d 4 h", "3 h 12 m", "45 s" until `until`. */
+  function banLeft(until) {
+    const s = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+    const d = Math.floor(s / 86400);
+    const hr = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (d) return `${d} d ${hr} h`;
+    if (hr) return `${hr} h ${m} m`;
+    return m ? `${m} m ${s % 60} s` : `${s} s`;
+  }
+  function renderBanned() {
+    clearInterval(banTick);
+    const b = account.profile.banned;
+    panelTitle.textContent = 'ACCOUNT BANNED';
+    if (!b) {
+      panelBody.appendChild(h('p', 'mt-hint', 'Your ban is over. Welcome back, and play fair!'));
+      return;
+    }
+    if (b.permanent) panelTitle.textContent = 'PERMANENTLY BANNED';
+    panelBody.appendChild(h('p', 'mt-ban-reason', b.reason));
+    const left = h('p', 'mt-ban-left', b.permanent ? 'This ban is permanent.' : `${b.label} ban · lifts in ${banLeft(b.until)}`);
+    panelBody.appendChild(left);
+    panelBody.appendChild(
+      h(
+        'p',
+        'mt-hint',
+        b.permanent
+          ? 'This account has been permanently banned and can’t be used to play, chat, shop or add friends.'
+          : 'While the ban lasts this account earns no coins or stats, is hidden from the ranks, and can’t use chat, the shop or friends. You can still play matches.'
+      )
+    );
+    if (!b.permanent) {
+      banTick = setInterval(() => {
+        if (Date.now() >= b.until) {
+          clearInterval(banTick);
+          account.init().catch(() => {}); // re-read the profile: the server lifts it on its own
+          return;
+        }
+        left.textContent = `${b.label} ban · lifts in ${banLeft(b.until)}`;
+      }, 1000);
+    }
+    const row = h('div', 'mt-signout-actions');
+    const out = btn('SIGN OUT', 'mn-btn mn-btn-small');
+    out.type = 'button';
+    out.addEventListener('click', () => {
+      click();
+      account.logout();
+      closePanel();
+    });
+    const ok = btn('OK', 'mn-btn mn-btn-hero');
+    ok.type = 'button';
+    ok.addEventListener('click', () => {
+      click();
+      closePanel();
+    });
+    if (b.permanent) row.append(out);
+    else row.append(out, ok);
+    panelBody.appendChild(row);
+  }
+  function renderWarning() {
+    const w = account.profile.warning;
+    panelTitle.textContent = 'WARNING';
+    panelBody.appendChild(h('p', 'mt-hint', 'A moderator sent your account a warning:'));
+    panelBody.appendChild(h('p', 'mt-ban-reason', w ? w.reason : ''));
+    panelBody.appendChild(h('p', 'mt-hint', 'Cheating or breaking the rules again can get this account banned, starting at 1 hour and going up to permanent.'));
+    const row = h('div', 'mt-signout-actions');
+    const ok = btn('GOT IT', 'mn-btn mn-btn-hero');
+    ok.type = 'button';
+    ok.addEventListener('click', () => {
+      click();
+      account.ackWarning();
+      closePanel();
+    });
+    row.append(ok);
+    panelBody.appendChild(row);
   }
 
   function renderRename() {
@@ -631,7 +730,7 @@ export function createMeta(menus, account, opts = {}) {
       'mt-hint',
       authTab === 'login'
         ? 'Your outfits, emotes, coins and friends follow your account to any device.'
-        : 'Usernames are 3-16 letters, numbers, _ or -. Passwords need at least 6 characters. You start with 1,500 coins.'
+        : 'Usernames are 3-16 letters, numbers, _ or -. Passwords need at least 8 characters. You start with 1,500 coins.'
     );
     form.append(user, pw, go, hint);
     form.addEventListener('submit', async (e) => {
@@ -651,20 +750,7 @@ export function createMeta(menus, account, opts = {}) {
     const guest = h('p', 'mt-hint', 'Guests can play with free defaults. Sign in to earn coins, unlock outfits, and keep progress on any device.');
     panelBody.append(tabs, form, guest);
 
-    // Clever first: Bentonville Google Workspace blocks unverified 3rd-party apps (admin_policy_enforced).
-    if (CLEVER_ENABLED) {
-      const divider = h('p', 'mt-hint mt-or', 'or');
-      const cleverBtn = btn('LOG IN WITH CLEVER', 'mn-btn mn-btn-hero mt-clever');
-      cleverBtn.type = 'button';
-      cleverBtn.addEventListener('click', () => {
-        click();
-        window.location.assign(cleverStartUrl());
-      });
-      const cleverHint = h('p', 'mt-hint', 'Best on school Chromebooks — uses Clever instead of Google.');
-      panelBody.append(divider, cleverBtn, cleverHint);
-    }
-
-    if (GOOGLE_CLIENT_ID && !CLEVER_ENABLED) {
+    if (GOOGLE_CLIENT_ID) {
       const divider = h('p', 'mt-hint mt-or', 'or');
       const googleWrap = h('div', 'mt-google');
       googleWrap.setAttribute('aria-label', 'Continue with Google');
@@ -1159,7 +1245,7 @@ export function createMeta(menus, account, opts = {}) {
   function renderBar() {
     const p = account.profile;
     whoName.textContent = p.guest ? 'GUEST' : p.name;
-    whoSub.textContent = p.guest ? 'Sign in for coins & skins' : `${p.stats.wins} wins · ${p.stats.kills} elims`;
+    whoSub.textContent = p.guest ? 'Sign in for coins & skins' : p.banned ? 'Banned' : `${p.stats.wins} wins · ${p.stats.kills} elims`;
     coinsNum.textContent = p.coins.toLocaleString();
     bAuth.querySelector('span').textContent = account.signedIn ? 'SIGN OUT' : 'SIGN IN';
     bAuth.classList.toggle('mt-chip-sun', !account.signedIn);
@@ -1176,12 +1262,29 @@ export function createMeta(menus, account, opts = {}) {
     }
   }
   account.on('change', checkRename);
+  // Ban / warning notices: each one opens once per page load (the player can close it and keep playing).
+  let shownBan = '';
+  function checkModeration() {
+    const p = account.profile;
+    if (!account.signedIn) return;
+    const key = p.banned ? `${p.banned.reason}|${p.banned.until}` : '';
+    if (key && (key !== shownBan || (p.banned.permanent && open !== 'banned'))) {
+      shownBan = key;
+      openPanel('banned');
+    } else if (!key && open === 'banned') {
+      render(); // the ban just ended
+    } else if (!key && p.warning && open !== 'warning' && open !== 'rename') {
+      openPanel('warning');
+    }
+  }
+  account.on('change', checkModeration);
   menus.onNeedRename = () => openPanel('rename');
 
   renderBar();
   lineUp();
   renderEmoteBar();
   checkRename();
+  checkModeration();
 
   // the update flyer: opens by itself the first time the title screen shows after an update
   // (once per version), never behind the loading screen or a match

@@ -98,6 +98,17 @@
   color: rgba(255, 246, 220, 0.6);
   font-style: italic;
 }
+/* private answer to a dev moderation command */
+.br-chat-mod {
+  border-left: 3px solid var(--br-sun, #ffc21f);
+  padding-left: 7px;
+  color: var(--br-sun-hi, #ffe36b);
+  font-size: 13px;
+}
+.br-chat-mod.is-bad {
+  border-left-color: var(--br-coral, #ff5d4a);
+  color: #ffc2c2;
+}
 .br-chat-form {
   display: flex;
   gap: 6px;

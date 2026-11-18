@@ -4,6 +4,7 @@
 //   const chat = createChat({ onSend(text) -> bool, onTypingChange(typing) })
 //   chat.add({ id, name, text, at })     a message (rendered as text, never HTML)
 //   chat.system(text)                    a grey local line (errors, offline)
+//   chat.mod(lines, ok)                  private answer to a dev moderation command (/ban, /flags, ...)
 //   chat.setOnline(on)                   status dot
 //   chat.setMe(name)                     our own name (highlighted)
 //   chat.setMode('lobby' | 'match')      docked panel / fading in-match feed (Enter to type)
@@ -13,6 +14,7 @@
 // The open / collapsed choice is remembered in localStorage (per browser).
 
 import { cleanChat, CHAT_MAX } from '../net/chatFilter.js';
+import { parseModCommand } from '../net/devs.js';
 import './chat.css';
 
 const KEEP = 80; // messages kept in the list
@@ -157,7 +159,9 @@ export function createChat({ onSend = () => false, onBlocked = () => {}, onTypin
       if (mode === 'match') setTyping(false);
       return;
     }
-    const r = cleanChat(raw);
+    // Dev moderation commands skip the local filter (a ban reason may quote what was said).
+    // The server only accepts them from a verified dev account and never broadcasts them.
+    const r = parseModCommand(raw) ? { ok: true, text: raw.trim().slice(0, CHAT_MAX) } : cleanChat(raw);
     if (!r.ok) {
       // not kid-friendly: never sent; the server only hears the rule it broke (repeat offenders get paused)
       err.textContent = r.reason === 'empty' ? '' : r.reason;
@@ -214,6 +218,9 @@ export function createChat({ onSend = () => false, onBlocked = () => {}, onTypin
     },
     system(text) {
       push(el('div', 'br-chat-msg br-chat-sys', text));
+    },
+    mod(lines, ok) {
+      for (const line of lines.length ? lines : ['Done.']) push(el('div', 'br-chat-msg br-chat-mod' + (ok ? '' : ' is-bad'), line));
     },
     error(text) {
       err.textContent = text;

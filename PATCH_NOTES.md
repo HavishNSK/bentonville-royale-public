@@ -1,5 +1,23 @@
 # Patch Notes
 
+## [2026-11-18] — Unreleased: moderation, player reports and security fixes
+- **Security:** the QA console hooks (`window.__game.debug`: teleport, give items, damage anyone) shipped in the production build, so a player, and especially a match host, could teleport or give themselves items mid-game. They now exist only in `vite` dev builds.
+- **Security:** the account `Rank_1_Kills`, used to exploit that, is permanently banned in the code (`PERMA_BANNED` in `party/moderation.js`). It can't be lifted with `/unban`. Signing in shows a permanent-ban notice that can't be closed, and the account can't start or join matches, chat, shop or use friends.
+- **Accounts:** too many wrong passwords now makes you wait before trying again. New passwords need at least 8 characters and can't be a very common one. You can sign out on all devices. Developers must have signed in within 12 hours to use dev commands.
+- **Removed:** Log in with Clever. Use a username and password (or Google, where it works).
+- **Security:** a security log of sign-ins, origin checks on the account API and sockets, and browser security headers (`vercel.json`). The internal matchmaker endpoints are closed to the internet.
+- **Titles:** developers can give a player a custom title with `/title name TITLE #colour` and remove it with `/untitle name`. Titles can't look like staff titles and grant no powers.
+- **Report a player:** signed-in players can report someone from the lobby ONLINE list or the pause menu, with a reason and a note. Reports are private. Developers read them with `/reports` or `/history <user>`, then `/ban` (which clears them) or `/dismiss <user>`. Limits: one report per player per day, and 10 a day per reporter.
+- Developers can `/warn`, `/ban`, `/unban`, `/history`, `/resetstats` and `/flags` from global chat. The account server re-checks developer rights, and only the developer sees the result.
+- Bans escalate per offence: 1 hour, 1 day, 1 week, 1 month, then permanent. A developer can also set the length (`/ban name perm reason`). Timed bans lift on their own; unbanning keeps the offence count.
+- Match results that look impossible or unlikely are flagged for a developer to review. Nothing is banned automatically.
+- A banned account sees the reason and a countdown, earns no coins or stats, is hidden from the ranks, and can't chat, shop or use friends.
+- This is moderation, not anti-cheat: results are still reported by the browser.
+
+## [2026-11-17] — v0.16.1: humans-only private matches are unranked
+- A private match with bots turned off pays no coins and does not add a win or eliminations, even when the host is on Hard.
+- Hard matches that include bots still pay coins and count.
+
 ## [2026-11-17] — v0.15.1: much stricter, kid-friendly global chat
 - `src/net/chatFilter.js` rewritten: a message that breaks a rule is refused (not masked with ****) and the sender sees which rule. Categories: profanity (including acronyms like stfu, gtfo, kys, fml), slurs and hate phrases, bullying ("ur so gay"), sexual talk, real-world threats, self-harm, drugs, and personal-info / off-app requests ("whats ur snap", "how old r u", "where do u live").
 - Sees through leetspeak, look-alike letters from other alphabets, fancy/fullwidth/circled letters, accents, stretched letters, symbols inside words, spaced-out letters, words split in two and some reversed spellings. Normal game talk ("i will kill you", "clap them", "45s left", "sus") still goes through.

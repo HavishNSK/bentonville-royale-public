@@ -8,6 +8,7 @@
 //   pr.reportBlocked(category)          our filter stopped a message: the server counts a strike (no text sent)
 //   pr.onChat = (m) => {}               m: {id, name, text, at, dev, announce}; also for each history message
 //   pr.onChatError = (reason) => {}     the server refused our message (rate limit, links, ...)
+//   pr.onModResult = ({ok, lines}) => {} answer to our dev moderation command (only we see it)
 //   pr.close()
 //
 // Reconnects on its own with backoff. Everything it receives is untrusted display text.
@@ -53,6 +54,7 @@ export function openPresence({ token, accountToken = '', name, status = 'lobby',
     onUpdate: null,
     onChat: null,
     onChatError: null,
+    onModResult: null,
     online: false,
     sendChat(text) {
       if (!ws || ws.readyState !== 1) return false;
@@ -130,7 +132,10 @@ export function openPresence({ token, accountToken = '', name, status = 'lobby',
       if (msg && msg.t === 'online') emit(cleanSnap(msg));
       else if (msg && msg.t === 'chat') chat(msg.m);
       else if (msg && msg.t === 'chatHistory' && Array.isArray(msg.list)) msg.list.slice(-50).forEach(chat);
-      else if (msg && msg.t === 'chatError' && api.onChatError) api.onChatError(String(msg.reason || 'Message not sent.').slice(0, 120));
+      else if (msg && msg.t === 'modResult' && api.onModResult) {
+        const lines = (Array.isArray(msg.lines) ? msg.lines : []).slice(0, 12).map((l) => String(l).slice(0, 300));
+        api.onModResult({ ok: msg.ok === true, lines });
+      } else if (msg && msg.t === 'chatError' && api.onChatError) api.onChatError(String(msg.reason || 'Message not sent.').slice(0, 120));
     };
     ws.onclose = (ev) => {
       ws = null;

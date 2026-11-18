@@ -297,7 +297,7 @@ export function createMenus(root, opts = {}) {
          ${range('fov', 'Field of view', 55, 100, 1)}
          <div class="mn-row"><span>Graphics quality</span>${seg('quality', QUALITY_OPTIONS)}</div>
          ${toggle('performanceMode', 'Performance mode (Chromebook)', 'Half resolution, no bloom/outlines/shadows, shorter draw distance. Best for Chromebooks and weak laptops.')}
-         <div class="mn-row"><span>Bot difficulty<small class="mn-hint">${RANKED_NOTE} In a private match the host's setting counts.</small></span>${seg('difficulty', DIFFICULTY_OPTIONS)}</div>
+         <div class="mn-row"><span>Bot difficulty<small class="mn-hint">${RANKED_NOTE}</small></span>${seg('difficulty', DIFFICULTY_OPTIONS)}</div>
          ${toggle('autoPickupAmmo', 'Auto-pickup ammo & mats', 'Walk over ammo and materials to take them without pressing interact.')}
          ${toggle('showFps', 'Show FPS')}
          <label class="mn-row mn-row-gtiles"><span>Real-world 3D view (Google)<small class="mn-hint" data-ref="gtilesHint"></small></span><input type="checkbox" class="mn-toggle" data-name="googleTiles"></label>
@@ -361,6 +361,7 @@ export function createMenus(root, opts = {}) {
        <h2 class="mn-h br-ol">PAUSED</h2>
        <button class="mn-btn mn-btn-hero" data-act="resume">${icon('play')}<span>RESUME</span></button>
        <button class="mn-btn" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
+       <button class="mn-btn" data-act="report" data-ref="reportBtn"><span>REPORT A PLAYER</span></button>
        <button class="mn-btn mn-btn-danger" data-act="leave">${icon('home')}<span data-ref="leaveLabel">LEAVE MATCH</span></button>
      </div>`
   );
@@ -686,6 +687,7 @@ export function createMenus(root, opts = {}) {
         else if (act === 'settings') api.showSettings(current === pause ? 'pause' : 'title');
         else if (act === 'back') settingsFrom === 'pause' ? api.showPause() : api.showTitle();
         else if (act === 'resume') opts.onResume && opts.onResume();
+        else if (act === 'report') opts.onReport && opts.onReport();
         else if (act === 'leave') opts.onLeave && opts.onLeave();
         else if (act === 'again') opts.onPlayAgain && opts.onPlayAgain();
         else if (act === 'menu') opts.onLeave && opts.onLeave();
@@ -995,6 +997,7 @@ export function createMenus(root, opts = {}) {
       pauseSandbox = !!(info && info.sandbox);
       P.pauseCard.classList.toggle('mn-card-sandbox', pauseSandbox);
       P.leaveLabel.textContent = pauseSandbox ? 'LEAVE SANDBOX' : 'LEAVE MATCH';
+      P.reportBtn.hidden = pauseSandbox; // nobody else is in the sandbox
       show(pause, false);
     },
     showResult(r) {
@@ -1044,7 +1047,10 @@ export function createMenus(root, opts = {}) {
       }
       // multiplayer: no instant rematch; the host makes a new room
       result.querySelector('[data-act=again]').hidden = !!r.mp;
-      if (r.difficulty && !r.ranked) R.sub.textContent += ` Unranked match (${String(r.difficulty).toUpperCase()} bots). ${RANKED_NOTE}`;
+      if (r.difficulty && !r.ranked) {
+        const why = (r.bots | 0) > 0 ? `Unranked match (${String(r.difficulty).toUpperCase()} bots). ${RANKED_NOTE}` : 'No rewards. Bots were off, so you get no coins and this match does not count on the ranks.';
+        R.sub.textContent += ` ${why}`;
+      }
       if (r.hostNote) R.sub.textContent += ' ' + r.hostNote;
       show(result, false);
     },

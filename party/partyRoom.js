@@ -24,6 +24,7 @@
 import { Server, getServerByName } from 'partyserver';
 import { MODE_SIZE, PARTY_MAX, modeSize, validMode, modeFor } from './modes.js';
 import { nameIsClean } from '../src/net/chatFilter.js';
+import { originAllowed } from './authLimits.js';
 
 const POLL_MS = 2000;
 const MATCHED_MS = 4000;
@@ -152,6 +153,15 @@ export class Party extends Server {
   // ---------------------------------------------------------------- connections
 
   onConnect(conn, ctx) {
+    // only the game's own pages may open sockets (party/authLimits.js originAllowed)
+    if (!originAllowed(ctx.request.headers.get('origin'), this.env && this.env.ALLOWED_ORIGINS)) {
+      try {
+        conn.close(4003, 'origin');
+      } catch {
+        /* gone */
+      }
+      return;
+    }
     const url = new URL(ctx.request.url);
     const name = cleanName(url.searchParams.get('name'));
     const skin = cleanSkin(url.searchParams.get('skin'));
@@ -352,7 +362,7 @@ export class Party extends Server {
   // ---------------------------------------------------------------- matchmaking
 
   _queue() {
-    const ticketId = Math.random().toString(36).slice(2, 10);
+    const ticketId = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join(''); // unguessable
     this.state = 'queued';
     this.queuedAt = Date.now();
     this.ticketId = ticketId;

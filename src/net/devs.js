@@ -9,6 +9,66 @@ export function isDevName(name) {
   return DEV_SET.has(String(name || '').trim().toLowerCase());
 }
 
+// Dev moderation commands, typed in global chat. Parsing is shared; the presence server only
+// forwards them for a verified dev, and the account server checks the dev account again.
+const MOD_USAGE = {
+  ban: '/ban <username> [1h|1d|1w|1mo|perm] <reason>',
+  warn: '/warn <username> <reason>',
+  unban: '/unban <username>',
+  history: '/history <username>',
+  resetstats: '/resetstats <username>',
+  flags: '/flags',
+  reports: '/reports',
+  dismiss: '/dismiss <username>',
+  title: '/title <username> <TITLE> [#rrggbb]',
+  untitle: '/untitle <username>',
+};
+const MOD_DURATIONS = { '1h': '1h', '1d': '1d', '1w': '1w', '1mo': '1mo', perm: 'perm', permanent: 'perm' };
+const NEEDS_REASON = new Set(['ban', 'warn']);
+
+/**
+ * `/ban`, `/warn`, `/unban`, `/history`, `/resetstats`, `/flags`.
+ * Returns null for normal chat, {error} for a malformed command, or {cmd, name, duration, reason}.
+ * This decides nothing about permission.
+ */
+export function parseModCommand(text) {
+  const m = String(text || '').trim().match(/^\/(\w+)(?:\s+([\s\S]*))?$/);
+  if (!m) return null;
+  const cmd = m[1].toLowerCase();
+  if (!MOD_USAGE[cmd]) return null;
+  const usage = `Usage: ${MOD_USAGE[cmd]}`;
+  if (cmd === 'flags' || cmd === 'reports') return { cmd, name: '', duration: null, reason: '' };
+  const words = (m[2] || '').trim().split(/\s+/).filter(Boolean);
+  const name = words.shift();
+  if (!name) return { error: usage };
+  if (!/^[A-Za-z0-9_-]{3,16}$/.test(name)) return { error: `That is not a valid username. ${usage}` };
+  let duration = null;
+  if (cmd === 'ban' && words.length && MOD_DURATIONS[words[0].toLowerCase()]) duration = MOD_DURATIONS[words.shift().toLowerCase()];
+  if (cmd === 'title') {
+    // the title (stored in `reason`) is upper-cased; an optional #rrggbb colour can end the command
+    const color = words.length && /^#[0-9a-f]{6}$/i.test(words[words.length - 1]) ? words.pop().toLowerCase() : null;
+    const title = words.join(' ').toUpperCase();
+    if (!title) return { error: `Add a title. ${usage}` };
+    return { cmd, name, duration: null, reason: title, color };
+  }
+  const reason = NEEDS_REASON.has(cmd) ? words.join(' ').slice(0, 100) : '';
+  if (NEEDS_REASON.has(cmd) && !reason) return { error: `Add a reason. ${usage}` };
+  return { cmd, name, duration, reason };
+}
+
+// Titles that would look like staff; a dev-made title can never use them (only real dev accounts
+// get [DEV], from DEV_NAMES).
+const STAFF_WORDS = /\b(DEV|DEVS|DEVELOPER|ADMIN|ADMINISTRATOR|MOD|MODS|MODERATOR|STAFF|OWNER)\b/;
+
+/** Why a dev-made title is not allowed, or null. (The account server also runs the swear filter.) */
+export function customTitleProblem(title) {
+  const t = typeof title === 'string' ? title.trim() : '';
+  if (t.length > 14) return 'Titles are at most 14 characters.';
+  if (!/^[A-Z0-9][A-Z0-9 ]{0,13}$/.test(t)) return 'Titles use letters, numbers and spaces only.';
+  if (STAFF_WORDS.test(t)) return 'That looks like a staff title. Pick something else.';
+  return null;
+}
+
 /**
  * `/announce ...` is a server-wide announcement. Only a verified dev account may send one.
  * Anything else is a normal chat line. `dev` must already be verified by the server.
@@ -47,10 +107,13 @@ export function cleanTitle(title, color) {
 /**
  * What a verified account name grants (presence server, after the Accounts lookup): dev rights,
  * a title, and the name shown in chat (`shown`: '' = keep the player's typed nickname).
+ * `custom` is a dev-made title stored on the account ({title, color}); titles never grant dev rights.
  */
-export function accountGrants(name) {
+export function accountGrants(name, custom = null) {
   if (typeof name !== 'string' || !name) return { dev: false, shown: '', title: '', titleColor: '' };
   const dev = isDevName(name);
-  const tt = titleForName(name);
+  // a title in the code wins; otherwise a dev-made title stored on the account (re-checked here)
+  const stored = custom && !customTitleProblem(custom.title) ? cleanTitle(custom.title, custom.color) : null;
+  const tt = titleForName(name) || stored;
   return { dev, shown: dev || tt ? name.slice(0, 16) : '', title: tt ? tt.title : '', titleColor: tt ? tt.color : '' };
 }
