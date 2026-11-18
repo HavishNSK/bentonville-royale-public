@@ -267,3 +267,21 @@ test('accountGrants: a stored custom title shows, a code title wins, and neither
   assert.deepEqual(accountGrants('SomeoneElse', { title: 'MOD', color: '#ff5d4a' }), { dev: false, shown: 'SomeoneElse', title: 'MOD', titleColor: '#ff5d4a' }, 'a staff title is only a tag: dev stays false');
   assert.deepEqual(accountGrants('SomeoneElse', { title: '<script>', color: 'red' }), { dev: false, shown: '', title: '', titleColor: '' });
 });
+
+test('/title takes an optional second colour for the username', () => {
+  assert.deepEqual(parseModCommand('/title foo VIP #ffaa00 #46cf63'), { cmd: 'title', name: 'foo', duration: null, reason: 'VIP', color: '#ffaa00', nameColor: '#46cf63' });
+  assert.deepEqual(parseModCommand('/title foo VIP #ffaa00'), { cmd: 'title', name: 'foo', duration: null, reason: 'VIP', color: '#ffaa00' });
+});
+
+test('accountGrants passes a separate, shape-checked name colour from a dev-made title', async () => {
+  const { accountGrants } = await import('../src/net/devs.js');
+  assert.deepEqual(accountGrants('SomeoneElse', { title: 'VIP', color: '#ffaa00', nameColor: '#46CF63' }), {
+    dev: false,
+    shown: 'SomeoneElse',
+    title: 'VIP',
+    titleColor: '#ffaa00',
+    nameColor: '#46cf63',
+  });
+  assert.equal('nameColor' in accountGrants('SomeoneElse', { title: 'VIP', color: '#ffaa00', nameColor: 'red;x:y' }), false, 'bad colours are dropped');
+  assert.equal('nameColor' in accountGrants('TheChosenOne'), false, 'code titles keep one colour');
+});

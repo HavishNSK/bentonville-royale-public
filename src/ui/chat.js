@@ -207,8 +207,15 @@ export function createChat({ onSend = () => false, onBlocked = () => {}, onTypin
       const titled = !dev && !!m.title; // a verified account title (devs.js PLAYER_TITLES)
       const row = el('div', 'br-chat-msg' + (me && m.name === me ? ' is-me' : '') + (dev ? ' is-dev' : '') + (titled ? ' has-title' : '') + (m.announce ? ' is-announce' : ''));
       if (m.announce) row.append(el('span', 'br-chat-ann', 'ANNOUNCEMENT'));
-      const name = el('span', 'br-chat-name', dev ? `[DEV] ${m.name}` : titled ? `[${m.title}] ${m.name}` : m.name);
-      if (titled && m.color) name.style.color = m.color; // #rrggbb, checked in Presence.js
+      const name = el('span', 'br-chat-name', dev ? `[DEV] ${m.name}` : titled ? null : m.name);
+      if (titled) {
+        // title and username can have their own colours (#rrggbb, checked in Presence.js)
+        const tag = el('span', 'br-chat-tag', `[${m.title}] `);
+        const who = el('span', null, m.name);
+        if (m.color) tag.style.color = m.color;
+        if (m.nameColor || m.color) who.style.color = m.nameColor || m.color;
+        name.append(tag, who);
+      }
       row.append(name, document.createTextNode(m.text));
       push(row);
       if (collapsed && mode === 'lobby') {

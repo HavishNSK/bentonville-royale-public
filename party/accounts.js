@@ -30,7 +30,7 @@
 //     modBan {token, name, duration?, reason}  modWarn {token, name, reason}  modUnban {token, name}
 //     modHistory {token, name}  modResetStats {token, name}  modFlags {token}
 //     modReports {token}  modDismiss {token, name}   (player reports; a ban also clears them)
-//     modTitle {token, name, title, color?}  modUntitle {token, name}   (dev-made chat titles; no powers)
+//     modTitle {token, name, title, color?, nameColor?}  modUntitle {token, name}   (dev-made titles; no powers)
 //   report {token, name, reason, note}  any signed-in, unbanned player -> {ok}. Private: only devs see
 //     reports (reports:<lower>). One per reporter per player per day, REPORTS_PER_DAY per reporter.
 //   Every dev action is logged as modlog:<time> -> {by, cmd, target, reason?, duration?, at}.
@@ -167,7 +167,7 @@ function profileOf(acc) {
     banned: banInfo(acc, Date.now()),
     warning: acc.warning ? { reason: acc.warning.reason, at: acc.warning.at } : null,
     // dev-made title (public; presence re-checks it before showing it)
-    title: acc.title ? { title: acc.title.title, color: acc.title.color || null } : null,
+    title: acc.title ? { title: acc.title.title, color: acc.title.color || null, nameColor: acc.title.nameColor || null } : null,
   };
 }
 
@@ -405,13 +405,16 @@ export class Accounts extends Server {
         const bad = customTitleProblem(title);
         if (bad) return err(bad);
         if (!nameIsClean(title)) return err('That title is not allowed.');
-        const color = typeof m.color === 'string' && /^#[0-9a-f]{6}$/i.test(m.color) ? m.color.toLowerCase() : null;
-        const next = { ...target, title: { title, color, by: dev.name, at: now } };
+        const hex = (c) => (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : null);
+        const color = hex(m.color);
+        const nameColor = hex(m.nameColor); // optional separate username colour
+        const next = { ...target, title: { title, color, nameColor, by: dev.name, at: now } };
         await this._save(next);
         await log('title', { reason: title });
         this._push(lower, { t: 'profile', profile: profileOf(next) });
-        await this._notifyPresence({ target: lower, title: { title, color } });
-        return reply(`${target.name} now has the title [${title}]${color ? ` in ${color}` : ''}.`, { target: lower, title: { title, color } });
+        await this._notifyPresence({ target: lower, title: { title, color, nameColor } });
+        const tints = [color && `title ${color}`, nameColor && `name ${nameColor}`].filter(Boolean).join(', ');
+        return reply(`${target.name} now has the title [${title}]${tints ? ` (${tints})` : ''}.`, { target: lower, title: { title, color, nameColor } });
       }
       case 'modUntitle': {
         if (!target.title) return reply(`${target.name} has no custom title.`);

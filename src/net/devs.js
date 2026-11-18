@@ -20,7 +20,7 @@ const MOD_USAGE = {
   flags: '/flags',
   reports: '/reports',
   dismiss: '/dismiss <username>',
-  title: '/title <username> <TITLE> [#rrggbb]',
+  title: '/title <username> <TITLE> [#titlecolour] [#namecolour]',
   untitle: '/untitle <username>',
 };
 const MOD_DURATIONS = { '1h': '1h', '1d': '1d', '1w': '1w', '1mo': '1mo', perm: 'perm', permanent: 'perm' };
@@ -45,11 +45,16 @@ export function parseModCommand(text) {
   let duration = null;
   if (cmd === 'ban' && words.length && MOD_DURATIONS[words[0].toLowerCase()]) duration = MOD_DURATIONS[words.shift().toLowerCase()];
   if (cmd === 'title') {
-    // the title (stored in `reason`) is upper-cased; an optional #rrggbb colour can end the command
-    const color = words.length && /^#[0-9a-f]{6}$/i.test(words[words.length - 1]) ? words.pop().toLowerCase() : null;
+    // the title (stored in `reason`) is upper-cased; up to two #rrggbb colours can end the command:
+    // the title colour, then the username colour
+    const isHex = (w) => /^#[0-9a-f]{6}$/i.test(w || '');
+    const colours = [];
+    while (colours.length < 2 && words.length && isHex(words[words.length - 1])) colours.unshift(words.pop().toLowerCase());
     const title = words.join(' ').toUpperCase();
     if (!title) return { error: `Add a title. ${usage}` };
-    return { cmd, name, duration: null, reason: title, color };
+    const out = { cmd, name, duration: null, reason: title, color: colours[0] || null };
+    if (colours[1]) out.nameColor = colours[1];
+    return out;
   }
   const reason = NEEDS_REASON.has(cmd) ? words.join(' ').slice(0, 100) : '';
   if (NEEDS_REASON.has(cmd) && !reason) return { error: `Add a reason. ${usage}` };
@@ -113,6 +118,11 @@ export function accountGrants(name, custom = null) {
   const dev = isDevName(name);
   // a title in the code wins; otherwise a dev-made title stored on the account (re-checked here)
   const stored = custom && !customTitleProblem(custom.title) ? cleanTitle(custom.title, custom.color) : null;
-  const tt = titleForName(name) || stored;
-  return { dev, shown: dev || tt ? name.slice(0, 16) : '', title: tt ? tt.title : '', titleColor: tt ? tt.color : '' };
+  const code = titleForName(name);
+  const tt = code || stored;
+  const out = { dev, shown: dev || tt ? name.slice(0, 16) : '', title: tt ? tt.title : '', titleColor: tt ? tt.color : '' };
+  // a dev-made title may colour the username separately (only #rrggbb; code titles keep one colour)
+  const nc = !code && stored && typeof custom.nameColor === 'string' && /^#[0-9a-f]{6}$/i.test(custom.nameColor) ? custom.nameColor.toLowerCase() : '';
+  if (nc) out.nameColor = nc;
+  return out;
 }

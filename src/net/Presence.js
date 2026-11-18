@@ -23,10 +23,13 @@ const MODES = ['solo', 'duo', 'trio', 'squad'];
 const STATUSES = ['lobby', 'queued', 'match'];
 
 /** Server snapshot -> a well-formed one (drops anything unexpected). */
-/** A verified account title ({ title, color }) off the wire, shape-checked; {} if none. */
+/** A verified account title ({ title, color, nameColor? }) off the wire, shape-checked; {} if none. */
 function titleOf(o) {
   const t = o && cleanTitle(o.title, o.color);
-  return t ? { title: t.title, color: t.color } : {};
+  if (!t) return {};
+  const out = { title: t.title, color: t.color };
+  if (typeof o.nameColor === 'string' && /^#[0-9a-f]{6}$/i.test(o.nameColor)) out.nameColor = o.nameColor.toLowerCase();
+  return out;
 }
 
 function cleanSnap(msg) {

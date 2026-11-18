@@ -326,8 +326,15 @@ export function createMeta(menus, account, opts = {}) {
       const row = h('div', 'mt-friend is-online' + (p.status === 'queued' ? ' is-queued' : p.status === 'match' ? ' is-busy' : ''));
       const info = h('span', 'mt-friend-info');
       const what = p.status === 'queued' ? `Searching · ${MODE_LABEL[p.mode]}` : p.status === 'match' ? 'In a match' : 'In the lobby';
-      const who = h('b', null, p.title ? `[${p.title}] ${p.name}` : p.name);
-      if (p.title && p.color) who.style.color = p.color; // verified account title (devs.js PLAYER_TITLES)
+      const who = h('b', null, p.title ? null : p.name);
+      if (p.title) {
+        // verified account title; the title and the username can have their own colours
+        const tag = h('span', null, `[${p.title}] `);
+        const nm = h('span', null, p.name);
+        if (p.color) tag.style.color = p.color;
+        if (p.nameColor || p.color) nm.style.color = p.nameColor || p.color;
+        who.append(tag, nm);
+      }
       info.append(who, h('small', null, what));
       row.append(h('i', 'mt-dot'), info);
       if (isDev() && p.name !== account.profile.name) {
@@ -674,6 +681,7 @@ export function createMeta(menus, account, opts = {}) {
   let devTarget = '';
   let devTitle = '';
   let devColor = '#ffc21f';
+  let devNameColor = '#fff6dc';
   let devLength = 'auto';
   let devReason = '';
   let devLog = []; // last result lines, newest first
@@ -752,11 +760,22 @@ export function createMeta(menus, account, opts = {}) {
     tColor.type = 'color';
     tColor.value = devColor;
     tColor.setAttribute('aria-label', 'Title colour');
+    tColor.title = 'Title colour';
+    const nColor = h('input', 'mt-dev-color');
+    nColor.type = 'color';
+    nColor.value = devNameColor;
+    nColor.setAttribute('aria-label', 'Username colour');
+    nColor.title = 'Username colour';
     const preview = h('span', 'mt-dev-preview');
+    const pTag = h('span');
+    const pName = h('span');
+    preview.append(pTag, pName);
     const paint = () => {
       const t = tText.value.trim().toUpperCase();
-      preview.textContent = t ? `[${t}] ${who.value.trim() || 'Player'}` : 'Preview';
-      preview.style.color = tColor.value;
+      pTag.textContent = t ? `[${t}] ` : '[TITLE] ';
+      pName.textContent = who.value.trim() || 'Player';
+      pTag.style.color = tColor.value;
+      pName.style.color = nColor.value;
     };
     tText.addEventListener('input', () => {
       devTitle = tText.value;
@@ -766,9 +785,13 @@ export function createMeta(menus, account, opts = {}) {
       devColor = tColor.value;
       paint();
     });
+    nColor.addEventListener('input', () => {
+      devNameColor = nColor.value;
+      paint();
+    });
     who.addEventListener('input', paint);
     paint();
-    tRow.append(tText, tColor);
+    tRow.append(tText, tColor, nColor);
     const tBtns = h('div', 'mt-dev-btns');
     tBtns.append(
       action('GIVE TITLE', 'mn-btn-hero', () => {
@@ -778,11 +801,11 @@ export function createMeta(menus, account, opts = {}) {
           devLog.unshift({ text: bad, bad: true });
           return showLog();
         }
-        run('modTitle', { title: t, color: tColor.value });
+        run('modTitle', { title: t, color: tColor.value, nameColor: nColor.value });
       }),
       action('REMOVE TITLE', '', () => run('modUntitle', {}))
     );
-    panelBody.append(field('TITLE', tRow), preview, tBtns);
+    panelBody.append(field('TITLE · TITLE COLOUR · NAME COLOUR', tRow), preview, tBtns);
 
     // bans
     panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'BAN'));

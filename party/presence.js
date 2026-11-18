@@ -97,7 +97,15 @@ export function snapshot(players) {
     .slice()
     .sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.since - b.since)
     .slice(0, MAX_LISTED)
-    .map((p) => (p.title ? { name: p.name, status: p.status, mode: p.mode, title: p.title, color: p.titleColor } : { name: p.name, status: p.status, mode: p.mode }));
+    .map((p) => {
+      const row = { name: p.name, status: p.status, mode: p.mode };
+      if (p.title) {
+        row.title = p.title;
+        row.color = p.titleColor;
+        if (p.nameColor) row.nameColor = p.nameColor; // dev-made titles can colour the username separately
+      }
+      return row;
+    });
   return { t: 'online', count: all.length, searching, inMatch, players: list };
 }
 
@@ -205,6 +213,7 @@ export class Presence extends Server {
         p.devName = g.shown;
         p.title = g.title;
         p.titleColor = g.titleColor;
+        p.nameColor = g.nameColor || '';
         if (p.devName) p.name = p.devName; // a verified name: the typed nickname cannot take it over
       })
       .catch(() => {
@@ -245,7 +254,7 @@ export class Presence extends Server {
     if (!name) return null;
     const short = String(name).slice(0, 16);
     const t = data.profile.title;
-    const title = t && typeof t.title === 'string' ? { title: t.title, color: t.color || null } : null;
+    const title = t && typeof t.title === 'string' ? { title: t.title, color: t.color || null, nameColor: t.nameColor || null } : null;
     return { name: short, lower: short.toLowerCase(), banned: !!data.profile.banned, title };
   }
 
@@ -267,6 +276,7 @@ export class Presence extends Server {
       reason: cmd.reason,
       title: cmd.cmd === 'title' ? cmd.reason : undefined,
       color: cmd.color || undefined,
+      nameColor: cmd.nameColor || undefined,
     });
     if (status !== 200) return send(false, data.error || 'That did not work.');
     this._applyAccountUpdate(data);
@@ -285,6 +295,7 @@ export class Presence extends Server {
         const g = accountGrants(other.acctDisplay, data.title);
         other.title = g.title;
         other.titleColor = g.titleColor;
+        other.nameColor = g.nameColor || '';
         if (g.shown) {
           other.devName = g.shown;
           other.name = g.shown;
@@ -366,6 +377,7 @@ export class Presence extends Server {
     if (p.title) {
       m.title = p.title;
       m.color = p.titleColor;
+      if (p.nameColor) m.nameColor = p.nameColor;
     }
     this.chat.push(m);
     if (this.chat.length > CHAT_KEEP) this.chat.shift();
