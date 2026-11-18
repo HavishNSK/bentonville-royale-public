@@ -197,7 +197,8 @@ function noiseTexture(size, base, spread) {
     for (let x = 0; x < size; x++) {
       const u = x / size;
       const v = y / size;
-      const nse = sample(l1, 8, u, v) * 0.65 + sample(l2, 32, u, v) * 0.35 + (rng() - 0.5) * 0.12;
+      // (only a trace of per-pixel grain: more of it sparkles at grazing angles)
+      const nse = sample(l1, 8, u, v) * 0.65 + sample(l2, 32, u, v) * 0.35 + (rng() - 0.5) * 0.03;
       const k = base + (nse - 0.5) * spread;
       const i = (y * size + x) * 4;
       img.data[i] = img.data[i + 1] = img.data[i + 2] = Math.max(0, Math.min(255, k * 255));
@@ -272,17 +273,24 @@ function buildingMaterial() {
           float gx = floor(vWall.x / 1.3);
           float gz = floor(vWall.y / 1.1);
           float grime = fract(sin(gx * 91.7 + gz * 47.3 + vWall.w * 1.7) * 43758.5453);
-          diffuseColor.rgb *= 1.0 - 0.05 * grime * near;
+          // (faded out before the 1.3 m blocks shrink to a few pixels: no checker shimmer)
+          float grimeVis = 1.0 - smoothstep(0.08, 0.3, max(fwidth(vWall.x), fwidth(vWall.y)) / 1.1);
+          diffuseColor.rgb *= 1.0 - 0.05 * grime * near * grimeVis;
           // darker toward the ground (fake AO)
           diffuseColor.rgb *= mix(0.86, 1.0, smoothstep(0.0, 2.5, vWall.y));
           if (style < 0.5) {
-            float l = smoothstep(0.0, 0.1, fract(vWall.y / 0.4));
-            diffuseColor.rgb *= mix(1.0, mix(0.9, 1.0, l), near);
+            // siding lines every 0.4 m: anti-aliased by their own screen-space size and faded
+            // to their average shade before they get thinner than a pixel (no moire stripes)
+            float sy = vWall.y / 0.4;
+            float sa = fwidth(sy);
+            float l = smoothstep(0.0, 0.1 + sa, fract(sy));
+            float sVis = 1.0 - smoothstep(0.2, 0.55, sa);
+            diffuseColor.rgb *= mix(0.995, mix(0.9, 1.0, l), near * sVis);
           }
         }`
       );
   };
-  mat.customProgramCacheKey = () => 'br-building-v2';
+  mat.customProgramCacheKey = () => 'br-building-v3';
   return mat;
 }
 
@@ -346,7 +354,7 @@ function hcap(chunk, pts, tris, y, dir, hex, h, litDir = dir) {
  * door openings, the wall thickness (an inner face), door jambs and lintels, an
  * interior floor and ceiling. Geometry sits on y = 0 like the rest of the map.
  */
-function addBuilding(chunk, b, tint, shell) {
+function addBuilding(chunk, b, tint, shell, roomChunk = chunk) {
   const pts = b.p;
   const n = pts.length;
   const h = b.h;
@@ -371,7 +379,7 @@ function addBuilding(chunk, b, tint, shell) {
   }
 
   if (shell) {
-    addShell(chunk, b, shell, sign, style, wr, wg, wb, tris);
+    addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roomChunk);
   } else {
     for (let i = 0; i < n; i++) {
       const a = pts[i];
@@ -418,7 +426,7 @@ function addBuilding(chunk, b, tint, shell) {
  * whose index range is recorded (chunk.panelRanges) so view.hidePanel can blank them. The
  * wall above the ceiling and a panel's underside stay (the hole is closed at the top).
  */
-function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris) {
+function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roomChunk = chunk) {
   const pts = b.p;
   const n = pts.length;
   const h = b.h;
@@ -518,7 +526,8 @@ function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris) {
   // painted ceiling instead of picking up the dim ground hemisphere colour
   hcap(chunk, inner, tris, shell.ceil-shell.floor, -1, CEILING_COLOR, h, 1);
   // interior partitions + room floors (InteriorMeshes.js)
-  if (shell.plan) addInteriorGeometry(chunk, shell, h, { quad, hcapFlat });
+  // (into `roomChunk`: the building's own interior mesh, drawn only from nearby, see view.update)
+  if (shell.plan) addInteriorGeometry(roomChunk, shell, h, { quad, hcapFlat });
 }
 
 /** Horizontal polygon (flat [x, z, ...]) facing up, triangulated here (room floor overlays). */
@@ -621,12 +630,12 @@ class Scatter {
   }
 
   cull(cam, dist) {
-    const lim = dist + CHUNK * 0.75;
-    const lim2 = lim * lim;
     for (const m of this.meshes) {
       const dx = m.userData.cx - cam.x;
       const dz = m.userData.cz - cam.z;
-      m.visible = dx * dx + dz * dz < lim2;
+      // the bucket's own size, not a whole chunk: small clusters drop out sooner
+      const lim = dist + (m.boundingSphere ? m.boundingSphere.radius : CHUNK * 0.75);
+      m.visible = dx * dx + dz * dz < lim * lim;
     }
   }
 }
@@ -780,7 +789,22 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const gd = b.maxZ - b.minZ + margin * 2;
   const groundTex = noiseTexture(256, 0.92, 0.22);
   groundTex.repeat.set(gw / 70, gd / 70);
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(gw, gd), new THREE.MeshLambertMaterial({ color: 0x7daf58, map: groundTex }));
+  const groundMat = new THREE.MeshLambertMaterial({ color: 0x7daf58, map: groundTex });
+  // The 70 m noise tile alone repeats ~14 times across town and reads as a grid of identical
+  // blocks from the air. A second read of the same texture, turned 90 degrees at an unrelated
+  // scale, breaks the repeat: the two patterns only line up again far beyond the map.
+  groundMat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <map_fragment>',
+      `#ifdef USE_MAP
+        vec4 gA = texture2D(map, vMapUv);
+        vec4 gB = texture2D(map, vec2(vMapUv.y, -vMapUv.x) * 0.283 + vec2(0.37, 0.61));
+        diffuseColor.rgb *= gA.rgb * gB.rgb / 0.92;
+      #endif`
+    );
+  };
+  groundMat.customProgramCacheKey = () => 'br-ground-v2';
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(gw, gd), groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.position.set((b.minX + b.maxX) / 2, 0, (b.minZ + b.maxZ) / 2);
   ground.receiveShadow = true;
@@ -855,9 +879,14 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // doors need every building and road registered first (road-facing, not into a neighbour)
   world.finishBuildings();
   await tick();
+  const interiorChunks = [];
   for (let i = 0; i < placed.length; i += 3) {
     const bd = placed[i + 1];
-    addBuilding(placed[i], bd, tints.get(bd.id), placed[i + 2].shell || null);
+    // rooms, stairs and furniture go in a mesh per building (about half of all the map's
+    // triangles): culled by distance and never drawn into the shadow map
+    const rooms = { buf: new Buf(), wall: [], bh: [], panelRanges: [] };
+    addBuilding(placed[i], bd, tints.get(bd.id), placed[i + 2].shell || null, rooms);
+    if (rooms.buf.idx.length) interiorChunks.push(rooms);
     if ((i / 3) % 600 === 599) {
       progress(0.25 + 0.2 * (i / placed.length), 'Raising buildings');
       await tick();
@@ -865,8 +894,10 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   }
   const bMat = buildingMaterial();
   const buildingMeshes = [];
+  const interiorMeshes = [];
   const panelRanges = new Map(); // panel -> { geo, ranges: [start, count, ...], saved, hidden }
-  for (const chunk of chunks.values()) {
+  for (const chunk of [...chunks.values(), ...interiorChunks]) {
+    const isInterior = interiorChunks.includes(chunk);
     const g = chunk.buf.geometry();
     g.setAttribute('aWall', new THREE.Float32BufferAttribute(chunk.wall, 4));
     g.setAttribute('aH', new THREE.Float32BufferAttribute(chunk.bh, 1));
@@ -878,17 +909,21 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
       for (let i = 0; i < R.length; i += 3) {
         let rec = panelRanges.get(R[i]);
         if (!rec) panelRanges.set(R[i], (rec = { geo: g, ranges: [], saved: null, hidden: false }));
+        if (rec.geo !== g) {
+          console.warn('[world] panel geometry split across meshes: not breakable visually');
+          continue;
+        }
         rec.ranges.push(R[i + 1], R[i + 2]);
       }
     }
     const mesh = new THREE.Mesh(g, bMat);
-    mesh.castShadow = true;
+    mesh.castShadow = !isInterior; // the shell already shades the rooms
     mesh.receiveShadow = true;
     mesh.userData.cx = g.boundingSphere.center.x;
     mesh.userData.cz = g.boundingSphere.center.z;
     mesh.userData.r = g.boundingSphere.radius;
     root.add(mesh);
-    buildingMeshes.push(mesh);
+    (isInterior ? interiorMeshes : buildingMeshes).push(mesh);
   }
   progress(0.48, 'Parking cars');
   await tick();
@@ -1191,6 +1226,13 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
         const dx = m.userData.cx - cam.x;
         const dz = m.userData.cz - cam.z;
         const lim = q.buildingDist + m.userData.r;
+        m.visible = dx * dx + dz * dz < lim * lim;
+      }
+      const iDist = q.interiorDist || 130;
+      for (const m of interiorMeshes) {
+        const dx = m.userData.cx - cam.x;
+        const dz = m.userData.cz - cam.z;
+        const lim = iDist + m.userData.r;
         m.visible = dx * dx + dz * dz < lim * lim;
       }
     },

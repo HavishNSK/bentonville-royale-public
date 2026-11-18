@@ -94,6 +94,7 @@ const LOD_FAR = 420; // metres: beyond this, physics every 4th frame instead of 
 const LOD_RECHECK = 0.5; // seconds between a bot's LOD re-evaluations
 const SIM_STEP_MAX = 0.05; // longest physics sub-step for time-sliced bots (no tunnelling)
 const ANIM_FULL = 35; // metres: animate every frame inside this
+const SHADOW_DIST = 55; // metres: bots farther than this cast no shadow
 const DEAD_ANIM = 3; // seconds a death animation plays before the pose is frozen
 // building
 const BUILD_Q = 10; // most queued pieces in one build response
@@ -2640,6 +2641,7 @@ export class Bots {
         b.stuckAt = this.time + STUCK_WINDOW;
         if (this.fx && a.character && a.character.root.visible) this.fx.dustPuff(pos);
         if (this.sfx) this.sfx.play('land', pos);
+        if (a.character) a.character.land(0.6);
       }
       this._clampBounds(pos);
       return;
@@ -2717,8 +2719,11 @@ export class Bots {
     }
     // position / facing every frame (cheap); the skeleton (mixer) at a distance-scaled rate:
     // every frame inside ANIM_FULL, every 2nd frame to half the draw distance, every 3rd beyond
+    ch.setShadows(d2 < SHADOW_DIST * SHADOW_DIST);
     ch.root.position.copy(a.pos);
-    ch.root.rotation.y = Math.PI - a.heading;
+    // facing: eased every frame (Character.update does the same on animated frames; writing the
+    // raw heading here made far bots flick between the two)
+    ch.turn(dt, a.heading);
     if (b.state === 'dead' && b.deadAnimated > DEAD_ANIM) return; // death pose settled: frozen
     b.animAcc += dt;
     const every = d2 > cd2 * 0.25 ? 3 : d2 > ANIM_FULL * ANIM_FULL ? 2 : 1;

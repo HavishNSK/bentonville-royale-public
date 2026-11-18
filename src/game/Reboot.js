@@ -28,6 +28,7 @@ import { buildRebootVan, buildRebootCard, REBOOT_VAN } from '../render/RebootVan
 import { sameTeam } from './Teams.js';
 
 const CARD_COLOR = 0x38e1ff;
+const VAN_DRAW_DIST = 320; // metres
 
 /** Small deterministic RNG from a string (same van spots on every machine). */
 function seeded(str) {
@@ -476,6 +477,12 @@ export class Reboot {
       c.mesh.position.y = c.y + 1.1 + Math.sin(c.spin * 1.3) * 0.12;
     }
     for (const v of this.vans) {
+      // far vans are not drawn (the map is ~1 km across; the minimap still shows them)
+      if (v.mesh && this.viewer) {
+        const far = (v.x - this.viewer.x) ** 2 + (v.z - this.viewer.z) ** 2 > VAN_DRAW_DIST * VAN_DRAW_DIST;
+        v.mesh.visible = !far;
+        if (far) continue;
+      }
       if (v.mesh && v.mesh.userData.update) v.mesh.userData.update(dt, this.viewer);
       const set = v.mesh && v.mesh.userData.setBeacon;
       if (!set) continue;
