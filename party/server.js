@@ -203,10 +203,12 @@ export class Main extends Server {
 
 export default {
   async fetch(request, env) {
-    // Internal-only endpoints: the matchmaker and the party rooms' match-plan POST are called by
-    // other Durable Objects through bindings, never by browsers. Refuse them from the internet.
+    // Internal-only endpoints: the matchmaker, the party rooms' match-plan POST and the presence
+    // account-update POST are called by other Durable Objects through bindings, never by browsers.
+    // Refuse them from the internet.
     const path = new URL(request.url).pathname;
-    if (path.startsWith('/parties/matchmaker/') || (path.startsWith('/parties/party/') && request.method === 'POST')) {
+    const internalPost = path.startsWith('/parties/party/') || path.startsWith('/parties/presence/');
+    if (path.startsWith('/parties/matchmaker/') || (internalPost && request.method === 'POST')) {
       return new Response('Not found', { status: 404 });
     }
     return (await routePartykitRequest(request, env)) || new Response('Not found', { status: 404 });

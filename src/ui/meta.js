@@ -35,6 +35,7 @@ const seenPatch = () => {
 
 import { partyHost, isLocal } from '../net/Net.js';
 import { nameIsClean } from '../net/chatFilter.js';
+import { isDevName, customTitleProblem } from '../net/devs.js';
 import { createUpdateFlyer } from './updateFlyer.js';
 
 // Google (GIS) button in renderAuth(); Account.loginWithGoogle.
@@ -155,7 +156,10 @@ export function createMeta(menus, account, opts = {}) {
   bOnline.appendChild(onlineNum);
   bOnline.title = 'Players on the title screen or in a match right now';
   const bAuth = btn('SIGN IN', 'mn-chip mt-chip mt-chip-sun', 'auth');
-  right.append(bOnline, bFriends, coins, who, bAuth);
+  // DEV panel (titles, bans, reports): shown to dev accounts only; the server checks every action
+  const bDev = btn('DEV', 'mn-chip mt-chip mt-chip-dev', 'dev');
+  bDev.hidden = true;
+  right.append(bDev, bOnline, bFriends, coins, who, bAuth);
   bar.append(tabs, right);
   // portal builds (opts.guestOnly, CrazyGames): no outside sign-in, so no accounts, coins,
   // friends or buying; the locker keeps the free items
@@ -172,6 +176,7 @@ export function createMeta(menus, account, opts = {}) {
     }
     bFriends.classList.toggle('is-on', open === 'friends');
     bOnline.classList.toggle('is-on', open === 'online');
+    bDev.classList.toggle('is-on', open === 'dev');
   }
 
   // ---------------------------------------------------------------- panel shell
@@ -287,6 +292,7 @@ export function createMeta(menus, account, opts = {}) {
     else if (open === 'signout') renderSignOut();
     else if (open === 'rename') renderRename();
     else if (open === 'banned') renderBanned();
+    else if (open === 'dev') renderDev();
     else if (open === 'warning') renderWarning();
     else if (open === 'shop') renderShop();
     else if (open === 'locker') renderLocker();
@@ -324,6 +330,16 @@ export function createMeta(menus, account, opts = {}) {
       if (p.title && p.color) who.style.color = p.color; // verified account title (devs.js PLAYER_TITLES)
       info.append(who, h('small', null, what));
       row.append(h('i', 'mt-dot'), info);
+      if (isDev() && p.name !== account.profile.name) {
+        const man = btn('MANAGE', 'mn-chip mt-report');
+        man.setAttribute('aria-label', `Manage ${p.name} in the DEV panel`);
+        man.addEventListener('click', () => {
+          click();
+          devTarget = p.name;
+          openPanel('dev');
+        });
+        row.appendChild(man);
+      }
       if (opts.onReport && account.signedIn && p.name !== account.profile.name) {
         const rep = btn('REPORT', 'mn-chip mt-report');
         rep.type = 'button';
@@ -649,6 +665,197 @@ export function createMeta(menus, account, opts = {}) {
     });
     row.append(ok);
     panelBody.appendChild(row);
+  }
+
+  // ---------------------------------------------------------------- DEV panel
+  // Titles (name tags, no powers) and bans for dev accounts. The client check only hides the button;
+  // the account server re-checks dev rights and a recent sign-in on every action.
+  const isDev = () => account.signedIn && isDevName(account.profile.name);
+  let devTarget = '';
+  let devTitle = '';
+  let devColor = '#ffc21f';
+  let devLength = 'auto';
+  let devReason = '';
+  let devLog = []; // last result lines, newest first
+  const DEV_LENGTHS = [
+    ['auto', 'Next step (1h > 1d > 1w > 1mo > perm)'],
+    ['1h', 'Temporary: 1 hour'],
+    ['1d', 'Temporary: 1 day'],
+    ['1w', 'Temporary: 1 week'],
+    ['1mo', 'Temporary: 1 month'],
+    ['perm', 'PERMANENT'],
+  ];
+
+  function renderDev() {
+    panelTitle.textContent = 'DEV TOOLS';
+    if (!isDev()) {
+      panelBody.appendChild(h('p', 'mt-hint', 'Only developer accounts can use this.'));
+      return;
+    }
+    const field = (label, input) => {
+      const l = h('label', 'mt-dev-label', label);
+      l.appendChild(input);
+      return l;
+    };
+    const status = h('div', 'mt-dev-log');
+    status.setAttribute('role', 'status');
+    const showLog = () => {
+      status.replaceChildren(...devLog.slice(0, 8).map((x) => h('p', x.bad ? 'is-bad' : '', x.text)));
+    };
+    showLog();
+    const busy = [];
+    const run = async (op, body, after) => {
+      const name = who.value.trim();
+      if (op !== 'modFlags' && op !== 'modReports' && !/^[A-Za-z0-9_-]{3,16}$/.test(name)) {
+        devLog.unshift({ text: 'Type the player’s username first.', bad: true });
+        return showLog();
+      }
+      busy.forEach((b) => (b.disabled = true));
+      try {
+        const lines = await account.mod(op, { name, ...body });
+        devLog.unshift(...lines.map((text) => ({ text })).reverse());
+        if (after) after();
+      } catch (err) {
+        devLog.unshift({ text: err && err.message ? err.message : 'That did not work.', bad: true });
+      }
+      devLog = devLog.slice(0, 30);
+      busy.forEach((b) => (b.disabled = false));
+      showLog();
+    };
+    const action = (label, cls, fn) => {
+      const b = btn(label, 'mn-btn mn-btn-small ' + (cls || ''));
+      b.addEventListener('click', () => {
+        click();
+        fn(b);
+      });
+      busy.push(b);
+      return b;
+    };
+
+    // who
+    const who = h('input', 'mn-field');
+    who.placeholder = 'Player username';
+    who.maxLength = 16;
+    who.autocomplete = 'off';
+    who.value = devTarget;
+    who.addEventListener('input', () => (devTarget = who.value));
+    panelBody.appendChild(field('PLAYER', who));
+
+    // titles
+    panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'TITLE (NAME TAG, NO POWERS)'));
+    const tRow = h('div', 'mt-dev-row');
+    const tText = h('input', 'mn-field');
+    tText.placeholder = 'e.g. BRIDGE KING';
+    tText.maxLength = 14;
+    tText.value = devTitle;
+    const tColor = h('input', 'mt-dev-color');
+    tColor.type = 'color';
+    tColor.value = devColor;
+    tColor.setAttribute('aria-label', 'Title colour');
+    const preview = h('span', 'mt-dev-preview');
+    const paint = () => {
+      const t = tText.value.trim().toUpperCase();
+      preview.textContent = t ? `[${t}] ${who.value.trim() || 'Player'}` : 'Preview';
+      preview.style.color = tColor.value;
+    };
+    tText.addEventListener('input', () => {
+      devTitle = tText.value;
+      paint();
+    });
+    tColor.addEventListener('input', () => {
+      devColor = tColor.value;
+      paint();
+    });
+    who.addEventListener('input', paint);
+    paint();
+    tRow.append(tText, tColor);
+    const tBtns = h('div', 'mt-dev-btns');
+    tBtns.append(
+      action('GIVE TITLE', 'mn-btn-hero', () => {
+        const t = tText.value.trim().toUpperCase();
+        const bad = customTitleProblem(t);
+        if (bad) {
+          devLog.unshift({ text: bad, bad: true });
+          return showLog();
+        }
+        run('modTitle', { title: t, color: tColor.value });
+      }),
+      action('REMOVE TITLE', '', () => run('modUntitle', {}))
+    );
+    panelBody.append(field('TITLE', tRow), preview, tBtns);
+
+    // bans
+    panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'BAN'));
+    const len = h('select', 'mn-field mt-dev-select');
+    for (const [v, label] of DEV_LENGTHS) {
+      const o = h('option', null, label);
+      o.value = v;
+      if (v === devLength) o.selected = true;
+      len.appendChild(o);
+    }
+    const reason = h('input', 'mn-field');
+    reason.placeholder = 'Reason (the player sees this)';
+    reason.maxLength = 100;
+    reason.value = devReason;
+    reason.addEventListener('input', () => (devReason = reason.value));
+    let confirmPerm = 0;
+    len.addEventListener('change', () => {
+      devLength = len.value;
+      confirmPerm = 0;
+    });
+    const bBtns = h('div', 'mt-dev-btns');
+    bBtns.append(
+      action('BAN', 'mt-dev-danger', (b) => {
+        if (!reason.value.trim()) {
+          devLog.unshift({ text: 'Add a reason for the ban.', bad: true });
+          return showLog();
+        }
+        // a permanent ban needs a second click
+        if (len.value === 'perm' && Date.now() - confirmPerm > 4000) {
+          confirmPerm = Date.now();
+          b.querySelector('span').textContent = 'CLICK AGAIN: PERMANENT';
+          setTimeout(() => (b.querySelector('span').textContent = 'BAN'), 4000);
+          return;
+        }
+        confirmPerm = 0;
+        b.querySelector('span').textContent = 'BAN';
+        run('modBan', { reason: reason.value.trim(), duration: len.value === 'auto' ? undefined : len.value });
+      }),
+      action('WARN', '', () => {
+        if (!reason.value.trim()) {
+          devLog.unshift({ text: 'Add a reason for the warning.', bad: true });
+          return showLog();
+        }
+        run('modWarn', { reason: reason.value.trim() });
+      }),
+      action('UNBAN', '', () => run('modUnban', {}))
+    );
+    panelBody.append(field('LENGTH', len), field('REASON', reason), bBtns);
+
+    // look-ups
+    panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'LOOK UP'));
+    const lBtns = h('div', 'mt-dev-btns');
+    lBtns.append(
+      action('HISTORY', '', () => run('modHistory', {})),
+      action('REPORTS', '', () => run('modReports', {})),
+      action('FLAGS', '', () => run('modFlags', {})),
+      action('RESET STATS', '', (b) => {
+        if (b.dataset.armed !== '1') {
+          b.dataset.armed = '1';
+          b.querySelector('span').textContent = 'CLICK AGAIN TO RESET';
+          setTimeout(() => {
+            b.dataset.armed = '';
+            b.querySelector('span').textContent = 'RESET STATS';
+          }, 4000);
+          return;
+        }
+        b.dataset.armed = '';
+        b.querySelector('span').textContent = 'RESET STATS';
+        run('modResetStats', {});
+      })
+    );
+    panelBody.append(lBtns, h('div', 'mn-party-label mt-sub', 'RESULTS'), status);
+    panelBody.appendChild(h('p', 'mt-hint', 'Every action is logged. Dev tools need a sign-in within the last 12 hours.'));
   }
 
   function renderRename() {
@@ -1249,6 +1456,8 @@ export function createMeta(menus, account, opts = {}) {
     coinsNum.textContent = p.coins.toLocaleString();
     bAuth.querySelector('span').textContent = account.signedIn ? 'SIGN OUT' : 'SIGN IN';
     bAuth.classList.toggle('mt-chip-sun', !account.signedIn);
+    bDev.hidden = !isDev();
+    if (open === 'dev' && !isDev()) closePanel();
     const n = account.friends.incoming.length;
     badge.textContent = n ? String(n) : '';
     badge.hidden = !n;

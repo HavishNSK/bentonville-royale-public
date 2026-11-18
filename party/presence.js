@@ -269,15 +269,19 @@ export class Presence extends Server {
       color: cmd.color || undefined,
     });
     if (status !== 200) return send(false, data.error || 'That did not work.');
-    // reflect a ban / unban on that player's open chat sockets right away
-    if (typeof data.banned === 'boolean' && data.target) {
+    this._applyAccountUpdate(data);
+    return send(true, Array.isArray(data.lines) ? data.lines : 'Done.');
+  }
+
+  /** A ban / unban or title change on an account: show it on that player's open sockets right away. */
+  _applyAccountUpdate(data) {
+    if (!data || typeof data.target !== 'string') return;
+    if (typeof data.banned === 'boolean') {
       for (const other of this.players.values()) if (other.acctName === data.target) other.banned = data.banned;
     }
-    // a title given / removed shows right away on that player's open sockets
-    if ('title' in data && data.target) {
+    if ('title' in data) {
       for (const other of this.players.values()) {
-        if (other.acctName !== data.target) continue;
-        if (!other.acctDisplay) continue;
+        if (other.acctName !== data.target || !other.acctDisplay) continue;
         const g = accountGrants(other.acctDisplay, data.title);
         other.title = g.title;
         other.titleColor = g.titleColor;
@@ -288,7 +292,6 @@ export class Presence extends Server {
       }
       this._schedule();
     }
-    return send(true, Array.isArray(data.lines) ? data.lines : 'Done.');
   }
 
   _chatLimits(p) {
@@ -419,7 +422,20 @@ export class Presence extends Server {
     }, BROADCAST_MS);
   }
 
-  onRequest() {
+  async onRequest(req) {
+    // POST is internal: the account server reports ban / title changes made from the DEV panel.
+    // (party/server.js refuses POSTs to /parties/presence/ from the internet.)
+    if (req.method === 'POST') {
+      let data = null;
+      try {
+        data = await req.json();
+      } catch {
+        return new Response('bad json', { status: 400 });
+      }
+      if (!data || data.t !== 'account') return new Response('unknown', { status: 400 });
+      this._applyAccountUpdate(data);
+      return Response.json({ ok: true });
+    }
     // counts only (no names) for a quick status check
     const s = snapshot(this.players.values());
     return Response.json({ count: s.count, searching: s.searching, inMatch: s.inMatch });

@@ -9,6 +9,7 @@
 //   profile.banned {reason, until, permanent, label} | null, profile.warning {reason, at} | null (moderation)
 //   await acct.ackWarning()                 the player saw the moderator warning; clears it
 //   await acct.report(name, reason, note) -> confirmation text   private player report for the devs
+//   await acct.mod(op, body) -> lines[]     DEV panel actions (modBan, modTitle, ...); the server checks dev rights
 //   await acct.buy(id) / acct.equip({ skin, pickaxe, backbling, emotes })
 //   await acct.reward({ kills, placement, players, won, ranked }) -> { earned, saved, ranked, guest?, error? }
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
@@ -198,6 +199,13 @@ export function createAccount() {
       } catch {
         /* shown again next time */
       }
+    },
+
+    /** A DEV panel action. Only dev accounts succeed (checked on the server). Throws with its message. */
+    async mod(op, body = {}) {
+      if (!acct.signedIn) throw new Error('Sign in first.');
+      const r = await api(op, { ...body, token });
+      return Array.isArray(r.lines) ? r.lines.map((l) => String(l).slice(0, 300)) : ['Done.'];
     },
 
     /** Report a player (private: only devs read reports). Throws with the server's message. */

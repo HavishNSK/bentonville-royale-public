@@ -44,7 +44,7 @@
 //                     {t:'invite', from, code}  {t:'request', from}  {t:'profile', profile}
 // The shop catalog's prices are mirrored here (PRICES) so a client cannot buy for free.
 
-import { Server } from 'partyserver';
+import { Server, getServerByName } from 'partyserver';
 import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS } from '../src/game/Cosmetics.js';
 import { verifyGoogleIdToken } from './googleIdToken.js';
 import { applyMatchStats } from './matchStats.js';
@@ -369,6 +369,7 @@ export class Accounts extends Server {
         await this._secLog('ban', { by: dev.name, target: target.name, reason, detail: next.ban.duration });
         await this.ctx.storage.delete('reports:' + lower); // handled
         this._push(lower, { t: 'profile', profile: profileOf(next) });
+        await this._notifyPresence({ target: lower, banned: true });
         const span = next.ban.until == null ? 'permanently' : `for ${BAN_LABEL[next.ban.duration]}`;
         return reply(`Banned ${target.name} ${span} (offence ${next.offences}): ${reason}`, { target: lower, banned: true });
       }
@@ -388,6 +389,7 @@ export class Accounts extends Server {
         await log('unban');
         await this._secLog('unban', { by: dev.name, target: target.name });
         this._push(lower, { t: 'profile', profile: profileOf(next) });
+        await this._notifyPresence({ target: lower, banned: false });
         return reply(`Unbanned ${target.name}. Their next ban still escalates (offences: ${next.offences | 0}).`, { target: lower, banned: false });
       }
       case 'modResetStats': {
@@ -408,6 +410,7 @@ export class Accounts extends Server {
         await this._save(next);
         await log('title', { reason: title });
         this._push(lower, { t: 'profile', profile: profileOf(next) });
+        await this._notifyPresence({ target: lower, title: { title, color } });
         return reply(`${target.name} now has the title [${title}]${color ? ` in ${color}` : ''}.`, { target: lower, title: { title, color } });
       }
       case 'modUntitle': {
@@ -416,10 +419,28 @@ export class Accounts extends Server {
         await this._save(next);
         await log('untitle');
         this._push(lower, { t: 'profile', profile: profileOf(next) });
+        await this._notifyPresence({ target: lower, title: null });
         return reply(`Removed ${target.name}'s title.`, { target: lower, title: null });
       }
     }
     return err('Unknown request.');
+  }
+
+  /** Tell the presence server (chat + online list) about a ban or title change, so it shows at once. */
+  async _notifyPresence(update) {
+    try {
+      if (!this.env || !this.env.Presence) return;
+      const stub = await getServerByName(this.env.Presence, 'global');
+      await stub.fetch(
+        new Request('https://presence/global', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ t: 'account', ...update }),
+        })
+      );
+    } catch (e) {
+      console.warn('[accounts] presence update failed', e && e.message); // it catches up on reconnect
+    }
   }
 
   _historyLines(acc, now) {

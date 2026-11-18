@@ -343,6 +343,84 @@
   justify-content: center;
   min-height: calc(var(--u) * 44);
 }
+/* meta.js renderDev (DEV panel) */
+.mn-chip.mt-chip-dev {
+  background: var(--br-coral);
+  color: var(--br-cream);
+}
+.mn-chip.mt-chip-dev.is-on {
+  background: var(--br-sun-hi);
+  color: var(--br-ink);
+}
+.mt-dev-label {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 4);
+  font-size: calc(var(--u) * 12);
+  letter-spacing: 0.06em;
+  color: var(--br-sun-hi);
+}
+.mt-dev-row {
+  display: flex;
+  gap: calc(var(--u) * 8);
+}
+.mt-dev-row .mn-field {
+  flex: 1 1 auto;
+}
+.mt-dev-color {
+  width: calc(var(--u) * 52);
+  height: calc(var(--u) * 46);
+  padding: calc(var(--u) * 3);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 12);
+  background: #fff;
+  cursor: pointer;
+}
+.mt-dev-preview {
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 16);
+  text-shadow: 0 calc(var(--u) * 2) 0 var(--br-ink);
+  overflow-wrap: anywhere;
+}
+.mt-dev-select {
+  width: 100%;
+}
+.mt-dev-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 8);
+}
+.mt-dev-btns .mn-btn {
+  flex: 1 1 auto;
+}
+.mn-btn.mt-dev-danger {
+  background: var(--br-coral);
+  color: var(--br-cream);
+}
+.mt-dev-log {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 4);
+  max-height: calc(var(--u) * 180);
+  overflow: auto;
+  padding: calc(var(--u) * 8) calc(var(--u) * 10);
+  border-radius: calc(var(--u) * 10);
+  background: var(--br-panel-soft);
+  font-size: calc(var(--u) * 13);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.mt-dev-log:empty::before {
+  content: 'Results show here.';
+  opacity: 0.6;
+}
+.mt-dev-log p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.mt-dev-log p.is-bad {
+  color: var(--br-coral);
+}
 /* meta.js renderBanned / renderWarning (moderation notices) */
 .mt-ban-reason {
   margin: 0 0 calc(var(--u) * 8);
