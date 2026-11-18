@@ -33,6 +33,7 @@ import { inHole, stairHeight, FLOOR_THICKNESS } from './interiors/storeys.js';
 import { tileIdAt } from './interiors/floorTiles.js';
 import { toLocal as planLocal } from './interiors/layout.js';
 import { makeBox, boxContains, boxPushCircle, boxRay } from './boxColliders.js';
+import { foundationBand, footprintDistance, foundationHeight } from './foundations.js';
 
 const CELL = 32;
 const STEP = 0.62;
@@ -71,8 +72,8 @@ const STOREY_MIN = 3.2;
 const STOREY_MAX = 4.5;
 // Footprint filters for hollowing (m^2 / m): tiny sheds stay solid prisms.
 const HOLLOW_MIN_AREA = 30;
-const HOLLOW_MIN_A_OVER_P = 1.0; // area / perimeter; ~ half the narrow width for a rectangle
-const HOLLOW_MAX_VERTS = 220;
+const HOLLOW_MIN_A_OVER_P = 0.65; // area / perimeter; ~ half the narrow width for a rectangle
+const HOLLOW_MAX_VERTS = 350;
 
 function pointInPoly(p, n, x, z) {
   let inside = false;
@@ -209,13 +210,38 @@ async function loadTerrainData(base = '/data/') {
       return img;
     }),
   ]);
-  return { terrain: meta && bin ? { meta, heights: decodeTerrain(meta, bin) } : null, trees, groundImage };
+  const terrain = meta && bin ? await get(async () => ({ meta, heights: decodeTerrain(meta, bin) })) : null;
+  return { terrain, trees, groundImage };
 }
 
 /** int16 little-endian centimetres -> Float32Array metres. */
+/** Bilinear sample of a heightfield grid { minX, minZ, cell, cols, rows, h }, clamped at the edges. */
+function sampleGrid(T, x, z) {
+  let fx = (x - T.minX) / T.cell;
+  let fz = (z - T.minZ) / T.cell;
+  const cm = T.cols - 1;
+  const rm = T.rows - 1;
+  if (fx < 0) fx = 0;
+  else if (fx > cm) fx = cm;
+  if (fz < 0) fz = 0;
+  else if (fz > rm) fz = rm;
+  let c = fx | 0;
+  let r = fz | 0;
+  if (c >= cm) c = cm - 1;
+  if (r >= rm) r = rm - 1;
+  const tx = fx - c;
+  const tz = fz - r;
+  const h = T.h;
+  const i = r * T.cols + c;
+  const a = h[i] + (h[i + 1] - h[i]) * tx;
+  const b = h[i + T.cols] + (h[i + T.cols + 1] - h[i + T.cols]) * tx;
+  return a + (b - a) * tz;
+}
+
 function decodeTerrain(meta, buf) {
-  const dv = new DataView(buf);
   const n = meta.cols * meta.rows;
+  if (!Number.isSafeInteger(n) || n < 4 || n > 16000000 || buf.byteLength !== n * 2) throw new Error('Invalid terrain payload');
+  const dv = new DataView(buf);
   const out = new Float32Array(n);
   for (let i = 0; i < n; i++) out[i] = dv.getInt16(i * 2, true) / 100;
   return out;
@@ -244,6 +270,7 @@ export class World {
     this.onPanelChange = null; // (collider, panel, alive) after breakPanel / restorePanel
     this.counts = { polys: 0, circles: 0 };
     this.terrain = null;
+    this.terrainOverlay = null; // a landmark's local heightfield over the map terrain (setTerrainOverlay)
     this.terrainMin = 0;
     this.terrainMax = 0;
     this._tTop = null; // highest terrain per world cell (ray march early-out)
@@ -254,6 +281,10 @@ export class World {
 
   /** meta: bentonville-terrain.json; heights: Float32Array of metres (row-major, z rows). */
   setTerrain(meta, heights) {
+    if (!meta || !Number.isFinite(meta.minX) || !Number.isFinite(meta.minZ) || !Number.isFinite(meta.cell) || meta.cell <= 0 ||
+        !Number.isSafeInteger(meta.cols) || !Number.isSafeInteger(meta.rows) || meta.cols < 2 || meta.rows < 2 ||
+        meta.cols * meta.rows > 16000000 || !(heights instanceof Float32Array) || heights.length !== meta.cols * meta.rows ||
+        heights.some((v) => !Number.isFinite(v))) throw new Error('Invalid terrain grid');
     const T = {
       minX: meta.minX,
       minZ: meta.minZ,
@@ -295,36 +326,99 @@ export class World {
     this._tTop = top;
   }
 
+  /**
+   * A detailed local heightfield laid over the map terrain: a bespoke landmark (the Crystal
+   * Bridges ravine) built around street level `edge` (0). Inside its rectangle the overlay IS
+   * the terrain; within `blend` m outside it the map terrain eases to `edge`, so the landmark
+   * sits in the hills without moving every collider it registers. Without map terrain this is
+   * plain setTerrain.
+   */
+  setTerrainOverlay(meta, heights, { blend = 60, edge = 0 } = {}) {
+    if (!this.terrain) return this.setTerrain(meta, heights);
+    if (!meta || !Number.isFinite(meta.minX) || !Number.isFinite(meta.minZ) || !Number.isFinite(meta.cell) || meta.cell <= 0 ||
+        !Number.isSafeInteger(meta.cols) || !Number.isSafeInteger(meta.rows) || meta.cols < 2 || meta.rows < 2 ||
+        meta.cols * meta.rows > 16000000 || !(heights instanceof Float32Array) || heights.length !== meta.cols * meta.rows ||
+        heights.some((v) => !Number.isFinite(v)) || !Number.isFinite(blend) || !Number.isFinite(edge)) throw new Error('Invalid terrain overlay');
+    const O = {
+      minX: meta.minX,
+      minZ: meta.minZ,
+      cell: meta.cell,
+      cols: meta.cols,
+      rows: meta.rows,
+      maxX: meta.minX + (meta.cols - 1) * meta.cell,
+      maxZ: meta.minZ + (meta.rows - 1) * meta.cell,
+      h: heights,
+      blend: Math.max(1, blend),
+      edge,
+    };
+    this.terrainOverlay = O;
+    for (let i = 0; i < heights.length; i++) {
+      if (heights[i] < this.terrainMin) this.terrainMin = heights[i];
+      if (heights[i] > this.terrainMax) this.terrainMax = heights[i];
+    }
+    this.terrainMin = Math.min(this.terrainMin, edge);
+    this.terrainMax = Math.max(this.terrainMax, edge);
+    // per-cell terrain maxima must stay an upper bound where the overlay / blend rises above the map
+    const top = this._tTop;
+    if (!top) return;
+    const x0 = O.minX - O.blend;
+    const x1 = O.maxX + O.blend;
+    const z0 = O.minZ - O.blend;
+    const z1 = O.maxZ + O.blend;
+    const step = Math.min(O.cell, this.terrain.cell);
+    for (let cz = 0; cz < this.rows; cz++) {
+      const sz0 = this.minZ + cz * CELL;
+      if (sz0 + CELL < z0 || sz0 > z1) continue;
+      for (let cx = 0; cx < this.cols; cx++) {
+        const sx0 = this.minX + cx * CELL;
+        if (sx0 + CELL < x0 || sx0 > x1) continue;
+        let m = edge;
+        for (let sz = sz0; sz <= sz0 + CELL + 1e-6; sz += step) for (let sx = sx0; sx <= sx0 + CELL + 1e-6; sx += step) m = Math.max(m, this.terrainHeight(sx, sz));
+        top[cz * this.cols + cx] = Math.max(top[cz * this.cols + cx], m + 0.05);
+      }
+    }
+  }
+
   /** Bilinear terrain height (m) at (x, z); 0 without a heightfield. Clamped at the edges. */
   terrainHeight(x, z) {
+    const O = this.terrainOverlay;
+    if (O) {
+      if (x >= O.minX && x <= O.maxX && z >= O.minZ && z <= O.maxZ) return sampleGrid(O, x, z);
+      const d = Math.hypot(Math.max(O.minX - x, 0, x - O.maxX), Math.max(O.minZ - z, 0, z - O.maxZ));
+      if (d < O.blend) {
+        const t = d / O.blend;
+        return O.edge + (this._mapTerrainHeight(x, z) - O.edge) * t * t * (3 - 2 * t);
+      }
+    }
+    return this._mapTerrainHeight(x, z);
+  }
+
+  /** The map heightfield alone (no overlay); 0 without one. */
+  _mapTerrainHeight(x, z) {
     const T = this.terrain;
-    if (!T) return 0;
-    let fx = (x - T.minX) / T.cell;
-    let fz = (z - T.minZ) / T.cell;
-    const cm = T.cols - 1;
-    const rm = T.rows - 1;
-    if (fx < 0) fx = 0;
-    else if (fx > cm) fx = cm;
-    if (fz < 0) fz = 0;
-    else if (fz > rm) fz = rm;
-    let c = fx | 0;
-    let r = fz | 0;
-    if (c >= cm) c = cm - 1;
-    if (r >= rm) r = rm - 1;
-    const tx = fx - c;
-    const tz = fz - r;
-    const h = T.h;
-    const i = r * T.cols + c;
-    const a = h[i] + (h[i + 1] - h[i]) * tx;
-    const b = h[i + T.cols] + (h[i + T.cols + 1] - h[i + T.cols]) * tx;
-    return a + (b - a) * tz;
+    return T ? sampleGrid(T, x, z) : 0;
+  }
+
+  /** Ground after foundation grading, shared by rendering, movement, rays and placement. */
+  surfaceHeight(x, z) {
+    const raw = this.terrainHeight(x, z);
+    const foundations = this.cellAt(x, z)?.foundations;
+    if (!foundations) return raw;
+    let height = raw;
+    let floor = Infinity;
+    for (const c of foundations) {
+      const d = footprintDistance(c, x, z);
+      if (d === 0) floor = Math.min(floor, c.y0);
+      else height = Math.min(height, foundationHeight(c, raw, d));
+    }
+    return floor < Infinity ? floor : height;
   }
 
   /** Unit terrain normal at (x, z) written to out ({x, y, z}); returns out. */
   terrainNormal(x, z, out = { x: 0, y: 1, z: 0 }) {
     const e = 1.5;
-    const gx = (this.terrainHeight(x + e, z) - this.terrainHeight(x - e, z)) / (2 * e);
-    const gz = (this.terrainHeight(x, z + e) - this.terrainHeight(x, z - e)) / (2 * e);
+    const gx = (this.surfaceHeight(x + e, z) - this.surfaceHeight(x - e, z)) / (2 * e);
+    const gz = (this.surfaceHeight(x, z + e) - this.surfaceHeight(x, z - e)) / (2 * e);
     const l = Math.hypot(gx, 1, gz);
     out.x = -gx / l;
     out.y = 1 / l;
@@ -416,7 +510,9 @@ export class World {
       if (z < minZ) minZ = z;
       if (z > maxZ) maxZ = z;
     }
-    const y0 = opts && opts.y0 != null ? opts.y0 : this.terrainMinUnder(p, n, minX, minZ, maxX, maxZ);
+    const y0 = opts && opts.y0 != null ? opts.y0 : kind === 'building'
+      ? this.terrainMinUnder(p, n, minX, minZ, maxX, maxZ)
+      : this.surfaceHeight((minX + maxX) / 2, (minZ + maxZ) / 2);
     const c = { type: 'poly', kind, p, n, h: y0 + h, y0, hgt: h, minX, maxX, minZ, maxZ, mat, ref, stamp: 0, alive: true, hp: Infinity, maxHp: Infinity };
     if (opts && opts.roof) {
       c.planes = opts.roof.planes;
@@ -438,6 +534,10 @@ export class World {
    */
   addBuilding(bd) {
     const c = this.addPoly(bd.p, bd.h, 'building', bd.mat, bd);
+    c.foundationBand = foundationBand(c, (x, z) => this.terrainHeight(x, z));
+    const band = c.foundationBand;
+    this._each(c.minX - band, c.minZ - band, c.maxX + band, c.maxZ + band, true,
+      (cell) => (cell.foundations || (cell.foundations = [])).push(c));
     if (!this._shellQueue) this._shellQueue = [];
     this._shellQueue.push(c);
     return c;
@@ -1204,7 +1304,7 @@ export class World {
         if (!this._onInteriorFloor(c, x, z, clr)) continue;
         if (this._circleAt(x, z, clr)) continue;
         out.x = x;
-        out.y = Math.max(c.shell.floor, this.terrainHeight(x, z));
+        out.y = c.shell.floor;
         out.z = z;
         out.building = b;
         return out;
@@ -1228,7 +1328,7 @@ export class World {
 
   /** h: height above the terrain at (x, z). The collider stores y0 (base) and h (absolute top). */
   addCircle(x, z, r, h, kind, mat, hp, ref) {
-    const y0 = this.terrainHeight(x, z);
+    const y0 = this.surfaceHeight(x, z);
     const c = { type: 'circle', kind, x, z, r, h: y0 + h, y0, hgt: h, mat, hp, maxHp: hp, ref, stamp: 0, alive: true };
     this._each(x - r, z - r, x + r, z + r, true, (cell) => cell.circles.push(c));
     this.counts.circles++;
@@ -1416,7 +1516,7 @@ export class World {
    */
   inWater(x, z, feetY) {
     if (this.areaAt(x, z) !== 'water') return false;
-    return feetY - this.terrainHeight(x, z) < 0.4;
+    return feetY - this.surfaceHeight(x, z) < 0.4;
   }
 
   /** The solid prism (building / vehicle) whose footprint contains the point, or null. */
@@ -1441,7 +1541,7 @@ export class World {
    */
   blockedAt(x, z, r, interiors = false) {
     let hit = false;
-    const band = this.terrainHeight(x, z) + PIECE_GROUND_BAND;
+    const band = this.surfaceHeight(x, z) + PIECE_GROUND_BAND;
     this._each(x - r, z - r, x + r, z + r, false, (cell) => {
       if (hit) return;
       const polys = cell.polys;
@@ -1535,7 +1635,7 @@ export class World {
    * ('floor' = the ground floor inside an enterable building, when it is above the terrain).
    */
   groundHeight(x, z, feetY, step = STEP, cap = Infinity) {
-    let y = this.terrainHeight(x, z);
+    let y = this.surfaceHeight(x, z);
     this.surface = 'ground';
     const cell = this.cellAt(x, z);
     if (!cell) return y;
@@ -2008,7 +2108,7 @@ export class World {
     for (let guard = 0; guard < 512; guard++) {
       // ---- terrain within this cell's stretch of the ray
       if (marchGround && groundT < 0 && flat) {
-        const h = this.terrainHeight(ox, oz);
+        const h = this.surfaceHeight(ox, oz);
         if (dy < 0 && oy > h) {
           const th = (oy - h) / -dy;
           if (th > 1e-4 && th < best) {
@@ -2035,7 +2135,7 @@ export class World {
           } else {
             let t = tEnter;
             for (;;) {
-              const d = oy + dy * t - this.terrainHeight(ox + dx * t, oz + dz * t);
+              const d = oy + dy * t - this.surfaceHeight(ox + dx * t, oz + dz * t);
               if (gD > 0 && d <= 0) {
                 // crossed between gT (above) and t (below): bisect, then interpolate
                 let a = gT;
@@ -2044,7 +2144,7 @@ export class World {
                 let db = d;
                 for (let k = 0; k < 4; k++) {
                   const m = (a + b) * 0.5;
-                  const dm = oy + dy * m - this.terrainHeight(ox + dx * m, oz + dz * m);
+                  const dm = oy + dy * m - this.surfaceHeight(ox + dx * m, oz + dz * m);
                   if (dm > 0) {
                     a = m;
                     da = dm;
@@ -2420,7 +2520,7 @@ export class World {
         if (marchGround && groundT < 0 && best > tEnter) {
           let t = tEnter;
           for (let g = 0; g < 4000 && t < best; g++) {
-            const d = oy + dy * t - this.terrainHeight(ox + dx * t, oz + dz * t);
+            const d = oy + dy * t - this.surfaceHeight(ox + dx * t, oz + dz * t);
             if (gD > 0 && d <= 0) {
               const th = gT + ((t - gT) * gD) / (gD - d || 1e-9);
               if (th > 1e-4 && th < best) {

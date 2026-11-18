@@ -35,9 +35,9 @@
  *   atmosphere.stormLevel    the smoothed storm intensity actually being rendered (0..1)
  *   atmosphere.fogColor      THREE.Color currently used for fog + horizon (live, do not mutate)
  *
- * Look (cartoon pass): saturated sky, cel-shaded puffy clouds (smooth ellipsoid normals, hard
- * sun terminator), crisp PCF shadows (radius 0.8), strong sky-tinted hemisphere fill so the
- * toon materials' dark sides stay colourful. Post-processing flags (outline / bloom /
+ * Look: a clear Ozark afternoon with restrained blue sky, warm direct sun and neutral
+ * ground bounce. The character/effects retain the shared cartoon shading, while exterior
+ * materials keep readable, natural colours. Post-processing flags (outline / bloom /
  * renderScale) live in config.js QUALITY and are applied by render/Post.js, not here.
  * Tone mapping: on the plain path (low) the renderer tone-maps lit materials while the sky,
  * clouds, wall and fog colour are display-referred (toneMapped: false). On the post path the
@@ -73,22 +73,22 @@ const QUALITY = {
 const SUN_DIRECTION = new THREE.Vector3(-0.42, 0.74, 0.52).normalize();
 
 // Clear-day and storm palettes. Colours are authored in sRGB hex; THREE converts to linear.
-// Cartoon palette: deep saturated zenith, bright cyan-white horizon, warm sun and a strong
-// sky-tinted fill so cel-shaded dark sides stay colourful instead of muddy.
+// Natural clear-day palette. Sun/fill contrast gives facades depth without
+// turning shaded concrete blue or washing pale stone into featureless white.
 const CLEAR = {
-  zenith: 0x1565e8,
-  mid: 0x46a2ff,
-  horizon: 0xc2e8ff,
-  fogDensity: 0.00085, // FogExp2: ~1% at 100 m, ~33% at 750 m, ~90% at 1800 m
-  sunColor: 0xfff0cf,
+  zenith: 0x4b7fae,
+  mid: 0x89b2cc,
+  horizon: 0xd2dce0,
+  fogDensity: 0.00065,
+  sunColor: 0xfff1da,
   sunDisc: 0xfffcec,
-  sunIntensity: 2.45,
-  hemiSky: 0xc6e0ff,
-  hemiGround: 0xd8c39a,
-  hemiIntensity: 2.5,
-  sunGlow: 1.0,
-  cloudLit: 0xffffff,
-  cloudShade: 0xb9cdf2,
+  sunIntensity: 2.1,
+  hemiSky: 0xcbd9e2,
+  hemiGround: 0xb4aa95,
+  hemiIntensity: 1.8,
+  sunGlow: 0.7,
+  cloudLit: 0xfffcf5,
+  cloudShade: 0xb9c7cf,
 };
 const STORM = {
   zenith: 0x1f1447,

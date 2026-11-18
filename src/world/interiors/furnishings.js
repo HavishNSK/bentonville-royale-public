@@ -222,7 +222,7 @@ class Room {
     for (const h of L.holes || []) this.res.push({ m: FLOOR | FLAT, box: { a0: h.a0 - 0.3, b0: h.b0 - 0.3, a1: h.a1 + 0.3, b1: h.b1 + 0.3 } });
     if (CIRCULATION.has(r.kind)) {
       // A clear walking spine along the room's long axis.
-      const half = r.kind === 'corridor' ? 0.65 : 1.0;
+      const half = r.kind === 'corridor' ? 0.9 : 1.0;
       const box = this.long === 'a'
         ? { a0: r.a0, a1: r.a1, b0: (r.b0 + r.b1) / 2 - half, b1: (r.b0 + r.b1) / 2 + half }
         : { b0: r.b0, b1: r.b1, a0: (r.a0 + r.a1) / 2 - half, a1: (r.a0 + r.a1) / 2 + half };

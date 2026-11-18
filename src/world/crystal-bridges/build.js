@@ -157,7 +157,10 @@ export function sideNormal(side) {
 export function buildSite(world, mapData) {
   const ponds = pondsFrom(mapData);
   const terrain = bakeTerrain(ponds);
-  if (world.setTerrain) world.setTerrain(terrain.meta, terrain.heights);
+  // over the map's USGS terrain the ravine is an overlay (the hills ease down to street level
+  // around the tile); without map terrain it is the whole heightfield
+  if (world.terrain && world.setTerrainOverlay) world.setTerrainOverlay(terrain.meta, terrain.heights, { blend: 60, edge: 0 });
+  else if (world.setTerrain) world.setTerrain(terrain.meta, terrain.heights);
   if (world.reserve) world.reserve(RESERVE);
   for (const pd of ponds) if (world.addArea) world.addArea(pd.p, 'water');
 

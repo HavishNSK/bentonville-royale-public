@@ -29,6 +29,7 @@ import { Input } from '../core/input.js';
 import { World } from '../world/World.js';
 import { buildWorldMeshes } from '../world/WorldMeshes.js';
 import { INTERIOR_VERSION } from '../world/Interiors.js';
+import { worldIdentity } from '../net/worldIdentity.js';
 import { Atmosphere } from '../render/Atmosphere.js';
 import { Effects } from '../render/Effects.js';
 import { Post } from '../render/Post.js';
@@ -510,22 +511,9 @@ export class Game {
     if (net) net.matchStarted(this);
   }
 
-  /**
-   * Identity of the loaded map file (multiplayer start check): meta.generated, else a short
-   * hash of meta.composition. null before the map loads or when it carries neither.
-   */
+  /** Actual map, terrain and generated collision layout (null until world loading finishes). */
   get mapId() {
-    const meta = this.mapData && this.mapData.meta;
-    if (!meta) return null;
-    // '+i<version>.<hash>': building interiors are generated on every client, so their version
-    // and plan hash are part of the map (catches stale builds and any nondeterministic layout)
-    const iv = '+i' + INTERIOR_VERSION + (this.world && this.world.interiorHash ? '.' + this.world.interiorHash : '');
-    if (meta.generated) return String(meta.generated) + iv;
-    if (!meta.composition) return null;
-    const str = JSON.stringify(meta.composition);
-    let h = 0x811c9dc5;
-    for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
-    return 'c' + (h >>> 0).toString(16) + iv;
+    return worldIdentity(this.mapData, this.world, INTERIOR_VERSION);
   }
 
   /** Puts the local player aboard the Drop Bus flying `route`. */

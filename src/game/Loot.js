@@ -693,7 +693,7 @@ export class Loot {
       const z = c.minZ + rng() * (c.maxZ - c.minZ);
       if (w.interiorAt(x, z) !== c) continue;
       if (w.blockedAt(x, z, clearance, true)) continue;
-      return { x, z, y: Math.max(b.floorY, w.terrainHeight(x, z)), yaw: rng() * TAU, b, level: 0 };
+      return { x, z, y: Math.max(b.floorY, w.surfaceHeight(x, z)), yaw: rng() * TAU, b, level: 0 };
     }
     return null;
   }
@@ -769,11 +769,11 @@ export class Loot {
         const x = F.ox + la * F.ux + lb * F.vx;
         const z = F.oz + la * F.uz + lb * F.vz;
         if (w.interiorAt(x, z) !== c || w.blockedAt(x, z, clearance, true)) continue;
-        return { x, z, y: Math.max(L.y, w.terrainHeight(x, z)), yaw, b, level: 0 };
+        return { x, z, y: Math.max(L.y, w.surfaceHeight(x, z)), yaw, b, level: 0 };
       }
     }
     if (w.interiorAt(sp.x, sp.z) !== c || w.blockedAt(sp.x, sp.z, clearance, true)) return null;
-    return { x: sp.x, z: sp.z, y: Math.max(L ? L.y : b.floorY, w.terrainHeight(sp.x, sp.z)), yaw, b, level: 0 };
+    return { x: sp.x, z: sp.z, y: Math.max(L ? L.y : b.floorY, w.surfaceHeight(sp.x, sp.z)), yaw, b, level: 0 };
   }
 
   /** Most spots of `kind` one building may hold (by its walkable floor area over every storey). */
@@ -926,7 +926,7 @@ export class Loot {
             ? w.interiorAt(ax, az) === s.b.collider && !w.blockedAt(ax, az, 0.3, true)
             : !w.blockedAt(ax, az, 0.3);
           const px = ok ? ax : s.x, pz = ok ? az : s.z;
-          const py = s.b ? (s.level > 0 ? s.y : Math.max(s.b.floorY, w.terrainHeight(px, pz))) : w.groundHeight(px, pz, 0.3);
+          const py = s.b ? (s.level > 0 ? s.y : Math.max(s.b.floorY, w.surfaceHeight(px, pz))) : w.groundHeight(px, pz, 0.3);
           this._add('item', px, py, pz, s.yaw, ammoFor(item.id));
         }
       }

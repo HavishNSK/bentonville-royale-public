@@ -1,7 +1,7 @@
 // Developer accounts. The presence server checks the signed-in account (not the
 // nickname) against this list before it grants the chat title or announcements.
 
-export const DEV_NAMES = ['sumukh', 'havish', 'gecko', 'shehryar'];
+export const DEV_NAMES = ['sumukh', 'havish', 'gecko', 'shehryar', 'rakkart13'];
 
 const DEV_SET = new Set(DEV_NAMES);
 

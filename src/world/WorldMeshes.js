@@ -10,7 +10,7 @@ import { createCrystalBridges, hasCrystalBridges } from './crystal-bridges/index
 import { TILE as CB_TILE } from './crystal-bridges/site.js';
 import { makeRng } from '../core/config.js';
 import { flattenModel } from '../core/assets.js';
-import { pointInPoly } from './World.js';
+import { pointInPoly, loadTerrainData } from './World.js';
 import { addInteriorGeometry } from './InteriorMeshes.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { schoolBusParts, schoolBusMaterials, SCHOOL_BUS } from '../render/SchoolBus.js';
@@ -19,12 +19,12 @@ const CHUNK = 256;
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 const AREA_COLOR = {
-  water: 0x4f97cf,
-  wood: 0x4d8a45,
-  park: 0x84bf5f,
-  grass: 0x8ac464,
-  pitch: 0x6cb257,
-  garden: 0x76b65c,
+  water: 0x527d86,
+  wood: 0x526849,
+  park: 0x75885b,
+  grass: 0x7b8b60,
+  pitch: 0x6c845b,
+  garden: 0x71865e,
   parking: 0x8a8e93,
   busloop: 0x83878c, // a school's bus loop: asphalt with parked school buses (parkSchoolBuses)
 };
@@ -95,7 +95,39 @@ class Buf {
 
 const _c = new THREE.Color();
 
-function addPolygon(buf, pts, y, hex) {
+// Subdivide a triangle until its longest edge is <= POLYGON_STEP, sampling
+// the height function at every new midpoint so the mesh follows terrain.
+// 16 m keeps terrain-following accurate for Bentonville's gentle hills while
+// producing ~16x fewer triangles than 4 m (avoids GPU memory exhaustion on
+// city-sized maps where large park / wood polygons dominate the flat mesh).
+const POLYGON_STEP = 16;
+function emitSubTri(buf, ax, ay, az, bx, by, bz, cx, cy, cz, getY, r, g, b) {
+  const abLen = Math.hypot(bx - ax, bz - az);
+  const bcLen = Math.hypot(cx - bx, cz - bz);
+  const caLen = Math.hypot(ax - cx, az - cz);
+  if (Math.max(abLen, bcLen, caLen) <= POLYGON_STEP) {
+    const ia = buf.v(ax, ay, az, 0, 1, 0, r, g, b);
+    const ib = buf.v(bx, by, bz, 0, 1, 0, r, g, b);
+    const ic = buf.v(cx, cy, cz, 0, 1, 0, r, g, b);
+    buf.idx.push(ia, ib, ic);
+    return;
+  }
+  if (abLen >= bcLen && abLen >= caLen) {
+    const mx = (ax + bx) / 2, mz = (az + bz) / 2, my = getY(mx, mz);
+    emitSubTri(buf, ax, ay, az, mx, my, mz, cx, cy, cz, getY, r, g, b);
+    emitSubTri(buf, mx, my, mz, bx, by, bz, cx, cy, cz, getY, r, g, b);
+  } else if (bcLen >= caLen) {
+    const mx = (bx + cx) / 2, mz = (bz + cz) / 2, my = getY(mx, mz);
+    emitSubTri(buf, ax, ay, az, bx, by, bz, mx, my, mz, getY, r, g, b);
+    emitSubTri(buf, ax, ay, az, mx, my, mz, cx, cy, cz, getY, r, g, b);
+  } else {
+    const mx = (cx + ax) / 2, mz = (cz + az) / 2, my = getY(mx, mz);
+    emitSubTri(buf, ax, ay, az, bx, by, bz, mx, my, mz, getY, r, g, b);
+    emitSubTri(buf, mx, my, mz, bx, by, bz, cx, cy, cz, getY, r, g, b);
+  }
+}
+
+export function addPolygon(buf, pts, y, hex) {
   if (pts.length < 3) return;
   const contour = pts.map((p) => new THREE.Vector2(p[0], p[1]));
   let tris;
@@ -105,23 +137,51 @@ function addPolygon(buf, pts, y, hex) {
     return;
   }
   _c.setHex(hex);
-  const base = buf.n;
-  for (const p of pts) buf.v(p[0], y, p[1], 0, 1, 0, _c.r, _c.g, _c.b);
-  for (const t of tris) {
-    const a = pts[t[0]];
-    const c = pts[t[1]];
-    const d = pts[t[2]];
-    const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
-    if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
-    else buf.idx.push(base + t[0], base + t[2], base + t[1]);
+  const getY = typeof y === 'function' ? y : () => y;
+  const r = _c.r, g = _c.g, b = _c.b;
+  if (typeof y === 'function') {
+    // Terrain-aware: subdivide each triangle so interior points sample the heightfield.
+    for (const t of tris) {
+      const a = pts[t[0]], c = pts[t[1]], d = pts[t[2]];
+      const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
+      let ax, az, bx, bz, cx, cz;
+      if (up > 0) { [ax, az] = a; [bx, bz] = c; [cx, cz] = d; }
+      else         { [ax, az] = a; [bx, bz] = d; [cx, cz] = c; }
+      emitSubTri(buf, ax, getY(ax, az), az, bx, getY(bx, bz), bz, cx, getY(cx, cz), cz, getY, r, g, b);
+    }
+  } else {
+    // Flat polygon: share boundary vertices, no subdivision needed.
+    const base = buf.n;
+    for (const p of pts) buf.v(p[0], getY(p[0], p[1]), p[1], 0, 1, 0, r, g, b);
+    for (const t of tris) {
+      const a = pts[t[0]], c = pts[t[1]], d = pts[t[2]];
+      const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
+      if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
+      else        buf.idx.push(base + t[0], base + t[2], base + t[1]);
+    }
   }
 }
 
-function addRibbon(buf, pts, halfWidth, y, hex) {
+// A road can span hundreds of metres between OSM nodes. Four-metre samples
+// follow the DEM instead of drawing a flat chord through hills and foundations.
+function ribbonSamples(path) {
+  if (path.length < 2) return path;
+  const points = [path[0]];
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1], b = path[i];
+    const count = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 4));
+    for (let k = 1; k <= count; k++) points.push([a[0] + (b[0] - a[0]) * k / count, a[1] + (b[1] - a[1]) * k / count]);
+  }
+  return points;
+}
+
+export function addRibbon(buf, path, halfWidth, y, hex) {
+  const pts = ribbonSamples(path);
   const n = pts.length;
   if (n < 2) return;
   _c.setHex(hex);
   const base = buf.n;
+  const getY = typeof y === 'function' ? y : () => y;
   for (let i = 0; i < n; i++) {
     const p = pts[i];
     const a = pts[Math.max(0, i - 1)];
@@ -159,8 +219,10 @@ function addRibbon(buf, pts, halfWidth, y, hex) {
     // miter length, clamped so sharp corners do not spike
     const cos = Math.max(0.5, nx * -d1z + nz * d1x);
     const w = halfWidth / cos;
-    buf.v(p[0] + nx * w, y, p[1] + nz * w, 0, 1, 0, _c.r, _c.g, _c.b);
-    buf.v(p[0] - nx * w, y, p[1] - nz * w, 0, 1, 0, _c.r, _c.g, _c.b);
+    const lx = p[0] + nx * w, lz = p[1] + nz * w;
+    const rx = p[0] - nx * w, rz = p[1] - nz * w;
+    buf.v(lx, getY(lx, lz), lz, 0, 1, 0, _c.r, _c.g, _c.b);
+    buf.v(rx, getY(rx, rz), rz, 0, 1, 0, _c.r, _c.g, _c.b);
   }
   for (let i = 0; i < n - 1; i++) {
     const a = base + i * 2;
@@ -214,6 +276,48 @@ function noiseTexture(size, base, spread) {
   return tex;
 }
 
+function groundTexture() {
+  // Multi-color natural ground: dark green → mid green → yellow-green → tan → dirt
+  const size = 512;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  const ctx = cv.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const rng = makeRng(8831);
+  const lattice = (n) => { const a = new Float32Array(n * n); for (let i = 0; i < a.length; i++) a[i] = rng(); return a; };
+  const l1 = lattice(4), l2 = lattice(16), l3 = lattice(64);
+  const sample = (l, n, u, v) => {
+    const x = u * n, y = v * n;
+    const x0 = Math.floor(x) % n, y0 = Math.floor(y) % n;
+    const x1 = (x0 + 1) % n, y1 = (y0 + 1) % n;
+    let fx = x - Math.floor(x), fy = y - Math.floor(y);
+    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+    return (l[y0 * n + x0] * (1 - fx) + l[y0 * n + x1] * fx) * (1 - fy) + (l[y1 * n + x0] * (1 - fx) + l[y1 * n + x1] * fx) * fy;
+  };
+  // earthy palette: deep green, mid green, bright green, yellow-green, tan, bare dirt
+  const pal = [[0x45,0x50,0x36],[0x5a,0x69,0x43],[0x76,0x83,0x55],[0x8b,0x91,0x64],[0xa0,0x95,0x70],[0x8e,0x7d,0x60]];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size, v = y / size;
+      const n = sample(l1, 4, u, v) * 0.50 + sample(l2, 16, u, v) * 0.30 + sample(l3, 64, u, v) * 0.20;
+      const t = Math.max(0, Math.min(1, n + (rng() - 0.5) * 0.07)) * (pal.length - 1);
+      const idx = Math.min(pal.length - 2, Math.floor(t));
+      const f = t - idx;
+      const r = Math.round(pal[idx][0] * (1 - f) + pal[idx + 1][0] * f);
+      const g = Math.round(pal[idx][1] * (1 - f) + pal[idx + 1][1] * f);
+      const b = Math.round(pal[idx][2] * (1 - f) + pal[idx + 1][2] * f);
+      const i = (y * size + x) * 4;
+      img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
 // ------------------------------------------------------------------ buildings
 
 function buildingMaterial() {
@@ -255,21 +359,20 @@ function buildingMaterial() {
           // sill under each window
           float sill = (1.0 - smoothstep(0.0, aa.y + 0.02, abs(f.y - (lo.y - fr.y - 0.03)))) * step(lo.x - fr.x, f.x) * step(f.x, hi.x + fr.x);
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.18, sill * win);
-          // plinth at the base
-          diffuseColor.rgb *= mix(0.72, 1.0, smoothstep(0.55, 0.62, vWall.y));
-          // slab line between floors (brick / metal)
-          if (style > 0.5) {
-            float fl = fract(vWall.y / fh);
-            float band = smoothstep(0.0, 0.015 + aa.y, fl) * (1.0 - smoothstep(0.06 - aa.y, 0.06, fl));
-            diffuseColor.rgb *= 1.0 - 0.12 * band * near * step(1.0, vWall.y);
-          }
-          // parapet / cornice cap: a lighter band with a dark shadow line beneath it
+          // plinth at the base (taller, darker — visible from street level)
+          diffuseColor.rgb *= mix(0.65, 1.0, smoothstep(0.70, 0.90, vWall.y));
+          // slab line between floors — wider and stronger for all material styles
+          float fl = fract(vWall.y / fh);
+          float band = smoothstep(0.0, 0.02 + aa.y, fl) * (1.0 - smoothstep(0.10 - aa.y, 0.10, fl));
+          float bandStr = style < 0.5 ? 0.08 : 0.18;
+          diffuseColor.rgb *= 1.0 - bandStr * band * near * step(1.0, vWall.y);
+          // parapet / cornice cap: more pronounced lighter band with deeper shadow beneath
           float top = vH - vWall.y;
-          diffuseColor.rgb *= mix(1.0, 1.14, 1.0 - smoothstep(0.42, 0.46, top));
-          diffuseColor.rgb *= 1.0 - 0.28 * smoothstep(0.42, 0.46, top) * (1.0 - smoothstep(0.58, 0.64, top));
-          // corners: darker pilaster at each end of the wall so building edges read up close
+          diffuseColor.rgb *= mix(1.0, 1.22, 1.0 - smoothstep(0.38, 0.44, top));
+          diffuseColor.rgb *= 1.0 - 0.38 * smoothstep(0.38, 0.44, top) * (1.0 - smoothstep(0.60, 0.70, top));
+          // corners: wider, darker pilasters so building edges read clearly
           float edge = vWall.w * 0.5 - abs(vWall.x);
-          diffuseColor.rgb *= mix(0.8, 1.0, smoothstep(0.32, 0.4, edge));
+          diffuseColor.rgb *= mix(0.68, 1.0, smoothstep(0.18, 0.46, edge));
           // low-frequency grime so a large wall is not one flat colour
           float gx = floor(vWall.x / 1.3);
           float gz = floor(vWall.y / 1.1);
@@ -280,11 +383,27 @@ function buildingMaterial() {
           if (style < 0.5) {
             float l = smoothstep(0.0, 0.1, fract(vWall.y / 0.4));
             diffuseColor.rgb *= mix(1.0, mix(0.9, 1.0, l), near);
+          } else if (style < 1.5) {
+            // Running-bond masonry in metres, antialiased away at distance. A
+            // restrained mortar joint gives brick a scale without new textures.
+            float row = floor(vWall.y / 0.085);
+            vec2 brick = vec2(vWall.x / 0.25 + mod(row, 2.0) * 0.5, vWall.y / 0.085);
+            vec2 bf = fract(brick);
+            vec2 ba = fwidth(brick) + 1e-4;
+            vec2 joint = smoothstep(vec2(0.04) - ba, vec2(0.04) + ba, bf);
+            float mortar = 1.0 - joint.x * joint.y;
+            float detail = 1.0 - smoothstep(0.2, 0.65, max(ba.x, ba.y));
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.82 + vec3(0.035), mortar * detail * 0.55 * (1.0 - m.x * m.y * win));
+          } else {
+            // Industrial metal cladding: narrow vertical panel seams.
+            float seam = abs(fract(vWall.x / 1.2) - 0.5);
+            float edgeAA = fwidth(vWall.x / 1.2) + 1e-4;
+            diffuseColor.rgb *= 1.0 - (1.0 - smoothstep(0.006, 0.006 + edgeAA, seam)) * 0.16 * near;
           }
         }`
       );
   };
-  mat.customProgramCacheKey = () => 'br-building-v2';
+  mat.customProgramCacheKey = () => 'br-building-v3';
   return mat;
 }
 
@@ -348,7 +467,9 @@ function hcap(chunk, pts, tris, y, dir, hex, h, litDir = dir) {
  * door openings, the wall thickness (an inner face), door jambs and lintels, an
  * interior floor and ceiling. Geometry sits on y = 0 like the rest of the map.
  */
-function addBuilding(chunk, b, tint, shell) {
+export function appendBuildingGeometry(chunk, b, tint, collider) {
+  const shell = collider?.shell;
+  const start = chunk.buf.pos.length;
   const pts = b.p;
   const n = pts.length;
   const h = b.h;
@@ -411,6 +532,11 @@ function addBuilding(chunk, b, tint, shell) {
     if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
     else buf.idx.push(base + t[0], base + t[2], base + t[1]);
   }
+  // Interior generators deliberately emit heights relative to shell.floor. Lift the
+  // entire building together, including panels, stairs and furniture, to the very
+  // same foundation used by World collision. Shader facade heights remain local.
+  const baseY = collider?.y0 || 0;
+  for (let i = start + 1; i < buf.pos.length; i += 3) buf.pos[i] += baseY;
 }
 
 /**
@@ -547,20 +673,21 @@ const _s = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 const _zero = new THREE.Matrix4().makeScale(0, 0, 0);
 
-class Scatter {
-  constructor(scene, shadows) {
+export class Scatter {
+  constructor(scene, shadows, surfaceHeight = () => 0) {
     this.scene = scene;
     this.shadows = shadows;
     this.defs = new Map();
     this.buckets = new Map(); // "cx,cz|name" -> records
     this.meshes = [];
+    this.surfaceHeight = surfaceHeight;
   }
 
   define(name, gltf, scale) {
     if (!gltf) return false;
     const flat = flattenModel(gltf.scene);
     if (!flat) return false;
-    this.defs.set(name, { geometry: flat.geometry, material: flat.material, scale });
+    this.defs.set(name, { geometry: flat.geometry, material: flat.material, scale, minY: flat.geometry.boundingBox.min.y });
     return true;
   }
 
@@ -569,13 +696,14 @@ class Scatter {
   }
 
   /** Returns a record you can later pass to hide(). */
-  add(name, x, z, rotY, scaleMul = 1, colorHex = null, y = 0) {
+  add(name, x, z, rotY, scaleMul = 1, colorHex = null, y = this.surfaceHeight(x, z)) {
     const def = this.defs.get(name);
     if (!def) return null;
     const key = Math.floor(x / CHUNK) + ',' + Math.floor(z / CHUNK) + '|' + name;
     let list = this.buckets.get(key);
     if (!list) this.buckets.set(key, (list = []));
-    const rec = { name, x, y, z, rotY, scale: def.scale * scaleMul, color: colorHex, mesh: null, index: list.length };
+    const scale = def.scale * scaleMul;
+    const rec = { name, x, y: y - def.minY * scale, z, rotY, scale, color: colorHex, mesh: null, index: list.length };
     list.push(rec);
     return rec;
   }
@@ -729,7 +857,7 @@ function parkSchoolBuses(world, data, root) {
       // bus-local -z (the front) points along +f; origin sits BUS_MID behind the footprint centre
       const ox = cx - fx * -BUS_MID;
       const oz = cz - fz * -BUS_MID;
-      const gy = world.terrainHeight(cx, cz);
+      const gy = world.surfaceHeight(cx, cz);
       m.makeRotationY(Math.atan2(-fx, -fz)).setPosition(ox, gy + SCHOOL_BUS.groundY, oz);
       for (const part of parts) (byMat[part.mat] ||= []).push(part.geometry.clone().applyMatrix4(m));
       const corners = [
@@ -738,7 +866,7 @@ function parkSchoolBuses(world, data, root) {
         [cx - fx * BUS_HALF_LEN - vx * BUS_HALF_W, cz - fz * BUS_HALF_LEN - vz * BUS_HALF_W],
         [cx - fx * BUS_HALF_LEN + vx * BUS_HALF_W, cz - fz * BUS_HALF_LEN + vz * BUS_HALF_W],
       ];
-      const col = world.addPoly(corners, SCHOOL_BUS.groundY + SCHOOL_BUS.top, 'vehicle', 'metal', []);
+      const col = world.addPoly(corners, SCHOOL_BUS.groundY + SCHOOL_BUS.top, 'vehicle', 'metal', [], { y0: gy });
       col.x = cx;
       col.z = cz;
       n++;
@@ -790,8 +918,14 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   root.name = 'world';
   scene.add(root);
 
-  // ---- Crystal Bridges (bespoke landmark): registered FIRST, because it sets the ravine
-  // heightfield every later collider stands on (src/world/crystal-bridges/)
+  progress(0.01, 'Loading terrain');
+  const terrainExtras = await loadTerrainData('/data/').catch(() => ({ terrain: null, trees: null, groundImage: null }));
+  if (terrainExtras.terrain) world.setTerrain(terrainExtras.terrain.meta, terrainExtras.terrain.heights);
+  const groundImage = terrainExtras.groundImage;
+
+  // ---- Crystal Bridges (bespoke landmark): registered right after the map terrain and before
+  // every other collider. It lays its ravine over the terrain (World.setTerrainOverlay: the hills
+  // ease down to street level around the tile) and reserves its site (src/world/crystal-bridges/)
   const cb = hasCrystalBridges(data) ? createCrystalBridges(world, data) : null;
   const skipFlat = (pts, k) => !!cb && cb.skipFlat(pts, k);
 
@@ -800,47 +934,65 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const margin = 2600;
   const gw = b.maxX - b.minX + margin * 2;
   const gd = b.maxZ - b.minZ + margin * 2;
-  const groundTex = noiseTexture(256, 0.92, 0.22);
-  groundTex.repeat.set(gw / 70, gd / 70);
-  // the Crystal Bridges tile is cut out of the ground plane: its own terrain mesh fills it
-  const groundGeo = cb ? groundWithHole(b, margin, CB_TILE) : new THREE.PlaneGeometry(gw, gd);
-  const ground = new THREE.Mesh(groundGeo, new THREE.MeshLambertMaterial({ color: 0x7daf58, map: groundTex }));
-  ground.rotation.x = -Math.PI / 2;
-  if (!cb) ground.position.set((b.minX + b.maxX) / 2, 0, (b.minZ + b.maxZ) / 2);
-  ground.receiveShadow = true;
-  ground.renderOrder = -2;
-  root.add(ground);
+  const cx0 = (b.minX + b.maxX) / 2;
+  const cz0 = (b.minZ + b.maxZ) / 2;
+
+  // Natural procedural ground texture (better than satellite photo at walking level)
+  const gTex = groundTexture();
+  gTex.repeat.set((b.maxX - b.minX) / 48, (b.maxZ - b.minZ) / 48);
+  const groundMat = new THREE.MeshLambertMaterial({ map: gTex });
+  // Outer margin (always flat, behind everything — horizon fill). The Crystal Bridges tile is
+  // cut out of it: the ravine dips below y = 0 and draws its own terrain mesh.
+  const outerGeo = cb ? groundWithHole(b, margin, CB_TILE) : new THREE.PlaneGeometry(gw, gd);
+  const outerMesh = new THREE.Mesh(outerGeo, new THREE.MeshLambertMaterial({ color: 0x65744e }));
+  outerMesh.rotation.x = -Math.PI / 2;
+  if (!cb) outerMesh.position.set(cx0, 0, cz0);
+  outerMesh.renderOrder = -3;
+  root.add(outerMesh);
+  // The displaced terrain mesh is created after buildings are registered so building
+  // footprints can be flattened to their floor level (prevents terrain from piercing walls).
 
   // ---- flat layers: land cover, sidewalks, paths, roads, centre lines (painter's order in one mesh)
+  // When terrain is loaded each overlay vertex follows the terrain surface so roads/parks
+  // don't float above or sink into hills.
+  // Areas use a terrain height function so addPolygon subdivides large polygons (every 4 m)
+  // giving interior vertices that faithfully follow hills. Heights are then overwritten at
+  // line 999 with surfaceHeight (which includes building foundation grading) so sidewalks
+  // and road approaches share the collision surface.
+  // Roads already subdivide via ribbonSamples; they still use 0 here and get corrected.
+  // Each flat layer gets a distinct Y offset so they depth-separate cleanly even on
+  // GPUs where painter's-order-within-a-draw-call is not guaranteed. Offsets must stay
+  // below the building interior floor overlay at +0.05 (InteriorMeshes.js line 68).
+  const yGround = 0;
+  const areaY = world.terrain ? (x, z) => world.terrainHeight(x, z) : 0;
   const flat = new Buf();
   for (const a of data.areas) {
     if (!AREA_COLOR[a.k] || skipFlat(a.p, a.k)) continue;
-    addPolygon(flat, a.p, 0, AREA_COLOR[a.k]);
+    addPolygon(flat, a.p, areaY, AREA_COLOR[a.k]);
     world.addArea(a.p, a.k);
   }
-  for (const w of data.waterways || []) if (!skipFlat(w.p)) addRibbon(flat, w.p, w.k === 'river' ? 5 : 1.6, 0, AREA_COLOR.water);
+  const flatAreaEnd = flat.n;
+  for (const w of data.waterways || []) if (!skipFlat(w.p)) addRibbon(flat, w.p, w.k === 'river' ? 5 : 1.6, yGround, AREA_COLOR.water);
+  const flatWaterwayEnd = flat.n;
+  // roads that would float over the Crystal Bridges ravine are left out (its paths replace them)
   const roads = cb ? data.roads.filter((r) => !skipFlat(r.p)) : data.roads;
   await tick();
-  for (const r of roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2 + 1.7, 0, 0xb7b3a8);
+  for (const r of roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2 + 1.7, yGround, 0xb7b3a8);
+  const flatShoulderEnd = flat.n;
   for (const r of roads) {
     if (!PATHS.has(r.k)) continue;
     const hex = r.k === 'path' || r.k === 'track' ? 0xb7a27a : r.k === 'pedestrian' ? 0xd9d1bd : r.k === 'cycleway' ? 0xc4bda8 : 0xcdc5b0;
-    addRibbon(flat, r.p, r.w / 2, 0, hex);
+    addRibbon(flat, r.p, r.w / 2, yGround, hex);
   }
-  for (const r of roads) if (r.k === 'service') addRibbon(flat, r.p, r.w / 2, 0, 0x64686d);
-  for (const r of roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2, 0, MAJOR.has(r.k) ? 0x484c52 : 0x53575c);
-  for (const r of roads) if (MAJOR.has(r.k)) addRibbon(flat, r.p, 0.14, 0, 0xe3c545);
+  const flatPathEnd = flat.n;
+  for (const r of roads) if (r.k === 'service') addRibbon(flat, r.p, r.w / 2, yGround, 0x64686d);
+  const flatServiceEnd = flat.n;
+  for (const r of roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2, yGround, MAJOR.has(r.k) ? 0x484c52 : 0x53575c);
+  const flatSurfaceEnd = flat.n;
+  for (const r of roads) if (MAJOR.has(r.k)) addRibbon(flat, r.p, 0.14, yGround, 0xe3c545);
   for (const r of roads) {
     for (let i = 0; i + 1 < r.p.length; i++) world.addRoadSegment(r.p[i][0], r.p[i][1], r.p[i + 1][0], r.p[i + 1][1], r.w, r.k);
   }
-  const flatMesh = new THREE.Mesh(
-    flat.geometry(),
-    new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 })
-  );
-  flatMesh.receiveShadow = true;
-  flatMesh.renderOrder = -1;
-  flatMesh.frustumCulled = false;
-  root.add(flatMesh);
   progress(0.15, 'Raising buildings');
   await tick();
 
@@ -850,12 +1002,18 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const tintIds = (key, tint) => {
     if (lm[key] && lm[key].ids) for (const id of lm[key].ids) tints.set(id, tint);
   };
-  tintIds('crystal_bridges', { wall: 0xd8d0bc, roof: 0xb0703c });
+  tintIds('crystal_bridges', { wall: 0xd4ccb0, roof: 0xb87038 }); // warm limestone walls, saturated copper roof
   tintIds('courthouse', { wall: 0xe6dcc3, roof: 0x7f8a8c });
   tintIds('walmart_museum', { wall: 0xc9483a, roof: 0x5c5148 });
   tintIds('momentary', { wall: 0xd9dde0, roof: 0xe2574c });
   // 8th Street Market is a converted plant: warm industrial grey, not a sky-blue slab
   tintIds('market_8th', { wall: 0xbdb3a1, roof: 0x6f7376 });
+  tintIds('compton_gardens',   { wall: 0xd6cebc, roof: 0x8a8070 });
+  tintIds('bentonville_high',  { wall: 0xb04030, roof: 0x6b4a3a });
+  tintIds('bentonville_west',  { wall: 0xd4cfc6, roof: 0x556678 });
+  tintIds('community_center',  { wall: 0xa8b2bc, roof: 0x7a8a96 });
+  tints.set(912841351, { wall: 0xd6cebc, roof: 0x8a8070 });
+  tints.set(912841368, { wall: 0xc8c0ae, roof: 0x857c6e });
 
   const chunks = new Map();
   const placed = []; // [chunk, map record, collider] triples
@@ -881,9 +1039,80 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // doors need every building and road registered first (road-facing, not into a neighbour)
   world.finishBuildings();
   await tick();
+
+  // Raise each flat layer to its own height above the terrain surface so overlapping
+  // road / area layers resolve cleanly via the depth buffer on every GPU.
+  // Layer order (lowest→highest): areas, waterways, shoulders, paths, service, surfaces, centrelines.
+  const liftFlat = (startV, endV, dy) => {
+    for (let i = startV * 3; i < endV * 3; i += 3)
+      flat.pos[i + 1] = world.surfaceHeight(flat.pos[i], flat.pos[i + 2]) + dy;
+  };
+  liftFlat(0,               flatAreaEnd,     0.010); // land cover (lowest)
+  liftFlat(flatAreaEnd,     flatWaterwayEnd, 0.015); // waterways
+  liftFlat(flatWaterwayEnd, flatShoulderEnd, 0.020); // road shoulders
+  liftFlat(flatShoulderEnd, flatPathEnd,     0.025); // paths / footways
+  liftFlat(flatPathEnd,     flatServiceEnd,  0.028); // service roads
+  liftFlat(flatServiceEnd,  flatSurfaceEnd,  0.034); // road surfaces (above shoulders)
+  liftFlat(flatSurfaceEnd,  flat.n,          0.040); // centre lines (top)
+  const flatGeometry = flat.geometry();
+  flatGeometry.computeVertexNormals();
+  const flatMesh = new THREE.Mesh(
+    flatGeometry,
+    new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 })
+  );
+  flatMesh.receiveShadow = true;
+  flatMesh.renderOrder = -1;
+  flatMesh.frustumCulled = false;
+  root.add(flatMesh);
+
+  // ---- terrain displaced mesh (deferred until buildings are registered so we can flatten under them)
+  if (world.terrain) {
+    const T = world.terrain;
+    const tCols = Math.ceil((b.maxX - b.minX) / T.cell) + 2;
+    const tRows = Math.ceil((b.maxZ - b.minZ) / T.cell) + 2;
+    const tGeo = new THREE.PlaneGeometry(b.maxX - b.minX, b.maxZ - b.minZ, tCols - 1, tRows - 1);
+    tGeo.rotateX(-Math.PI / 2);
+    const tPos = tGeo.attributes.position;
+    for (let i = 0; i < tPos.count; i++) {
+      const wx = tPos.getX(i) + cx0;
+      const wz = tPos.getZ(i) + cz0;
+      // Flatten terrain under building footprints to that building's floor level so walls
+      // don't appear to sink into hillsides.
+      tPos.setY(i, world.surfaceHeight(wx, wz));
+    }
+    tPos.needsUpdate = true;
+    if (cb) {
+      // the Crystal Bridges tile draws its own ravine terrain: drop this mesh's triangles there
+      const idx = tGeo.index.array;
+      const keep = [];
+      for (let k = 0; k < idx.length; k += 3) {
+        const mx = (tPos.getX(idx[k]) + tPos.getX(idx[k + 1]) + tPos.getX(idx[k + 2])) / 3 + cx0;
+        const mz = (tPos.getZ(idx[k]) + tPos.getZ(idx[k + 1]) + tPos.getZ(idx[k + 2])) / 3 + cz0;
+        if (mx > CB_TILE.x0 && mx < CB_TILE.x1 && mz > CB_TILE.z0 && mz < CB_TILE.z1) continue;
+        keep.push(idx[k], idx[k + 1], idx[k + 2]);
+      }
+      tGeo.setIndex(keep);
+    }
+    tGeo.computeVertexNormals();
+    const tMesh = new THREE.Mesh(tGeo, groundMat);
+    tMesh.position.set(cx0, 0, cz0);
+    tMesh.receiveShadow = true;
+    tMesh.renderOrder = -2;
+    root.add(tMesh);
+  } else {
+    // No terrain data — simple flat ground
+    const fGeo = cb ? groundWithHole(b, 0, CB_TILE) : new THREE.PlaneGeometry(b.maxX - b.minX, b.maxZ - b.minZ);
+    const fMesh = new THREE.Mesh(fGeo, groundMat);
+    fMesh.rotation.x = -Math.PI / 2;
+    if (!cb) fMesh.position.set(cx0, 0, cz0);
+    fMesh.receiveShadow = true;
+    fMesh.renderOrder = -2;
+    root.add(fMesh);
+  }
+
   for (let i = 0; i < placed.length; i += 3) {
     const bd = placed[i + 1];
-    addBuilding(placed[i], bd, tints.get(bd.id), placed[i + 2].shell || null);
+    appendBuildingGeometry(placed[i], bd, tints.get(bd.id), placed[i + 2]);
     if ((i / 3) % 600 === 599) {
       progress(0.25 + 0.2 * (i / placed.length), 'Raising buildings');
       await tick();
@@ -920,8 +1149,9 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   await tick();
 
   // ---- instanced props
-  const trees = new Scatter(root, true);
-  const props = new Scatter(root, true);
+  const surfaceHeight = (x, z) => world.surfaceHeight(x, z);
+  const trees = new Scatter(root, true, surfaceHeight);
+  const props = new Scatter(root, true, surfaceHeight);
   const scaleOf = (list, file) => (list || []).find((m) => m.file === file)?.suggestedUniformScale || 1;
   const TREE_NAMES = ['tree_a', 'tree_b', 'tree_c', 'tree_d', 'pine_a', 'pine_b'];
   const TREE_H = { tree_a: 9, tree_b: 6.5, tree_c: 7, tree_d: 5.5, pine_a: 10, pine_b: 9 };
@@ -993,7 +1223,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
           [x - fx * hl - ux * hw, z - fz * hl - uz * hw],
           [x - fx * hl + ux * hw, z - fz * hl + uz * hw],
         ];
-        const col2 = world.addPoly(corners, name === 'truck' ? 2.3 : 1.5, 'vehicle', 'metal', [rec]);
+        const col2 = world.addPoly(corners, name === 'truck' ? 2.3 : 1.5, 'vehicle', 'metal', [rec], { y0: surfaceHeight(x, z) });
         col2.hp = col2.maxHp = 300;
         col2.x = x;
         col2.z = z;
