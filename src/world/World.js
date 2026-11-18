@@ -430,8 +430,10 @@ export class World {
   terrainMinUnder(p, n, minX, minZ, maxX, maxZ) {
     if (!this.terrain) return 0;
     let m = Infinity;
+    const hs = [];
     for (let i = 0; i < n; i++) {
       const y = this.terrainHeight(p[i * 2], p[i * 2 + 1]);
+      hs.push(y);
       if (y < m) m = y;
     }
     const s = this.terrain.cell;
@@ -439,10 +441,16 @@ export class World {
       for (let x = Math.ceil(minX / s) * s; x < maxX; x += s) {
         if (!pointInPoly(p, n, x, z)) continue;
         const y = this.terrainHeight(x, z);
+        hs.push(y);
         if (y < m) m = y;
       }
     }
-    return m === Infinity ? this.terrainHeight((minX + maxX) / 2, (minZ + maxZ) / 2) : m;
+    if (m === Infinity) return this.terrainHeight((minX + maxX) / 2, (minZ + maxZ) / 2);
+    // a ditch / creek spike under one corner must not sink a whole building into a pit (its
+    // foundation would undercut the neighbours): never more than 1 m below the 10th-percentile
+    // ground under the footprint. Footprints with <= 10 samples keep the exact minimum.
+    hs.sort((a, b) => a - b);
+    return Math.max(m, hs[Math.floor(0.1 * (hs.length - 1))] - 1);
   }
 
   /** Walkable / hittable top of prism c at (x, z) (pitched roofs follow their planes). */
