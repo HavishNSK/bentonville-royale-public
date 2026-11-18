@@ -131,3 +131,25 @@ test('a respawned bot keeps its own difficulty', () => {
   bots.respawn(hard, 12, 0, 12);
   assert.equal(hard._bot.diffName, 'hard');
 });
+
+test('bots fight each other toggle: own teams when on, one team when off (existing bots too)', async () => {
+  const { setSandboxBotsHostile, sandboxBotTeam, SANDBOX_BOT_FFA_TEAM } = await import('../src/game/sandboxLoadout.js');
+  const { sameTeam } = await import('../src/game/Teams.js');
+  const { game } = sandbox();
+  const a = spawnSandboxBot(game, 'normal').bot;
+  const b = spawnSandboxBot(game, 'hard').bot;
+  assert.ok(sameTeam(a, b), 'off by default: one team, hunting the player');
+  assert.equal(sandboxBotStatus(game).hostile, false);
+  setSandboxBotsHostile(game, true);
+  assert.ok(!sameTeam(a, b), 'on: the bots already out are enemies now');
+  assert.ok(a.team <= SANDBOX_BOT_FFA_TEAM && b.team <= SANDBOX_BOT_FFA_TEAM);
+  const c = spawnSandboxBot(game, 'easy').bot;
+  assert.ok(!sameTeam(a, c) && !sameTeam(b, c), 'and new ones spawn on their own team');
+  assert.equal(sandboxBotStatus(game).hostile, true);
+  // fighting each other, then off: the bot drops its target that is now a teammate
+  a._bot.target = b;
+  setSandboxBotsHostile(game, false);
+  assert.ok(sameTeam(a, b) && sameTeam(a, c));
+  assert.equal(a._bot.target, null);
+  assert.equal(sandboxBotTeam(game, 3), SANDBOX_BOT_TEAM);
+});

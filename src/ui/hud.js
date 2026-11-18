@@ -282,6 +282,7 @@ function hudHTML() {
         <button type="button" class="br-sandbox-bot is-hard" data-diff="hard" data-ref="sandboxBotHard" aria-label="Spawn a hard bot">HARD</button>
         <button type="button" class="br-sandbox-bot is-clear" data-ref="sandboxBotClear" aria-label="Remove all sandbox bots">CLEAR</button>
       </div>
+      <button type="button" class="br-sandbox-bot br-sandbox-bots-ffa" data-ref="sandboxBotFfa" aria-pressed="false">BOTS FIGHT EACH OTHER: OFF</button>
       <p class="br-sandbox-bots-note" data-ref="sandboxBotsNote" role="status" hidden></p>
     </section>
     <button type="button" class="br-sandbox-loadout-close" data-ref="sandboxBotsClose">Close</button>
@@ -1094,10 +1095,17 @@ export function buildHud(root) {
   // ---- sandbox BOTS section (Game.spawnSandboxBot / clearSandboxBots / _syncSandboxBots)
   let onSandboxBot = null;
   let onSandboxBotClear = null;
-  function setSandboxBotHandlers(spawn, clear) {
+  let onSandboxBotFfa = null;
+  function setSandboxBotHandlers(spawn, clear, ffa) {
     onSandboxBot = typeof spawn === 'function' ? spawn : null;
     onSandboxBotClear = typeof clear === 'function' ? clear : null;
+    onSandboxBotFfa = typeof ffa === 'function' ? ffa : null;
   }
+  r.sandboxBotFfa.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onSandboxBotFfa) onSandboxBotFfa(r.sandboxBotFfa.getAttribute('aria-pressed') !== 'true');
+  });
   const botButtons = [r.sandboxBotEasy, r.sandboxBotNormal, r.sandboxBotHard];
   for (const btn of botButtons) {
     btn.addEventListener('click', (e) => {
@@ -1120,6 +1128,10 @@ export function buildHud(root) {
       btn.setAttribute('aria-disabled', st.canSpawn ? 'false' : 'true');
     }
     r.sandboxBotClear.disabled = !(st.count > 0) && !st.bodies;
+    const ffa = !!st.hostile;
+    r.sandboxBotFfa.setAttribute('aria-pressed', ffa ? 'true' : 'false');
+    r.sandboxBotFfa.classList.toggle('is-on', ffa);
+    r.sandboxBotFfa.textContent = ffa ? 'BOTS FIGHT EACH OTHER: ON' : 'BOTS FIGHT EACH OTHER: OFF';
     r.sandboxBotsNote.hidden = !st.reason;
     r.sandboxBotsNote.textContent = st.reason || '';
   }

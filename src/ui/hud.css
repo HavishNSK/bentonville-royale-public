@@ -2208,6 +2208,22 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
+/* bots fight each other (free-for-all) toggle: full width under the spawn row, coral when on */
+.br-sandbox-bots-ffa {
+  display: block;
+  width: 100%;
+  margin-top: calc(var(--u) * 8);
+  font-size: calc(var(--u) * 15);
+}
+.br-sandbox-bots-ffa.is-on {
+  background: var(--br-coral);
+  color: var(--br-ink);
+}
+.br-sandbox-bots-ffa.is-on:hover,
+.br-sandbox-bots-ffa.is-on:focus-visible {
+  background: #ff8070;
+  color: var(--br-ink);
+}
 .br-sandbox-bots-note {
   margin: calc(var(--u) * 8) 0 0;
   font-size: calc(var(--u) * 13);

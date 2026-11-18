@@ -66,6 +66,33 @@ export const SANDBOX_BOT_CAP = 12;
 export const SANDBOX_BOT_DIST = 25; // metres in front of you a new bot appears (+-1 m so they don't stack)
 export const SANDBOX_BOT_DIFFS = Object.freeze(['easy', 'normal', 'hard']);
 export const SANDBOX_BOT_TEAM = -77; // every sandbox bot is on one team: they all hunt the player
+export const SANDBOX_BOT_FFA_TEAM = -1000; // "bots fight each other": bot n is on team -1000 - n (its own)
+
+/** The team a sandbox bot gets: the shared one, or its own when bots fight each other. */
+export function sandboxBotTeam(game, seq) {
+  return game && game.sandboxBotsHostile ? SANDBOX_BOT_FFA_TEAM - seq : SANDBOX_BOT_TEAM;
+}
+
+/**
+ * Sandbox toggle: bots fight each other (each on its own team) or stay one team that only hunts
+ * the player. Applies to the bots already out too; a bot that was fighting one that is now a
+ * teammate drops it. Returns the new setting.
+ */
+export function setSandboxBotsHostile(game, on) {
+  if (!game) return false;
+  game.sandboxBotsHostile = !!on;
+  const list = game.bots ? game.bots.list || game.bots.actors || [] : [];
+  for (const a of list) {
+    if (!a || !a.sandbox) continue;
+    a.team = sandboxBotTeam(game, a.sandboxSeq || 0);
+    const b = a._bot;
+    if (!b || on) continue;
+    for (const k of ['target', 'threat', 'hunt']) if (b[k] && b[k].sandbox) b[k] = null;
+    if (b.grudge && b.grudge.actor && b.grudge.actor.sandbox) b.grudge = null;
+    if (b.target == null) b.targetVisible = false;
+  }
+  return game.sandboxBotsHostile;
+}
 export const SANDBOX_CORPSE_TIME = 6; // s a dead sandbox bot's body stays before it is removed
 
 /** Free build in the open world (not Museum Mode), playing, solo. */
@@ -93,7 +120,7 @@ export function sandboxBotStatus(game) {
   let bodies = 0;
   const list = game && game.bots ? game.bots.list || game.bots.actors || [] : [];
   for (const a of list) if (a && a.sandbox && !a.alive) bodies++;
-  return { count, cap: SANDBOX_BOT_CAP, canSpawn: !reason, reason, bodies };
+  return { count, cap: SANDBOX_BOT_CAP, canSpawn: !reason, reason, bodies, hostile: !!(game && game.sandboxBotsHostile) };
 }
 
 /** A basic loadout for a sandbox bot of difficulty `d`: a rifle (+ a shotgun above easy), ammo, a medkit. No mats: it farms. */
@@ -145,10 +172,11 @@ export function spawnSandboxBot(game, d) {
   const bot = bots.addBot(d, x, z, {
     name: `${d[0].toUpperCase()}${d.slice(1)} Bot ${game._sandboxBotSeq}`,
     loadout: sandboxBotLoadout(d),
-    team: SANDBOX_BOT_TEAM,
+    team: sandboxBotTeam(game, game._sandboxBotSeq),
     heading: Math.atan2(p.pos.x - x, -(p.pos.z - z)),
     sandbox: true,
   });
+  if (bot) bot.sandboxSeq = game._sandboxBotSeq;
   return { bot, reason: null };
 }
 

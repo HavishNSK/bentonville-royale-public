@@ -22,7 +22,7 @@
 
 import * as THREE from 'three';
 import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, CONSUMABLES, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
-import { canSandboxLoadout, canCreativeMap, giveSandboxWeapon, sandboxBotStatus, spawnSandboxBot, clearSandboxBots, purgeSandboxBodies } from './sandboxLoadout.js';
+import { canSandboxLoadout, canCreativeMap, giveSandboxWeapon, sandboxBotStatus, spawnSandboxBot, clearSandboxBots, purgeSandboxBodies, setSandboxBotsHostile } from './sandboxLoadout.js';
 import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
 import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
@@ -227,7 +227,13 @@ export class Game {
     if (this.hud.setSandboxBotsClose) this.hud.setSandboxBotsClose(() => this.toggleSandboxBots(false));
     if (this.hud.setSandboxLoadoutHandler) this.hud.setSandboxLoadoutHandler((id) => this.giveSandboxGun(id));
     if (this.hud.setSandboxLoadoutClose) this.hud.setSandboxLoadoutClose(() => this.toggleSandboxLoadout(false));
-    if (this.hud.setSandboxBotHandlers) this.hud.setSandboxBotHandlers((d) => this.spawnSandboxBot(d), () => this.clearSandboxBots());
+    if (this.hud.setSandboxBotHandlers) {
+      this.hud.setSandboxBotHandlers((d) => this.spawnSandboxBot(d), () => this.clearSandboxBots(), (on) => {
+        setSandboxBotsHostile(this, on);
+        this._syncSandboxBots();
+        sfx.play('ui_click');
+      });
+    }
     const mb = mapData && mapData.meta && mapData.meta.bounds;
     if (mb && this.hud.setFullMapAspect) this.hud.setFullMapAspect((mb.maxX - mb.minX) / (mb.maxZ - mb.minZ));
     this.minimap = new Minimap({ mapData, miniCanvas: this.hud.getMinimapCanvas(), fullCanvas: this.hud.getFullMapCanvas() });
