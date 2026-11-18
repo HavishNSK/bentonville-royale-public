@@ -23,7 +23,7 @@
 import * as THREE from 'three';
 import { flattenModel } from '../core/assets.js';
 import { toToon } from '../render/Toon.js';
-import { grenadeModel } from './Grenades.js';
+import { grenadeModel, smokeGrenadeModel } from './Grenades.js';
 import {
   WEAPONS, WEAPON_IDS, weaponStats, clampWeaponRarity, CONSUMABLES, AMMO, MATERIALS, MATERIAL_COLOR, RARITIES, MATCH,
   DROP_ZONES, STORM, QUALITY, TAU,
@@ -159,7 +159,10 @@ export function ammoFor(weaponId) {
   return { type: 'ammo', ammo: kind, count: AMMO[kind].pickup };
 }
 export function rollConsumable(rng) {
-  if (rng() < LOOT.grenadeShare) return { type: 'consumable', id: 'grenade', count: CONSUMABLES.grenade.pickup };
+  if (rng() < LOOT.grenadeShare) {
+    const id = rng() < 0.4 ? 'smoke' : 'grenade';
+    return { type: 'consumable', id, count: CONSUMABLES[id].pickup };
+  }
   const id = rng() < 0.55 ? 'medkit' : 'tonic';
   return { type: 'consumable', id, count: id === 'medkit' ? 1 : 1 + (rng() < 0.3 ? 1 : 0) };
 }
@@ -296,6 +299,7 @@ export class Loot {
       medkit: new Batch(g, prepFlat(m.medkit, () => boxFlat(0.22, 0.29, 0.14, 0xd83a3a)), CAP.consumable, { name: 'medkit' }),
       potion: new Batch(g, prepFlat(m.potion, () => boxFlat(0.2, 0.4, 0.2, 0x3b9cff)), CAP.consumable, { name: 'potion' }),
       grenade: new Batch(g, grenadeModel(true), CAP.consumable, { name: 'grenade' }),
+      smoke: new Batch(g, smokeGrenadeModel(true), CAP.consumable, { name: 'smoke' }),
       crate: new Batch(g, prepFlat(m.crate, () => boxFlat(0.5, 0.5, 0.5, 0xffffff)), CAP.crate, { colored: true, name: 'crate' }),
     };
     for (const id of WEAPON_KEYS) {
@@ -999,6 +1003,19 @@ export class Loot {
     return true;
   }
 
+  /**
+   * Explosion: dump the chest / ammo box (same spill as `open`) then remove the container
+   * so the mesh is gone. An already-open container is removed without spilling again.
+   */
+  smash(id) {
+    const rec = this.byId.get(id);
+    if (!rec || rec.kind === 'item') return false;
+    if (!rec.opened) this.open(id);
+    const gone = this.byId.get(id);
+    if (gone) this._remove(gone);
+    return true;
+  }
+
   /** Removes a floor item and returns it (plays pickup sound/burst). */
   take(id) {
     const rec = this.byId.get(id);
@@ -1156,8 +1173,8 @@ export class Loot {
             sc = S.w;
             break;
           case 'consumable':
-            batch = it.id === 'medkit' ? B.medkit : it.id === 'grenade' ? B.grenade : B.potion;
-            sc = it.id === 'medkit' ? S.medkit : it.id === 'grenade' ? S.grenade : S.potion;
+            batch = it.id === 'medkit' ? B.medkit : it.id === 'grenade' ? B.grenade : it.id === 'smoke' ? B.smoke : B.potion;
+            sc = it.id === 'medkit' ? S.medkit : it.id === 'grenade' || it.id === 'smoke' ? S.grenade : S.potion;
             break;
           case 'ammo':
             batch = B.crate;

@@ -96,6 +96,12 @@ const GROUND_SNAP = 0.1;
 const GROUND_TOL = 0.75;
 // Feet this close to the terrain count as "standing on the ground" for planning.
 const ON_GROUND = 0.6;
+/** The level grid's offset (0..LEVEL) for a surface at height y, to the cm. */
+function levelPhase(y) {
+  if (!Number.isFinite(y)) return 0;
+  const m = Math.round((((y % LEVEL) + LEVEL) % LEVEL) * 100) / 100;
+  return m >= LEVEL - 0.01 ? 0 : m;
+}
 // A piece may start this far below a roof top and clip into it: roofs are not on the 3 m grid,
 // so on a 4 m roof the nearest level (3 m) would otherwise always be refused.
 const ROOF_CLIP = LEVEL * 0.5;
@@ -735,9 +741,18 @@ export class Structures {
     const fz = -Math.cos(heading);
     // the level the feet are on; a player standing on the terrain builds at the ground
     // level of the target cell instead (so pieces sit on slopes, not float off them)
-    const kFeet = Math.floor(pos.y / LEVEL + 0.34);
     const w = this.world;
-    const onGround = !!(w && w.terrainHeight) && pos.y - w.terrainHeight(pos.x, pos.z) < ON_GROUND && !this._onBuild(pos);
+    const standOn = this._onBuild(pos);
+    // a landmark slab (the museum's floors sit 0.45 m above the clamped terrain under them) is
+    // not the terrain: build on its own grid, flush with it
+    const surf = w && w.groundHeight ? w.groundHeight(pos.x, pos.z, pos.y + 0.3) : -Infinity;
+    const onSlab = !!(w && w.terrainHeight) && surf > w.terrainHeight(pos.x, pos.z) + 0.15;
+    const onGround = !!(w && w.terrainHeight) && pos.y - w.terrainHeight(pos.x, pos.z) < ON_GROUND && !standOn && !onSlab;
+    // off the terrain the level grid follows what the feet stand on: a built piece keeps its own
+    // grid, and a landmark slab (the museum's floors at -7 / -11, its roofs) starts a grid at
+    // its surface, so the first piece sits flush instead of 1 m above or below the floor
+    const phase = onGround ? 0 : standOn ? levelPhase(standOn.y) : levelPhase(Number.isFinite(surf) ? surf : 0);
+    const kFeet = Math.floor((pos.y - phase) / LEVEL + 0.34);
     let dk = 0;
     let x;
     let z;
@@ -799,13 +814,13 @@ export class Structures {
     // standing on a ramp in a box and ramping again: that spot is taken by the ramp we are on,
     // so the new one goes up a level (keeps climbing, like a ramp rush in a box)
     if (kind === 'ramp' && dk >= 0) {
-      const here = this.slots.get(slotKey('ramp', x, k * LEVEL, z, rot));
-      if (here && here.alive && pos.y > k * LEVEL + 0.4) k += 1;
+      const here = this.slots.get(slotKey('ramp', x, phase + k * LEVEL, z, rot));
+      if (here && here.alive && pos.y > phase + k * LEVEL + 0.4) k += 1;
     }
 
     out.kind = kind;
     out.x = x;
-    out.y = k * LEVEL;
+    out.y = Math.round((phase + k * LEVEL) * 100) / 100;
     out.z = z;
     out.rot = rot;
     out.level = k;
@@ -865,24 +880,25 @@ export class Structures {
   }
 
   /** Are the feet on a built surface (floor / ramp / cone surface, or the top of a wall)? */
+  /** The live built piece the feet stand on (a floor / ramp top, or the top of a wall), or null. */
   _onBuild(pos) {
     const set = this._grid.get(Math.floor(pos.x / CELL) + ',' + Math.floor(pos.z / CELL));
-    if (!set) return false;
+    if (!set) return null;
     for (const q of set) {
       if (!q.alive) continue;
       if (q.surf) {
         if (pos.x < q.minX || pos.x > q.maxX || pos.z < q.minZ || pos.z > q.maxZ) continue;
-        if (Math.abs(q.surf(pos.x, pos.z) - pos.y) < 0.35) return true;
+        if (Math.abs(q.surf(pos.x, pos.z) - pos.y) < 0.35) return q;
       } else if (q.seg && Math.abs(q.y1 - pos.y) < 0.35) {
         const s = q.seg;
         const ex = s[2] - s[0];
         const ez = s[3] - s[1];
         const l2 = ex * ex + ez * ez || 1;
         const t = clamp(((pos.x - s[0]) * ex + (pos.z - s[1]) * ez) / l2, 0, 1);
-        if (Math.hypot(pos.x - s[0] - ex * t, pos.z - s[1] - ez * t) < 0.6) return true;
+        if (Math.hypot(pos.x - s[0] - ex * t, pos.z - s[1] - ez * t) < 0.6) return q;
       }
     }
-    return false;
+    return null;
   }
 
   /** Ground level (grid level index) of the terrain at (x, z). */
@@ -1436,7 +1452,10 @@ export class Structures {
   _grounded(p) {
     const w = this.world;
     // terrain: any sample under the piece within GROUND_TOL of its base (or above it)
-    const th = w && w.terrainHeight ? (x, z) => w.terrainHeight(x, z) : () => 0;
+    // ground = the terrain or any walkable world surface (the museum's floors, slabs and roofs)
+    const th = w && w.groundHeight
+      ? (x, z) => Math.max(w.terrainHeight(x, z), w.groundHeight(x, z, p.y0 + 0.3))
+      : w && w.terrainHeight ? (x, z) => w.terrainHeight(x, z) : () => 0;
     const lo = p.y0 - GROUND_TOL;
     if (p.seg) {
       const s = p.seg;

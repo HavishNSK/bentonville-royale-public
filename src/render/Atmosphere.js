@@ -775,7 +775,7 @@ export class Atmosphere {
     if (pal && pal !== this._interiorPal) {
       this._interiorPal = pal;
       if (!this._intCol) this._intCol = { fog: new THREE.Color(), floor: new THREE.Color(), light: new THREE.Color() };
-      this._intCol.fog.set(pal.fog || '#0c0908');
+      this._intCol.fog.set(pal.fog || '#c5d2c8');
       this._intCol.floor.set(pal.floor || '#0d0a08');
       this._intCol.light.set(pal.lightColor || '#ffe2b8');
     }
@@ -787,13 +787,16 @@ export class Atmosphere {
     const c = this._intCol;
     // musewalk halls: Fog(hall.fog, 10, 64) and HemisphereLight(light * 0.5, floor, 1.1). Kept
     // lighter than musewalk's black box: the real galleries are daylit through the glass.
-    this._fog.color.lerp(_intTmp.copy(c.fog).lerp(c.light, 0.12), k * 0.85);
-    this._fog.density = this._fog.density + (0.024 - this._fog.density) * k;
+    // Exp2 density 0.0095 keeps a 70 m gallery readable end to end (~8% haze at 30 m, ~36% at
+    // 70 m; the old 0.036 washed it out to ~70% at 30 m) and the warm hemisphere fill keeps the
+    // rooms bright instead of flat grey.
+    this._fog.color.lerp(_intTmp.copy(c.fog).lerp(c.light, 0.3), k * 0.8);
+    this._fog.density = this._fog.density + (0.0095 - this._fog.density) * k;
     this._uniforms.uFogDensity.value = this._fog.density;
-    this._hemi.color.lerp(_intTmp.copy(c.light).multiplyScalar(0.5), k);
-    this._hemi.groundColor.lerp(_intTmp.copy(c.floor).lerp(c.light, 0.2), k);
-    this._hemi.intensity *= 1 - 0.5 * k;
-    this._sun.intensity *= 1 - 0.75 * k;
+    this._hemi.color.lerp(_intTmp.copy(c.light).multiplyScalar(0.95), k);
+    this._hemi.groundColor.lerp(_intTmp.copy(c.floor).lerp(c.light, 0.35), k);
+    this._hemi.intensity *= 1 + 0.15 * k;
+    this._sun.intensity *= 1 - 0.55 * k;
   }
 
   /**

@@ -104,7 +104,7 @@ const menus = createMenus(uiRoot, {
       game.startMatch(undefined, { freeBuild: true });
     } catch (err) {
       console.error(err);
-      showError('Could not start free build: ' + (err && err.message ? err.message : err));
+      showError('Could not start sandbox: ' + (err && err.message ? err.message : err));
       menus.showTitle();
     }
   },

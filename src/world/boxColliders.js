@@ -12,7 +12,7 @@
 //     maxZ, hp, maxHp, ref, alive, stamp }
 
 /** Make a box collider (not registered). yaw: radians, the box's local x axis is (cos yaw, sin yaw). */
-export function makeBox({ id, cx, cz, hx, hz, yaw = 0, y0, y1, kind = 'museum', mat = 'brick', hp = Infinity, ref = [] }) {
+export function makeBox({ id, cx, cz, hx, hz, yaw = 0, y0, y1, kind = 'museum', mat = 'brick', hp = Infinity, ref = [], passable = false }) {
   if (!(hx > 0) || !(hz > 0) || !(y1 > y0)) throw new Error('makeBox: degenerate box');
   const cos = Math.cos(yaw);
   const sin = Math.sin(yaw);
@@ -21,7 +21,7 @@ export function makeBox({ id, cx, cz, hx, hz, yaw = 0, y0, y1, kind = 'museum', 
   return {
     type: 'box', id, kind, mat, cx, cz, hx, hz, cos, sin, y0, y1, h: y1, hgt: y1 - y0,
     minX: cx - ex, maxX: cx + ex, minZ: cz - ez, maxZ: cz + ez,
-    hp, maxHp: hp, ref, alive: true, stamp: 0,
+    hp, maxHp: hp, ref, alive: true, stamp: 0, passable: !!passable,
   };
 }
 

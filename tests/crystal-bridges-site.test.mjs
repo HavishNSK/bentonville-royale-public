@@ -3,8 +3,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { World } from '../src/world/World.js';
-import { PAVILIONS, LEVEL, siteHeight, clipRect, pondsFrom } from '../src/world/crystal-bridges/site.js';
+import { PAVILIONS, LEVEL, SLABS, WALKER_LANDING, siteHeight, clipRect, pondsFrom } from '../src/world/crystal-bridges/site.js';
+import { createCrystalBridges } from '../src/world/crystal-bridges/index.js';
 import { buildSite, roofUnder, sideSpans, subtractRects } from '../src/world/crystal-bridges/build.js';
+import { GLASS_PANE, DOOR_GLASS } from '../src/world/crystal-bridges/meshes.js';
+import * as THREE from 'three';
+import { placeOrbitCamera } from '../src/game/Player.js';
 
 const mapData = JSON.parse(readFileSync(new URL('../public/data/bentonville-osm.json', import.meta.url)));
 const STEP = 0.62;
@@ -37,6 +41,24 @@ test('every side span list covers its side exactly once', () => {
   }
 });
 
+test('weirs are labyrinth teeth, not a single straight sill', () => {
+  const eleven = SLABS.filter((s) => String(s.id).startsWith('weir-eleven'));
+  const modern = SLABS.filter((s) => String(s.id).startsWith('weir-modern'));
+  assert.ok(eleven.length >= 5, `eleven teeth ${eleven.length}`);
+  assert.ok(modern.length >= 5, `modern teeth ${modern.length}`);
+  const span = (list) => {
+    const zs = list.flatMap((s) => [s.z0, s.z1]);
+    return Math.max(...zs) - Math.min(...zs);
+  };
+  assert.ok(span(eleven) > 4, `eleven weir depth ${span(eleven)}`);
+  assert.ok(span(modern) > 4, `modern weir depth ${span(modern)}`);
+  assert.ok(eleven.some((s) => s.id === 'weir-eleven'), 'keeps a walkable spine named weir-eleven');
+});
+
+test('Walker Landing wraps more than a half-circle into the pond', () => {
+  assert.ok(WALKER_LANDING.a1 - WALKER_LANDING.a0 > Math.PI, `arc ${WALKER_LANDING.a1 - WALKER_LANDING.a0}`);
+});
+
 test('three ponds step down northward over the weirs', () => {
   const ponds = pondsFrom(mapData);
   assert.deepEqual(ponds.map((p) => p.id), ['south-pond', 'north-pond', 'expansion-pond']);
@@ -47,16 +69,61 @@ test('three ponds step down northward over the weirs', () => {
   assert.ok(siteHeight(ponds, 0, -300) < -12, 'north pond bed');
 });
 
+test('visitor rooms have red-oak floors; Eleven keeps quartzite; the library is a thin slab', () => {
+  const { out } = site();
+  const oak = new Set([
+    'lobby', 'entry-tower', 'south-lobby', 'great-hall', 'corridor', 'library', 'store',
+    'early-american-1', 'early-american-2', 'east-terrace', 'reflection', 'north-gallery',
+    'modern-bridge', 'contemporary', 'lower-west', 'west-wing-2026', 'bridge-gallery-2026',
+    'east-wing-2026',
+  ]);
+  for (const pv of PAVILIONS) {
+    const floors = out.parts.filter((p) => p.floorOf === pv.id);
+    assert.ok(floors.length >= 1, `${pv.id} has no floor mesh`);
+    if (pv.id === 'eleven') {
+      assert.ok(floors.every((p) => p.mat === 'quartzite'), `Eleven floor ${floors[0] && floors[0].mat}`);
+    } else if (oak.has(pv.id)) {
+      assert.ok(floors.every((p) => p.mat === 'oak'), `${pv.id} floor ${floors[0] && floors[0].mat}`);
+    }
+    if (pv.id === 'library') {
+      const t = Math.max(...floors.map((p) => p.y1 - p.y0));
+      assert.ok(t < 0.35, `library plinth ${t.toFixed(2)} m would fill the corridor below`);
+    }
+  }
+});
+
 test('builds deterministic colliders: glass, props, loot and a high-tier chest', () => {
   const a = site();
   const b = site();
   assert.equal(a.out.stats.boxes, b.out.stats.boxes);
-  assert.ok(a.out.stats.boxes > 400 && a.out.stats.boxes < 4000, `boxes ${a.out.stats.boxes}`);
+  // budget raised 4000 -> 5000 for the breakable roof tiles (~1600); measured ~56 fps in the museum on an M4
+  assert.ok(a.out.stats.boxes > 400 && a.out.stats.boxes < 5000, `boxes ${a.out.stats.boxes}`);
   assert.ok(a.out.stats.glass > 60, `glass ${a.out.stats.glass}`);
   assert.ok(a.out.stats.props > 30, `props ${a.out.stats.props}`);
-  for (const g of a.out.glass) assert.ok(g.collider.breakable && g.collider.maxHp < 1e6);
+  for (const g of a.out.glass) {
+    assert.ok(g.collider.breakable && g.collider.maxHp < 1e6);
+    if (g.visOnly) assert.equal(g.collider.passable, true);
+    else assert.ok(!g.collider.passable);
+  }
   assert.ok(a.out.loot.filter((l) => l.tier === 'high').length >= 2);
   assert.equal(a.world.fixedLoot.length, a.out.loot.length);
+});
+
+test('OSM grass that spans the ravine is skipped even when every vertex sits on the crest', () => {
+  const world = new World({ ...mapData, buildings: [], roads: [] });
+  const cb = createCrystalBridges(world, mapData);
+  const poly = [
+    [90, -280],
+    [90, -320],
+    [-90, -320],
+    [-90, -280],
+  ];
+  for (const [x, z] of poly) {
+    assert.ok(world.terrainHeight(x, z) > -0.6, `vertex ${x},${z} already in the ravine (${world.terrainHeight(x, z).toFixed(2)})`);
+  }
+  assert.equal(cb.skipFlat(poly, 'grass'), true);
+  const rim = [[90, -150], [110, -150], [110, -170], [90, -170]];
+  assert.equal(cb.skipFlat(rim, 'grass'), false, 'crest-only grass next to the tile should stay');
 });
 
 test('no terrain pokes through a pavilion floor', () => {
@@ -65,7 +132,7 @@ test('no terrain pokes through a pavilion floor', () => {
     if (pv.noSlab) continue;
     for (let x = pv.x0 + 0.5; x < pv.x1; x += 2) {
       for (let z = pv.z0 + 0.5; z < pv.z1; z += 2) {
-        assert.ok(world.terrainHeight(x, z) <= pv.floor + 1e-3, `${pv.id} terrain ${world.terrainHeight(x, z).toFixed(2)} above floor at ${x},${z}`);
+        assert.ok(world.terrainHeight(x, z) <= pv.floor - 0.2, `${pv.id} terrain ${world.terrainHeight(x, z).toFixed(2)} z-fights floor ${pv.floor} at ${x},${z}`);
       }
     }
   }
@@ -128,6 +195,86 @@ test('the south route is walkable: lobby -> Great Hall Corridor -> library stair
   assert.ok(Math.abs(toLibrary.y - (LEVEL.MAIN + 6)) < 0.7, `library y ${toLibrary.y.toFixed(2)} at ${toLibrary.x.toFixed(1)},${toLibrary.z.toFixed(1)}`);
   const toHall = walk(world, [[20, -240], [20, -180], [10, -167], [-24, -167], [-24, -188]], LEVEL.MAIN);
   assert.ok(Math.hypot(toHall.x + 24, toHall.z + 188) < 1.5, `stuck at ${toHall.x.toFixed(1)}, ${toHall.z.toFixed(1)}`);
+});
+
+test('south and library doors read as real doors: framed glass you can see', () => {
+  assert.ok(DOOR_GLASS.opacity >= 0.5, `door glass opacity ${DOOR_GLASS.opacity} is invisible`);
+  assert.equal(DOOR_GLASS.depthWrite, true, 'door glass must write depth so the opening is not a hole');
+  const { out } = site();
+  for (const id of ['south', 'library']) {
+    const leaves = out.parts.filter((p) => p.doorLeaf && p.entrance === id);
+    assert.equal(leaves.length, 2, `${id} has two leaves`);
+    assert.ok(leaves.every((p) => p.y1 - p.y0 >= 2.4), `${id} leaves are door-height`);
+    assert.ok(leaves.every((p) => p.hx >= 1.2), `${id} leaves are wide enough to see`);
+  }
+});
+
+test('museum windows read as real glass: see-through, tinted, reflective, framed', () => {
+  assert.ok(GLASS_PANE.opacity >= 0.25, `glass opacity ${GLASS_PANE.opacity} is invisible`);
+  assert.ok(GLASS_PANE.opacity <= 0.6, `glass opacity ${GLASS_PANE.opacity} reads as a frosted panel, not a window`);
+  assert.equal(GLASS_PANE.transparent, true);
+  assert.ok(GLASS_PANE.shininess > 40, 'glass needs a specular highlight');
+  const { out } = site();
+  const solid = out.glass.filter((g) => !g.visOnly);
+  const frames = out.parts.filter((p) => p.frame);
+  assert.ok(frames.length >= solid.length, `window frames ${frames.length} for ${solid.length} panes`);
+  assert.ok(frames.every((f) => f.collider.passable), 'frames are visual only');
+});
+
+test('the lobby north door is glazed so Walker Landing is not an open hole', () => {
+  const { out } = site();
+  const panes = out.glass.filter((g) => g.pv === 'lobby' && g.side === 'n');
+  assert.ok(panes.length >= 1, `lobby north glass ${panes.length}`);
+  assert.ok(panes.every((g) => g.visOnly), 'exterior door glass must stay walkable');
+});
+
+test('looking up in the lobby does not put the camera through the oak floor', () => {
+  const { world } = site();
+  const cam = new THREE.PerspectiveCamera();
+  const pivot = new THREE.Vector3(26, LEVEL.MAIN + 1.55, -258);
+  placeOrbitCamera(cam, world, pivot, 0, 0.7, 4.4, 0.75);
+  const floor = world.groundHeight(26, -258, LEVEL.MAIN + 0.1, STEP);
+  assert.ok(cam.position.y >= floor + 0.25, `camera y ${cam.position.y.toFixed(2)} is through lobby floor ${floor.toFixed(2)}`);
+});
+
+test('looking at a lobby wall does not put the camera through it', () => {
+  const { world } = site();
+  const cam = new THREE.PerspectiveCamera();
+  const pivot = new THREE.Vector3(26, LEVEL.MAIN + 1.55, -258);
+  placeOrbitCamera(cam, world, pivot, Math.PI / 2, 0, 4.4, 0.75); // look east; camera pulls west toward x=14
+  assert.ok(cam.position.x > 14.3, `camera x ${cam.position.x.toFixed(2)} is through the west wall`);
+});
+
+test('frosted door glass stops the camera but stays walkable', () => {
+  const { world } = site();
+  const cam = new THREE.PerspectiveCamera();
+  const pivot = new THREE.Vector3(35, LEVEL.MAIN + 1.55, -261);
+  placeOrbitCamera(cam, world, pivot, -Math.PI / 2, 0, 4.4, 0.75); // look west; camera toward the east door pane at x≈37.8
+  assert.ok(cam.position.x < 37.5, `camera x ${cam.position.x.toFixed(2)} went through the frosted east door`);
+  const body = { x: 35, y: LEVEL.MAIN, z: -261 };
+  for (let i = 0; i < 24; i++) {
+    body.x += 0.25;
+    world.resolveCircle(body, 0.42, 1.7);
+  }
+  assert.ok(body.x > 38.5, `stuck at ${body.x.toFixed(2)}; visOnly glass must stay walkable`);
+});
+
+test('sloped roofs do not leave sky gaps above the walls', () => {
+  const { out } = site();
+  const byId = Object.fromEntries(PAVILIONS.map((pv) => [pv.id, pv]));
+  const walls = out.parts.filter((p) => p.wall && p.side && !p.partition && p.pv && byId[p.pv] && byId[p.pv].roof && byId[p.pv].roof.rise);
+  assert.ok(walls.length > 20, `wall pieces ${walls.length}`);
+  for (const p of walls) {
+    const pv = byId[p.pv];
+    if (p.lintel || p.y0 > pv.floor + 0.2 || p.y1 < pv.floor + pv.height - 0.3) continue;
+    const yRoof = roofUnder(pv, p.cx, p.cz);
+    assert.ok(p.y1 + 1e-6 >= yRoof, `${pv.id} ${p.side || ''} wall top ${p.y1.toFixed(2)} leaves a ${(yRoof - p.y1).toFixed(2)} m hole under roof ${yRoof.toFixed(2)} at ${p.cx.toFixed(1)},${p.cz.toFixed(1)}`);
+  }
+  for (const g of out.glass.filter((p) => p.pv && byId[p.pv] && byId[p.pv].roof && byId[p.pv].roof.rise && !p.visOnly)) {
+    const pv = byId[g.pv];
+    const yRoof = roofUnder(pv, g.cx, g.cz);
+    assert.ok(g.y1 + 1e-6 >= yRoof - 0.12, `${pv.id} glass top ${g.y1.toFixed(2)} leaves a hole under roof ${yRoof.toFixed(2)}`);
+  }
 });
 
 test('glass blocks until shot out; loot stands on solid ground', () => {

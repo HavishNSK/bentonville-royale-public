@@ -258,6 +258,34 @@
 .mn-card-narrow {
   width: min(calc(var(--u) * 340), 100%);
 }
+.mn-card-sandbox {
+  width: min(calc(var(--u) * 480), 100%);
+}
+.mn-sandbox {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 8);
+}
+.mn-sandbox-h {
+  margin: 0;
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 18);
+  font-weight: 400;
+  color: var(--br-sun);
+  letter-spacing: 0.06em;
+}
+.mn-sandbox-guns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: calc(var(--u) * 6);
+  max-height: calc(var(--u) * 260);
+  overflow: auto;
+}
+.mn-sandbox-gun {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+}
 .mn-card .mn-btn {
   width: 100%;
 }

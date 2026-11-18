@@ -2,7 +2,14 @@
 // The config is data (musewalk gallery.config.json shape): every field is type-checked, clamped
 // and length-limited before use; colours must be #rrggbb; portal targets must be finite numbers.
 
-export const DEFAULT_PALETTE = { accent: '#b7a98c', wall: '#2a211c', panel: '#39302a', floor: '#0d0a08', fog: '#0c0908', lightColor: '#ffe2b8', frameStyle: 'dark' };
+export const DEFAULT_PALETTE = { accent: '#b7a98c', wall: '#2a211c', panel: '#39302a', floor: '#8b5a32', fog: '#c5d2c8', lightColor: '#ffe2b8', frameStyle: 'dark' };
+
+/** 0 = outdoor town, 1 = full gallery mist. The ravine stays hazy even between pavilions. */
+export function interiorBlend({ inside = false, glassy = false, inSite = false } = {}) {
+  if (inside) return glassy ? 0.62 : 0.92;
+  if (inSite) return 0.58;
+  return 0;
+}
 
 /** ?cbConfig=/data/foo.json (same-origin JSON under /data/ only); else the default config. */
 export function configUrl(search = typeof location !== 'undefined' ? location.search : '') {

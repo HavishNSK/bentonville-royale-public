@@ -1,5 +1,6 @@
-// BENTONVILLE ROYALE — explosives: thrown grenades (arc, bounces, fuse, blast) and the
-// Rocket Launcher's rockets (straight flight, blast on impact).
+// BENTONVILLE ROYALE — explosives: thrown grenades (arc, bounces, fuse, blast), smoke
+// grenades (same throw, then a cloud), and the Rocket Launcher's rockets (straight
+// flight, blast on impact).
 //
 //   const grenades = new Grenades({ scene, world, combat, structures, fx, sfx });
 //   grenades.throw(owner, origin, dir)   // one grenade from `origin` along `dir` (see GRENADE in config.js)
@@ -16,7 +17,9 @@
 // and characters, and explodes when its fuse (started at the throw) runs out. The blast
 // deals GRENADE.damage to every character within GRENADE.radius that it has a clear line
 // to (the thrower included; walls give cover), and GRENADE.structureDamage to built
-// pieces, building wall and floor panels, trees, rocks and props in range.
+// pieces, building wall and floor panels, trees, rocks, museum glass, window
+// frames, benches, other breakable props, and chests (which spill their loot
+// and are destroyed) in range.
 //
 // Multiplayer: the host simulates and explodes them (onThrow / onExplode feed its event
 // stream). A client (`combat.authoritative === false`) draws the same flight from
@@ -25,7 +28,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { toToon } from '../render/Toon.js';
-import { GRENADE, ROCKET, PLAYER } from '../core/config.js';
+import { GRENADE, ROCKET, SMOKE, PLAYER } from '../core/config.js';
 
 const UP_BIAS = 0.35; // m the blast origin is lifted off the surface it rests on
 const PREVIEW_STEP = 0.05; // s per arc segment
@@ -68,6 +71,19 @@ export function grenadeModel(grounded = false) {
   geometry.translate(0, 0.118, 0);
   geometry.computeBoundingBox();
   return { geometry, material: _model.material };
+}
+
+let _smokeModel = null;
+/** Same silhouette as the frag, painted grey so a smoke grenade reads on the ground. */
+export function smokeGrenadeModel(grounded = false) {
+  const base = grenadeModel(grounded);
+  if (!_smokeModel) {
+    _smokeModel = [
+      toToon(new THREE.MeshStandardMaterial({ color: 0xc5ccd4, roughness: 0.78 }), { saturate: 1.05 }),
+      toToon(new THREE.MeshStandardMaterial({ color: 0xf4f6f8, roughness: 0.45 }), { saturate: 1.05 }),
+    ];
+  }
+  return { geometry: base.geometry, material: _smokeModel };
 }
 
 let _rocket = null;
@@ -134,16 +150,20 @@ export function throwVelocity(dir, out = new THREE.Vector3()) {
 }
 
 export class Grenades {
-  constructor({ scene, world, combat, structures = null, fx = null, sfx = null }) {
+  constructor({ scene, world, combat, structures = null, loot = null, fx = null, sfx = null }) {
     this.scene = scene;
     this.world = world;
     this.combat = combat;
     this.structures = structures;
+    this.loot = loot;
     this.fx = fx;
     this.sfx = sfx;
     this.list = [];
+    this.clouds = [];
     this._pool = [];
+    this._spool = []; // smoke canister meshes
     this._rpool = []; // rocket meshes
+    this._cpool = []; // smoke cloud groups
     this._nextId = 1;
     this.onThrow = null; // (grenade) => {}   host: replicate the throw
     this.onExplode = null; // (grenade) => {} host: replicate the blast
@@ -175,18 +195,19 @@ export class Grenades {
 
   // ---------------------------------------------------------------- spawn
 
-  /** Throws one grenade. `dir` need not be normalised. Returns the grenade. */
-  throw(owner, origin, dir) {
-    const g = this.spawn(this._nextId++, owner, origin, throwVelocity(dir, _v));
+  /** Throws one grenade. `dir` need not be normalised. `kind` is `'grenade'` or `'smoke'`. */
+  throw(owner, origin, dir, kind = 'grenade') {
+    const g = this.spawn(this._nextId++, owner, origin, throwVelocity(dir, _v), { smoke: kind === 'smoke' });
     if (this.sfx) this.sfx.play('grenade_throw', { x: origin.x, y: origin.y, z: origin.z, volume: 0.7 });
     if (this.onThrow) this.onThrow(g);
     return g;
   }
 
   /** Adds a grenade already in flight (a client replays the host's throw with this). */
-  spawn(id, owner, pos, vel) {
-    const m = grenadeModel();
-    const mesh = this._pool.pop() || new THREE.Mesh(m.geometry, m.material);
+  spawn(id, owner, pos, vel, opts = null) {
+    const smoke = !!(opts && opts.smoke);
+    const m = smoke ? smokeGrenadeModel() : grenadeModel();
+    const mesh = (smoke ? this._spool : this._pool).pop() || new THREE.Mesh(m.geometry, m.material);
     mesh.castShadow = true;
     mesh.position.copy(pos);
     mesh.visible = true;
@@ -200,6 +221,7 @@ export class Grenades {
       age: 0,
       resting: false,
       spent: false,
+      smoke,
       spin: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize(),
       mesh,
       beepAt: 0,
@@ -318,6 +340,8 @@ export class Grenades {
   clear() {
     for (const g of this.list) this._free(g);
     this.list.length = 0;
+    for (const c of this.clouds) this._freeCloud(c);
+    this.clouds.length = 0;
     this._nextId = 1;
     this.preview(null);
   }
@@ -325,7 +349,7 @@ export class Grenades {
   _free(g) {
     g.mesh.visible = false;
     g.mesh.removeFromParent();
-    (g.rocket ? this._rpool : this._pool).push(g.mesh);
+    (g.rocket ? this._rpool : g.smoke ? this._spool : this._pool).push(g.mesh);
   }
 
   _remove(g) {
@@ -407,6 +431,7 @@ export class Grenades {
   }
 
   update(dt) {
+    this._updateClouds(dt);
     if (!this.list.length) return;
     const auth = this.authoritative;
     for (let i = this.list.length - 1; i >= 0; i--) {
@@ -434,8 +459,8 @@ export class Grenades {
         g.mesh.position.copy(g.pos);
         if (!g.resting) g.mesh.rotateOnAxis(g.spin, Math.min(14, 3 + Math.sqrt(before)) * dt);
       }
-      // fuse: faster beeps and a blink as it runs down
-      if (!g.spent && g.age >= g.beepAt) {
+      // fuse: faster beeps and a blink as it runs down (frags only — smoke just sits)
+      if (!g.spent && !g.smoke && g.age >= g.beepAt) {
         g.beepAt = g.age + Math.max(0.09, g.fuse * 0.28);
         if (this.sfx && g.fuse > 0.05) this.sfx.play('grenade_beep', { x: g.pos.x, y: g.pos.y, z: g.pos.z, volume: 0.5 });
         if (this.fx && this.fx.grenadeBlink) this.fx.grenadeBlink(g.pos);
@@ -444,7 +469,10 @@ export class Grenades {
       if (auth) {
         this.list.splice(i, 1);
         this._free(g);
-        this._explode(g);
+        if (g.smoke) {
+          if (this.onExplode) this.onExplode(g);
+          this._popSmoke(g.pos);
+        } else this._explode(g);
       } else {
         // client: the host decides where and when it goes off
         g.spent = true;
@@ -456,10 +484,12 @@ export class Grenades {
   // ---------------------------------------------------------------- blast
 
   /** Client: the host's grenade / rocket `id` exploded at `pos`. */
-  explodeAt(id, pos, rocket = false) {
+  explodeAt(id, pos, rocket = false, smoke = false) {
     const g = this.list.find((x) => x.id === id);
+    const isSmoke = smoke || !!(g && g.smoke);
     if (g) this._remove(g);
-    this._blastFx(pos, (g ? g.rocket : rocket) ? ROCKET.radius : GRENADE.radius);
+    if (isSmoke) this._popSmoke(pos);
+    else this._blastFx(pos, (g ? g.rocket : rocket) ? ROCKET.radius : GRENADE.radius);
   }
 
   _blastFx(pos, radius = GRENADE.radius) {
@@ -468,6 +498,179 @@ export class Grenades {
       else this.fx.ring(pos, { color: 0xffb060, radius, duration: 0.45 });
     }
     if (this.sfx) this.sfx.play('explosion', { x: pos.x, y: pos.y, z: pos.z });
+  }
+
+  _popSmoke(pos) {
+    const cloud = { x: pos.x, y: pos.y, z: pos.z, t: 0, scale: 0.2, group: this._cloudMesh() };
+    if (cloud.group) {
+      cloud.group.position.set(pos.x, pos.y, pos.z);
+      cloud.group.visible = true;
+      this.group.add(cloud.group);
+    }
+    this.clouds.push(cloud);
+    if (this.fx && this.fx.dustPuff) {
+      for (let i = 0; i < 8; i++) this.fx.dustPuff(pos);
+    }
+    if (this.sfx) this.sfx.play('grenade_bounce', { x: pos.x, y: pos.y, z: pos.z, volume: 0.85 });
+  }
+
+  _cloudMesh() {
+    const pooled = this._cpool.pop();
+    if (pooled) return pooled;
+    const g = new THREE.Group();
+    // Opaque + depthWrite so the puff hides the world and the ink-outline pass
+    // (screen-space from the depth buffer) cannot draw silhouettes behind it.
+    // Double-sided core so walking inside shows gray smoke, not the far side of the map.
+    const coreMat = new THREE.MeshLambertMaterial({
+      color: 0x8d96a1,
+      transparent: false,
+      opacity: 1,
+      depthWrite: true,
+      fog: false,
+      side: THREE.DoubleSide,
+    });
+    const lumpMat = new THREE.MeshLambertMaterial({
+      color: 0x9aa4b0,
+      transparent: false,
+      opacity: 1,
+      depthWrite: true,
+      fog: false,
+      side: THREE.FrontSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
+    const core = new THREE.Mesh(new THREE.SphereGeometry(SMOKE.radius * 0.96, 18, 14), coreMat);
+    core.position.set(0, 2.4, 0);
+    core.scale.set(1, 0.82, 1);
+    g.add(core);
+    // Stacked floor caps sit above the terrain so grass does not z-fight through.
+    const floorMat = new THREE.MeshLambertMaterial({
+      color: 0x838c96,
+      transparent: false,
+      opacity: 1,
+      depthWrite: true,
+      fog: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(SMOKE.radius * 1.05, 28), floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(0, 0.38, 0);
+    floor.userData.smokeFloor = true;
+    g.add(floor);
+    const floor2 = new THREE.Mesh(new THREE.CircleGeometry(SMOKE.radius * 1.02, 24), floorMat);
+    floor2.rotation.x = -Math.PI / 2;
+    floor2.position.set(0, 0.78, 0);
+    g.add(floor2);
+    const haze = new THREE.Mesh(new THREE.SphereGeometry(SMOKE.radius * 0.95, 16, 10), floorMat);
+    haze.position.set(0, 0.55, 0);
+    haze.scale.set(1, 0.07, 1);
+    g.add(haze);
+    const k = SMOKE.radius / 7;
+    const blobs = [
+      [0, 1.6, 0, 3.8],
+      [2.2, 1.9, 0.7, 3.1],
+      [-2.0, 1.7, -1.2, 3.2],
+      [0.5, 2.8, -2.2, 2.9],
+      [-0.8, 2.4, 2.3, 3.0],
+      [1.6, 3.4, 1.4, 2.6],
+      [-1.5, 3.2, -0.4, 2.7],
+      [2.4, 2.2, -1.6, 2.5],
+      [-2.3, 2.0, 1.5, 2.6],
+    ];
+    for (const [x, y, z, r] of blobs) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(r * k, 12, 9), lumpMat);
+      m.position.set(x * k, y * k, z * k);
+      g.add(m);
+    }
+    return g;
+  }
+
+  _freeCloud(c) {
+    if (!c.group) return;
+    c.group.visible = false;
+    c.group.removeFromParent();
+    this._cpool.push(c.group);
+  }
+
+  _updateClouds(dt) {
+    const D = SMOKE.duration;
+    for (let i = this.clouds.length - 1; i >= 0; i--) {
+      const c = this.clouds[i];
+      c.t += dt;
+      let s = 1;
+      if (c.t < 0.5) s = 0.25 + 0.75 * (c.t / 0.5);
+      else if (c.t > D - 2.2) s = Math.max(0, (D - c.t) / 2.2);
+      c.scale = s;
+      if (c.group) {
+        c.group.scale.setScalar(s);
+        c.group.rotation.y += dt * 0.12;
+      }
+      if (c.t >= D) {
+        this._freeCloud(c);
+        this.clouds.splice(i, 1);
+      }
+    }
+  }
+
+  /** 0..1 how deep `pos` (or x,y,z) is inside a live smoke cloud. */
+  cover01(x, y, z) {
+    if (x && typeof x === 'object') {
+      y = x.y;
+      z = x.z;
+      x = x.x;
+    }
+    let best = 0;
+    for (const c of this.clouds) {
+      const R = SMOKE.radius * Math.max(0.35, c.scale || 1);
+      const d = Math.hypot(x - c.x, z - c.z);
+      if (d > R) continue;
+      if (y < c.y - 1.2 || y > c.y + SMOKE.height) continue;
+      best = Math.max(best, 1 - (d / R) * (d / R));
+    }
+    return best;
+  }
+
+  covers(x, y, z) {
+    return this.cover01(x, y, z) > 0.12;
+  }
+
+  /** True when the segment between two points crosses a smoke cloud. */
+  blocksSight(ax, ay, az, bx, by, bz) {
+    _d.set(bx - ax, by - ay, bz - az);
+    const len = _d.length();
+    if (len < 1e-4) return this.covers(ax, ay, az);
+    _d.multiplyScalar(1 / len);
+    return this.blockT({ x: ax, y: ay, z: az }, _d, len) != null;
+  }
+
+  /** Distance along a unit `dir` at which the ray enters smoke, or null. */
+  blockT(origin, dir, maxT) {
+    let best = null;
+    for (const c of this.clouds) {
+      const R = SMOKE.radius * Math.max(0.4, c.scale || 1);
+      const ox = origin.x - c.x;
+      const oz = origin.z - c.z;
+      const inside = ox * ox + oz * oz <= R * R && origin.y > c.y - 1.2 && origin.y < c.y + SMOKE.height;
+      if (inside) return 0.05;
+      const a = dir.x * dir.x + dir.z * dir.z;
+      if (a < 1e-8) continue;
+      const b = 2 * (ox * dir.x + oz * dir.z);
+      const cc = ox * ox + oz * oz - R * R;
+      const disc = b * b - 4 * a * cc;
+      if (disc < 0) continue;
+      const root = Math.sqrt(disc);
+      for (const hit of [(-b - root) / (2 * a), (-b + root) / (2 * a)]) {
+        if (hit < 0.05 || hit > maxT) continue;
+        const y = origin.y + dir.y * hit;
+        if (y < c.y - 1.2 || y > c.y + SMOKE.height) continue;
+        if (best == null || hit < best) best = hit;
+      }
+    }
+    return best;
   }
 
   /**
@@ -557,9 +760,14 @@ export class Grenades {
       }
     }
 
-    // ---- trees, rocks, props, vehicles
+    // ---- trees, rocks, props, vehicles, museum glass and furniture
     const hits = new Set();
-    this.world._each(c.x - R, c.z - R, c.x + R, c.z + R, false, (cell) => {
+    // museum roof tiles (breakable, roofTile parts) take extra damage over a wider radius
+    const cfg = rk ? ROCKET : GRENADE;
+    const roofR = R * (cfg.roofRadiusMult || 1);
+    const roofDamage = structureDamage * (cfg.roofDamageMult || 1);
+    const QR = Math.max(R, roofR);
+    this.world._each(c.x - QR, c.z - QR, c.x + QR, c.z + QR, false, (cell) => {
       for (const k of cell.circles) {
         if (hits.has(k) || !combat._isHarvestable(k)) continue;
         if (Math.hypot(k.x - c.x, k.z - c.z) - k.r <= R && c.y > k.y0 - R && c.y < k.h + R) hits.add(k);
@@ -570,13 +778,49 @@ export class Grenades {
         const pz = Math.max(k.minZ, Math.min(c.z, k.maxZ));
         if (Math.hypot(px - c.x, pz - c.z) <= R && c.y > k.y0 - R && c.y < k.h + R) hits.add(k);
       }
+      for (const k of cell.boxes) {
+        if (hits.has(k) || !k.alive) continue;
+        if (k.passable && !k.frame) continue;
+        const smash = combat._isBreakable(k) || (k.kind === 'prop' && k.hp > 0);
+        if (!smash) continue;
+        const px = Math.max(k.minX, Math.min(c.x, k.maxX));
+        const pz = Math.max(k.minZ, Math.min(c.z, k.maxZ));
+        const py = Math.max(k.y0, Math.min(c.y, k.y1));
+        const roof = !!(k.part && k.part.roofTile);
+        if (Math.hypot(px - c.x, py - c.y, pz - c.z) <= (roof ? roofR : R)) hits.add(k);
+      }
     });
     for (const k of hits) {
-      k.hp -= structureDamage;
+      k.hp -= k.part && k.part.roofTile ? roofDamage : structureDamage;
       if (k.hp <= 0) {
-        const x = k.type === 'poly' ? (k.minX + k.maxX) / 2 : k.x;
-        const z = k.type === 'poly' ? (k.minZ + k.maxZ) / 2 : k.z;
-        combat._destroyCollider(k, new THREE.Vector3(x, k.y0 + Math.min(3, (k.h - k.y0) * 0.5), z));
+        let x;
+        let z;
+        let y;
+        if (k.type === 'box') {
+          x = k.cx;
+          z = k.cz;
+          y = (k.y0 + k.y1) / 2;
+        } else if (k.type === 'poly') {
+          x = (k.minX + k.maxX) / 2;
+          z = (k.minZ + k.maxZ) / 2;
+          y = k.y0 + Math.min(3, (k.h - k.y0) * 0.5);
+        } else {
+          x = k.x;
+          z = k.z;
+          y = k.y0 + Math.min(3, (k.h - k.y0) * 0.5);
+        }
+        combat._destroyCollider(k, new THREE.Vector3(x, y, z));
+      }
+    }
+
+    // ---- chests / ammo boxes: dump loot and destroy the container
+    const loot = this.loot;
+    if (loot && loot.records) {
+      for (const rec of loot.records.slice()) {
+        if (rec.kind !== 'chest' && rec.kind !== 'ammoBox') continue;
+        if (Math.hypot(rec.x - c.x, rec.z - c.z, rec.y - c.y) > R) continue;
+        if (loot.smash) loot.smash(rec.id);
+        else loot.open(rec.id);
       }
     }
   }

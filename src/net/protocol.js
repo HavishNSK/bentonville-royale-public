@@ -44,7 +44,7 @@ export const FLAG = { alive: 1, grounded: 2, gliding: 4, crouch: 8, bus: 16, emo
 export const XFLAG = { downed: 1, revived: 2 }; // revived = a teammate is reviving this actor right now
 export const MODES = ['ground', 'freefall', 'glide', 'bus', 'dead', 'downed'];
 export const STORM_MODES = ['waiting', 'shrinking', 'final', 'done'];
-export const EQUIP = ['pickaxe', 'none', ...Object.keys(WEAPONS), 'grenade']; // new ids go on the end
+export const EQUIP = ['pickaxe', 'none', ...Object.keys(WEAPONS), 'grenade', 'smoke']; // new ids go on the end
 export const SURF = ['none', 'body', 'shield', 'dirt', 'wood', 'brick', 'metal', 'glass', 'water'];
 
 export function randomCode(rng = Math.random) {

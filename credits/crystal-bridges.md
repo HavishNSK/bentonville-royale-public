@@ -80,3 +80,18 @@ Research sources are listed in `docs/crystal-bridges-research.md`.
 - Floor plans, the venue map and the audio-tour script were read for layout and materials only.
 - No museum photo, Safdie Architects image or McGill archive image is copied into the game.
 - All textures (concrete with cedar bands, red oak, quartzite, copper, steel, grass) are procedural canvases drawn in `meshes.js`.
+
+## Statues
+
+Stone figures on plinths around the museum (`src/world/crystal-bridges/statues.js`), models in `public/assets/statues/`:
+
+| File | Source | License |
+| --- | --- | --- |
+| `dragon.glb` | Supplied by the project owner (`dragon-statue.glb`, Blender glTF export). Origin and license **not recorded**: confirm before public release. | Unconfirmed |
+| `gargoyle.glb` | Pixor free library, "Gargoyle" (`https://pixor.art/library/dungeon/gargoyle/`), retrieved 2026-11-17 | CC0 1.0 |
+| `guardian.glb` | Pixor free library, "Guardian statue" (`https://pixor.art/library/dungeon/statue/`), retrieved 2026-11-17 | CC0 1.0 |
+| `broken-statue.glb` | Pixor free library, "Broken statue" (`https://pixor.art/library/ruins/broken-statue/`), retrieved 2026-11-17 | CC0 1.0 |
+| `idol.glb` | Pixor free library, "Idol" (`https://pixor.art/library/ruins/idol/`), retrieved 2026-11-17 | CC0 1.0 |
+| `obelisk.glb` | Pixor free library, "Desert obelisk" (`https://pixor.art/library/desert/obelisk-desert/`), retrieved 2026-11-17 | CC0 1.0 |
+
+Pixor's license page (`https://pixor.art/library/license/`) dedicates every library model to the public domain under CC0 1.0 and says credit is appreciated but not required ("Made with Pixor", https://pixor.art). They are game props, not reproductions of works in the Crystal Bridges collection.

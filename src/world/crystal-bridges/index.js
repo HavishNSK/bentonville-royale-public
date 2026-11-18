@@ -11,7 +11,7 @@
 // Layout: site.js (cites docs/crystal-bridges-layout.md). Colliders: build.js. Meshes: meshes.js.
 
 import { buildSite } from './build.js';
-import { PAVILIONS, PADS, TILE, LEVEL, WALKER_LANDING, pointInPolygon, distToPolygon, bowMargin } from './site.js';
+import { PAVILIONS, PADS, TILE, LEVEL, WALKER_LANDING, pointInPolygon, distToPolygon, bowMargin, flatOverlapsRavine } from './site.js';
 
 export const CB_KEY = 'crystal_bridges';
 
@@ -35,8 +35,7 @@ export function createCrystalBridges(world, mapData) {
     /** A flat map feature (road ribbon / land-cover polygon / old pond) that would float over the ravine. */
     skipFlat(points, kind) {
       if (kind === 'water' && points.some(([x, z]) => inTile(x, z))) return true; // replaced by the three ponds
-      for (const [x, z] of points) if (inTile(x, z) && world.terrainHeight(x, z) < -0.25) return true;
-      return false;
+      return flatOverlapsRavine(points, (x, z) => world.terrainHeight(x, z), { filled: !!kind && kind !== 'water' });
     },
     treeSpots() {
       return forest(world, site);

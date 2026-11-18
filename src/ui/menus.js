@@ -4,7 +4,7 @@
 //   const menus = createMenus(root, {
 //     settings,                       // current settings object (src/ui/settings.js shape)
 //     onPlay(), onSettings(settings), onResume(), onLeave(), onPlayAgain(),
-//     onFreeBuild(name),                           // solo sandbox: no bots, no storm, full mats
+//     onFreeBuild(name),                           // SANDBOX: no bots, no storm, full mats, gun menu
 //     onHost(name), onJoin(code, name),           // private match (main.js lazy-loads src/net)
 //     onLobbyStart(), onLobbyLeave(), onLobbyFill(on), onLobbyMode(mode), onLobbyReady(on),
 //     onPartyReady(on), onPartyCancel(), onPartyMode(mode), onPartyFill(on),   // party lobby (title)
@@ -157,7 +157,7 @@ export function createMenus(root, opts = {}) {
      </div>
      <div class="mn-title-side">
        <div class="mn-stack mn-stack-row">
-         <button class="mn-btn mn-btn-small" data-act="freebuild">${icon('wall')}<span>FREE BUILD</span></button>
+         <button class="mn-btn mn-btn-small" data-act="freebuild">${icon('pencil')}<span>SANDBOX</span></button>
          <button class="mn-btn mn-btn-small" data-act="museum" title="Walk the Crystal Bridges galleries: no bots, no storm">${icon('star')}<span>VISIT THE MUSEUM</span></button>
          <button class="mn-btn mn-btn-small" data-act="private" aria-expanded="false" data-ref="privBtn">${icon('people')}<span>PRIVATE MATCH</span></button>
          <button class="mn-btn mn-btn-small" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
@@ -365,14 +365,17 @@ export function createMenus(root, opts = {}) {
   const pause = el(
     'section',
     'mn-screen mn-pause',
-    `<div class="mn-card mn-card-narrow">
+    `<div class="mn-card mn-card-narrow" data-ref="pauseCard">
        <h2 class="mn-h br-ol">PAUSED</h2>
        <button class="mn-btn mn-btn-hero" data-act="resume">${icon('play')}<span>RESUME</span></button>
        <button class="mn-btn" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
-       <button class="mn-btn mn-btn-danger" data-act="leave">${icon('home')}<span>LEAVE MATCH</span></button>
+       <button class="mn-btn mn-btn-danger" data-act="leave">${icon('home')}<span data-ref="leaveLabel">LEAVE MATCH</span></button>
      </div>`
   );
   wrap.appendChild(pause);
+  const P = {};
+  pause.querySelectorAll('[data-ref]').forEach((e) => (P[e.dataset.ref] = e));
+  let pauseSandbox = false;
 
   // ---------------------------------------------------------------- result
   const result = el(
@@ -994,8 +997,11 @@ export function createMenus(root, opts = {}) {
       L.pct.textContent = Math.round(p * 100) + '%';
       if (label) L.label.textContent = label;
     },
-    showPause() {
+    showPause(info) {
       api.showDropBanner(false);
+      pauseSandbox = !!(info && info.sandbox);
+      P.pauseCard.classList.toggle('mn-card-sandbox', pauseSandbox);
+      P.leaveLabel.textContent = pauseSandbox ? 'LEAVE SANDBOX' : 'LEAVE MATCH';
       show(pause, false);
     },
     showResult(r) {

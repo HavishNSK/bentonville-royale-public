@@ -80,6 +80,7 @@ export function debugItem(what, rarity = 'rare') {
   if (WEAPONS[what]) return { type: 'weapon', id: what, rarity, mag: WEAPONS[what].mag };
   if (what === 'medkit' || what === 'tonic') return { type: 'consumable', id: what, count: 3 };
   if (what === 'grenade') return { type: 'consumable', id: 'grenade', count: 6 };
+  if (what === 'smoke') return { type: 'consumable', id: 'smoke', count: CONSUMABLES.smoke.stack };
   if (MATERIALS.includes(what)) return { type: 'material', mat: what, count: 300 };
   return null;
 }
@@ -265,8 +266,10 @@ export class HostSession {
     keep(game.combat, 'swingPickaxe');
     keep(game.grenades, 'onThrow');
     keep(game.grenades, 'onExplode');
-    for (const k of ['_add', 'take', 'open']) keep(game.loot, k);
+    for (const k of ['_add', 'take', 'open', 'smash']) keep(game.loot, k);
     for (const k of ['place', 'damage', '_destroy', 'edit', 'setDoor']) keep(game.structures, k);
+    const siteDoors = game.world && game.world.siteDoors;
+    if (siteDoors) keep(siteDoors, 'setOpen');
     const ev = (e) => this.started && !this._spawning && this.events.push(e);
     const combat = game.combat;
     combat.onFire = (shooter, wid, origin, records, dirs, ballistic) => {
@@ -320,8 +323,8 @@ export class HostSession {
     // grenades: clients replay the flight from the throw and wait for the blast
     if (game.grenades) {
       game.grenades.onThrow = (gr) =>
-        ev({ e: 'gr', id: gr.id, a: gr.owner ? gr.owner.id : -1, p: [rnd(gr.pos.x), rnd(gr.pos.y), rnd(gr.pos.z)], v: [rnd(gr.vel.x), rnd(gr.vel.y), rnd(gr.vel.z)], r: gr.rocket ? 1 : 0 });
-      game.grenades.onExplode = (gr) => ev({ e: 'gx', id: gr.id, p: [rnd(gr.pos.x), rnd(gr.pos.y), rnd(gr.pos.z)], r: gr.rocket ? 1 : 0 });
+        ev({ e: 'gr', id: gr.id, a: gr.owner ? gr.owner.id : -1, p: [rnd(gr.pos.x), rnd(gr.pos.y), rnd(gr.pos.z)], v: [rnd(gr.vel.x), rnd(gr.vel.y), rnd(gr.vel.z)], r: gr.rocket ? 1 : 0, s: gr.smoke ? 1 : 0 });
+      game.grenades.onExplode = (gr) => ev({ e: 'gx', id: gr.id, p: [rnd(gr.pos.x), rnd(gr.pos.y), rnd(gr.pos.z)], r: gr.rocket ? 1 : 0, s: gr.smoke ? 1 : 0 });
     }
 
     const loot = game.loot;
@@ -344,6 +347,14 @@ export class HostSession {
         if (ok) ev({ e: 'lo', id });
         return ok;
       };
+      if (loot.smash) {
+        const smash = loot.smash.bind(loot);
+        loot.smash = (id) => {
+          const ok = smash(id);
+          if (ok) ev({ e: 'lx', id });
+          return ok;
+        };
+      }
     }
 
     const st = game.structures;
@@ -383,6 +394,14 @@ export class HostSession {
           return destroy(piece, ...rest);
         };
       }
+    }
+    if (siteDoors && siteDoors.setOpen) {
+      const setOpen = siteDoors.setOpen.bind(siteDoors);
+      siteDoors.setOpen = (id, open) => {
+        const ok = setOpen(id, open);
+        if (ok) ev({ e: 'md', id, o: open ? 1 : 0 });
+        return ok;
+      };
     }
   }
 
@@ -805,6 +824,14 @@ export class HostSession {
         st.edit(piece, m.ed | 0);
         return;
       }
+      case 'md': {
+        const doors = g.world && g.world.siteDoors;
+        if (!doors || a.inBus || a.airborneDrop) return;
+        const d = doors.near(a.pos);
+        if (!d || d.id !== m.id) return;
+        doors.toggle(m.id);
+        return;
+      }
       case 'dr': {
         // open / close a door cut into a built wall (anyone may)
         const st = g.structures;
@@ -894,7 +921,7 @@ export class HostSession {
         if (!used) return;
         a.lastThrow = this.time;
         if (a.character) a.character.swing();
-        g.grenades.throw(a, _o, _d.normalize());
+        g.grenades.throw(a, _o, _d.normalize(), used.id);
         return;
       }
       case 'mv': {

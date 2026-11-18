@@ -1814,6 +1814,16 @@
   visibility: visible;
   transition: opacity 0.16s ease-out;
 }
+.br-fullmap.is-on .br-fullmap-side {
+  pointer-events: auto;
+}
+.br-fullmap[data-travel] .br-map-hint-marker {
+  display: none;
+}
+.br-fullmap:not([data-travel]) .br-map-hint-travel,
+.br-fullmap:not([data-travel]) .br-map-hint-sandbox {
+  display: none;
+}
 .br-fullmap-frame {
   display: flex;
   align-items: stretch;
@@ -1936,6 +1946,189 @@
   border-top: calc(var(--u) * 2) solid rgba(255, 246, 220, 0.2);
   border-radius: 0;
   color: var(--br-sun);
+}
+.br-travel {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: calc(var(--u) * 8) calc(var(--u) * 10);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: calc(var(--u) * 10);
+  background: rgba(255, 246, 220, 0.08);
+  color: var(--br-cream);
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 16);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-align: left;
+  cursor: pointer;
+}
+.br-travel:hover,
+.br-travel:focus-visible {
+  background: rgba(255, 194, 31, 0.22);
+  color: var(--br-sun-hi);
+  outline: none;
+}
+.br-travel.is-here {
+  background: var(--br-sun);
+  color: var(--br-ink);
+}
+.br-map-weapons {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 10);
+  width: 100%;
+  margin: 0 0 calc(var(--u) * 4);
+  padding: calc(var(--u) * 8) calc(var(--u) * 10);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 12);
+  background: var(--br-sun);
+  color: var(--br-ink);
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 20);
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.br-map-weapons:hover,
+.br-map-weapons:focus-visible {
+  background: var(--br-sun-hi);
+  outline: none;
+}
+.br-map-weapons-ico {
+  display: grid;
+  place-items: center;
+  width: calc(var(--u) * 52);
+  height: calc(var(--u) * 28);
+  flex: none;
+}
+.br-map-weapons-ico .br-ico-wide {
+  width: calc(var(--u) * 50);
+  height: auto;
+}
+.br-sandbox-loadout {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  padding: calc(var(--u) * 16);
+  background: rgba(13, 9, 40, 0.72);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.16s ease-in,
+    visibility 0s linear 0.16s;
+}
+.br-sandbox-loadout.is-on {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 0.16s ease-out;
+}
+.br-sandbox-loadout-card {
+  display: flex;
+  flex-direction: column;
+  width: min(calc(var(--u) * 720), calc(100vw - 32px));
+  max-height: calc(100vh - 40px);
+  overflow: hidden;
+  padding: calc(var(--u) * 18) calc(var(--u) * 20) calc(var(--u) * 16);
+  border: calc(var(--u) * 4) solid var(--br-ink);
+  border-radius: calc(var(--u) * 22);
+  background: var(--br-ink-2);
+  box-shadow: 0 calc(var(--u) * 8) 0 rgba(13, 9, 40, 0.6);
+  color: var(--br-cream);
+}
+.br-sandbox-loadout-h {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 10);
+  margin: 0 0 calc(var(--u) * 4);
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 32);
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  color: var(--br-sun);
+  line-height: 1;
+}
+.br-sandbox-loadout-h .br-ico-wide {
+  width: calc(var(--u) * 56);
+  flex: none;
+}
+.br-sandbox-loadout-sub {
+  margin: 0 0 calc(var(--u) * 14);
+  font-size: calc(var(--u) * 13);
+  font-weight: 800;
+  color: var(--br-cream);
+  opacity: 0.78;
+}
+.br-sandbox-loadout-guns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(var(--u) * 8);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: min(52vh, calc(var(--u) * 420));
+  overflow: auto;
+}
+.br-sandbox-gun {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 10);
+  margin: 0;
+  padding: calc(var(--u) * 8) calc(var(--u) * 10);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: calc(var(--u) * 12);
+  background: rgba(255, 246, 220, 0.1);
+  color: var(--br-cream);
+  text-align: left;
+  cursor: pointer;
+}
+.br-sandbox-gun:hover,
+.br-sandbox-gun:focus-visible {
+  background: rgba(255, 194, 31, 0.24);
+  color: var(--br-sun-hi);
+  outline: none;
+}
+.br-sandbox-gun-pic {
+  display: grid;
+  place-items: center;
+  width: calc(var(--u) * 88);
+  height: calc(var(--u) * 44);
+  flex: none;
+  border-radius: calc(var(--u) * 8);
+  background: rgba(13, 9, 40, 0.45);
+}
+.br-sandbox-gun-pic .br-ico-wide {
+  width: calc(var(--u) * 80);
+  height: auto;
+}
+.br-sandbox-gun-name {
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 16);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+.br-sandbox-loadout-close {
+  display: block;
+  flex: none;
+  width: 100%;
+  margin: calc(var(--u) * 14) 0 0;
+  padding: calc(var(--u) * 10) calc(var(--u) * 12);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 12);
+  background: var(--br-cream);
+  color: var(--br-ink);
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 18);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.br-sandbox-loadout-close:hover,
+.br-sandbox-loadout-close:focus-visible {
+  background: var(--br-sun);
+  outline: none;
 }
 .br-fullmap-keys {
   display: flex;

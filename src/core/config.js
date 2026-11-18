@@ -271,6 +271,16 @@ export const CONSUMABLES = {
   tonic: { id: 'tonic', name: 'Shield Tonic', icon: 'potion', model: 'potion', rarity: 'rare', useTime: 2.4, heal: 0, shield: 50, stack: 3, sound: 'drink_shield' },
   // throwable: fire throws one instead of channelling a heal (see GRENADE and game/Grenades.js)
   grenade: { id: 'grenade', name: 'Grenade', icon: 'grenade', model: 'grenade', rarity: 'common', throwable: true, useTime: 0, heal: 0, shield: 0, stack: 6, pickup: 3, sound: null },
+  smoke: { id: 'smoke', name: 'Smoke Grenade', icon: 'smoke', model: 'smoke', rarity: 'uncommon', throwable: true, useTime: 0, heal: 0, shield: 0, stack: 4, pickup: 2, sound: null },
+};
+
+// Smoke grenades (game/Grenades.js): same throw as a frag, then a cloud instead of a blast.
+export const SMOKE = {
+  radius: 12, // m, horizontal (~3x the original area)
+  height: 6.5, // m, above the canister
+  duration: 12, // s
+  opacity: 1, // opaque — looking at it must not show the world or ink outlines through it
+  fogBoost: 0, // never crank scene FogExp2; that washed the view to white
 };
 
 // Grenades (game/Grenades.js): thrown along the aim ray in an arc, bounce off the world,
@@ -279,6 +289,8 @@ export const GRENADE = {
   damage: 75, // flat, to every character within `radius` that the blast can see (the thrower too)
   radius: 5.5, // m
   structureDamage: 600, // one blast breaks a build, a wall panel, a tree or a prop in range
+  roofDamageMult: 3, // museum roof tiles take 3x structureDamage...
+  roofRadiusMult: 1.6, // ...out to 1.6x the radius (one grenade opens a ~9 m hole)
   fuse: 2.2, // s
   speed: 20, // m/s along the aim direction
   lift: 4, // m/s added straight up
@@ -299,6 +311,8 @@ export const ROCKET = {
   cleanRadius: 1.3, // m
   minDamage: 40,
   structureDamage: 600, // one blast breaks a build, a wall panel, a tree or a prop in range
+  roofDamageMult: 3, // museum roof tiles: 3x structureDamage out to 1.8x the radius
+  roofRadiusMult: 1.8,
   size: 0.15, // collision radius (m)
 };
 
@@ -307,7 +321,7 @@ export const PICKAXE = {
   rate: 1.9, // swings per second
   range: 3.1,
   harvest: 50, // damage to harvestables per swing
-  yield: { wood: 50, brick: 40, metal: 35 }, // mats granted per harvesting swing
+  yield: { wood: 20, brick: 20, metal: 20 }, // mats granted per harvesting swing (trees, rocks, cars)
 };
 
 // Breakable building wall panels (see World.breakPanel / Interiors.js): outer walls use the
@@ -323,7 +337,7 @@ export const MATERIAL_COLOR = { wood: 0xb9803f, brick: 0xb5533c, metal: 0x8d99a6
 export const BUILD = {
   cell: 4,
   level: 3,
-  cost: 10,
+  cost: 5, // mats per piece (was 10: building should be quick and cheap)
   hp: { wood: 150, brick: 260, metal: 380 },
   pieces: ['wall', 'floor', 'ramp', 'cone'],
   maxPieces: 900,
@@ -419,15 +433,22 @@ export const RANKED_DIFFICULTY = 'hard';
 export const isRankedDifficulty = (d) => d === RANKED_DIFFICULTY;
 export const RANKED_NOTE = 'Only matches on HARD bot difficulty count toward the ranks (wins and eliminations).';
 
+// closeMiss: aim scatter in METRES at the target (sd), on top of the angular aimError: an angle
+// alone shrinks to nothing up close, so without it a bot could not miss at shotgun range.
 export const DIFFICULTY = {
-  easy: { lead: 0.5, aimError: 0.085, reaction: 0.9, burst: 0.55, buildChance: 0.35, buildPieces: 2, buildCooldown: 6, buildRate: 0.45, sight: 80, damageScale: 0.6, wallOnHit: 0.25, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0.3 },
+  easy: { lead: 0.5, aimError: 0.085, closeMiss: 0.7, reaction: 0.9, burst: 0.55, buildChance: 0.35, buildPieces: 2, buildCooldown: 6, buildRate: 0.45, sight: 80, damageScale: 0.6, wallOnHit: 0.25, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0.3 },
   normal: {
-    lead: 0.8, aimError: 0.05, reaction: 0.55, burst: 0.7, buildChance: 0.75, buildPieces: 6, buildCooldown: 2.5, buildRate: 0.18, sight: 100, damageScale: 0.8,
+    lead: 0.8, aimError: 0.05, closeMiss: 0.5, reaction: 0.55, burst: 0.7, buildChance: 0.75, buildPieces: 6, buildCooldown: 2.5, buildRate: 0.18, sight: 100, damageScale: 0.8,
     wallOnHit: 0.7, boxHeal: 0.6, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.6, boxFight: 0.35, peekOpen: 1.1, peekClosed: 0.8,
   },
   hard: {
-    lead: 1, aimError: 0.017, reaction: 0.18, burst: 0.92, buildChance: 1, buildPieces: 10, buildCooldown: 0.8, buildRate: 0.06, sight: 150, damageScale: 1,
-    wallOnHit: 1, boxHeal: 1, pushWeak: 0.95, thirdParty: 0.7, rotateEarly: 1, boxFight: 0.9, peekOpen: 0.9, peekClosed: 0.55,
+    // aimError 0.017 -> 0.02 and closeMiss: hard bots used to never miss up close
+    lead: 1, aimError: 0.02, closeMiss: 0.36, reaction: 0.18, burst: 0.92, buildChance: 1, buildPieces: 16, buildCooldown: 0.5, buildRate: 0.06, sight: 150, damageScale: 1,
+    wallOnHit: 1, boxHeal: 1, pushWeak: 0.95, thirdParty: 0.7, rotateEarly: 1, boxFight: 0.9, peekOpen: 0.6, peekClosed: 0.32, // quick edits (was 0.9 / 0.55)
+    peekWindow: true, // edit a window first, even up close (a door only when the window does not line up)
+    trap: 0.55, // chance to full-box a close, grounded target and window-peek it (Bots._maybeTrap)
+    rushFloors: true, // ramp rushes are ramp + wall + floor (cover ahead and overhead)
+    highGround: 0.6, // chance to take height on a level target 8-45 m away instead of a lone wall
   },
 };
 

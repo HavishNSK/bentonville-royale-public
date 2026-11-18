@@ -140,7 +140,7 @@ export function obstaclesFrom(site) {
     const ez = Math.abs(Math.sin(p.yaw || 0)) * p.hx + Math.abs(Math.cos(p.yaw || 0)) * p.hz;
     return { x0: p.cx - ex, x1: p.cx + ex, z0: p.cz - ez, z1: p.cz + ez };
   };
-  for (const p of site.parts) if (p.stair || p.room || p.threshold) out.push(rectOf(p));
+  for (const p of site.parts) if (p.stair || p.room || p.threshold || p.plinth || p.statue) out.push(rectOf(p));
   for (const p of site.props) if (p.type === 'shelf' || p.type === 'case' || p.type === 'counter') out.push(rectOf(p));
   return out;
 }

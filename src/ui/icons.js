@@ -105,6 +105,14 @@ const SQUARE = {
     `<ellipse cx="24" cy="29" rx="14.500" ry="16" fill="#5d8a45" ${S}/>` +
     `<path d="M10 26h28M11.500 34h25M19 14.500v29M29 14.500v29" fill="none" stroke="${INK}" stroke-width="2" opacity=".45"/>` +
     `<path d="M15 21.500q2.500-4 6-5" fill="none" stroke="#b9e08f" stroke-width="2.500" stroke-linecap="round"/>`,
+  smoke:
+    `<ellipse cx="16" cy="12" rx="7" ry="5.5" fill="#e8edf2" ${S}/>` +
+    `<ellipse cx="28" cy="9" rx="9" ry="6.5" fill="#f4f6f8" ${S}/>` +
+    `<ellipse cx="37" cy="14" rx="6" ry="4.5" fill="#d5dde6" ${S}/>` +
+    `<rect x="18" y="18" width="12" height="7" rx="2" fill="#9aa6b4" ${S}/>` +
+    `<ellipse cx="24" cy="34" rx="11" ry="12" fill="#c5ccd4" ${S}/>` +
+    `<path d="M16 31h16" fill="none" stroke="${INK}" stroke-width="2" opacity=".4"/>` +
+    `<path d="M20 22q-6-6-2-12" fill="none" stroke="#c5ccd4" stroke-width="2.5" stroke-linecap="round"/>`,
 
   // ---- menu / misc -------------------------------------------------------
   play: `<path d="M14 7.500L41 24L14 40.500Z" fill="#fff" ${S}/>`,
@@ -154,6 +162,12 @@ const SQUARE = {
     `<path d="M4.500 11L17 6L31 11L43.500 6V37L31 42L17 37L4.500 42Z" fill="#fff" ${S}/>` +
     `<path d="M17 6V37M31 11V42" fill="none" stroke="${INK}" stroke-width="2.500"/>` +
     `<circle cx="24" cy="22" r="4" fill="#ff4f6d" ${S}/>`,
+  pencil:
+    `<path d="M8 10h22v28H12c-2.2 0-4-1.8-4-4V10z" fill="#fff6dc" ${S}/>` +
+    `<path d="M14 18h10M14 24h12M14 30h8" fill="none" stroke="${INK}" stroke-width="2.4" stroke-linecap="round"/>` +
+    `<path d="M26 40L42 16l5 5L31 45h-5z" fill="${GOLD}" ${S}/>` +
+    `<path d="M42 16l4-4 5 5-4 4z" fill="#ff8aa0" ${S}/>` +
+    `<path d="M26 40l-2 6 6-2" fill="#c98a45" ${S}/>`,
 };
 
 // ---- weapon silhouettes (96x48, facing right) ------------------------------

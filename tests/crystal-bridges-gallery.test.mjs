@@ -11,7 +11,7 @@ import { placeArt, obstaclesFrom, paintingSize } from '../src/world/crystal-brid
 const mapData = JSON.parse(readFileSync(new URL('../public/data/bentonville-osm.json', import.meta.url)));
 const config = JSON.parse(readFileSync(new URL('../public/data/crystal-bridges.config.json', import.meta.url)));
 
-import { sanitizeConfig, configUrl } from '../src/world/crystal-bridges/gallery/config.js';
+import { sanitizeConfig, configUrl, DEFAULT_PALETTE, interiorBlend } from '../src/world/crystal-bridges/gallery/config.js';
 
 function setup() {
   const world = new World({ ...mapData, buildings: [], roads: [] });
@@ -72,6 +72,16 @@ test('copyrighted works are placeholders, never fetched art', () => {
       if (/Rockwell|Warhol|Kusama|O'Keeffe|Bourgeois|Marshall|Maya Lin|Rothko|Koons|Haring/.test(x.artist || '')) assert.ok(x.placeholder, `${x.artist} must be a placeholder`);
     }
   }
+});
+
+test('museum fog is a mist, and the ravine stays hazy even outdoors', () => {
+  const n = parseInt(DEFAULT_PALETTE.fog.slice(1), 16);
+  const lum = ((n >> 16) & 255) + ((n >> 8) & 255) + (n & 255);
+  assert.ok(lum / 3 > 140, `fog ${DEFAULT_PALETTE.fog} still reads as a black box`);
+  assert.equal(interiorBlend({ inside: false, inSite: false }), 0);
+  assert.ok(interiorBlend({ inside: false, inSite: true }) >= 0.4, 'ravine should stay foggy');
+  assert.ok(interiorBlend({ inside: true, glassy: true }) >= 0.5);
+  assert.ok(interiorBlend({ inside: true, glassy: false }) >= 0.8);
 });
 
 test('config sanitising and the ?cbConfig override', () => {

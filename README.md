@@ -85,7 +85,7 @@ Place a personal track at `local-music/menu.mp3`. The dev/preview middleware ser
 
 ## User Flow and Controls
 
-1. Select **PLAY** for solo, or **WITH FRIENDS** to host/join using a room code and display name.
+1. Select **PLAY** for solo, or **WITH FRIENDS** to host/join using a room code and display name. **SANDBOX** has no bots or storm; **N** opens the sandbox map (also remappable). Click **WEAPONS** on that map to pick a gun or grenades from pictures, or click a named POI to travel there. Frag grenades and the rocket launcher shatter museum windows and their frames, break benches, and blow chests apart so the loot spills and the chest is gone. Smoke grenades pop a thick opaque cloud, about three times the original area, that hides whatever is behind it.
 2. The host shares the code and starts the friend match when players have joined.
 3. Drop/glide, loot, fight, build, and remain inside the storm circle.
 4. Use the result screen to play again or return to the menu. In friend matches, the host starts the next round.
@@ -105,6 +105,7 @@ Place a personal track at `local-music/menu.mp3`. The dev/preview middleware ser
 | G | Cycle build material |
 | B | Emote |
 | M / Escape | Full map / pause |
+| N | Sandbox map (sandbox only; remappable in Settings). Click **WEAPONS** for pictured guns, or a named POI to travel. Fast travel and the weapon menu are not available in matches. **M** still opens the same map in sandbox. |
 
 Click into gameplay to capture the pointer. Settings include sensitivity, invert Y, volume, graphics quality, bot difficulty, and optional Google view. Only matches on **Hard** bot difficulty count toward the RANKS leaderboards (wins and eliminations); Easy and Normal matches still pay coins. In multiplayer the host's difficulty is sent in the start message and decides for everyone. The client reports `ranked` with the match result and the account server (`party/accounts.js`) adds wins/kills only when `ranked === true`. Like kills, this is client-reported, not anti-cheat. Touch gameplay is not implemented.
 
@@ -209,6 +210,17 @@ Crystal Bridges Museum of American Art is a bespoke point of interest in `src/wo
 - the Great Hall Corridor with the library above it;
 - the Garrison Lobby, an entrance stair hall from the crest, Walker Landing's stepwell tiers, and the 2026 expansion (west galleries, glass Bridge Gallery with café, sawtooth Hub).
 
+**Entrances.** Three public doorways (`nav.js` `ENTRANCES`) have bronze frames, a copper canopy and a sign:
+- **Main:** the east colonnade on the crest, then down the Entrance Hall stair to the lobby. This doorway stays open, with glass leaves parked to the sides.
+- **South:** at the foot of the lawn path, into the café. Framed sliding glass doors start closed; press Interact to open or close them.
+- **Library:** the upper east door. Same framed sliding doors as South.
+
+Bots open the south and library doors as they walk up to them. Other exterior doors keep walk-through door glass.
+
+**Café.** The South Lobby holds a coffee bar (counters, espresso machines, pastry case, menu board), a cafeteria serving line with a sneeze guard, and tables with chairs on either side of the central aisle.
+
+**Windows.** Wall glass is clear, tinted, specular glass with sky-reflection streaks. Every pane has mullions, sill and head rails, and a transom in tall bays. Grenades and rockets destroy the pane and those frames together. Slab undersides are drawn, so floors don't turn see-through when seen from under the bridges.
+
 These sit in a ravine of three ponds that step down northward over two weirs. The site plan and its sources are in [docs/crystal-bridges-layout.md](docs/crystal-bridges-layout.md) and [docs/crystal-bridges-research.md](docs/crystal-bridges-research.md). Pavilion-to-outline assignments are inferences from schematic plans, not survey data.
 
 **Collision.**
@@ -217,13 +229,17 @@ These sit in a ravine of three ponds that step down northward over two weirs. Th
 - **Hits and materials:**
   - The building is indestructible but harvestable for brick (concrete) and wood.
   - Glass panes break when shot or swung at, and give no materials.
-  - Benches, tables and shelves break and give wood.
+  - Benches, tables, chairs, counters and shelves break and give wood. Every gallery and the Great Hall Corridor has benches, kept clear of the bot lanes and the loot.
 - **Multiplayer:** breakable boxes sync to clients by box id, and clients ignore destroy events for unbreakable boxes.
 
-**Loot.** The museum places its own chests, ammo boxes and floor items (`world.fixedLoot`). Two high-tier chests sit on the North Elevator Tower roof (reach it by building) and on the weir under Eleven. Generic scatter and loot stay off the site (`world.reserve`).
+**Bots.** The museum isn't an OSM shell building, so `nav.js` gives it a waypoint graph that `World.siteNav` exposes. When a bot's goal is inside (or it needs to get out, or change level), `Bots._siteRoute` walks it through the nearest entrance and the stairs. Bots target museum loot up to 16 m below them, since the galleries are in the ravine. Floor slabs are `walkable`, so the A* fallback (`World.blockedAt`) treats pavilion floors as open ground.
+
+**Loot.** The museum places its own chests, ammo boxes and floor items (`world.fixedLoot`). Most chests sit on furniture: gallery benches, a library reading table, a café table, a Great Hall table, the lobby desk and the store's display case. Others are tucked away: behind the Contemporary idol, out on the Contemporary balcony, at the foot of the Reflection Room dragon, behind the coffee bar and in Eleven's kitchen. Two high-tier chests sit on the North Elevator Tower roof (reach it by building) and on the weir under Eleven. Generic scatter and loot stay off the site (`world.reserve`). Known gap: breaking a bench or table that holds a chest leaves the chest floating at seat height.
+
+**Statues.** Thirty stone figures on plinths (`src/world/crystal-bridges/statues.js`, models in `public/assets/statues/`): obelisks, guardians and two dragons line the main-entrance colonnade, marble figures flank the Entrance Hall stair, gargoyles guard the south door, and one or two stand in each gallery and on the terraces. Each figure is solid (a plinth box plus a hidden collider), stays out of bot lanes and doorways, and the paintings hang around it. Credits are in [credits/crystal-bridges.md](credits/crystal-bridges.md): five Pixor CC0 models, plus a dragon supplied by the project owner whose license is not yet recorded.
 
 **Galleries.**
-- **Look:** the presentation is ported from [musewalk](https://github.com/shuyan-5200/musewalk) (MIT, see [credits/crystal-bridges.md](credits/crystal-bridges.md)): gold, dark and float frames, plaques, light pools plus a pool of three real spotlights, and an interior mood crossfade (fog, light, bloom, vignette over about 1 s).
+- **Look:** the presentation is ported from [musewalk](https://github.com/shuyan-5200/musewalk) (MIT, see [credits/crystal-bridges.md](credits/crystal-bridges.md)): gold, dark and float frames, plaques, light pools plus a pool of three real spotlights, and an interior mood crossfade (misty fog, light, bloom, vignette over about 1 s). The ravine stays hazy even between pavilions. The orbit camera clamps to walkable slabs so looking up does not drop it through the oak floors.
 - **Config:** works hang from `public/data/crystal-bridges.config.json`, which uses musewalk's `gallery.config.json` shape. `?cbConfig=/data/<file>.json` swaps it for testing; only same-origin `/data/*.json` is accepted, and every field is validated.
 - **Focus mode:** **E** near a painting opens it, with the info panel; **E** again, moving, or taking damage closes it, and recent combat blocks it.
 - **Portals:** walking into Kindred Spirits, The Backwoods of America or Indian Encampment plays musewalk's brush-stroke dissolve and white veil, then moves you to a paired spot. Each player has a 10 s cooldown; bots can't use portals, and they don't work from inside the storm. In multiplayer the host validates range, cooldown, storm and the exact destination.
@@ -233,7 +249,7 @@ These sit in a ravine of three ponds that step down northward over two weirs. Th
 **Art.** `node scripts/fetch-cb-art.mjs` (Commons) or `node scripts/fetch-cb-art.mjs --source museum` (crystalbridges.org collection records) fetches public-domain paintings in the museum's collection into `public/art/crystal-bridges/`, with provenance in `public/art/sources.json`. Both sources are paced, and only Public Domain / CC0 / CC BY works are accepted. Copyrighted works are never reproduced: they appear as empty frames or plinths with their real labels. See [ASSET_CREDITS.md](ASSET_CREDITS.md).
 
 **Verification.**
-- `npm test` covers the box colliders, the site's walkable routes, glass, loot placement and gallery hanging.
+- `npm test` covers the box colliders, the site's walkable routes, glass, loot placement and gallery hanging. `tests/crystal-bridges-nav.test.mjs` walks every bot-graph edge both ways and checks the entrances, café, benches, chests and a full bot route from the crest to the Contemporary gallery.
 - The browser walkthrough checks every wing, focus mode and a portal, after the QA setup in [tools/qa/README.md](tools/qa/README.md):
 
 ```bash

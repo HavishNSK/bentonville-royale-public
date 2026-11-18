@@ -1468,11 +1468,12 @@ export class World {
       for (let i = 0; i < dyn.length && !hit; i++) {
         if (this._pieceOverlaps(dyn[i], x, z, r, band)) hit = true;
       }
-      // architecture boxes that reach down into the ground band (a slab high overhead is no obstacle)
+      // architecture boxes that reach down into the ground band (a slab high overhead is no
+      // obstacle; a `walkable` floor slab, e.g. a museum floor over the ravine, is walked on)
       const boxes = cell.boxes;
       for (let i = 0; i < boxes.length && !hit; i++) {
         const c = boxes[i];
-        if (c.y0 < band && c.y1 > band - PIECE_GROUND_BAND && boxContains(c, x, z, r)) hit = true;
+        if (!c.passable && !c.walkable && c.y0 < band && c.y1 > band - PIECE_GROUND_BAND && boxContains(c, x, z, r)) hit = true;
       }
     });
     return hit;
@@ -1594,7 +1595,7 @@ export class World {
     const boxes = cell.boxes;
     for (let i = 0; i < boxes.length; i++) {
       const c = boxes[i];
-      if (c.y1 <= y || c.y1 > lim || c.y1 >= cap || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
+      if (c.passable || c.y1 <= y || c.y1 > lim || c.y1 >= cap || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
       if (boxContains(c, x, z)) {
         y = c.y1;
         this.surface = 'floor';
@@ -1662,7 +1663,7 @@ export class World {
     const boxes = cell.boxes;
     for (let i = 0; i < boxes.length; i++) {
       const c = boxes[i];
-      if (c.y0 <= lim || c.y0 >= y || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
+      if (c.passable || c.y0 <= lim || c.y0 >= y || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
       if (boxContains(c, x, z)) y = c.y0;
     }
     const dyn = cell.dyn;
@@ -1716,7 +1717,7 @@ export class World {
     const boxes = cell.boxes;
     for (let i = 0; i < boxes.length; i++) {
       const c = boxes[i];
-      if (c.y0 <= feetY + 0.05 || c.y1 >= y || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
+      if (c.passable || c.y0 <= feetY + 0.05 || c.y1 >= y || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
       if (boxContains(c, x, z)) y = c.y1;
     }
     const dyn = cell.dyn;
@@ -1832,6 +1833,7 @@ export class World {
             const c = boxes[i];
             if (c.stamp === stamp) continue;
             c.stamp = stamp;
+            if (c.passable) continue;
             if (feet >= c.y1 - step || head <= c.y0 + 0.05) continue;
             if (pos.x < c.minX - r || pos.x > c.maxX + r || pos.z < c.minZ - r || pos.z > c.maxZ + r) continue;
             const p = boxPushCircle(c, pos.x, pos.z, r);

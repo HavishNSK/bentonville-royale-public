@@ -18,7 +18,7 @@ import { buildFrame, buildPlaque, buildLightPool, buildBeam, emptyCanvas, standI
 import { createGalleryUI } from './ui.js';
 import { Ambience } from './ambience.js';
 import { runPortal } from './portal.js';
-import { configUrl, sanitizeConfig, DEFAULT_PALETTE } from './config.js';
+import { configUrl, sanitizeConfig, DEFAULT_PALETTE, interiorBlend } from './config.js';
 
 export { configUrl, sanitizeConfig };
 
@@ -313,19 +313,19 @@ export async function createGallery({ game, site, sfx = null }) {
       inside = !!pv && !(game.state !== 'play' && game.state !== 'over');
       if (pv && pv.wing && wingById.has(pv.wing)) pal = wingById.get(pv.wing);
       else if (pv) pal = DEFAULT_PALETTE;
-      // galleries take the full musewalk mood; the daylit glass halls (bridges, Eleven, Great Hall,
-      // lobby, corridor) only part of it
+      // galleries take the musewalk mist; glass halls and the ravine between pavilions keep a haze
       const glassy = pv && (pv.bridge || !pv.wing || ['lobby', 'corridor', 'great-hall', 'eleven', 'library'].includes(pv.wing));
-      const target = inside ? (glassy ? 0.45 : 1) : 0;
+      const inSite = Math.abs(p.pos.x) < 75 && p.pos.z < -150 && p.pos.z > -470 && (game.state === 'play' || game.state === 'over');
+      if (!inside && inSite) pal = DEFAULT_PALETTE;
+      const target = interiorBlend({ inside, glassy, inSite });
       k += (target - k) * (1 - Math.exp(-dt * 3)); // ~1 s crossfade (musewalk wing transitions)
       if (game.atmosphere && game.atmosphere.setInterior) game.atmosphere.setInterior(k, pal);
       if (game.post && game.post._bloom) game.post._bloom.strength = 0.32 + (0.55 - 0.32) * k; // musewalk hall bloom target 0.55
       if (!focus) ui.setVignette(k * 0.9, false);
 
       // NOW ENTERING
-      const inSite = Math.abs(p.pos.x) < 75 && p.pos.z < -150 && p.pos.z > -470 && (game.state === 'play');
-      if (inSite && !wasInSite) ui.entering(true);
-      wasInSite = inSite;
+      if (inSite && game.state === 'play' && !wasInSite) ui.entering(true);
+      wasInSite = inSite && game.state === 'play';
 
       // damage cancels focus; recent combat blocks it
       const hp = (p.health || 0) + (p.shield || 0);

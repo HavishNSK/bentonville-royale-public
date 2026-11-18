@@ -212,6 +212,156 @@
       "artist": "Oscar Bluemner",
       "year": "1916–18",
       "room": "early-twentieth"
+    },
+    "krimmel-village-politicians": {
+      "title": "The Village Politicians",
+      "artist": "John Lewis Krimmel",
+      "year": "c. 1819",
+      "room": "early-american"
+    },
+    "catlin-indian-encampment": {
+      "title": "Indian Encampment",
+      "artist": "George Catlin",
+      "year": "c. 1830s",
+      "room": "early-american"
+    },
+    "mcentee-winter-country": {
+      "title": "Winter in the Country",
+      "artist": "Jervis McEntee",
+      "year": "1867",
+      "room": "early-american"
+    },
+    "pomarede-st-louis": {
+      "title": "View of St. Louis",
+      "artist": "Leon Pomarede",
+      "year": "1835",
+      "room": "early-american"
+    },
+    "taylor-classical-landscape": {
+      "title": "A Wooded Classical Landscape at Evening",
+      "artist": "John Taylor",
+      "year": "18th century",
+      "room": "early-american"
+    },
+    "bannister-harvest": {
+      "title": "Harvest",
+      "artist": "Edward Mitchell Bannister",
+      "year": "c. 1880s",
+      "room": "nineteenth"
+    },
+    "johnson-at-the-camp": {
+      "title": "At the Camp—Spinning Yarns and Whittling",
+      "artist": "Eastman Johnson",
+      "year": "c. 1864–66",
+      "room": "nineteenth"
+    },
+    "stanley-buffalo-hunt": {
+      "title": "The Buffalo Hunt",
+      "artist": "John Mix Stanley",
+      "year": "1855",
+      "room": "nineteenth"
+    },
+    "pettit-union-refugees": {
+      "title": "Union Refugees",
+      "artist": "George W. Pettit",
+      "year": "1865",
+      "room": "nineteenth"
+    },
+    "richards-along-the-shore": {
+      "title": "Along the Shore",
+      "artist": "William Trost Richards",
+      "year": "1881",
+      "room": "nineteenth"
+    },
+    "brush-indian-lily": {
+      "title": "The Indian and the Lily",
+      "artist": "George de Forest Brush",
+      "year": "1887",
+      "room": "nineteenth"
+    },
+    "ulrich-glass-engraver": {
+      "title": "The Glass Engraver",
+      "artist": "Charles Frederic Ulrich",
+      "year": "1883",
+      "room": "nineteenth"
+    },
+    "chase-the-song": {
+      "title": "The Song",
+      "artist": "William Merritt Chase",
+      "year": "1907",
+      "room": "bridge-gallery"
+    },
+    "sargent-under-willows": {
+      "title": "Under the Willows",
+      "artist": "John Singer Sargent",
+      "year": "c. 1887",
+      "room": "bridge-gallery"
+    },
+    "twachtman-yellowstone": {
+      "title": "Lower Falls of the Yellowstone",
+      "artist": "John Henry Twachtman",
+      "year": "1895",
+      "room": "bridge-gallery"
+    },
+    "metcalf-pool": {
+      "title": "The Pool",
+      "artist": "Willard LeRoy Metcalf",
+      "year": "1904",
+      "room": "bridge-gallery"
+    },
+    "dewing-fortune-teller": {
+      "title": "The Fortune Teller",
+      "artist": "Thomas Wilmer Dewing",
+      "year": "1904–05",
+      "room": "bridge-gallery"
+    },
+    "bellows-the-studio": {
+      "title": "The Studio",
+      "artist": "George Wesley Bellows",
+      "year": "1919",
+      "room": "early-twentieth"
+    },
+    "maurer-midinette": {
+      "title": "The Midinette",
+      "artist": "Alfred Henry Maurer",
+      "year": "c. 1901",
+      "room": "early-twentieth"
+    },
+    "luks-in-the-corner": {
+      "title": "In the Corner",
+      "artist": "George Benjamin Luks",
+      "year": "c. 1905",
+      "room": "early-twentieth"
+    },
+    "decker-boy-berries": {
+      "title": "Boy Eating Berries",
+      "artist": "Joseph Decker",
+      "year": "1886",
+      "room": "corridor"
+    },
+    "peto-green-book": {
+      "title": "Green Book and Lard Lamp",
+      "artist": "John Frederick Peto",
+      "year": "c. 1890s",
+      "room": "corridor"
+    },
+    "audubon-wild-turkey": {
+      "title": "Wild Turkey Cock, Hen and Young",
+      "artist": "John James Audubon",
+      "year": "1826",
+      "room": "corridor"
+    },
+    "tryon-brook-in-may": {
+      "title": "The Brook in May",
+      "artist": "Dwight William Tryon",
+      "year": "1914",
+      "room": "corridor"
+    },
+    "dewing-rose-garden": {
+      "title": "Rose Garden",
+      "artist": "Maria Oakey Dewing",
+      "year": "1901",
+      "room": "corridor"
     }
   }
 }

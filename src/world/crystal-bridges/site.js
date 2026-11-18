@@ -61,7 +61,7 @@ const O = (a, b) => ({ t: 'open', a, b });
 export const PAVILIONS = Object.freeze([
   {
     id: 'south-lobby', name: 'South Lobby', x0: -30, x1: 34, z0: -176, z1: -158, floor: LEVEL.MAIN, height: 4.4,
-    roof: { type: 'flat', mat: 'green' }, floorMat: 'stone', wing: null,
+    roof: { type: 'flat', mat: 'green' }, floorMat: 'oak', wing: null,
     sides: {
       s: [W(-30, -4), D(-4, 6), W(6, 34)],
       n: [W(-30, -28), O(-28, -20), G(-20, 12), W(12, 14), O(14, 32), W(32, 34)],
@@ -71,12 +71,12 @@ export const PAVILIONS = Object.freeze([
   },
   {
     id: 'great-hall', name: 'Great Hall', x0: -34, x1: -18, z0: -200, z1: -176, floor: LEVEL.MAIN, height: 8.8,
-    roof: { type: 'convex', rise: 2.2, mat: 'copper', along: 'z' }, floorMat: 'stone', ribs: true, wing: 'great-hall',
+    roof: { type: 'convex', rise: 2.2, mat: 'copper', along: 'z' }, floorMat: 'oak', ribs: true, wing: 'great-hall',
     sides: { s: [W(-34, -28), O(-28, -20), W(-20, -18)], n: [W(-34, -32), G(-32, -20), W(-20, -18)], w: [W(-200, -198), G(-198, -178), W(-178, -176)], e: [W(-200, -198), G(-198, -178), W(-178, -176)] },
   },
   {
     id: 'corridor', name: 'Great Hall Corridor', x0: 12, x1: 34, z0: -246, z1: -176, floor: LEVEL.MAIN, height: 5.5,
-    roof: { type: 'flat', mat: 'copper', holes: [{ x0: 29.4, x1: 33.6, z0: -210, z1: -187 }] }, floorMat: 'stone', wing: 'corridor',
+    roof: { type: 'flat', mat: 'copper', holes: [{ x0: 29.4, x1: 33.6, z0: -210, z1: -187 }] }, floorMat: 'oak', wing: 'corridor',
     sides: {
       w: [G(-246, -176)],
       e: [W(-246, -176)],
@@ -88,6 +88,7 @@ export const PAVILIONS = Object.freeze([
   },
   {
     id: 'library', name: 'Library', x0: 22, x1: 34, z0: -236, z1: -180, floor: LEVEL.MAIN + 6.0, height: 4.2, noSlab: true,
+    floorHoles: [{ x0: 29.4, x1: 33.6, z0: -210, z1: -187 }],
     roof: { type: 'flat', mat: 'copper' }, floorMat: 'oak', wing: 'library',
     sides: {
       w: [G(-236, -180)],
@@ -98,7 +99,7 @@ export const PAVILIONS = Object.freeze([
   },
   {
     id: 'entry-tower', name: 'Entrance Hall', x0: 34, x1: 56, z0: -246, z1: -232, floor: LEVEL.MAIN, height: 11, wing: 'lobby',
-    roof: { type: 'flat', mat: 'concrete' }, floorMat: 'stone',
+    roof: { type: 'flat', mat: 'concrete' }, floorMat: 'oak',
     sides: {
       n: [O(34, 38), W(38, 56)],
       e: [W(-246, -242), D(-242, -236, { sill: LEVEL.CREST }), W(-236, -232)],
@@ -109,7 +110,7 @@ export const PAVILIONS = Object.freeze([
   },
   {
     id: 'lobby', name: 'Garrison Lobby', x0: 14, x1: 38, z0: -272, z1: -246, floor: LEVEL.MAIN, height: 7.5,
-    roof: { type: 'dome', rise: 2.6, mat: 'glass' }, floorMat: 'stone', ribs: true, wing: 'lobby',
+    roof: { type: 'dome', rise: 2.6, mat: 'glass' }, floorMat: 'oak', ribs: true, wing: 'lobby',
     sides: {
       s: [W(14, 16), O(16, 32), W(32, 34), O(34, 38)],
       w: [W(-272, -264), O(-264, -250), W(-250, -246)],
@@ -129,7 +130,7 @@ export const PAVILIONS = Object.freeze([
   },
   {
     id: 'west-tower', name: 'West Stair', x0: -60, x1: -40, z0: -272, z1: -248, floor: LEVEL.LOWER, height: 11, wing: null,
-    roof: { type: 'flat', mat: 'concrete' }, floorMat: 'stone',
+    roof: { type: 'flat', mat: 'concrete' }, floorMat: 'oak',
     sides: {
       e: [W(-272, -264), O(-264, -250), W(-250, -248)],
       n: [W(-60, -56), O(-56, -48), W(-48, -40)],
@@ -148,7 +149,7 @@ export const PAVILIONS = Object.freeze([
   },
   {
     id: 'east-terrace', name: 'East Terrace', x0: 34, x1: 50, z0: -304, z1: -296, floor: LEVEL.MAIN, height: 4.4, wing: null,
-    roof: { type: 'flat', mat: 'copper' }, floorMat: 'stone',
+    roof: { type: 'flat', mat: 'copper' }, floorMat: 'oak',
     sides: { s: [O(34, 50)], n: [O(34, 50)], w: [G(-304, -296)], e: [G(-304, -296)] },
   },
   {
@@ -160,7 +161,7 @@ export const PAVILIONS = Object.freeze([
   },
   {
     id: 'reflection', name: 'Reflection Room', x0: 32, x1: 54, z0: -350, z1: -336, floor: LEVEL.LOWER, height: 8, wing: null,
-    roof: { type: 'flat', mat: 'copper' }, floorMat: 'stone',
+    roof: { type: 'flat', mat: 'copper' }, floorMat: 'oak',
     sides: { s: [W(32, 46), O(46, 52), W(52, 54)], n: [W(32, 34), O(34, 42), W(42, 54)], w: [G(-350, -336)], e: [W(-350, -336)] },
     ramps: [{ x: 49, hw: 2.8, z0: -336, z1: -348, y0: LEVEL.MAIN, y1: LEVEL.LOWER }],
   },
@@ -171,7 +172,7 @@ export const PAVILIONS = Object.freeze([
   },
   {
     id: 'north-tower', name: 'North Elevator Tower', x0: 34, x1: 44, z0: -386, z1: -372, floor: LEVEL.LOWER, height: 9, wing: null,
-    roof: { type: 'flat', mat: 'concrete' }, floorMat: 'stone',
+    roof: { type: 'flat', mat: 'concrete' }, floorMat: 'oak',
     sides: { s: [W(34, 35), O(35, 41), W(41, 44)], e: [W(-386, -375.5), D(-375.5, -372.5, { sill: -4.5 }), W(-372.5, -372)], n: [W(34, 44)], w: [W(-386, -372)] },
     landings: [{ x0: 34, x1: 44, z0: -386, z1: -383, y: -7.5 }, { x0: 39, x1: 44, z0: -376, z1: -372, y: -4.5 }],
     ramps: [
@@ -214,7 +215,7 @@ export const PAVILIONS = Object.freeze([
   },
   {
     id: 'east-wing-2026', name: 'North Temporary Gallery and Hub (2026)', x0: 34, x1: 58, z0: -452, z1: -386, floor: LEVEL.LOWER, height: 7, wing: null,
-    roof: { type: 'sawtooth', rise: 1.8, mat: 'steel' }, floorMat: 'concrete', hub: true,
+    roof: { type: 'sawtooth', rise: 1.8, mat: 'steel' }, floorMat: 'oak', hub: true,
     sides: { w: [W(-452, -450), O(-450, -442), W(-442, -430), G(-430, -396), W(-396, -386)], e: [W(-452, -420), D(-420, -414, { sill: -6 }), W(-414, -386)], n: [W(34, 58)], s: [W(34, 58)] },
   },
 ]);
@@ -227,15 +228,44 @@ export const PADS = Object.freeze([
   { id: 'colonnade', x0: 56, x1: 72, z0: -246, z1: -232, y0: LEVEL.CREST },
   { id: 'library-door', x0: 34, x1: 46, z0: -216, z1: -204, y0: LEVEL.MAIN + 6.0, y1: LEVEL.CREST, axis: 'x' },
   { id: 'store-garden', x0: 44, x1: 58, z0: -250, z1: -246, y0: LEVEL.MAIN },
-  { id: 'hub-door', x0: 58, x1: 70, z0: -422, z1: -412, y0: -6, y1: LEVEL.CREST, axis: 'x' },
-  { id: 'west-wing-door', x0: -52, x1: -40, z0: -470, z1: -452, y0: -2, y1: LEVEL.LOWER, axis: 'z' },
+  { id: 'hub-door', x0: 58, x1: 82, z0: -422, z1: -412, y0: -6, y1: LEVEL.CREST, axis: 'x' }, // 6 m over 24 m (was 12 m: a 27° climb)
+  { id: 'west-wing-door', x0: -52, x1: -40, z0: -478, z1: -452, y0: LEVEL.CREST, y1: LEVEL.LOWER, axis: 'z' }, // from street level at the tile edge (was -2 over 18 m)
 ]);
+
+/**
+ * Labyrinth weir: a walkable spine plus alternating north/south teeth (the real sills under
+ * Eleven and the Modern Art bridge are zig-zag overflow weirs, not a straight bar).
+ * `z` is the spine centreline; north is −z.
+ */
+export function labyrinthWeir({ id, x0, x1, z, y, from, mat, tooth = 4.5, jut = 2.6, thick = 2 }) {
+  const z0 = z - thick / 2;
+  const z1 = z + thick / 2;
+  const slabs = [{ id, x0, x1, z0, z1, y, from, mat }];
+  const n = Math.max(2, Math.round((x1 - x0) / tooth));
+  const w = (x1 - x0) / n;
+  for (let i = 0; i < n; i++) {
+    const xa = x0 + i * w + 0.12;
+    const xb = x0 + (i + 1) * w - 0.12;
+    if (i % 2 === 0) {
+      slabs.push({ id: `${id}-n${i}`, x0: xa, x1: xb, z0: z0 - jut, z1: z0, y, from, mat });
+    } else {
+      slabs.push({ id: `${id}-s${i}`, x0: xa, x1: xb, z0: z1, z1: z1 + jut, y, from, mat });
+    }
+  }
+  return slabs;
+}
 
 /** Free-standing walkable boxes: weirs, the contemporary balcony, bridge piers. y = top. */
 export const SLABS = Object.freeze([
-  { id: 'weir-eleven', x0: -40, x1: 14, z0: -258, z1: -256, y: LEVEL.SOUTH_POND + 0.05, from: LEVEL.NORTH_POND - POND_DEPTH, mat: 'concrete' },
-  { id: 'weir-modern', x0: -36, x1: 18, z0: -355, z1: -353, y: LEVEL.NORTH_POND + 0.05, from: LEVEL.EXP_POND - POND_DEPTH, mat: 'concrete' },
-  { id: 'balcony', x0: -33.2, x1: -28.5, z0: -312, z1: -306, y: LEVEL.LOWER, from: LEVEL.LOWER - 0.5, mat: 'concrete', rail: true },
+  ...labyrinthWeir({
+    id: 'weir-eleven', x0: -40, x1: 14, z: -257,
+    y: LEVEL.SOUTH_POND + 0.05, from: LEVEL.NORTH_POND - POND_DEPTH, mat: 'concrete',
+  }),
+  ...labyrinthWeir({
+    id: 'weir-modern', x0: -36, x1: 18, z: -354,
+    y: LEVEL.NORTH_POND + 0.05, from: LEVEL.EXP_POND - POND_DEPTH, mat: 'concrete',
+  }),
+  { id: 'balcony', x0: -34.4, x1: -28.5, z0: -312, z1: -306, y: LEVEL.LOWER, from: LEVEL.LOWER - 0.5, mat: 'concrete', rail: true },
 ]);
 
 /** Footbridge decks (walkable ramps): { a: [x, y, z], b: [x, y, z], hw }. */
@@ -246,9 +276,10 @@ export const DECKS = Object.freeze([
 /**
  * Walker Landing: concentric stepwell tiers stepping down into the north pond from the terrace
  * north of the lobby (the real one is a circular amphitheatre, 144 x 58 ft, modelled on Indian
- * stepwells). Arcs centred at (cx, cz), angles a0..a1 (radians, z = cz + r sin a: south half).
+ * stepwells). Arcs centred at (cx, cz), angles a0..a1 (radians, z = cz + r sin a). The east
+ * galleries stop the arc from closing; it wraps west and north into the pond.
  */
-export const WALKER_LANDING = Object.freeze({ cx: 12, cz: -300, r0: 4, step: 2, tiers: 11, rise: (LEVEL.MAIN - LEVEL.NORTH_POND) / 11, a0: 0.9, a1: 2.7, segs: 9 });
+export const WALKER_LANDING = Object.freeze({ cx: 12, cz: -300, r0: 4, step: 2, tiers: 11, rise: (LEVEL.MAIN - LEVEL.NORTH_POND) / 11, a0: 0.9, a1: 4.15, segs: 14 });
 
 /** The OSM pond ring of the tile (game coordinates) from map data, clipped and split into three ponds. */
 export function pondsFrom(mapData) {
@@ -330,6 +361,54 @@ export function bowMargin(pv, side) {
   return (pv.bow && pv.bow[side]) || 0;
 }
 
+const RAVINE_Y = -0.25;
+
+/**
+ * True when a map polyline or filled polygon crosses the museum ravine. Vertex-only tests miss
+ * OSM landcover whose corners sit on the crest while the interior floats over the ponds.
+ */
+export function flatOverlapsRavine(points, heightAt, { filled = false, ravineY = RAVINE_Y } = {}) {
+  if (!points || !points.length || typeof heightAt !== 'function') return false;
+  const hit = (x, z) => x > TILE.x0 && x < TILE.x1 && z > TILE.z0 && z < TILE.z1 && heightAt(x, z) < ravineY;
+  for (const pt of points) if (pt && hit(pt[0], pt[1])) return true;
+  const n = points.length;
+  const last = filled ? n : n - 1;
+  for (let i = 0; i < last; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % n];
+    if (!a || !b) continue;
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const steps = Math.max(1, Math.ceil(len / 8));
+    for (let k = 1; k < steps; k++) {
+      const t = k / steps;
+      if (hit(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)) return true;
+    }
+  }
+  if (!filled || n < 3) return false;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const pt of points) {
+    if (!pt) continue;
+    if (pt[0] < minX) minX = pt[0];
+    if (pt[0] > maxX) maxX = pt[0];
+    if (pt[1] < minZ) minZ = pt[1];
+    if (pt[1] > maxZ) maxZ = pt[1];
+  }
+  const x0 = Math.max(minX, TILE.x0);
+  const x1 = Math.min(maxX, TILE.x1);
+  const z0 = Math.max(minZ, TILE.z0);
+  const z1 = Math.min(maxZ, TILE.z1);
+  if (!(x1 > x0 && z1 > z0)) return false;
+  for (let x = x0; x <= x1; x += 10) {
+    for (let z = z0; z <= z1; z += 10) {
+      if (pointInPolygon(points, x, z) && hit(x, z)) return true;
+    }
+  }
+  return pointInPolygon(points, (x0 + x1) / 2, (z0 + z1) / 2) && hit((x0 + x1) / 2, (z0 + z1) / 2);
+}
+
 /**
  * Terrain height of the site at (x, z) before rounding to the heightfield: the ravine around
  * the ponds (pond bed inside the water, a bank rising to the crest RUN m away), faded to street
@@ -354,23 +433,49 @@ export function siteHeight(ponds, x, z) {
   }
   const edge = Math.min(x - TILE.x0, TILE.x1 - x, z - TILE.z0, TILE.z1 - z);
   y *= smooth(0, EDGE, edge);
+  // path shoulders: within SHOULDER m of a pad (entrance path, terrace, courtyard) the ground
+  // eases into the pad's height instead of dropping off its edge as a cliff
+  if (!inWater) {
+    let best = null;
+    let bd = SHOULDER;
+    for (const pd of PADS) {
+      const cx = Math.min(pd.x1, Math.max(pd.x0, x));
+      const cz = Math.min(pd.z1, Math.max(pd.z0, z));
+      const dd = Math.hypot(x - cx, z - cz);
+      if (dd > 0 && dd < bd) {
+        bd = dd;
+        best = padHeight(pd, cx, cz);
+      }
+    }
+    if (best !== null) y = best + (y - best) * smooth(0, SHOULDER, bd);
+  }
   for (const pv of PAVILIONS) {
     if (pv.noSlab) continue;
-    const m = 1.2;
+    const m = 2.2;
     const x0 = pv.x0 - m - bowMargin(pv, 'w'), x1 = pv.x1 + m + bowMargin(pv, 'e');
     const z0 = pv.z0 - m - bowMargin(pv, 'n'), z1 = pv.z1 + m + bowMargin(pv, 's');
-    if (x >= x0 && x <= x1 && z >= z0 && z <= z1 && y > pv.floor - 0.05) y = pv.floor - 0.05;
+    if (x >= x0 && x <= x1 && z >= z0 && z <= z1 && y > pv.floor - 0.45) y = pv.floor - 0.45;
   }
   for (const pd of PADS) {
     if (x < pd.x0 || x > pd.x1 || z < pd.z0 || z > pd.z1) continue;
-    if (pd.y1 === undefined) y = pd.y0 - 0.02;
-    else {
-      // linear ramp: y0 at the low-coordinate end (x0 / z0), y1 at the high end
-      const t = pd.axis === 'x' ? (x - pd.x0) / (pd.x1 - pd.x0) : (z - pd.z0) / (pd.z1 - pd.z0);
-      y = pd.y0 + (pd.y1 - pd.y0) * t - 0.02;
-    }
+    y = padHeight(pd, x, z);
+  }
+  // a pad must not lift the ground into a pavilion's own footprint (its edge row of the 2 m
+  // grid would interpolate up through the floor slab)
+  for (const pv of PAVILIONS) {
+    if (pv.noSlab) continue;
+    if (x >= pv.x0 - bowMargin(pv, 'w') && x <= pv.x1 + bowMargin(pv, 'e') && z >= pv.z0 && z <= pv.z1 && y > pv.floor - 0.45) y = pv.floor - 0.45;
   }
   return y;
+}
+
+const SHOULDER = 6; // m of eased ground beside every pad
+
+/** Surface height of pad pd at (x, z): flat at y0, or a linear ramp y0 (low end) -> y1. */
+function padHeight(pd, x, z) {
+  if (pd.y1 === undefined) return pd.y0 - 0.02;
+  const t = pd.axis === 'x' ? (x - pd.x0) / (pd.x1 - pd.x0) : (z - pd.z0) / (pd.z1 - pd.z0);
+  return pd.y0 + (pd.y1 - pd.y0) * Math.min(1, Math.max(0, t)) - 0.02;
 }
 
 /**

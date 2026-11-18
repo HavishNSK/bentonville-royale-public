@@ -53,11 +53,26 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
   _cam.y += rise;
   // pull in when something is between the pivot and the camera
   _v.copy(_fwd).multiplyScalar(-1);
-  const hit = world ? world.raycast(_cam.x, _cam.y, _cam.z, _v.x, _v.y, _v.z, dist + 0.3, null) : null;
-  const d = hit ? Math.max(0.6, hit.t - 0.3) : dist;
+  const hit = world ? world.raycast(_cam.x, _cam.y, _cam.z, _v.x, _v.y, _v.z, dist + 0.45, null) : null;
+  let d = hit ? Math.max(0.7, hit.t - 0.45) : dist;
+  const startY = _cam.y;
+  // Keep the boom above walkable slabs (museum oak, roofs), not raw ravine terrain.
+  // Shorten the orbit instead of sliding onto the floor — that used to plant the camera in the boards.
+  const floorHint = world && world.groundHeight ? world.groundHeight(_cam.x, _cam.z, pivot.y) : 0;
+  const floorY = floorHint + 0.45;
+  if (_v.y < -1e-4 && startY + d * _v.y < floorY) {
+    d = Math.max(0.7, (floorY - startY) / _v.y);
+  }
   _cam.addScaledVector(_v, d);
-  const floorY = (world && world.terrainHeight ? world.terrainHeight(_cam.x, _cam.z) : 0) + 0.3; // the ravine is below y 0
-  if (_cam.y < floorY) _cam.y = floorY;
+  if (world && world.groundHeight) {
+    const gy = world.groundHeight(_cam.x, _cam.z, pivot.y) + 0.45;
+    if (_cam.y < gy) _cam.y = gy;
+  }
+  if (world && world.ceilingAbove) {
+    const gy = world.groundHeight ? world.groundHeight(_cam.x, _cam.z, pivot.y) + 0.45 : _cam.y;
+    const ceil = world.ceilingAbove(_cam.x, _cam.z, gy);
+    if (Number.isFinite(ceil) && _cam.y > ceil - 0.35) _cam.y = Math.max(gy, ceil - 0.35);
+  }
   camera.position.copy(_cam);
   _v.copy(_cam).add(_fwd);
   camera.lookAt(_v);
@@ -643,7 +658,7 @@ export class Player {
     this.placeCooldown -= dt;
 
     // equipped model on the character
-    const eqId = this.buildPiece ? 'pickaxe' : cur ? (cur.type === 'weapon' ? cur.id : cur.id === 'grenade' ? 'grenade' : 'none') : 'pickaxe';
+    const eqId = this.buildPiece ? 'pickaxe' : cur ? (cur.type === 'weapon' ? cur.id : CONSUMABLES[cur.id] && CONSUMABLES[cur.id].throwable ? cur.id : 'none') : 'pickaxe';
     if (eqId !== this.lastEquipped) {
       if (this.lastEquipped !== null) g.sfx.play('weapon_switch', { volume: 0.5 });
       this.lastEquipped = eqId;
@@ -948,6 +963,20 @@ export class Player {
       if (input.actionHit('interact')) this.interactWith(rec, g);
       return;
     }
+    // Crystal Bridges south / library sliding doors (the main colonnade stays open)
+    const siteDoor = g.world && g.world.siteDoors && !this.airborneDrop ? g.world.siteDoors.near(this.pos) : null;
+    if (siteDoor) {
+      g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] ' + (siteDoor.open ? 'Close' : 'Open') + ' door');
+      if (input.actionHit('interact')) {
+        const net = clientNet(g);
+        if (net) net.action({ k: 'md', id: siteDoor.id });
+        else {
+          g.world.siteDoors.toggle(siteDoor.id);
+          if (g.sfx) g.sfx.play('build_metal', { x: siteDoor.cx, y: siteDoor.y0 + 1.2, z: siteDoor.cz, volume: 0.35 });
+        }
+      }
+      return;
+    }
     // doors cut into built walls: anyone can open / close them, swinging away from them
     const st = g.structures;
     const door = st && st.doorNear && !this.airborneDrop ? st.doorNear(this.pos) : null;
@@ -1123,6 +1152,7 @@ export class Player {
     if (this.cooldown > 0 || !g.grenades) return false;
     this._cancelReload();
     const slot = this.inventory.selected;
+    const kind = it.id;
     if (!this.inventory.useConsumable()) return false;
     this.cooldown = GRENADE.cooldown;
     if (this.character) this.character.swing();
@@ -1131,7 +1161,7 @@ export class Player {
     const net = clientNet(g);
     // a client asks the host, which throws it and echoes the flight to everyone
     if (net) net.action({ k: 'gr', s: slot, o: [o.x, o.y, o.z], d: [d.x, d.y, d.z] }, true);
-    else g.grenades.throw(this, o, d);
+    else g.grenades.throw(this, o, d, kind);
     return true;
   }
 
@@ -1197,7 +1227,7 @@ export class Player {
     if (!st || !this.buildPiece) return null;
     if (!this.placement) this.placement = st.plan(this.buildPiece, this.pos, this.heading, this.pitch);
     const pl = this.placement;
-    this.placeCooldown = 0.12;
+    this.placeCooldown = 0.07; // hold-to-build: ~14 pieces a second
     if (!pl || !pl.valid) return null;
     const mats = this.inventory.mats;
     this._autoMaterial(g);
