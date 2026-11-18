@@ -111,12 +111,21 @@ export function sandboxBotLoadout(d) {
 }
 
 /**
- * Open ground about SANDBOX_BOT_DIST m (+-1) in front of game.player: in bounds, not blocked,
- * not water (16 tries, then straight ahead). Shared by the sandbox and private-match host spawners.
+ * Spawns one sandbox bot of difficulty `d` on open ground 9-15 m in front of the player
+ * (game.bots.addBot), armed with sandboxBotLoadout(d), on SANDBOX_BOT_TEAM (they all hunt the
+ * player, not each other). Refused (bot null, reason set) outside the open-world sandbox, with
+ * a net session, for an unknown difficulty, or at SANDBOX_BOT_CAP live bots.
+ * Returns { bot, reason }.
  */
-export function botSpotInFront(game) {
+export function spawnSandboxBot(game, d) {
+  if (!SANDBOX_BOT_DIFFS.includes(d)) return { bot: null, reason: 'Unknown difficulty' };
+  const status = sandboxBotStatus(game);
+  if (!status.canSpawn) return { bot: null, reason: status.reason };
+  const bots = game.bots;
   const p = game.player;
   const world = game.world;
+  if (!p || !bots || !bots.addBot || !world) return { bot: null, reason: 'Sandbox not ready' };
+  purgeSandboxBodies(game, true); // make room: bodies go before a new bot comes in
   const rng = game.rng || Math.random;
   let x = p.pos.x + Math.sin(p.heading) * SANDBOX_BOT_DIST;
   let z = p.pos.z - Math.cos(p.heading) * SANDBOX_BOT_DIST;
@@ -132,26 +141,6 @@ export function botSpotInFront(game) {
     z = cz;
     break;
   }
-  return { x, z };
-}
-
-/**
- * Spawns one sandbox bot of difficulty `d` on open ground SANDBOX_BOT_DIST m in front of the player
- * (game.bots.addBot), armed with sandboxBotLoadout(d), on SANDBOX_BOT_TEAM (they all hunt the
- * player, not each other). Refused (bot null, reason set) outside the open-world sandbox, with
- * a net session, for an unknown difficulty, or at SANDBOX_BOT_CAP live bots.
- * Returns { bot, reason }.
- */
-export function spawnSandboxBot(game, d) {
-  if (!SANDBOX_BOT_DIFFS.includes(d)) return { bot: null, reason: 'Unknown difficulty' };
-  const status = sandboxBotStatus(game);
-  if (!status.canSpawn) return { bot: null, reason: status.reason };
-  const bots = game.bots;
-  const p = game.player;
-  const world = game.world;
-  if (!p || !bots || !bots.addBot || !world) return { bot: null, reason: 'Sandbox not ready' };
-  purgeSandboxBodies(game, true); // make room: bodies go before a new bot comes in
-  const { x, z } = botSpotInFront(game);
   game._sandboxBotSeq = (game._sandboxBotSeq || 0) + 1;
   const bot = bots.addBot(d, x, z, {
     name: `${d[0].toUpperCase()}${d.slice(1)} Bot ${game._sandboxBotSeq}`,

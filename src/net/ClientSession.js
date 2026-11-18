@@ -196,12 +196,30 @@ export class ClientSession {
   /** Called by Game.startClientMatch once the scene is reset. */
   begin(game, start) {
     this.id = start.you;
+    const kits = game.kits;
     for (const info of start.roster) {
       if (info.id === this.id) {
         game.player.name = info.n;
         continue;
       }
-      this._addPuppet(game, info);
+      const kit = kits[info.k] || kits.player;
+      // bots' pickaxe / back bling follow from their id; humans send theirs
+      const look = info.h ? { pickaxe: info.px || undefined, backbling: info.bb || undefined } : botLoadout(info.id);
+      const ch =
+        info.sk && SKINS[info.sk] && game.makeSkinCharacter
+          ? game.makeSkinCharacter(info.sk, info.c, look.pickaxe, look.backbling)
+          : kit
+            ? new Character(kit, { weapons: game.weaponScenes, canopyColor: info.c, ...look })
+            : null;
+      if (ch) {
+        ch.root.visible = false;
+        game.scene.add(ch.root);
+      }
+      const pup = new Puppet(info, ch);
+      pup.game = game; // world lookups in present() (swimming)
+      if (info.sk) pup.skin = info.sk;
+      this.puppets.set(info.id, pup);
+      game.combat.register(pup);
     }
     this.aliveCount = start.roster.length;
     // tell the host (and through it everyone) which outfit we wear
@@ -221,63 +239,6 @@ export class ClientSession {
     const q = this.queue;
     this.queue = [];
     for (const m of q) this._message(m);
-  }
-
-  /** A puppet (character + Combat registration) for roster entry `info`. */
-  _addPuppet(game, info) {
-    const kits = game.kits;
-    const kit = kits[info.k] || kits.player;
-    // bots' pickaxe / back bling follow from their id; humans send theirs
-    const look = info.h ? { pickaxe: info.px || undefined, backbling: info.bb || undefined } : botLoadout(info.id);
-    const ch =
-      info.sk && SKINS[info.sk] && game.makeSkinCharacter
-        ? game.makeSkinCharacter(info.sk, info.c, look.pickaxe, look.backbling)
-        : kit
-          ? new Character(kit, { weapons: game.weaponScenes, canopyColor: info.c, ...look })
-          : null;
-    if (ch) {
-      ch.root.visible = false;
-      game.scene.add(ch.root);
-    }
-    const pup = new Puppet(info, ch);
-    pup.game = game; // world lookups in present() (swimming)
-    if (info.sk) pup.skin = info.sk;
-    this.puppets.set(info.id, pup);
-    game.combat.register(pup);
-    return pup;
-  }
-
-  /**
-   * Host tools ('ab'): a bot the private-match host added mid-match. Host data is untrusted
-   * here too: a fresh one-byte id, a short plain-text name, a known kit; humans are never added.
-   */
-  _addSpawnedBot(e) {
-    const g = this.game;
-    const id = e.id;
-    if (!Number.isInteger(id) || id < 0 || id > 255 || id === this.id || this.puppets.has(id)) return;
-    const kit = typeof e.k === 'string' && Object.prototype.hasOwnProperty.call(g.kits || {}, e.k) ? e.k : 'player';
-    const info = {
-      id,
-      n: String(e.n || 'Bot').replace(/[\u0000-\u001f<>]/g, '').slice(0, 24) || 'Bot',
-      k: kit,
-      c: Number.isFinite(e.c) ? e.c : 0xffffff,
-      h: 0,
-      tm: Number.isInteger(e.tm) ? e.tm : id,
-    };
-    this._addPuppet(g, info);
-    if (Number.isInteger(e.tot) && e.tot > 0 && e.tot < 1000) g.totalActors = e.tot;
-  }
-
-  /** Host tools ('rb'): host-spawned bots removed. Only bot puppets go; never us or a human. */
-  _removeSpawnedBots(e) {
-    const g = this.game;
-    for (const id of Array.isArray(e.ids) ? e.ids.slice(0, 64) : []) {
-      const pup = this.puppets.get(id);
-      if (!pup || pup.human) continue;
-      g.combat.unregister(pup);
-      pup.dispose();
-      this.puppets.delete(id);
-    }
   }
 
   /** A piece this client placed ahead of the host's echo ('sp'); see _expirePredicted. */
@@ -502,10 +463,6 @@ export class ClientSession {
         return this._hit(e);
       case 'el':
         return this._elim(e);
-      case 'ab':
-        return this._addSpawnedBot(e);
-      case 'rb':
-        return this._removeSpawnedBots(e);
       case 'rcd':
       case 'rcx':
       case 'rbu':

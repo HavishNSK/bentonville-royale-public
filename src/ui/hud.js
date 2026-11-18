@@ -262,7 +262,7 @@ function hudHTML() {
 <div class="br-sandbox-loadout" data-ref="sandboxLoadout" hidden>
   <div class="br-sandbox-loadout-card">
     <div class="br-sandbox-loadout-h">${icon('rifle')}WEAPONS</div>
-    <p class="br-sandbox-loadout-sub" data-ref="sandboxLoadoutSub">Click a gun or grenade — it lands on your hotbar</p>
+    <p class="br-sandbox-loadout-sub">Click a gun or grenade — it lands on your hotbar</p>
     <div class="br-sandbox-loadout-guns" data-ref="sandboxLoadoutGuns"></div>
     <button type="button" class="br-sandbox-loadout-close" data-ref="sandboxLoadoutClose">Close</button>
   </div>
@@ -275,7 +275,7 @@ function hudHTML() {
         <h3 class="br-sandbox-bots-h" id="br-sandbox-bots-h">SPAWN</h3>
         <span class="br-sandbox-bots-count" data-ref="sandboxBotsCount" aria-live="polite">0 / 0</span>
       </div>
-      <p class="br-sandbox-bots-sub" data-ref="sandboxBotsSub">Spawns 25 m in front of you and hunts you. You can't be eliminated in Sandbox.</p>
+      <p class="br-sandbox-bots-sub">Spawns 25 m in front of you and hunts you. You can't be eliminated in Sandbox.</p>
       <div class="br-sandbox-bots-row" role="group" aria-label="Spawn a bot">
         <button type="button" class="br-sandbox-bot" data-diff="easy" data-ref="sandboxBotEasy" aria-label="Spawn an easy bot">EASY</button>
         <button type="button" class="br-sandbox-bot" data-diff="normal" data-ref="sandboxBotNormal" aria-label="Spawn a normal bot">NORMAL</button>
@@ -923,10 +923,9 @@ export function buildHud(root) {
    * rows: [{ name, color, kills, assists, damage, you, state: 'alive'|'down'|'out' }]
    */
   let lastStatsKey = '';
-  function setMapStats(rows, opts = null) {
+  function setMapStats(rows) {
     const list = rows || [];
-    const tools = !!(opts && opts.tools);
-    const key = JSON.stringify(list) + (tools ? '|t' : '');
+    const key = JSON.stringify(list);
     if (key === lastStatsKey) return;
     lastStatsKey = key;
     const box = r.mapStats;
@@ -974,8 +973,6 @@ export function buildHud(root) {
       }
       box.appendChild(el);
     }
-    // private-match host: the sandbox WEAPONS / BOTS tools, under the stats (Game hostTools gate)
-    if (tools) appendMapTools(box);
   }
 
   let lastTravelKey = '';
@@ -1004,8 +1001,19 @@ export function buildHud(root) {
   function setSandboxLoadoutClose(fn) {
     onSandboxLoadoutClose = typeof fn === 'function' ? fn : null;
   }
-  /** The WEAPONS and BOTS buttons of the map side panel (sandbox, or a private-match host). */
-  function appendMapTools(box) {
+  /** Free-build POI list in the map side panel. `null` restores match stats. */
+  function setMapTravel(targets, hereKey) {
+    r.fullmap.dataset.travel = targets ? '1' : '';
+    if (!targets) {
+      lastTravelKey = '';
+      return;
+    }
+    lastStatsKey = '';
+    const key = targets.map((t) => t.key).join(',') + '|' + (hereKey || '') + '|w';
+    if (key === lastTravelKey) return;
+    lastTravelKey = key;
+    const box = r.mapStats;
+    box.replaceChildren();
     const wep = document.createElement('button');
     wep.type = 'button';
     wep.className = 'br-map-weapons';
@@ -1038,44 +1046,6 @@ export function buildHud(root) {
       if (onBots) onBots();
     });
     box.appendChild(bots);
-  }
-  /** Map side-panel tool texts: 'sandbox' (hotbar guns, can't be eliminated) or 'host' (private match). */
-  let toolsMode = 'sandbox';
-  const TOOL_TEXT = {
-    sandbox: {
-      loadout: 'Click a gun or grenade — it lands on your hotbar',
-      bots: "Spawns 25 m in front of you and hunts you. You can't be eliminated in Sandbox.",
-      clear: 'Remove all sandbox bots',
-    },
-    host: {
-      loadout: 'Click a gun or grenade — it drops in front of you. Anyone can pick it up.',
-      bots: 'Spawns 25 m in front of you. Hostile to everyone: they can eliminate players and count for the win.',
-      clear: 'Remove the bots you spawned',
-    },
-  };
-  function setSandboxToolsMode(mode) {
-    const m = mode === 'host' ? 'host' : 'sandbox';
-    if (m === toolsMode) return;
-    toolsMode = m;
-    const t = TOOL_TEXT[m];
-    r.sandboxLoadoutSub.textContent = t.loadout;
-    r.sandboxBotsSub.textContent = t.bots;
-    r.sandboxBotClear.setAttribute('aria-label', t.clear);
-  }
-  /** Free-build POI list in the map side panel. `null` restores match stats. */
-  function setMapTravel(targets, hereKey) {
-    r.fullmap.dataset.travel = targets ? '1' : '';
-    if (!targets) {
-      lastTravelKey = '';
-      return;
-    }
-    lastStatsKey = '';
-    const key = targets.map((t) => t.key).join(',') + '|' + (hereKey || '') + '|w';
-    if (key === lastTravelKey) return;
-    lastTravelKey = key;
-    const box = r.mapStats;
-    box.replaceChildren();
-    appendMapTools(box);
     const head = document.createElement('div');
     head.className = 'br-mapstats-row br-mapstats-head';
     const label = document.createElement('span');
@@ -1419,7 +1389,6 @@ export function buildHud(root) {
     setSandboxLoadoutClose,
     setSandboxBotHandlers,
     setSandboxBots,
-    setSandboxToolsMode,
     showSandboxLoadout,
     showFullMap,
     setEmoteHint,
