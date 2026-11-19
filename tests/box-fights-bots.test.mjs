@@ -468,3 +468,37 @@ test('arena: a badly hurt bot under fire never retreats or backs away from the s
     }
   }
 });
+
+// ---- the pre-built spawn box (BoxFights.spawnBoxPieces, placed unowned by Game._boxSpawnBoxes)
+
+test('arena: a bot in its spawn box never shoots its own box, and gets a look at the enemy', async () => {
+  const { spawnBoxPieces, arenaLayout: layoutFor, spawnLayout: spawnsFor } = await import('../src/game/BoxFights.js');
+  const lay = layoutFor('solo');
+  const spawns = spawnsFor(lay, 'solo');
+  for (const difficulty of ['normal', 'hard']) {
+    for (const seed of [1, 2, 3, 4]) {
+      const env = makeArena(seed);
+      env.structures.buildArea = lay.buildArea;
+      env.bots.setArena(lay);
+      for (const sp of spawns) for (const pc of spawnBoxPieces(sp, lay.floorY)) env.structures.placeBuilt({ ...pc, valid: true }, 'wood', null);
+      const mine = new Set([...env.structures.slots.values()].filter((p) => p && Math.abs(p.x - spawns[0].x) <= 2.1 && Math.abs(p.z - spawns[0].z) <= 2.1));
+      const s0 = spawns[0];
+      const s1 = spawns[1];
+      const [bot] = env.bots.spawn(1, env.rng, { positions: [{ x: s0.x, y: lay.floorY, z: s0.z, heading: s0.heading }], teams: [2], loadout: loadout(), difficulty, idBase: 1 });
+      const me = { id: 99, team: 1, isBot: false, pos: new THREE.Vector3(s1.x, lay.floorY, s1.z), vel: new THREE.Vector3(), grounded: true, alive: true, downed: false, health: 100, shield: 100, invulnerable: true, heading: 0, pitch: 0 };
+      env.combat.actors.push(me);
+      env.combat.onDamage = (t, a, info) => env.bots.notifyDamage(t, a, info);
+      let ownShots = 0;
+      let saw = false;
+      for (let i = 0; i < 8 * 30; i++) {
+        env.bots.update(1 / 30, { player: me, storm, humans: [me] });
+        if (env.structures.update) env.structures.update(1 / 30);
+        if (bot._bot.shootPiece && mine.has(bot._bot.shootPiece)) ownShots++;
+        if (bot._bot.walledBy && mine.has(bot._bot.walledBy)) ownShots++;
+        if (bot._bot.targetVisible) saw = true;
+      }
+      assert.equal(ownShots, 0, `${difficulty} seed ${seed}: aimed at its own spawn box for ${ownShots} frames`);
+      assert.ok(saw, `${difficulty} seed ${seed}: never got a look at the enemy (stuck in its box)`);
+    }
+  }
+});

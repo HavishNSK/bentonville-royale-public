@@ -1689,7 +1689,54 @@ export class Bots {
     if (L < 0.1) return null;
     const h = w.raycast(ex, ey, ez, dx / L, dy / L, dz / L, L);
     const c = h && h.collider;
-    return c && c.isStructure && c.alive !== false && c.owner !== a ? c : null;
+    return c && c.isStructure && c.alive !== false && c.owner !== a && !this._spawnBoxPiece(b, c) ? c : null;
+  }
+
+  /**
+   * Box Fights: an unowned piece of the pre-built spawn box around the bot's own cell
+   * (Game._boxSpawnBoxes places them with no owner). Counts as the bot's own: never shot or
+   * broken into, edited to peek / get out instead.
+   */
+  _spawnBoxPiece(b, c) {
+    if (!this.arena || !c || c.owner != null) return false;
+    const a = b.actor;
+    const cx = (Math.floor(a.pos.x / BUILD.cell) + 0.5) * BUILD.cell;
+    const cz = (Math.floor(a.pos.z / BUILD.cell) + 0.5) * BUILD.cell;
+    return Math.abs(c.x - cx) <= CELL_HALF + 0.1 && Math.abs(c.z - cz) <= CELL_HALF + 0.1 && c.y < a.pos.y + BUILD.level + 0.5 && c.y > a.pos.y - 1;
+  }
+
+  /**
+   * Box Fights: standing in a spawn box (3+ walls of our cell, unowned): take it as our box, so
+   * the box fight logic edit-peeks through it. A healthy bot (arenaPush roll) doors out toward
+   * the target and ramp-pushes instead of holding it. True when it adopted / left one.
+   */
+  _adoptSpawnBox(b, target) {
+    const a = b.actor;
+    const t = this.time;
+    const st = this.structures;
+    if (!this.arena || b.box || !st || !target || !a.grounded || b.bqI < b.bqN || t < (b.spawnBoxCheckAt || 0)) return false;
+    b.spawnBoxCheckAt = t + 0.5;
+    const cx = (Math.floor(a.pos.x / BUILD.cell) + 0.5) * BUILD.cell;
+    const cz = (Math.floor(a.pos.z / BUILD.cell) + 0.5) * BUILD.cell;
+    const box = { x: cx, y: a.pos.y, z: cz, since: t, peek: 'closed', peekT: t + 0.3 + this.rng() * 0.3, editKey: null, fixAt: 0, fails: 0, blocked: 0, checked: false, spawn: true };
+    b.box = box;
+    let walls = 0;
+    for (let k = 0; k < 4; k++) {
+      const w = this._boxWall(b, (k * Math.PI) / 2);
+      if (w && w.owner == null) walls++;
+    }
+    if (walls < 3) {
+      b.box = null;
+      return false;
+    }
+    b.boxRollAt = t + 3 + this.rng() * 2;
+    b.holdUntil = Infinity;
+    if (a.health + a.shield >= ARENA_PUSH_HP && this.rng() < (this.diff.arenaPush || 0)) {
+      const snap = (ang) => (Math.round(ang / (Math.PI / 2)) * Math.PI) / 2;
+      this._leaveBox(b, snap(Math.atan2(target.pos.x - cx, -(target.pos.z - cz))));
+      b.boxPush = { src: target, until: t + BOX_PUSH_WAIT };
+    }
+    return true;
   }
 
   /** First built piece of this bot's on the line from its eyes to (tx, ty + CHEST, tz), or null. */
@@ -1707,7 +1754,7 @@ export class Bots {
     if (L < 0.1) return null;
     const h = w.raycast(ex, ey, ez, dx / L, dy / L, dz / L, Math.min(L, 16));
     const c = h && h.collider;
-    return c && c.isStructure && c.alive !== false && c.owner === a && c.kind !== 'ramp' ? c : null;
+    return c && c.isStructure && c.alive !== false && (c.owner === a || this._spawnBoxPiece(b, c)) && c.kind !== 'ramp' ? c : null;
   }
 
   /** Cone / floor edit opening the quarter toward (tx, tz) (2 x 2: bit = col + 2 * row, local). */
@@ -2826,6 +2873,8 @@ export class Bots {
         break;
       }
       case 'engage': {
+        // Box Fights: starting in a spawn box: fight from it (edit peeks) or door out and push
+        this._adoptSpawnBox(b, target);
         // they boxed up / walled off: go to the piece in the way and pickaxe through it (the
         // swing itself is in _act: smashUntil), rather than wait or wander off
         const wb = b.walledBy;
