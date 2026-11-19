@@ -173,7 +173,7 @@ test('classrooms: the room is reachable from its door (a walking grid around blo
   }
 });
 
-test('classrooms: loot sits on surfaces, >= 1 spot per room, chests in at least half the rooms', () => {
+test('classrooms: loot sits on surfaces, >= 1 spot per room, a chest in about 1 in 4 rooms', () => {
   let chests = 0;
   for (const r of rooms) {
     assert.ok(r.lootSpots.length >= 1, `${r.building}:${r.id} has loot`);
@@ -183,7 +183,8 @@ test('classrooms: loot sits on surfaces, >= 1 spot per room, chests in at least 
       assert.ok(Math.abs(g - l.y) < 0.06, `${r.building}:${r.id} ${l.kind} at y ${l.y.toFixed(2)} but the surface is ${g.toFixed(2)}`);
     }
   }
-  assert.ok(chests >= rooms.length / 2, `chests in ${chests} / ${rooms.length} rooms`);
+  assert.ok(chests >= rooms.length / 6, `chests in ${chests} / ${rooms.length} rooms`);
+  assert.ok(chests < rooms.length / 2, `chests in ${chests} / ${rooms.length} rooms — keep it under half`);
 });
 
 test('classrooms: music risers step at most 0.6 m (0.2 m per tier)', () => {

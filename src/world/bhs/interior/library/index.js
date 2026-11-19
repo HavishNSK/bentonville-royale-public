@@ -249,9 +249,7 @@ export function buildLibrary(K, ctx) {
   plant(K, GX + 1.0, GZ + 1.0, MY, 1.1);
   plant(K, X0 + 1.2, GZ - 1.0, MY, 1.0);
   loot.push({ kind: 'chest', x: GX + 2.6, z: 400.8, y: MY, yaw: Math.PI / 2 });
-  loot.push({ kind: 'chest', x: 51.0, z: 390.3, y: MY, yaw: 0 });
-  // floor chests: by the window islands, beside the circulation desk, at the south door aisle
-  loot.push({ kind: 'chest', x: 47.2, z: 396.6, y: FL, yaw: Math.PI / 2 });
+  // floor chests: beside the circulation desk and at the south door aisle
   loot.push({ kind: 'chest', x: 88.6, z: 390.6, y: FL, yaw: Math.PI });
   loot.push({ kind: 'chest', x: 54.4, z: 414.2, y: FL, yaw: 0 });
   loot.push({ kind: 'item', x: galT[2].cx - 0.9, z: galT[2].cz, y: galT[2].y1, yaw: 0 });

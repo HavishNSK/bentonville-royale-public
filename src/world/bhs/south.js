@@ -350,10 +350,8 @@ function cafeteria(K) {
       K.decor({ cx: x, cz: z, hx: 0.01, hz: 0.01, yaw: 0, y0: C.top - 3.05, y1: C.top - 0.5 }, 'picket');
     }
   K.light({ x: (C.x0 + C.x1) / 2, y: 6, z: (C.z0 + C.z1) / 2, range: 26, intensity: 1.0 });
-  // loot: chests by the serving line and the far corners, ammo near the van
+  // loot: one chest by the serving line, ammo near the van
   K.loot({ kind: 'chest', x: C.x0 + 2.2, z: C.z0 + 1.2, y: 0 });
-  K.loot({ kind: 'chest', x: C.x1 - 1.2, z: C.z1 - 1.2, y: 0 });
-  K.loot({ kind: 'chest', x: C.x1 - 1.2, z: C.z0 + 1.2, y: 0 });
   K.loot({ kind: 'ammoBox', x: VAN_SPOT.x + VAN_CLEAR + 1.5, z: VAN_SPOT.z, y: 0 });
 }
 

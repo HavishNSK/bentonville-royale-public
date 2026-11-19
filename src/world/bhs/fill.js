@@ -98,7 +98,7 @@ function office(K, r, y, rnd) {
     K.decor({ cx: x + Math.sin(yaw) * 0.7, cz: z - Math.cos(yaw) * 0.7, hx: 0.25, hz: 0.25, yaw, y0: y, y1: y + 0.95 }, '#2a2c30'); // task chair
   }
   K.box({ cx: r.x1 - 0.5, cz: r.z0 + 1, hx: 0.25, hz: 0.6, yaw: 0, y0: y, y1: y + 1.35 }, { mat: 'metal', hp: 200, look: '#8d9196', role: 'prop' }); // file cabinet
-  K.loot({ kind: rnd() < 0.55 ? 'chest' : 'item', x: (r.x0 + r.x1) / 2, z: r.z1 - 0.9, y });
+  K.loot({ kind: rnd() < 0.3 ? 'chest' : 'item', x: (r.x0 + r.x1) / 2, z: r.z1 - 0.9, y });
 }
 
 function restroom(K, r, y) {
@@ -123,7 +123,7 @@ function storage(K, r, y, rnd) {
     const p = K.box({ ...c, yaw: 0, y0: y, y1: y + 2.0 }, { mat: 'metal', hp: 200, look: '#8b8f93', role: 'prop' });
     for (let k = 0; k < 4; k++) if (rnd() < 0.7) K.decor({ ...c, hx: c.hx * 0.4, hz: c.hz * 0.8, cx: c.cx + (rnd() - 0.5) * c.hx, yaw: 0, y0: y + 0.05 + k * 0.5, y1: y + 0.4 + k * 0.5 }, '#b48a5c', { dep: p });
   }
-  K.loot({ kind: rnd() < 0.6 ? 'chest' : 'ammoBox', x: (r.x0 + r.x1) / 2, z: (r.z0 + r.z1) / 2, y });
+  K.loot({ kind: rnd() < 0.35 ? 'chest' : 'ammoBox', x: (r.x0 + r.x1) / 2, z: (r.z0 + r.z1) / 2, y });
 }
 
 export function dressFill(K, plans) {
@@ -139,11 +139,11 @@ export function dressFill(K, plans) {
         // a clock and an exit-style door frame light at the ends of long corridors (blank signs)
         const len = Math.max(r.x1 - r.x0, r.z1 - r.z0);
         if (len > 30) K.light({ x: (r.x0 + r.x1) / 2, y: y + 3, z: (r.z0 + r.z1) / 2, range: len / 2, intensity: 0.7 });
-        // loot along the hallway [user: "lots of chests"]: every ~18 m against a wall, mostly chests
+        // loot along the hallway: every ~36 m against a wall, mostly ammo / floor loot
         const along = r.x1 - r.x0 >= r.z1 - r.z0;
-        for (let s = 8; s < len - 4; s += 18) {
+        for (let s = 8; s < len - 4; s += 36) {
           const k = rnd();
-          const kind = k < 0.6 ? 'chest' : k < 0.85 ? 'ammoBox' : 'item';
+          const kind = k < 0.3 ? 'chest' : k < 0.7 ? 'ammoBox' : 'item';
           const x = along ? r.x0 + s : r.x0 + 0.45;
           const z = along ? r.z0 + 0.45 : r.z0 + s;
           K.loot({ kind, x, z, y, yaw: along ? 0 : Math.PI / 2 });
@@ -152,7 +152,7 @@ export function dressFill(K, plans) {
       else if (r.kind === 'restroom') {
         restroom(K, r, y);
         if (rnd() < 0.5) K.loot({ kind: 'item', x: (r.x0 + r.x1) / 2, z: (r.z0 + r.z1) / 2, y });
-      } else if (r.kind === 'stair' && rnd() < 0.7) {
+      } else if (r.kind === 'stair' && rnd() < 0.35) {
         // a chest on the stairwell's landing: the first inset corner that is floor at this level
         for (const [x, z] of [[r.x0 + 0.8, r.z0 + 0.8], [r.x1 - 0.8, r.z0 + 0.8], [r.x0 + 0.8, r.z1 - 0.8], [r.x1 - 0.8, r.z1 - 0.8]]) {
           if (Math.abs(K.world.groundHeight(x, z, y + 0.3) - y) < 0.06) {

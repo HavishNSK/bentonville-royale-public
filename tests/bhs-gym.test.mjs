@@ -148,8 +148,9 @@ test('the east entry gap and the under-concourse walk connect the door to the co
 test('loot sits on surfaces, with one high-tier chest on the concourse', () => {
   const { world } = B;
   const loot = B.g.loot;
-  assert.ok(loot.length >= 12, `loot ${loot.length}`);
-  assert.ok(loot.filter((l) => l.kind === "chest").length >= 8, "lots of chests");
+  assert.ok(loot.length >= 8, `loot ${loot.length}`);
+  const chests = loot.filter((l) => l.kind === "chest").length;
+  assert.ok(chests >= 4 && chests <= 6, `gym chests ${chests}`);
   const high = loot.filter((l) => l.tier === 'high');
   assert.equal(high.length, 1);
   assert.equal(high[0].kind, 'chest');

@@ -105,7 +105,7 @@ export const PATCH_NOTES = [
       {
         heading: 'Loot everywhere',
         items: [
-          'Bentonville High is now the loot capital of the map: well over 150 chests across the campus, plus ammo boxes and floor loot.',
+          'Bentonville High is stacked with loot, but not a dump: chests in about one classroom in four, plus ammo boxes and floor loot in the halls.',
           'Check the hallways, classrooms, closets, stairwell landings, the stage, the press box, the gym concourse and the library mezzanine.',
           'Loot no longer floats: if you blow up the floor under a chest, the chest drops to the floor below.',
         ],

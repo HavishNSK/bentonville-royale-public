@@ -1010,7 +1010,6 @@ function fillArena(K, ar) {
   cart(K, CX - 4.8, I.z0 + 4.5, 1.2, 0.6, 0.9, (p) => balls(K, p, CX - 4.8, I.z0 + 4.5, 1.1, 0.5, 0.33, '#f2f0ea', 0.11));
   chairStack(K, CX - 1.6, I.z0 + 2.2);
   chairStack(K, CX - 0.8, I.z0 + 2.2, 8);
-  spots.push({ kind: 'chest', x: CX + 1.6, z: I.z0 + 2.6, y: 0, yaw: 0, at: 'gymNorthEnd' });
   for (const z of [I.z0 + 0.6, I.z1 - 0.6]) {
     trashCan(K, I.x0 + FRONT + 0.6, z);
     trashCan(K, I.x1 - FRONT - 0.6, z);
@@ -1020,7 +1019,7 @@ function fillArena(K, ar) {
   table(K, CX - 11, CX - 9, I.z1 - 3.8, I.z1 - 3.0, COL.gold);
   cooler(K, CX + 9.2, CZ + 11.2);
 
-  // under the concourses: storage behind the bleachers (cover) + a chest each
+  // under the concourses: storage behind the bleachers (cover) + one chest on the east side
   for (const S of [W, E]) {
     const x = (d) => S.xw + S.s * d;
     for (const z of [327.4, 330.4]) cart(K, x(0.55), z, 0.8, 2.6, 1.0, (p) => {
@@ -1028,7 +1027,7 @@ function fillArena(K, ar) {
     });
     chairStack(K, x(0.45), 346.6);
     chairStack(K, x(0.45), 347.5);
-    spots.push({ kind: 'chest', x: x(2.2), z: S.s > 0 ? 352 : 356, y: 0, yaw: S.s > 0 ? Math.PI / 2 : -Math.PI / 2, at: `gymUnder_${S.name}` });
+    if (S.s > 0) spots.push({ kind: 'chest', x: x(2.2), z: 352, y: 0, yaw: Math.PI / 2, at: `gymUnder_${S.name}` });
   }
   // concourse: wall benches, trash cans, a chest on the east side
   K.setGroup('int:south:1');
@@ -1069,8 +1068,6 @@ function fillAux(K, ax) {
     K.decor(rect(x - 0.4, x + 0.4, z - 0.03, z + 0.03, 0.42, 0.5), COL.gold);
   }
   spots.push({ kind: 'chest', x: I.x0 + 4.0, z: I.z1 - 1.1, y: 0.3, yaw: Math.PI, at: 'auxClimbMat' });
-  spots.push({ kind: 'chest', x: CX - 3, z: ax.portable.z0 + 0.3, y: ax.portable.rows * RISE, yaw: 0, at: 'auxBleacher' });
-  spots.push({ kind: 'chest', x: I.x0 + 1.2, z: I.z0 + 1.4, y: 0, yaw: Math.PI / 2, at: 'auxCorner' });
   return spots;
 }
 
@@ -1099,7 +1096,7 @@ export function buildGym(K, ctx) {
   K.loot({ kind: 'ammoBox', x: east.xw - 2.0, z: 326, y: 0, at: 'gymUnderConcourse' });
   const m = ax.mats[0];
   K.loot({ kind: 'ammoBox', x: (m.x0 + m.x1) / 2, z: (m.z0 + m.z1) / 2, y: m.top, at: 'auxMats' });
-  // the gyms are full: equipment, storage, a band riser, and chests in every zone (user: lots of chests)
+  // the gyms are dressed: equipment, storage, a band riser, and a few chests (not every zone)
   for (const sp of [...fillArena(K, ar), ...fillAux(K, ax)]) {
     K.setGroup(sp.y > 3 ? 'int:south:1' : 'int:south:0');
     K.loot(sp);

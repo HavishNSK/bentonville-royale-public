@@ -131,6 +131,13 @@ test('stairwells are open from the 2nd to the 3rd floor (no floor across the fli
   assert.ok(top < 8.5, `nothing at 8.8 over the NW flights (got ${top})`);
 });
 
+test('campus chests are spread around, not a dump in every hallway', () => {
+  const { world } = build();
+  const chests = (world.fixedLoot || []).filter((l) => l.kind === 'chest');
+  assert.ok(chests.length <= 90, `too many BHS chests: ${chests.length}`);
+  assert.ok(chests.length >= 40, `too few BHS chests: ${chests.length}`);
+});
+
 test('the BHS reboot van parks in the cafeteria with the lunch tables around it', async () => {
   const { world, bhs } = build();
   const { Reboot } = await import('../src/game/Reboot.js');

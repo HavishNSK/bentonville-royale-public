@@ -358,7 +358,7 @@ export function placeLoot(rc, teacher, closetInfo) {
   const roll = (rc.hash % 1000) / 1000;
   const world = (u, v) => rc.F.toW(u, v);
   let chest = null;
-  if (roll < 0.64) {
+  if (roll < 0.28) {
     if (closetInfo) {
       const [u, v] = closetInfo.P.pt(0, -0.85);
       const [x, z] = world(u, v);

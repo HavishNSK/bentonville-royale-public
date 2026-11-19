@@ -39,7 +39,7 @@ The biggest POI revamp yet. Bentonville High School is rebuilt from the ground u
   - the entry court with its water channel and arch, and the arts center's stepped brick front
   - a covered walkway and a crosswalk between the buildings
 - **101 unique classrooms:** subject-driven science labs, art rooms, computer labs, band and choir rooms, culinary, engineering and robotics. 8 seating layouts, posters, plants, backpacks and other lived-in clutter. No two neighbours alike.
-- **Loot capital:** about 150+ chests across the campus, plus ammo boxes and floor loot, in hallways, classrooms, closets, stairwells, the stage, the gyms and the library.
+- **Loot:** chests in about one classroom in four, plus ammo boxes and floor loot in hallways, closets, stairwells, the stage, the gyms and the library.
 - **Everything breaks:** walls, glass, floors, roof tiles, stairs and bleachers at the school. Land on the roof, blast in, drop into class.
 - **New mechanic, vault:** jump at a thin obstacle (fence, railing, low wall) to vault over it (`Player._findVault`). This works everywhere on the map; solid walls and closed windows can't be vaulted.
 - **Loot drops:** a chest on a destroyed floor or ledge now falls to the surface below (`Loot.dropFrom`, called from `Combat._destroyCollider`, so it's the same on every client).
