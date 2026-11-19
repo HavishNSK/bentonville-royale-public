@@ -71,7 +71,7 @@ import { createFpsMeter } from '../ui/fpsMeter.js';
 import { DynamicResolution } from '../render/DynamicResolution.js';
 import { graphicsQuality, FPS_UNLIMITED } from '../ui/settings.js';
 import { planBusRoute, makeRoute, routeWire, busPosAt, planBotTargets, DropBusMesh } from './DropBus.js';
-import { BOX_FIGHT, arenaLayout, arenaKey, spawnLayout, ffaSpawnLayout, spawnBoxPieces, boxLoadout, boxMatchConfig, createBoxFightState, stepBoxFight, boxElim, boxStandings, boxReplacement, roundBanner, boxResultCopy, sideOfTeam } from './BoxFights.js';
+import { BOX_FIGHT, arenaLayout, arenaKey, spawnLayout, ffaSpawnLayout, boxLoadout, boxMatchConfig, createBoxFightState, stepBoxFight, boxElim, boxStandings, boxReplacement, roundBanner, boxResultCopy, sideOfTeam } from './BoxFights.js';
 import { buildArenaMeshes } from '../render/BoxArena.js';
 import { sanitizeBoxStart, botEloFor, boxOpponentElo, reportedElo } from './boxEloMatch.js';
 import { ELO_START } from './BoxElo.js';
@@ -1025,26 +1025,6 @@ export class Game {
     return out;
   }
 
-  /**
-   * Everyone starts in a pre-built 1x1 box (4 walls + cone roof; the arena floor is the box floor,
-   * so no floor piece). Unowned pieces, full health, replicated by the round start's structure list.
-   */
-  _boxSpawnBoxes(spawnOf) {
-    const st = this.structures;
-    if (!st || !st.placeBuilt) return;
-    const floorY = this.boxFight.layout.floorY;
-    for (const sp of spawnOf.values()) {
-      for (const pc of spawnBoxPieces(sp, floorY)) {
-        try {
-          st.placeBuilt({ ...pc, valid: true }, 'wood', null);
-        } catch (err) {
-          this._error('box.spawnBox', err);
-          return;
-        }
-      }
-    }
-  }
-
   /** Host / solo: wipe the arena, everyone back in a fresh box at full health with the loadout. */
   _boxRoundStart() {
     const bf = this.boxFight;
@@ -1061,8 +1041,8 @@ export class Game {
         const sp = bf.spawnOf.get(a.id);
         if (sp) this._boxResetActor(a, sp);
       }
-      this._boxSpawnBoxes(bf.spawnOf);
-      // FFA has no middle wall: nobody can be hurt until FIGHT (a shot out of the box in the countdown)
+      // no spawn boxes (owner call): team modes start apart behind the middle wall, as before.
+      // FFA has no middle wall: nobody can be hurt until FIGHT
       if (bf.ffa) for (const a of this.combat.actors) a.invulnerable = true;
       // team modes: the middle wall also keeps the two sides apart until FIGHT
       this._setDivider(true);
