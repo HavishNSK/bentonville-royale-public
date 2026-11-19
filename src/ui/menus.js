@@ -134,6 +134,14 @@ export function createMenus(root, opts = {}) {
        <div class="mn-logo-tag">100 players &middot; one town square &middot; build to survive</div>
      </div>
      <div class="mn-party mn-card" aria-label="Party">
+       <button type="button" class="mn-box-rank" data-ref="boxRank" data-act="leaderboard" hidden aria-label="Box Fights rank">
+         <span class="mn-box-rank-kicker">BOX FIGHTS RANK</span>
+         <span class="br-tier mn-box-rank-tier" data-ref="boxRankTier"></span>
+         <b class="mn-box-rank-elo br-ol" data-ref="boxRankElo"></b>
+         <span class="mn-box-rank-meta" data-ref="boxRankMeta"></span>
+         <span class="mn-box-rank-track" aria-hidden="true"><i data-ref="boxRankFill"></i></span>
+         <span class="mn-box-rank-next" data-ref="boxRankNext"></span>
+       </button>
        <div class="mn-party-head">
          <span class="mn-party-label">PARTY</span>
          <b class="mn-party-code br-ol" data-ref="pcode">····</b>

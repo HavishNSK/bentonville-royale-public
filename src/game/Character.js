@@ -27,6 +27,8 @@ const UPPER_CLIP = {
   aim2: '2H_Ranged_Aiming', aim1: '1H_Ranged_Aiming', shoot2: '2H_Ranged_Shoot', shoot1: '1H_Ranged_Shoot', swing: '2H_Melee_Attack_Chop', use: 'Use_Item',
   reload: '2H_Ranged_Reload', reload1: '1H_Ranged_Reload', hit: 'Hit_A', throw: 'Throw', pickup: 'PickUp',
   paws: 'Blocking', // 'Paws Up' glider (Cosmetics.GLIDERS.gl_paws): both fists held up in front of the chest
+  // holding a pickaxe / sword: Idle hangs the arms and the blade clips the torso; Melee_Idle keeps it clear
+  meleeIdle: '2H_Melee_Idle',
 };
 // Ground speed (m/s) each gait clip looks right at: the cycle is played faster / slower around
 // it, and forward motion cross-fades walk -> run between WALK_TO_RUN speeds (no foot sliding
@@ -486,6 +488,7 @@ export class Character {
     this.heading = 0;
     this.pitch = 0;
     this.aim = 0; // 0..1 how much the upper body is in the aim pose
+    this.melee = 0; // 0..1 holding a pickaxe / blade in Melee_Idle (so long weapons do not clip the torso)
     this.shot = null; // one-shot upper action in progress
     this.shotW = 0;
     this.mode = 'alive'; // 'alive' | 'dead' | 'emote'
@@ -947,6 +950,11 @@ export class Character {
     const sprinting = s.grounded && s.speed > SPRINT_LOWERS_GUN && !(this.shot && this.shotLeft > 0);
     const wantAim = !full && !this.downed && !sprinting && this.equipped && this.equipped !== 'pickaxe' ? 1 : 0;
     this.aim = damp(this.aim, wantAim, 14, dt);
+    // pickaxe / sword out: hold Melee_Idle so the blade is not jammed through the body at rest
+    const wantMelee =
+      !full && !this.downed && !this.seated && !gliding && this.equipped === 'pickaxe' && this.pickaxe && this.pickaxe.visible ? 1 : 0;
+    this.melee = damp(this.melee || 0, wantMelee, 10, dt);
+    if (this.melee < 0.002 && !wantMelee) this.melee = 0;
     let shotTarget = 0;
     if (this.shot) {
       this.shotLeft -= dt;
@@ -978,7 +986,7 @@ export class Character {
         this._emFade = null;
       }
     }
-    const over = Math.max(this.aim, this.shotW, this._arms);
+    const over = Math.max(this.aim, this.shotW, this._arms, this.melee);
     const aimKey = this.twoHanded ? 'aim2' : 'aim1';
     for (const key in this.ov) {
       const a = this.ov[key];
@@ -986,6 +994,8 @@ export class Character {
       else if (a === this._shotOld) a.setEffectiveWeight(this._oldW * (1 - this.shotW) * fullW);
       else if (key === aimKey) a.setEffectiveWeight(this.aim * (1 - this.shotW) * (1 - this._arms) * fullW);
       else if (key === 'paws') a.setEffectiveWeight(this._arms * (1 - this.shotW) * fullW);
+      else if (key === 'meleeIdle')
+        a.setEffectiveWeight(this.melee * (1 - this.shotW) * (1 - this._arms) * (1 - this.aim) * fullW);
       else a.setEffectiveWeight(0);
     }
     // Walk / run / backpedal / strafes share one gait phase so blending between them never

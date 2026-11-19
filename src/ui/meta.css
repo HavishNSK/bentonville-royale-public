@@ -114,8 +114,12 @@
   gap: calc(var(--u) * 2);
   min-width: 0;
 }
+.mt-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .mt-right {
-  flex: none;
+  flex: 0 0 auto;
   gap: calc(var(--u) * 10);
   margin-left: auto;
 }

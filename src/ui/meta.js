@@ -23,7 +23,7 @@ import { SKINS, EMOTES, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, EMOTE_SLOTS, PRI
 import { createShowcase } from './Showcase.js';
 import { PATCH_NOTES, LATEST_VERSION } from '../data/patchNotes.js';
 import { RANKED_NOTE } from '../core/config.js';
-import { tierOf } from '../game/BoxElo.js';
+import { TIERS, clampElo, tierOf } from '../game/BoxElo.js';
 import { boardPosts } from '../net/feedbackBoard.js';
 
 const SEEN_KEY = 'bentonville-royale.seenPatch';
@@ -170,7 +170,8 @@ export function createMeta(menus, account, opts = {}) {
   // DEV panel (titles, bans, reports): shown to dev accounts only; the server checks every action
   const bDev = btn('DEV', 'mn-chip mt-chip mt-chip-dev', 'dev');
   bDev.hidden = true;
-  right.append(bDev, bOnline, bFriends, coins, who, bAuth);
+  // DEV sits after SIGN OUT so it never crowds the FEEDBACK tab on the left
+  right.append(bOnline, bFriends, coins, who, bAuth, bDev);
   bar.append(tabs, right);
   // portal builds (opts.guestOnly, CrazyGames): no outside sign-in, so no accounts, coins,
   // friends or buying; the locker keeps the free items
@@ -264,6 +265,25 @@ export function createMeta(menus, account, opts = {}) {
       e.stopPropagation();
       closePanel();
     }
+  });
+
+  // Party rank card sits outside the top bar but opens the same RANKS panel
+  titleEl.addEventListener('click', (e) => {
+    const b = e.target.closest('button.mn-box-rank[data-act]');
+    if (!b || b.hidden) return;
+    e.preventDefault();
+    click();
+    if (permaBanned()) {
+      openPanel('banned');
+      return;
+    }
+    if (mustRename()) {
+      openPanel('rename');
+      return;
+    }
+    const act = b.dataset.act;
+    if (open === act) closePanel();
+    else openPanel(act);
   });
 
   bar.addEventListener('click', (e) => {
@@ -1599,10 +1619,9 @@ export function createMeta(menus, account, opts = {}) {
   function renderBar() {
     const p = account.profile;
     whoName.textContent = p.guest ? 'GUEST' : p.name;
-    const box = p.box && Number.isFinite(p.box.elo) ? ` · Box ${p.box.elo | 0} ${tierOf(p.box.elo).name}` : '';
-    // short enough for one line in the top bar; the full line is the hover title
-    const full = `${p.stats.wins} wins · ${p.stats.kills} elims${box}`;
-    whoSub.textContent = p.guest ? 'Sign in for coins & skins' : p.banned ? 'Banned' : box ? `${p.stats.wins} wins${box}` : full;
+    // Box Fights Elo lives in the party rank card now — keep the top bar to BR stats
+    const full = `${p.stats.wins} wins · ${p.stats.kills} elims`;
+    whoSub.textContent = p.guest ? 'Sign in for coins & skins' : p.banned ? 'Banned' : full;
     who.title = p.guest || p.banned ? '' : full;
     coinsNum.textContent = p.coins.toLocaleString();
     bAuth.querySelector('span').textContent = account.signedIn ? 'SIGN OUT' : 'SIGN IN';
@@ -1612,6 +1631,58 @@ export function createMeta(menus, account, opts = {}) {
     const n = account.friends.incoming.length;
     badge.textContent = n ? String(n) : '';
     badge.hidden = !n;
+    renderBoxRank();
+  }
+
+  /** Big Box Fights ladder card above the party panel (menus.js .mn-box-rank). */
+  function renderBoxRank() {
+    const card = titleEl.querySelector('[data-ref="boxRank"]');
+    if (!card) return;
+    const tierEl = card.querySelector('[data-ref="boxRankTier"]');
+    const eloEl = card.querySelector('[data-ref="boxRankElo"]');
+    const metaEl = card.querySelector('[data-ref="boxRankMeta"]');
+    const fillEl = card.querySelector('[data-ref="boxRankFill"]');
+    const nextEl = card.querySelector('[data-ref="boxRankNext"]');
+    const p = account.profile;
+    const elo = p.box && Number.isFinite(p.box.elo) ? clampElo(p.box.elo) : null;
+    const trackEl = card.querySelector('.mn-box-rank-track');
+    if (p.guest || elo == null) {
+      card.hidden = false;
+      card.dataset.tier = '';
+      if (tierEl) {
+        tierEl.textContent = 'UNRANKED';
+        tierEl.dataset.tier = 'bronze';
+      }
+      if (eloEl) eloEl.textContent = '—';
+      if (metaEl) metaEl.textContent = p.guest ? 'Sign in to climb the ladder' : 'Play Box Fights to earn a rank';
+      if (fillEl) fillEl.style.width = '0%';
+      if (nextEl) nextEl.textContent = '';
+      if (trackEl) trackEl.hidden = true;
+      return;
+    }
+    const t = tierOf(elo);
+    const idx = TIERS.findIndex((x) => x.id === t.id);
+    const next = idx >= 0 && idx < TIERS.length - 1 ? TIERS[idx + 1] : null;
+    const floor = TIERS[idx] ? TIERS[idx].min : 0;
+    const ceil = next ? next.min : floor + 300;
+    const pct = next ? Math.max(0, Math.min(1, (elo - floor) / Math.max(1, ceil - floor))) : 1;
+    const games = Number.isFinite(p.box.games) ? p.box.games | 0 : 0;
+    const wins = Number.isFinite(p.box.wins) ? p.box.wins | 0 : 0;
+    card.hidden = false;
+    card.dataset.tier = t.id;
+    if (tierEl) {
+      tierEl.textContent = t.name;
+      tierEl.dataset.tier = t.id;
+    }
+    if (eloEl) eloEl.textContent = `${elo | 0}`;
+    if (metaEl) {
+      metaEl.textContent = games
+        ? `${wins}W · ${Math.max(0, games - wins)}L · peak ${Number.isFinite(p.box.peak) ? (p.box.peak | 0) : elo}`
+        : 'No ranked games yet — hit PLAY';
+    }
+    if (fillEl) fillEl.style.width = `${Math.round(pct * 100)}%`;
+    if (trackEl) trackEl.hidden = false;
+    if (nextEl) nextEl.textContent = next ? `${ceil - elo} Elo to ${next.name}` : 'Top of the ladder';
   }
 
   function checkRename() {
