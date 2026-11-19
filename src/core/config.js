@@ -452,7 +452,7 @@ export const DIFFICULTY = {
   easy: { lead: 0.5, aimError: 0.085, closeMiss: 0.7, guessError: 0.6, misguess: 0.35, reaction: 0.9, burst: 0.55, buildChance: 0.35, buildPieces: 2, buildCooldown: 6, buildRate: 0.45, sight: 80, damageScale: 0.6, wallOnHit: 0.25, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0.3 },
   normal: {
     lead: 0.8, aimError: 0.05, closeMiss: 0.5, guessError: 0.45, misguess: 0.22, reaction: 0.55, burst: 0.7, buildChance: 0.75, buildPieces: 6, buildCooldown: 2.5, buildRate: 0.3, sight: 100, damageScale: 0.8,
-    wallOnHit: 0.9, boxHeal: 0.6, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.6, boxFight: 0.35, peekOpen: 1.1, peekClosed: 0.8,
+    wallOnHit: 0.9, boxHeal: 0.6, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.6, boxFight: 0.6, peekOpen: 0.8, peekClosed: 0.5,
   },
   hard: {
     // aimError 0.017 -> 0.02 and closeMiss: hard bots used to never miss up close

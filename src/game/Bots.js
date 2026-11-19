@@ -130,6 +130,11 @@ const CB_FULL = 60;
 const CB_MAX = 8;
 const WINDOW = 1 << 4; // wall edit: middle tile (chest / eye height)
 const BOTTOM_ROW = 0b111; // wall edit: the three bottom tiles
+const ATTACKER_SIGHT = 350; // m: a bot shot in the last ATTACKER_MEMORY s keeps sight of its attacker this far
+const ATTACKER_MEMORY = 8; // s
+const RUSH_FOLLOW = 3; // s after a rush ends (or its ramp is lost) for the trap / box follow-up
+const RUSH_TRAP_DIST = 16; // m: a rush this close ends in a trap on them
+const FAR_SHOT = 45; // m: shot from farther than this, a bot builds TOWARD the shooter (ramp rush), not a box / tower
 // Taunts: after an elimination, a bot nobody is pressuring may walk to the body and emote
 const TAUNT_CHANCE = { easy: 0.15, normal: 0.3, hard: 0.4 }; // per elimination (halved for a bot victim)
 const TAUNT_EMOTES = ['emote_cheer', 'emote_hype', 'emote_flex'];
@@ -677,9 +682,13 @@ export class Bots {
       b.hitDmg = Math.min(60, (fresh ? 0 : b.hitDmg || 0) + (amount > 0 ? amount : 0));
       this._setGrudge(b, src);
       // (on the same frame: _startQueue places the first piece right away)
-      if (b.tower) {
-        // up on (or climbing) our tower: its walls are the cover
-      } else if (this._tryTower(b, src)) {
+      const far = Math.hypot(src.pos.x - b.actor.pos.x, src.pos.z - b.actor.pos.z) > FAR_SHOT;
+      if (far) b.farHitAt = t; // _maybeBuild ramp-rushes toward them
+      const pushing = t - (b.lastRushAt ?? -Infinity) < 6;
+      if (b.tower || pushing) {
+        // up on (or climbing) our tower, or mid ramp-rush at them: those walls are the cover
+        // (a hit-wall would block the next ramp of the push)
+      } else if (!far && this._tryTower(b, src)) {
         b.hitDmg = 0; // hard, shot from range: height now (any other build is dropped for it)
       } else if (fresh) {
         if (this._wallOnHit(b, src)) b.hitDmg = 0;
@@ -777,7 +786,9 @@ export class Bots {
     const t = this.time;
     if (this.diffName !== 'hard' || !this.structures || !src || !src.alive || !src.pos || b.tower || b.trap || a.downed || b.stormUrgent) return false;
     const d = Math.hypot(src.pos.x - a.pos.x, src.pos.z - a.pos.z);
-    if (d < TOWER_NEAR || d > TOWER_FAR) return false;
+    // far off (FAR_SHOT+): go at them instead (ramp rush toward, _maybeBuild), not up
+    if (d < TOWER_NEAR || d > Math.min(TOWER_FAR, FAR_SHOT)) return false;
+    if (t - (b.lastRushAt ?? -Infinity) < 6) return false; // mid-push toward them: finish it (trap), no tower
     b.towerWant = { src, until: t + 3 };
     if (!a.grounded) return false; // landing first
     if (b.box) {
@@ -961,7 +972,8 @@ export class Bots {
     let mode = 'wall';
     let afford = 0;
     for (const m of MATERIALS) afford += Math.floor(a.inventory.mats[m] / BUILD.cost);
-    if (diff.buildPieces >= 5 && afford >= 5 && !b.box && this.rng() < (RAMP_BOX_CHANCE[this.diffName] || 0)) {
+    const nearShot = Math.hypot(src.pos.x - a.pos.x, src.pos.z - a.pos.z) <= FAR_SHOT;
+    if (nearShot && diff.buildPieces >= 5 && afford >= 5 && !b.box && this.rng() < (RAMP_BOX_CHANCE[this.diffName] || 0)) {
       // a ramp box: four walls with a ramp up the middle toward the shooter; peek over the front
       // wall from the top of the ramp, shoot, drop back down into cover (_boxTick, ramp peeks)
       n = this._queuePreset(b, 0, 'tower', hs);
@@ -1018,7 +1030,7 @@ export class Bots {
    * and the dice say so, keeps one going, or ends it. True while boxed (the caller holds us in
    * the middle of the box).
    */
-  _boxFight(b, target, dist) {
+  _boxFight(b, target, dist, force = false) {
     const a = b.actor;
     const t = this.time;
     const diff = this.diff;
@@ -1040,10 +1052,11 @@ export class Bots {
       return true;
     }
     // up close they get boxed in (_maybeTrap), not us with them
-    if (!st || !diff.boxFight || !target || !target.alive || dist > BOX_RANGE || dist < BOX_MIN || !a.grounded) return false;
-    if (t < (b.boxRollAt || 0) || b.bqI < b.bqN) return false;
+    if (!st || !diff.boxFight || !target || !target.alive || (!force && dist > BOX_RANGE) || dist < BOX_MIN || !a.grounded) return false;
+    if ((!force && t < (b.boxRollAt || 0)) || b.bqI < b.bqN) return false;
+    if (!force && t - (b.lastRushAt ?? -Infinity) < 6) return false; // mid-push toward them: finish it (trap)
     b.boxRollAt = t + 3 + this.rng() * 2;
-    if (this.rng() > diff.boxFight) return false;
+    if (!force && this.rng() > diff.boxFight) return false;
     if (st.count >= BUILD.maxPieces * BUILD_ROOM) return false;
     const mat = bestMat(a.inventory);
     let afford = 0;
@@ -1438,7 +1451,7 @@ export class Bots {
    * the wall facing us with quick window edits: open, shoot, close. True while trapping (the
    * caller holds the bot still). Players cannot edit someone else's walls: they must break out.
    */
-  _maybeTrap(b, target, dist) {
+  _maybeTrap(b, target, dist, force = false) {
     const diff = this.diff;
     const st = this.structures;
     const a = b.actor;
@@ -1448,10 +1461,10 @@ export class Bots {
     if (!chance || !st || !target || !target.alive || !a.grounded) return false;
     // a target behind our own closed box peek is still "seen" for a moment
     const seen = b.targetVisible || (b.target === target && t - (b.lastSeen ?? -Infinity) < TRAP_SEEN);
-    if (!seen || dist > TRAP_RANGE || dist < 3.2 || b.bqI < b.bqN || t < (b.trapRollAt || 0)) return false;
+    if (!seen || dist > TRAP_RANGE + (force ? 3 : 0) || dist < 3.2 || b.bqI < b.bqN || (!force && t < (b.trapRollAt || 0))) return false;
     // hard bots look for the trap every ~2 s; others every 4-7 s
     b.trapRollAt = t + (this.diffName === 'hard' ? 1.2 + this.rng() * 1.2 : 4 + this.rng() * 3);
-    if (this.rng() > chance || target.grounded === false) return false;
+    if ((!force && this.rng() > chance) || target.grounded === false) return false;
     if (st.count >= BUILD.maxPieces * BUILD_ROOM) return false;
     const mat = bestMat(a.inventory);
     let afford = 0;
@@ -2164,7 +2177,15 @@ export class Bots {
         // they are in a box of our own walls (a trap that lapsed, or a box they walked into): work
         // it from outside again instead of walking at it and "breaking out" of our own trap
         if (!b.trap && !b.box) this._retrap(b, target);
-        if (this._maybeTrap(b, target, d)) {
+        // a ramp rush that got us close: drop on them and box them in. One whose ramp was shot
+        // out from under us: box ourselves and edit-fight from there.
+        if (b.rushing && t >= b.rushUntil) {
+          b.rushing = false;
+          b.rushEndedAt = t; // the rush is over (time up, or close enough): trap them if near
+        }
+        const rushTrap = t - (b.rushEndedAt ?? -Infinity) < RUSH_FOLLOW && !b.trap && !b.box;
+        const rushBox = t - (b.rampLostAt ?? -Infinity) < RUSH_FOLLOW && !b.trap && !b.box;
+        if (this._maybeTrap(b, target, d, rushTrap)) {
           // trapping them: stand square in front of the wall we peek through (a window lines up
           // with them from there; from a corner the line runs through two walls' edges and the
           // windows show nothing), and work the window edits
@@ -2176,7 +2197,7 @@ export class Bots {
           b.wantJump = false;
           break;
         }
-        if (this._boxFight(b, target, d)) {
+        if (this._boxFight(b, target, d, rushBox)) {
           // boxed: hold the middle of the box; the edit peeks do the fighting. A ramp box: stand
           // up the ramp to peek over the front wall, back down for cover
           gx = b.box.x;
@@ -2200,6 +2221,16 @@ export class Bots {
           gz = a.pos.z + b.bqDirZ * 6;
           speed = PLAYER.runSpeed;
           stop = 0;
+          b.rushing = true;
+          if (b.chainRamp && b.chainRamp.alive === false) {
+            // our ramp was shot out from under us: stop and box up (above)
+            b.rampLostAt = t;
+            b.rushUntil = 0;
+            b.rushing = false;
+          } else if (d < RUSH_TRAP_DIST) {
+            // close enough: off the ramp toward them, then the trap (above)
+            b.rushUntil = 0;
+          }
         } else if (b.bqMode === 'box' && t < b.holdUntil) {
           // boxed up: stay inside while it goes up (and heal / reload behind it)
           speed = 0;
@@ -2607,7 +2638,10 @@ export class Bots {
     if (tgt && (!tgt.alive || tgt.pos.y - a.pos.y > 40)) tgt = b.target = null;
     if (tgt) {
       const d2 = dist2(a.pos, tgt.pos);
-      if (d2 < s2 * 1.3 && this._los(ex, ey, ez, tgt.pos.x, tgt.pos.y + CHEST, tgt.pos.z)) {
+      // someone shooting at us from far off is not out of sight: we know where the shots come from
+      const attacker = tgt === b.lastHitBy && t - (b.hurtAt ?? -Infinity) < ATTACKER_MEMORY;
+      const lim2 = attacker ? Math.max(s2 * 1.3, ATTACKER_SIGHT * ATTACKER_SIGHT) : s2 * 1.3;
+      if (d2 < lim2 && this._los(ex, ey, ez, tgt.pos.x, tgt.pos.y + CHEST, tgt.pos.z)) {
         this._see(b, tgt);
         return;
       }
@@ -3221,7 +3255,16 @@ export class Bots {
     }
     let n = 0;
     let mode;
-    if (maxN >= 5 && hurt && d < 40) {
+    // mid-push toward them (a ramp rush in the last few seconds, still short of trap range):
+    // only the next rush, never a wall / box / cover in the path of the push
+    const pushing = t - (b.lastRushAt ?? -Infinity) < 6 && d > RUSH_TRAP_DIST;
+    if (pushing && maxN < 3) {
+      b.buildCooldown = t + 0.5;
+      return;
+    }
+    if (pushing) {
+      // fall through to the rush branch below
+    } else if (maxN >= 5 && hurt && d < 40) {
       // 1x1 box around the bot's own cell: front wall first, then sides, back, roof
       mode = 'box';
       n = this._queueBox(b, n, hs);
@@ -3233,7 +3276,10 @@ export class Bots {
       // cover preset: a three-wall pocket facing the enemy, to heal or peek from
       mode = 'wall';
       n = this._queuePreset(b, n, 'cover', hs);
-    } else if (maxN >= 3 && (high || (d > 18 && this.rng() < 0.45) || (diff.highGround && d > 8 && d < 45 && this.rng() < diff.highGround))) {
+    }
+    if (mode) {
+      // box chosen above
+    } else if (maxN >= 3 && (pushing || high || ((t - (b.farHitAt ?? -Infinity) < 6 || t - (b.lastRushAt ?? -Infinity) < 4) && d > RUSH_TRAP_DIST) || (d > 18 && this.rng() < 0.45) || (diff.highGround && d > 8 && d < 45 && this.rng() < diff.highGround))) {
       // ramp rush: a chain of rising ramps toward the target, run up while it is built
       mode = 'rush';
       const ramps = Math.min(maxN, high ? 2 + Math.ceil((tgt.pos.y - py) / BUILD.level) : 3);
@@ -3275,7 +3321,10 @@ export class Bots {
     b.bqDirX = dx;
     b.bqDirZ = dz;
     b.buildCooldown = Infinity; // set for real when the queue finishes
-    if (mode === 'rush') b.rushUntil = t + 0.6 + n * Math.max(0.5, diff.buildRate * 2.5);
+    if (mode === 'rush') {
+      b.rushUntil = t + 0.6 + n * Math.max(0.5, diff.buildRate * 2.5);
+      b.lastRushAt = t;
+    }
     else if (mode === 'box') b.holdUntil = t + n * diff.buildRate + 2.5;
     this._buildStep(b);
   }

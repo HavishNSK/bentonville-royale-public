@@ -138,3 +138,58 @@ test('after an elimination, an unpressured bot walks to the body and emotes; a h
   assert.equal(bot.emoting, false, 'taunt cut off by the hit');
   assert.equal(b.taunt, null);
 });
+
+test('shot from far: the bot keeps the shooter, ramp-rushes toward them, and boxes them in when close', () => {
+  const { structures: st, bots, bot, b, player } = sim('hard');
+  bot.inventory.mats.wood = 400;
+  player.pos.set(bot.pos.x, 0, bot.pos.z - 90); // 90 m north, past its normal sight
+  player.shotAt = performance.now() / 1000;
+  bots._los = () => true;
+  bots.notifyDamage(bot, 12, { source: player });
+  let maxKept = 0;
+  let rampsTowardThem = 0;
+  let trapped = false;
+  const d0 = Math.hypot(bot.pos.x - player.pos.x, bot.pos.z - player.pos.z);
+  for (let i = 0; i < 25 * 60; i++) {
+    if (i % 30 === 0) player.shotAt = performance.now() / 1000; // they keep shooting
+    if (i % 180 === 0) bots.notifyDamage(bot, 6, { source: player }); // and land a hit every 3 s
+    bots.update(1 / 60, { player });
+    if (b.target === player) maxKept = i;
+    if (b.trap) {
+      trapped = true;
+      break;
+    }
+  }
+  rampsTowardThem = st.pieces.filter((p) => p.owner === bot && p.kind === 'ramp' && p.z < bot.pos.z + 4).length;
+  const d1 = Math.hypot(bot.pos.x - player.pos.x, bot.pos.z - player.pos.z);
+  assert.ok(maxKept > 5 * 60, 'kept the far shooter as its target');
+  assert.ok(rampsTowardThem >= 1 || st.pieces.some((p) => p.owner === bot && p.kind === 'ramp'), 'built ramps (toward them)');
+  assert.ok(d1 < d0 - 30, `closed in: ${d0.toFixed(0)} -> ${d1.toFixed(0)} m`);
+  assert.ok(trapped, 'and boxed them in once close');
+});
+
+test('mid ramp-rush, its ramp shot out from under it: the bot boxes itself and edit-fights', () => {
+  const { structures: st, bots, bot, b, player } = sim('hard');
+  bot.inventory.mats.wood = 400;
+  player.pos.set(bot.pos.x, 0, bot.pos.z - 90);
+  player.shotAt = performance.now() / 1000;
+  bots._los = () => true;
+  bots.notifyDamage(bot, 12, { source: player });
+  let broke = false;
+  let boxed = false;
+  for (let i = 0; i < 12 * 60; i++) {
+    if (i % 30 === 0) player.shotAt = performance.now() / 1000;
+    bots.update(1 / 60, { player });
+    // once it is up a ramp of the rush, shoot that ramp out
+    if (!broke && b.chainRamp && b.chainRamps >= 2 && bots.time < b.rushUntil) {
+      st.damage(b.chainRamp, 1e6);
+      broke = true;
+    }
+    if (broke && b.box) {
+      boxed = true;
+      break;
+    }
+  }
+  assert.ok(broke, 'the rush got a couple of ramps up');
+  assert.ok(boxed, 'and it boxed itself up when the ramp went');
+});
