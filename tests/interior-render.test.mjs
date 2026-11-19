@@ -8,6 +8,7 @@ import { World } from '../src/world/World.js';
 
 // Catalog from the interior contract: kind -> [w, d, h, lift]. "sized" kinds use a room-ish size.
 const CATALOG = {
+  commons_table:[1.36,2.05,0.82],
   bed:[1.6,2.1,0.55], nightstand:[0.5,0.45,0.55], dresser:[1.2,0.5,0.95], wardrobe:[1.2,0.6,2.0],
   sofa:[2.0,0.85,0.8], armchair:[0.85,0.85,0.8], coffee_table:[1.1,0.6,0.42], tv_stand:[1.6,0.45,0.55],
   rug:[3.0,2.0,0.02], dining_table:[1.8,0.95,0.75], chair:[0.45,0.45,0.9], stool:[0.4,0.4,0.75],

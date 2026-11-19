@@ -9,6 +9,7 @@ This is the index of every third-party or fetched asset in the project. Older pe
 - [fonts](credits/fonts.md)
 - [map data](credits/map-data.md)
 - [Crystal Bridges](credits/crystal-bridges.md)
+- [Bentonville High School](credits/bhs.md)
 
 ## Crystal Bridges paintings (`public/art/crystal-bridges/`)
 

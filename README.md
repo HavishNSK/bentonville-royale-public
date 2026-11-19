@@ -261,6 +261,37 @@ node tools/qa/smoke.mjs --url http://localhost:5173 --script tools/qa/crystal-br
 - Bots navigate the museum with the generic open-world steering and can look clumsy on stairs.
 - Measured frame rate held at the 60 fps vsync cap inside and outside the museum in headless Chromium on an Apple M4; a typical laptop has not been measured.
 
+## Bentonville High School Landmark
+
+Bentonville High School is a bespoke point of interest in `src/world/bhs/`, built to look like the real campus. It sits in the south-centre tile of the composed map. The build contract is [docs/bhs/BHS_CONTRACT.md](docs/bhs/BHS_CONTRACT.md). The look is defined in [docs/bhs/STYLE_BIBLE.md](docs/bhs/STYLE_BIBLE.md): the palette sampled from reference photos, materials, facades and hero spaces.
+
+- **Kit** (`src/world/bhs/kit/`):
+  - a palette and procedural canvas materials, with world-space UVs and no image files
+  - a pure builder: walls with doors and windows, slabs, stairs with a smooth deck ramp, railings, columns, lights, loot
+  - a plan engine that turns a building described as data (outline, courtyards, rooms per storey, voids, stair halls, raised volumes, a facade function) into geometry
+  - a generated bot waypoint graph (`world.siteNav`, combined with Crystal Bridges' graph)
+  - merged meshes, one per (group, look), with interiors streamed by distance and a small pool of real lights following the camera
+- **North Building** (`north.js`, replaces map building 952075843):
+  - 3 storeys, U-shaped around a courtyard
+  - the west main entrance in a niche between the brick commons frontage and the light-block stair tower: glass doors, a canopy, the sign band with an original tiger emblem, and a 2-storey curtain wall
+  - a 3-storey commons atrium with a glass-railed walkway and a feature stair
+  - wings of classrooms and labs, a media centre, a lecture hall and four stair halls
+- **Main building** (`south.js`, replaces 952075842):
+  - 2 storeys with raised volumes: Tiger Arena, the auxiliary gym, the cafeteria clerestory, the Arend Arts Center house and fly tower, and the library
+  - the entry court with its water channel and arch beam, the Arend's stepped brick drums, and the covered walkway to the North Building
+- **Hero interiors and rooms** (`interior/`):
+  - the gym, the library and the Arend theatre
+  - a seeded classroom generator (subject-driven layouts and lived-in props)
+  - `fill.js`: hallway lockers, offices, restrooms and storage
+- **Tiger Stadium** (`stadium.js`, `stadiumMeshes.js`):
+  - a regulation field with the home grandstand and press box on the west
+  - the visitor stand was removed so the North Building entrance plaza stays open
+  - the real stadium is about 280 m west across SE J St and is moved into the tile
+- **Data** (`data.js`): storey overrides keyed by id, and the stadium site cleared of unmapped parking aisles. The map JSON is unchanged.
+- **Reference photos are private.** They live outside the repo, and `scripts/hooks/pre-commit` (copy it to `.git/hooks/`) rejects any `bhs-refs` path and stray images. The match-loop camera is `node tools/qa/bhs-shot.mjs --url <dev url> --views tools/bhs/views.json`; it writes renders and photo comparisons outside the repo.
+- **Not included:** no logos or mascot art copied from photos (the emblem is original), no real names, room numbers or security details, and no official floor plans. Spaces without photos are approximate (see `HACKATHON_NOTES.md`).
+- **Verification:** `tests/bhs-*.test.mjs` and `npm test`.
+
 ## Map and Asset Maintenance
 
 The game currently consumes `public/data/bentonville-osm.json`. World units are meters: x east, z south, y up; heading zero faces north.

@@ -74,6 +74,34 @@ const BEAM_TOP_GAP = 0.005; // beams hang just under the ceiling plane
 // shell's up-lit ceiling, and 1 cm stays depth-separable (near 0.3 m, 24-bit) out to ~200 m;
 // beam tops (BEAM_TOP_GAP) end 5 mm above it, hidden. Light panels hang 2-3 cm down, below it.
 const STYLED_CEIL_GAP = 0.01;
+
+// An original cut-paper panorama. World-space phase joins the coloured ridges across
+// neighbouring breakable panels. Each panel owns its own strip of the composition.
+function addRidgeMural(chunk, quad, A, B, side, nx, nz, base, height, colors, h) {
+  const low = base + height * 0.22;
+  const start = A(side, low), end = B(side, low);
+  const length = Math.hypot(end[0] - start[0], end[2] - start[2]);
+  const count = Math.max(1, Math.ceil(length / 1.2));
+  const section = i => {
+    const t = i / count;
+    const x = start[0] + (end[0] - start[0]) * t, z = start[2] + (end[2] - start[2]) * t;
+    const s = x * 0.59 + z * 0.81;
+    return [0, 1, 2, 3].map(layer => {
+      if (!layer) return [x, low, z];
+      const wave = 0.06 * Math.sin(s * 0.42 + layer * 1.9) + 0.04 * Math.cos(s * 0.76 + layer);
+      return [x, low + height * (layer * 0.15 + wave), z];
+    });
+  };
+  let left = section(0);
+  for (let i = 1; i <= count; i++) {
+    const right = section(i);
+    for (let layer = 0; layer < colors.length; layer++) {
+      quad(chunk, left[layer], right[layer], right[layer + 1], left[layer + 1],
+        nx, 0, nz, ...rgb(colors[layer]), null, h);
+    }
+    left = right;
+  }
+}
 // Light normal for styled ceilings and beam undersides. An up normal takes the full hemisphere
 // SKY colour (#c6e0ff), which turns a cream ceiling blue-grey. This one tilts slightly down
 // (n.y = -0.25: ~38% sky / 62% warm ground fill, so cream stays cream), and its horizontal part
@@ -361,6 +389,21 @@ export function addInteriorGeometry(chunk, shell, h, api, styles = LANDMARK_STYL
           }
         }
       }
+      // Inlaid ribbons are cut to the same footprint as the ground-floor finish.
+      if (L.i === 0 && st?.inlay !== undefined) {
+        for (let a = r.a0 + 2; a + 0.9 < r.a1; a += 6.8) {
+          for (const [start, end] of [[a, a + 0.54], [a + 0.68, a + 0.79]]) {
+            const strips = cutHoles([{ a0: start, b0: r.b0, a1: end, b1: r.b1 }], L.holes);
+            for (const strip of strips) {
+              const poly = clipRect(P, strip.a0, strip.b0, strip.a1, strip.b1);
+              if (poly.length < 6) continue;
+              const pts = [];
+              for (let i = 0; i < poly.length; i += 2) pts.push(...toWorld(F, poly[i], poly[i + 1]));
+              hcapFlat(chunk, pts, base + 0.052, st.inlay, h);
+            }
+          }
+        }
+      }
       // fake AO: darker strips along the room's edges (cut around stair holes, clipped to the shell)
       const sw = Math.min(EDGE_AO, (r.a1 - r.a0) / 4, (r.b1 - r.b0) / 4);
       if (sw > 0.05) {
@@ -454,6 +497,16 @@ export function addInteriorGeometry(chunk, shell, h, api, styles = LANDMARK_STYL
           if (y1 - y0 > TOP_BAND + SKIRT_H + 0.5) {
             const [lr, lg, lb] = rgb(tone(hex, 1, 0xfff8ec, 0.35));
             quad(chunk, A(s * tb, y1 - TOP_BAND), B(s * tb, y1 - TOP_BAND), B(s * tb, y1), A(s * tb, y1), nx, 0, nz, lr, lg, lb, null, h);
+          }
+          // Broad, edge-to-edge maple courses read at the game's lower render resolutions.
+          if (ts?.panelWood !== undefined) {
+            const bottom = y0 + 1.5, pitch = (y1 - TOP_BAND - bottom) / 3;
+            for (let i = 0; pitch > 0.08 && i < 3; i++) {
+              const low = bottom + i * pitch, high = bottom + (i + 1) * pitch;
+              const wood = tone(ts.panelWood, i % 2 === 0 ? 1 : 0.90);
+              quad(chunk, A(s * tb, low), B(s * tb, low), B(s * tb, high), A(s * tb, high), nx, 0, nz, ...rgb(wood), null, h);
+            }
+            if (ts.mural) addRidgeMural(chunk, quad, A, B, s * sk, nx, nz, y0, y1 - y0, ts.mural, h);
           }
         }
         const pn = meta.panel >= 0 ? plan.panels[meta.panel] : null;

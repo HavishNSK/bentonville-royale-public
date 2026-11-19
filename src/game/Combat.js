@@ -274,6 +274,9 @@ export class Combat {
 
   _destroyCollider(c, point) {
     this.world.remove(c);
+    // loot resting on it falls to what is below (a broken floor tile, press box, shelf); every client
+    // replays the same destroy event, so the records move the same way everywhere
+    if (this.loot && this.loot.dropFrom) this.loot.dropFrom(c);
     if (this.view && this.view.hideCollider) this.view.hideCollider(c);
     this.destroyed.push(c);
     if (this.onColliderDestroyed) this.onColliderDestroyed(c, point);

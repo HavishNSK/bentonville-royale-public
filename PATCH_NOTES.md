@@ -1,5 +1,39 @@
 # Patch Notes
 
+## [2026-11-19] — v0.20.0: Back to School, Bentonville High rebuilt
+The biggest POI revamp yet. Bentonville High School is rebuilt from the ground up, inside and out, matched against real photos of the campus. It's packed with loot.
+
+- **Two real buildings, fully built out:** both school buildings are bespoke landmarks (`src/world/bhs/`) instead of generic map boxes:
+  - a building kit with real materials, glass, stairs and railings
+  - a plan engine that turns rooms, storeys, atria and facades into geometry
+  - recognisable from the parking lot and from the sky
+- **North Building**, U-shaped around a grass courtyard, 3 storeys:
+  - the west main entrance: glass doors under a canopy, a 2-storey curtain wall, the MAIN ENTRANCE sign band with a tiger emblem, and the light-block stair tower
+  - the lobby, with the 3-storey cafeteria atrium (glass-railed walkway, feature stair) on the left, the crosswalk entrance on the right, and the main hallway straight ahead, looping the whole building
+  - classrooms on every floor with glass onto the hallway and big windows onto the courtyard
+  - four big corner stairwells, a media center and a lecture hall
+- **Main Building:**
+  - the **Arend Arts Center**: a 1,798-seat auditorium with a balcony, a raised stage and a red curtain
+  - **Tiger Arena**: a painted court, 12-row bleachers and a running-track concourse; plus an auxiliary gym with a climbing wall
+  - a 2-storey **library** with a mezzanine
+  - a cafeteria with tables around the reboot van
+  - the entry court with its water channel and arch, and the arts center's stepped brick front
+  - a covered walkway and a crosswalk between the buildings
+- **101 unique classrooms:** subject-driven science labs, art rooms, computer labs, band and choir rooms, culinary, engineering and robotics. 8 seating layouts, posters, plants, backpacks and other lived-in clutter. No two neighbours alike.
+- **Loot capital:** about 150+ chests across the campus, plus ammo boxes and floor loot, in hallways, classrooms, closets, stairwells, the stage, the gyms and the library.
+- **Everything breaks:** walls, glass, floors, roof tiles, stairs and bleachers at the school. Land on the roof, blast in, drop into class.
+- **New mechanic, vault:** jump at a thin obstacle (fence, railing, low wall) to vault over it (`Player._findVault`). This works everywhere on the map; solid walls and closed windows can't be vaulted.
+- **Loot drops:** a chest on a destroyed floor or ledge now falls to the surface below (`Loot.dropFrom`, called from `Combat._destroyCollider`, so it's the same on every client).
+- **"Now entering Bentonville High School"** banner, with the tiger emblem stamping onto it.
+- **Tiger Stadium:** the visitor stand was removed to open the North Building's entrance plaza.
+- **Fixed:** the chest prompt read "Open Open Chest".
+- **Notes:**
+  - The tiger emblem is an original drawing, not the school's logo artwork. Reference photos never enter the repo (`scripts/hooks/pre-commit`).
+  - Spaces without photos are approximate (`HACKATHON_NOTES.md`).
+  - BHS interiors cost more frame rate than the old empty shells. Other POIs are unaffected.
+  - Docs: `docs/bhs/STYLE_BIBLE.md`, `docs/bhs/BHS_CONTRACT.md`.
+  - Multiplayer: everyone needs to refresh (interior version 9).
+
 ## [2026-11-18] — Unreleased: moderation, player reports and security fixes
 - **Security:** the QA console hooks (`window.__game.debug`: teleport, give items, damage anyone) shipped in the production build, so a player, and especially a match host, could teleport or give themselves items mid-game. They now exist only in `vite` dev builds.
 - **Security:** the account `Rank_1_Kills`, used to exploit that, is permanently banned in the code (`PERMA_BANNED` in `party/moderation.js`). It can't be lifted with `/unban`. Signing in shows a permanent-ban notice that can't be closed, and the account can't start or join matches, chat, shop or use friends.

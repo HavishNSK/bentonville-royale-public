@@ -24,6 +24,8 @@
 import * as THREE from 'three';
 import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, CONSUMABLES, isRankedMatch, makeRng, clamp, damp, TAU } from '../core/config.js';
 import { canSandboxLoadout, canCreativeMap, giveSandboxWeapon } from './sandboxLoadout.js';
+import { landmarkAt } from './landmarkAt.js';
+import { BHS_KEY } from '../world/bhs/data.js';
 import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
 import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
@@ -298,6 +300,7 @@ export class Game {
     const lootModels = {};
     for (const k of [...LOOT_MODELS, ...WEAPON_MODELS, 'rocket_launcher']) lootModels[k] = models[k];
     this.loot = LootMod.Loot ? new LootMod.Loot({ scene: this.scene, world: this.world, models: lootModels, fx: this.fx, sfx }) : null;
+    if (this.combat && this.loot) this.combat.loot = this.loot; // loot on a destroyed floor / ledge drops (Loot.dropFrom)
     if (this.grenades) this.grenades.loot = this.loot;
 
     const StormCls = StormMod.Storm || StaticStorm;
@@ -476,6 +479,7 @@ export class Game {
     if (this.structures) this.structures.clear();
     this.fx.clear();
     this.hud.clearTransient();
+    this._atSchool = false;
     if (this.pings) this.pings.reset();
 
     // storm, centred toward a random POI (the opening storm is dormant and covers the map;
@@ -701,6 +705,7 @@ export class Game {
     if (this.structures) this.structures.clear();
     this.fx.clear();
     this.hud.clearTransient();
+    this._atSchool = false;
     if (this.pings) this.pings.reset();
     this.bots.clear();
 
@@ -1632,17 +1637,12 @@ export class Game {
     this._locT = (this._locT || 0) - dt;
     if (this._locT <= 0) {
       this._locT = 0.5;
-      let best = null;
-      let bd = Infinity;
-      for (const k in this.world.landmarks) {
-        const l = this.world.landmarks[k];
-        const d = Math.hypot(l.x - f.pos.x, l.z - f.pos.z);
-        if (d < Math.max(60, l.r * 1.2) && d < bd) {
-          bd = d;
-          best = l;
-        }
-      }
+      const best = landmarkAt(this.world.data, f.pos.x, f.pos.z);
       hud.setLocation(best ? best.n.toUpperCase() : null);
+      const atSchool = best && best === this.world.landmarks[BHS_KEY] && f === p &&
+        p.alive && this.state === 'play' && !p.airborneDrop;
+      if (atSchool && !this._atSchool) hud.toast(best.n);
+      this._atSchool = !!atSchool;
     }
 
     // harvested object bar

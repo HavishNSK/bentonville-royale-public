@@ -1,0 +1,7 @@
+[
+  { "name": "arend-house", "ref": "bhsaacarendartscenter.jpg", "cam": { "x": 58.5, "y": 2.55, "z": 304.8, "tx": 84, "ty": 4.4, "tz": 303.5, "hfov": 70 }, "tp": [58.5, 304.8] },
+  { "name": "arend-stage-out", "cam": { "x": 88.5, "y": 2.9, "z": 313.5, "tx": 45, "ty": 4.5, "tz": 313.5, "hfov": 80 }, "tp": [88.5, 313.5] },
+  { "name": "arend-balcony", "cam": { "x": 44.5, "y": 8.4, "z": 306.5, "tx": 84, "ty": 3.5, "tz": 314, "hfov": 75 }, "tp": [44.5, 306.5] },
+  { "name": "arend-front", "cam": { "x": 60, "y": 3.0, "z": 313.5, "tx": 90, "ty": 4.0, "tz": 313.5, "hfov": 75 }, "tp": [60, 313.5] },
+  { "name": "arend-lobby", "cam": { "x": 21.0, "y": 1.7, "z": 328.5, "tx": 36, "ty": 3.0, "tz": 300, "hfov": 75 }, "tp": [21.0, 328.5] }
+]

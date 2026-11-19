@@ -34,6 +34,7 @@ import { tileIdAt } from './interiors/floorTiles.js';
 import { toLocal as planLocal } from './interiors/layout.js';
 import { makeBox, boxContains, boxPushCircle, boxRay } from './boxColliders.js';
 import { foundationBand, footprintDistance, foundationHeight } from './foundations.js';
+import { applyBhsOverrides } from './bhs/data.js';
 
 const CELL = 32;
 const STEP = 0.62;
@@ -249,6 +250,7 @@ function decodeTerrain(meta, buf) {
 
 export class World {
   constructor(mapData, extras = null) {
+    applyBhsOverrides(mapData); // Bentonville High floors + stadium site (src/world/bhs/data.js)
     this.data = mapData;
     const b = mapData.meta.bounds;
     this.bounds = { minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ };

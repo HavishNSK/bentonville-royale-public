@@ -77,7 +77,7 @@ import { storeyCount, addStoreys, FLOOR_THICKNESS } from './interiors/storeys.js
 import { furnishInterior } from './interiors/furnishings.js';
 import { addFloorTiles } from './interiors/floorTiles.js';
 
-export const INTERIOR_VERSION = 8;
+export const INTERIOR_VERSION = 9; // 9: Bentonville High 2 + 3 storeys (src/world/bhs/)
 
 const HUB = { corridor: 1, hall: 1, lobby: 1, sales: 1, living: 1, open: 1 };
 
