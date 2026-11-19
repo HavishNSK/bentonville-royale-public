@@ -303,10 +303,14 @@ export function createAccount() {
     async reward({ kills = 0, placement = 1, players = 1, won = false, ranked = false } = {}) {
       if (!acct.signedIn) return { earned: 0, saved: false, guest: true };
       try {
+        // Send the ticket when we have one; the server decides. An account server deployed before
+        // match tickets existed answers matchStart with "Unknown request." but still takes results,
+        // so a missing ticket must not stop the result from being sent.
         const matchId = await matchTicket;
         matchTicket = null;
-        if (!matchId) return { earned: 0, saved: false, error: 'This match was not registered with the server, so it was not saved.' };
-        const r = await api('reward', { token, matchId, kills, placement, players, won, ranked: !!ranked });
+        const body = { token, kills, placement, players, won, ranked: !!ranked };
+        if (matchId) body.matchId = matchId;
+        const r = await api('reward', body);
         setProfile(r.profile);
         return { earned: r.earned || 0, saved: true, rateLimited: !!r.rateLimited, ranked: r.ranked === true, rankedReason: r.rankedReason || null };
       } catch (err) {
