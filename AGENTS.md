@@ -767,6 +767,7 @@ At handoff, confirm AGENTS.md was checked and identify any nested instructions. 
 - Map downloads are optional maintenance, not startup. Respect cache behavior, request pacing, and request caps in `scripts/fetch-map-data.mjs`; never parallelize its OSM requests or regenerate data merely to edit docs.
 - `agents/SUMMARY.md` and reports are historical handoffs. Inspect current source before repeating their capability claims, especially multiplayer status.
 - Keep runtime work focused. Do not migrate to React, add a database, introduce authentication, or deploy merely to satisfy conditional template sections.
+- Owner-approved exception (2026-11-18), gas stations only: the three parody fuel brands "Clam Oil", "Floor Mart" and "Circle O" may use colour schemes evoking real fuel chains (red/yellow, blue/yellow, red/orange) and logos in a similar spirit. Logos must still be original drawings (no copies or traces of real emblems), and the real brand names must never appear in code, art or copy. The owner accepted the trademark / trade-dress risk on a public site; this does not extend to any other brand or asset.
 
 ### Existing owner workflow requirements
 
