@@ -289,6 +289,37 @@ function emblemTex() {
   return tex(256, 256, (ctx) => drawEmblem(ctx), 41);
 }
 
+/** The US flag (public-domain design): 13 stripes, a blue canton with 50 stars. Tile = the whole flag. */
+function usFlagTex() {
+  return tex(760, 400, (ctx, w, h) => {
+    const sh = h / 13;
+    for (let i = 0; i < 13; i++) {
+      ctx.fillStyle = i % 2 ? '#ffffff' : '#b22234';
+      ctx.fillRect(0, i * sh, w, sh + 1);
+    }
+    const cw = w * 0.4;
+    const ch = sh * 7;
+    ctx.fillStyle = '#3c3b6e';
+    ctx.fillRect(0, 0, cw, ch);
+    ctx.fillStyle = '#ffffff';
+    const star = (x, y, r) => {
+      ctx.beginPath();
+      for (let k = 0; k < 10; k++) {
+        const a = -Math.PI / 2 + (k * Math.PI) / 5;
+        const rr = k % 2 ? r * 0.4 : r;
+        ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+      }
+      ctx.closePath();
+      ctx.fill();
+    };
+    // 9 rows alternating 6 and 5 stars
+    for (let row = 0; row < 9; row++) {
+      const n = row % 2 ? 5 : 6;
+      for (let k = 0; k < n; k++) star((cw / 12) * (2 * k + 1 + (row % 2)), (ch / 10) * (row + 1), ch / 24);
+    }
+  }, 44);
+}
+
 /** Entrance sign band: gold field, black text (school name + MAIN ENTRANCE) [ENT]. Tile = whole sign. */
 function signTex() {
   return tex(1024, 128, (ctx, w, h) => {
@@ -374,6 +405,7 @@ const LOOKS = {
   woodFloor: { map: () => woodBandTex(0xb3814f, 43), tile: [2.4, 1.2], shininess: 35 },
   emblem: { map: () => emblemTex(), tile: 'box', transparent: true, alphaTest: 0.4 },
   signMain: { map: () => signTex(), tile: 'box' },
+  usFlag: { map: () => usFlagTex(), tile: 'box' },
 };
 
 const cache = new Map();

@@ -25,7 +25,8 @@ The biggest POI revamp yet. Bentonville High School is rebuilt from the ground u
 - **New mechanic, vault:** jump at a thin obstacle (fence, railing, low wall) to vault over it (`Player._findVault`). This works everywhere on the map; solid walls and closed windows can't be vaulted.
 - **Loot drops:** a chest on a destroyed floor or ledge now falls to the surface below (`Loot.dropFrom`, called from `Combat._destroyCollider`, so it's the same on every client).
 - **"Now entering Bentonville High School"** banner, with the tiger emblem stamping onto it.
-- **Tiger Stadium:** the visitor stand was removed to open the North Building's entrance plaza.
+- **Tiger Stadium:** the visitor stand was removed to open the North Building's entrance plaza. The scoreboard is now a lit display: TIGERS 28 / GUEST 14, clock, quarter, down and distance.
+- **Flag:** a large American flag on a 14 m pole on the North Building's entrance plaza.
 - **Fixed:** the chest prompt read "Open Open Chest".
 - **Notes:**
   - The tiger emblem is an original drawing, not the school's logo artwork. Reference photos never enter the repo (`scripts/hooks/pre-commit`).

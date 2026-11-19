@@ -27,6 +27,7 @@ export const PATCH_NOTES = [
           'The cafeteria is a three-storey atrium with wood walls, round tables, banners and a glass-railed walkway you can fight across from above.',
           'Classrooms on all three floors, with glass windows into the hallway and out onto the green courtyard in the middle.',
           'Four big corner stairwells take you from floor 1 to 3, plus a two-storey media center and a lecture hall.',
+          'A huge American flag flies over the entrance plaza on a 14 m pole.',
         ],
       },
       {
@@ -60,7 +61,7 @@ export const PATCH_NOTES = [
         items: [
           'Every wall, window, floor, stair, bleacher and roof at the school can be destroyed. Land on the roof, blast a hole, drop straight into class.',
           'New: vault! Jump at a fence or railing to vault over it. Works on fences and rails anywhere on the map.',
-          'Tiger Stadium got a clean-up: the visitor stand is gone so the school\'s main entrance plaza is wide open.',
+          'Tiger Stadium got a clean-up: the visitor stand is gone so the school\'s main entrance plaza is wide open, and the scoreboard is lit up: TIGERS 28, GUEST 14, fourth quarter.',
         ],
       },
       {

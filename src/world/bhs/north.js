@@ -323,6 +323,19 @@ function entranceHero(K) {
       K.decor({ cx: x, cz: 264.2 + (((x * 3.1) % 1) - 0.5) * 0.6, hx: r, hz: r, yaw: 0, y0: 0.05, y1: 0.05 + r * 1.5 }, '#3f5a2f', { shape: 'cyl' });
     }
   }
+  // a large flag on the entrance plaza [user]: a 14 m pole on a concrete base, a 5.5 x 2.9 m US flag.
+  // Seen from the plaza (west) the pole is on the left and the canton top-left; it breaks like the rest.
+  {
+    const px = -48.4;
+    const pz = 229.5;
+    K.box({ cx: px, cz: pz, hx: 0.9, hz: 0.9, yaw: 0, y0: 0, y1: 0.45 }, { mat: 'block', look: 'cmuLight', faces: { top: 'paving' } });
+    const pole = K.box({ cx: px, cz: pz, hx: 0.09, hz: 0.09, yaw: 0, y0: 0.45, y1: 14 }, { mat: 'metal', look: 'none', faces: { pu: 'none', nu: 'none', pv: 'none', nv: 'none', top: 'none', bottom: 'none' }, role: 'pole' });
+    K.decor({ cx: px, cz: pz, hx: 0.1, hz: 0.1, yaw: 0, y0: 0.45, y1: 14 }, 'alu', { shape: 'cyl', dep: pole });
+    K.decor({ cx: px, cz: pz, hx: 0.17, hz: 0.17, yaw: 0, y0: 14, y1: 14.3 }, '#d4af37', { shape: 'cyl', dep: pole });
+    const fw = 5.5;
+    const fh = 2.9;
+    K.decor({ cx: px, cz: pz + 0.12 + fw / 2, hx: 0.015, hz: fw / 2, yaw: 0, y0: 13.7 - fh, y1: 13.7 }, 'usFlag', { faces: { pu: 'usFlag', nu: 'usFlag', pv: 'none', nv: 'none', top: 'none', bottom: 'none' }, dep: pole });
+  }
   // entry plaza paving, planters, bollards, trash receptacle
   K.decor({ cx: -44.5, cz: 247, hx: 5.8, hz: 13, yaw: 0, y0: 0, y1: 0.02 }, 'paving', { faces: { top: 'paving', pu: 'none', nu: 'none', pv: 'none', nv: 'none', bottom: 'none' } });
   for (const z of [236, 258]) K.box({ cx: -44, cz: z, hx: 1.2, hz: 3.2, yaw: 0, y0: 0, y1: 0.55 }, { mat: 'block', look: 'cmuLight', faces: { top: 'mulch' } });

@@ -266,6 +266,11 @@ function makeMaterials() {
     board: lam({ color: 0x1b1c1e }),
     boardFace: lam({ color: 0x0d0e10, ...flat }),
     boardTrim: lam({ color: 0x5b5f63 }),
+    // the lit display (user: text and a score instead of a blank board): self-lit so it reads at night
+    boardDisplay: (() => {
+      const t = scoreboardTexture();
+      return new THREE.MeshLambertMaterial({ map: t, emissive: 0xffffff, emissiveMap: t, emissiveIntensity: 0.85, ...flat });
+    })(),
     rail: lam({ color: 0xc4c9cd }),
     post: lam({ color: 0x9aa1a6 }),
     lamp: new THREE.MeshBasicMaterial({ color: 0xf4f1e0 }),
@@ -561,17 +566,110 @@ export function buildStadiumMeshes({ root, world, parts }) {
   };
 }
 
-/** Blank scoreboard face: a dark inset panel and plain unlit panels (no digits, words or logos). */
+/** Scoreboard face: a dark backing and the lit display (scoreboardTexture), mapped once across it. */
 function addScoreboardFace(buf, key, p) {
   const z = p.cz + p.hz;
   const x0 = p.cx - p.hx, x1 = p.cx + p.hx;
-  const face = (xa, xb, ya, yb, dz, look) =>
-    buf(look).keyed(key, (b) => b.quad([xa, ya, z + dz], [xb, ya, z + dz], [xb, yb, z + dz], [xa, yb, z + dz], [0, 0, 1], [xa, ya], [xb, ya], [xb, yb], [xa, yb]));
-  face(x0 + 0.25, x1 - 0.25, p.y0 + 0.25, p.y1 - 0.25, 0.01, 'boardFace');
-  // trim and blank panel blocks: a wide top panel, two side blocks and a centre clock block
-  face(x0 + 0.6, x1 - 0.6, p.y1 - 1.25, p.y1 - 0.55, 0.02, 'boardTrim');
-  for (const [a, b2] of [[x0 + 0.6, x0 + 3.0], [x1 - 3.0, x1 - 0.6]]) face(a, b2, p.y0 + 0.55, p.y0 + 2.2, 0.02, 'boardTrim');
-  face(p.cx - 1.4, p.cx + 1.4, p.y0 + 0.9, p.y0 + 2.2, 0.02, 'boardTrim');
+  buf('boardFace').keyed(key, (b) => b.quad([x0 + 0.12, p.y0 + 0.12, z + 0.01], [x1 - 0.12, p.y0 + 0.12, z + 0.01], [x1 - 0.12, p.y1 - 0.12, z + 0.01], [x0 + 0.12, p.y1 - 0.12, z + 0.01], [0, 0, 1], [0, 0], [1, 0], [1, 1], [0, 1]));
+  const xa = x0 + 0.3, xb = x1 - 0.3, ya = p.y0 + 0.3, yb = p.y1 - 0.3;
+  buf('boardDisplay').keyed(key, (b) => b.quad([xa, ya, z + 0.025], [xb, ya, z + 0.025], [xb, yb, z + 0.025], [xa, yb, z + 0.025], [0, 0, 1], [0, 0], [1, 0], [1, 1], [0, 1]));
+}
+
+/**
+ * The scoreboard display: BENTONVILLE TIGERS across the top, TIGERS vs GUEST scores in red LED
+ * digits, the game clock and quarter in amber, down / to go / ball on along the bottom.
+ * Proportions match the 9.2 x 3.4 m display (canvas 1024 x 378).
+ */
+function scoreboardTexture() {
+  const W = 1024;
+  const H = 378;
+  const cv = document.createElement('canvas');
+  cv.width = W;
+  cv.height = H;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#050506';
+  ctx.fillRect(0, 0, W, H);
+  // LED dot grid
+  ctx.fillStyle = 'rgba(255,255,255,0.035)';
+  for (let y = 2; y < H; y += 6) for (let x = 2; x < W; x += 6) ctx.fillRect(x, y, 2, 2);
+  // gold frame and header band
+  ctx.strokeStyle = '#c9a54a';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(5, 5, W - 10, H - 10);
+  ctx.fillStyle = '#1a1407';
+  ctx.fillRect(10, 10, W - 20, 64);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const glow = (colour, blur) => {
+    ctx.shadowColor = colour;
+    ctx.shadowBlur = blur;
+  };
+  glow('#ffcf5a', 12);
+  ctx.fillStyle = '#f2c94c';
+  ctx.font = '900 46px Arial, Helvetica, sans-serif';
+  ctx.fillText('BENTONVILLE  TIGERS', W / 2, 44);
+  // team names
+  glow('#ffffff', 6);
+  ctx.fillStyle = '#f4efe2';
+  ctx.font = '800 40px Arial, Helvetica, sans-serif';
+  ctx.fillText('TIGERS', 190, 112);
+  ctx.fillText('GUEST', W - 190, 112);
+  // scores (red LED)
+  glow('#ff2a1f', 22);
+  ctx.fillStyle = '#ff3b2f';
+  ctx.font = '900 132px "Courier New", Courier, monospace';
+  ctx.fillText('28', 190, 210);
+  ctx.fillText('14', W - 190, 210);
+  // clock + quarter (amber)
+  glow('#ffb020', 18);
+  ctx.fillStyle = '#ffb627';
+  ctx.font = '900 96px "Courier New", Courier, monospace';
+  ctx.fillText('2:00', W / 2, 160);
+  glow('#ffffff', 4);
+  ctx.fillStyle = '#f4efe2';
+  ctx.font = '800 28px Arial, Helvetica, sans-serif';
+  ctx.fillText('QTR', W / 2 - 52, 238);
+  glow('#ff2a1f', 14);
+  ctx.fillStyle = '#ff3b2f';
+  ctx.font = '900 52px "Courier New", Courier, monospace';
+  ctx.fillText('4', W / 2 + 36, 238);
+  // possession arrow toward TIGERS, timeouts left
+  glow('#ffb020', 10);
+  ctx.fillStyle = '#ffb627';
+  ctx.beginPath();
+  ctx.moveTo(330, 210);
+  ctx.lineTo(356, 192);
+  ctx.lineTo(356, 228);
+  ctx.closePath();
+  ctx.fill();
+  for (let i = 0; i < 3; i++) {
+    ctx.fillStyle = i < 2 ? '#ffb627' : '#3a2a0a';
+    ctx.fillRect(140 + i * 34, 268, 22, 10);
+    ctx.fillStyle = i < 1 ? '#ffb627' : '#3a2a0a';
+    ctx.fillRect(W - 208 + i * 34, 268, 22, 10);
+  }
+  // bottom row: DOWN / TO GO / BALL ON
+  ctx.fillStyle = '#14100a';
+  ctx.shadowBlur = 0;
+  ctx.fillRect(10, 296, W - 20, 72);
+  const cell = (label, value, x) => {
+    glow('#ffffff', 4);
+    ctx.fillStyle = '#f4efe2';
+    ctx.font = '800 26px Arial, Helvetica, sans-serif';
+    ctx.fillText(label, x - 52, 332);
+    glow('#ff2a1f', 12);
+    ctx.fillStyle = '#ff3b2f';
+    ctx.font = '900 50px "Courier New", Courier, monospace';
+    ctx.fillText(value, x + 52, 332);
+  };
+  cell('DOWN', '3', 190);
+  cell('TO GO', '7', W / 2);
+  cell('BALL ON', '35', W - 210);
+  ctx.shadowBlur = 0;
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
 }
 
 /** Light tower lamp rack: two horizontal beams and end uprights, centred on the pole top. */

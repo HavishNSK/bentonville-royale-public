@@ -430,7 +430,7 @@ export function buildStadium(world, { site, owner = 'bhs' } = {}) {
     dbeam(p, 'steel', [t.x, 0.9, t.z], [t.x, t.h - 2.6, t.z], 0.04); // ladder cage (thin line)
   }
 
-  // ---------------------------------------------------------------- scoreboard (blank)
+  // ---------------------------------------------------------------- scoreboard (lit display: stadiumMeshes.js)
   const SB = plan.scoreboard;
   const legs = [-SB.legDx, SB.legDx].map((dx) =>
     add({ role: 'leg', look: 'steel', mat: 'metal', hp: STADIUM_HP.leg, ...ext(SB.cx + dx - 0.2, SB.cx + dx + 0.2, SB.cz - 0.2, SB.cz + 0.2, 0, SB.legY) }),
