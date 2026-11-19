@@ -4,9 +4,10 @@ import * as G from '../src/game/GameModes.js';
 
 test('constants are frozen', () => {
   assert.deepEqual(G.GAMES, ['br', 'boxfights']);
-  assert.deepEqual(G.BOX_MODES, ['solo', 'duo', 'trio', 'squad']);
+  assert.deepEqual(G.BOX_MODES, ['solo', 'duo', 'trio', 'ffa']);
   assert.deepEqual(G.BR_MODES, ['solo', 'duo', 'trio', 'squad']);
-  assert.equal(G.BOXFIGHT_WINS, 3);
+  assert.equal(G.BOXFIGHT_WINS, 5);
+  assert.equal(G.BOX_MAX_PLAYERS, 6);
   assert.ok(Object.isFrozen(G.GAMES) && Object.isFrozen(G.BOX_MODES) && Object.isFrozen(G.BR_MODES));
 });
 
@@ -21,13 +22,14 @@ test('normalizeGame / validGame', () => {
 });
 
 test('modeSize', () => {
-  assert.deepEqual(['solo', 'duo', 'trio', 'squad'].map(G.modeSize), [1, 2, 3, 4]);
+  assert.deepEqual(['solo', 'duo', 'trio', 'squad', 'ffa'].map(G.modeSize), [1, 2, 3, 4, 1]);
   for (const bad of ['__proto__', 'constructor', 'toString', '', undefined, 3, {}]) assert.equal(G.modeSize(bad), 0);
 });
 
 test('validGameMode matrix', () => {
   for (const m of ['solo', 'duo', 'trio', 'squad']) assert.equal(G.validGameMode('br', m), true);
-  for (const m of ['solo', 'duo', 'trio', 'squad']) assert.equal(G.validGameMode('boxfights', m), true);
+  for (const m of ['solo', 'duo', 'trio', 'ffa']) assert.equal(G.validGameMode('boxfights', m), true);
+  assert.equal(G.validGameMode('boxfights', 'squad'), false, 'no 4v4');
   assert.equal(G.validGameMode('boxfights', 'platoon'), false);
   assert.equal(G.validGameMode('br', '__proto__'), false);
   assert.equal(G.validGameMode('nope', 'solo'), false);
@@ -40,7 +42,8 @@ test('partyCap / boxFightSlots', () => {
   assert.equal(G.boxFightSlots('solo'), 2);
   assert.equal(G.boxFightSlots('duo'), 4);
   assert.equal(G.boxFightSlots('trio'), 6);
-  assert.equal(G.boxFightSlots('squad'), 8);
+  assert.equal(G.boxFightSlots('squad'), 0);
+  assert.equal(G.boxFightSlots('ffa'), 6);
   assert.equal(G.boxFightSlots('bogus'), 0);
 });
 
@@ -49,11 +52,11 @@ test('fitMode', () => {
   assert.equal(G.fitMode('br', 'solo', 3), 'trio');
   assert.equal(G.fitMode('br', 'squad', 1), 'squad');
   assert.equal(G.fitMode('boxfights', 'duo', 1), 'duo');
-  assert.equal(G.fitMode('boxfights', 'squad', 3), 'squad');
-  assert.equal(G.fitMode('boxfights', 'squad', 2), 'squad');
+  assert.equal(G.fitMode('boxfights', 'squad', 3), 'trio');
+  assert.equal(G.fitMode('boxfights', 'squad', 2), 'duo');
   assert.equal(G.fitMode('boxfights', 'solo', 3), 'trio');
-  assert.equal(G.fitMode('boxfights', 'trio', 4), 'squad');
-  assert.equal(G.fitMode('boxfights', 'trio', 5), null);
+  assert.equal(G.fitMode('boxfights', 'trio', 4), 'ffa');
+  assert.equal(G.fitMode('boxfights', 'trio', 7), null);
   assert.equal(G.fitMode('br', 'solo', 5), null);
 });
 
@@ -61,17 +64,19 @@ test('queueName / parseQueue', () => {
   assert.equal(G.queueName('br', 'duo'), 'duo');
   assert.equal(G.queueName('br', 'squad'), 'squad');
   assert.equal(G.queueName('boxfights', 'trio'), 'bf-trio');
-  assert.equal(G.queueName('boxfights', 'squad'), 'bf-squad');
+  assert.equal(G.queueName('boxfights', 'squad'), null);
+  assert.equal(G.queueName('boxfights', 'ffa'), 'bf-ffa');
   assert.equal(G.queueName('br', '__proto__'), null);
   for (const game of G.GAMES) {
-    for (const mode of G.BR_MODES) {
+    for (const mode of [...G.BR_MODES, 'ffa']) {
       const q = G.queueName(game, mode);
       if (q === null) continue;
       assert.deepEqual(G.parseQueue(q), { game, mode });
     }
   }
   assert.deepEqual(G.parseQueue('solo'), { game: 'br', mode: 'solo' });
-  assert.deepEqual(G.parseQueue('bf-squad'), { game: 'boxfights', mode: 'squad' });
+  assert.equal(G.parseQueue('bf-squad'), null);
+  assert.deepEqual(G.parseQueue('bf-ffa'), { game: 'boxfights', mode: 'ffa' });
   assert.deepEqual(G.parseQueue('bf-solo'), { game: 'boxfights', mode: 'solo' });
   for (const bad of ['bf-platoon', '__proto__', 'bf-', '', 'squad-bf', 'bf-__proto__', 'BF-solo', 'bf-solo ', null, undefined, 5, {}, ['solo']]) {
     assert.equal(G.parseQueue(bad), null, String(bad));

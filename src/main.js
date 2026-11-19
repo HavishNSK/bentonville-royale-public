@@ -8,7 +8,7 @@ import { createGoogleTilesController, hasGoogleTilesKey } from './render/GoogleT
 import { inject as injectAnalytics } from '@vercel/analytics';
 import { teamSize, normalizeMode } from './game/Teams.js';
 import { normalizeGame, validGameMode, lobbyStartCheck } from './game/GameModes.js';
-import { boxSizeForMode, normalizeBoxSize } from './game/BoxFights.js';
+import { boxMatchConfig } from './game/BoxFights.js';
 import { createAccount } from './net/Account.js';
 import { createMeta } from './ui/meta.js';
 import { RANKED_NOTE } from './core/config.js';
@@ -133,7 +133,7 @@ const menus = createMenus(uiRoot, {
     if (menus.current === 'result') await ads.interstitial('match-end'); // a natural break, on the player's click
     // a Box Fight replays the same size; everything else replays the last local match
     const bf = game && game.result && game.result.boxFight;
-    if (bf) playBoxFight(bf.size);
+    if (bf) playBoxFight({ mode: bf.mode, ffaPlayers: bf.ffaPlayers, winRounds: bf.winRounds });
     else playLocal(lastLocal.mode, lastLocal.fill); // the match just played was a battle royale
   }),
   onAdReward: () => watchAdForCoins('match-coins').then(() => setTimeout(refreshAdButton, 2500)),
@@ -152,7 +152,7 @@ const menus = createMenus(uiRoot, {
   onLobbyFill: (on) => mp && mp.room && mp.room.setFill(on),
   onLobbyMode: (mode) => {
     if (!mp || !mp.room) return;
-    mp.room.setMode(normalizeMode(mode));
+    mp.room.setMode(gameMode(mp.room.game, mode));
   },
   onLobbyGame: (g) => mp && mp.room && mp.room.setGame(normalizeGame(g)),
   onLobbyReady: (on) => mp && mp.conn && mp.conn.setReady(on),
@@ -318,13 +318,18 @@ async function hostMultiplayer(name) {
   }
 }
 
+/** A mode id for `game`: Box Fights keeps 'ffa'; everything else is a team size (Teams.normalizeMode). */
+function gameMode(game, mode) {
+  return normalizeGame(game) === 'boxfights' && mode === 'ffa' ? 'ffa' : normalizeMode(mode);
+}
+
 /** Private-match START (host): only when every guest is ready. */
 function startHostedMatch() {
   const me = mp;
   if (!me || me.role !== 'host' || !me.room || me.room.closed || me.room.started) return;
   if (!me.room.allReady()) return;
-  const mode = normalizeMode(me.room.mode);
   const kind = normalizeGame(me.room.game);
+  const mode = gameMode(kind, me.room.mode);
   // checked again here: the lobby screen may be a beat behind the room
   if (!lobbyStartCheck({ game: kind, mode, fill: me.room.fill, humans: me.room.players.length }).ok) return;
   return runHostedMatch(me, { fill: me.room.fill, mode, game: kind, humanTeams: joinOrderTeams(me.room.players, mode) });
@@ -715,8 +720,8 @@ async function hostMatch(plan, name, token) {
     const room = await hostRoom({ name, code: plan.code });
     if (mp !== me) return room.close();
     me.room = room;
-    room.mode = normalizeMode(plan.mode);
     room.game = normalizeGame(plan.game);
+    room.mode = gameMode(room.game, plan.mode);
     if (!validGameMode(room.game, room.mode)) throw new Error('This match type is not available.');
     preloadInLobby();
     room.onError = (text) => mp === me && console.warn('[net]', text);
@@ -765,14 +770,18 @@ async function hostMatch(plan, name, token) {
   }
 }
 
-/** Box Fights vs bots: size 1..4 (1v1 .. 4v4), first to 3 rounds in the indoor arena. */
-async function playBoxFight(size) {
-  const n = normalizeBoxSize(size);
+/**
+ * Box Fights vs bots in the indoor arena. opts: { mode: 'solo'|'duo'|'trio' (1v1..3v3, first to
+ * winRounds, default 5) | 'ffa' (ffaPlayers 2..6, default 6), winRounds?, botDifficulty? } — validated
+ * by boxMatchConfig (bot difficulty defaults to the local setting).
+ */
+async function playBoxFight(opts = {}) {
+  const cfg = boxMatchConfig(opts);
   try {
     unreadyForSolo();
     closeMultiplayer();
     await ensureLoaded();
-    game.startMatch(undefined, { boxFight: { size: n } });
+    game.startMatch(undefined, { boxFight: { mode: cfg.mode, ffaPlayers: cfg.sides, winRounds: cfg.winRounds, botDifficulty: cfg.botDifficulty } });
   } catch (err) {
     console.error(err);
     showError('Could not start the box fight: ' + (err && err.message ? err.message : err));
@@ -782,10 +791,7 @@ async function playBoxFight(size) {
 
 /** Local match with bots (offline, Free Build aside, and PLAY AGAIN after one). */
 async function playLocal(mode = 'solo', fill = true, kind = 'br') {
-  if (normalizeGame(kind) === 'boxfights') {
-    const size = boxSizeForMode(normalizeMode(mode));
-    if (size) return playBoxFight(size);
-  }
+  if (normalizeGame(kind) === 'boxfights') return playBoxFight({ mode }); // 'squad' (no 4v4) falls back to 1v1
   lastLocal.mode = normalizeMode(mode);
   lastLocal.fill = fill;
   try {
@@ -863,11 +869,15 @@ try {
         if (meta) meta.matchReward(0, 'Sign in to earn a Box Fights Elo.');
         return;
       }
+      if (bf.ffa) {
+        if (meta) meta.matchReward(0, 'Box Fights FFA is not rated.');
+        return;
+      }
       if (!bf.rated) {
         if (meta) meta.matchReward(0, 'No round was fought, so this Box Fight is not rated.');
         return;
       }
-      const out = await account.boxResult({ won: !!bf.won, size: bf.size, oppElo: bf.oppElo, score: bf.score, forfeit: !!bf.forfeit });
+      const out = await account.boxResult({ won: !!bf.won, size: bf.size, oppElo: bf.oppElo, score: bf.score, forfeit: !!bf.forfeit, wins: bf.winRounds });
       if (!meta) return;
       if (out.guest) meta.matchReward(0, 'Sign in to earn a Box Fights Elo.');
       else if (out.ok) {

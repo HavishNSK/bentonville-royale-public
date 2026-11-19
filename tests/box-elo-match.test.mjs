@@ -35,10 +35,23 @@ test('sanitizeBoxStart: botElo is clamped, defaults to normal', () => {
 });
 
 test('sanitizeBoxStart: existing fields keep their clamps', () => {
-  const s = sanitizeBoxStart({ bf: { size: 2, wins: 9, teams: [3, 'x'] } });
+  const s = sanitizeBoxStart({ bf: { size: 2, wins: 12, teams: [3, 'x'] } });
   assert.equal(s.size, 2);
-  assert.equal(s.wins, 3);
+  assert.equal(s.mode, 'duo');
+  assert.equal(s.ffa, false);
+  assert.equal(s.wins, 5, 'out of range -> default');
   assert.deepEqual(s.teams, [3, -2]);
+  assert.equal(sanitizeBoxStart({ bf: { size: 1, wins: 9 } }).wins, 9);
+  assert.equal(sanitizeBoxStart({ bf: { size: 4 } }).size, 1, 'no 4v4');
+});
+
+test('sanitizeBoxStart: FFA has one team id per side (2..6)', () => {
+  const s = sanitizeBoxStart({ bf: { mode: 'ffa', size: 3, teams: [0, 5, 'x', 9] } });
+  assert.deepEqual([s.mode, s.ffa, s.size, s.players], ['ffa', true, 1, 4]);
+  assert.deepEqual(s.teams, [0, 5, -3, 9]);
+  assert.equal(sanitizeBoxStart({ bf: { mode: 'ffa', teams: Array(40).fill(1) } }).players, 6);
+  assert.equal(sanitizeBoxStart({ bf: { mode: 'ffa', teams: [1] } }).players, 6, 'too few -> default count');
+  assert.equal(sanitizeBoxStart({ bf: { mode: '__proto__' } }).ffa, false);
 });
 
 test('boxOpponentElo: bots rate the bot Elo, humans their reported value', () => {

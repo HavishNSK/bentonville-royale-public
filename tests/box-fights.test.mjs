@@ -14,11 +14,14 @@ const deepFreeze = (o) => { if (o && typeof o === 'object' && !Object.isFrozen(o
 const near = (a, b) => Math.abs(a - b) < 1e-9;
 
 test('BOX_FIGHT config is frozen and matches the plan', () => {
-  assert.equal(BOX_FIGHT.winRounds, 3);
+  assert.equal(BOX_FIGHT.winRounds, 5);
+  assert.equal(BOX_FIGHT.minWinRounds, 1);
+  assert.equal(BOX_FIGHT.maxWinRounds, 9);
+  assert.deepEqual({ ...BOX_FIGHT.ffa }, { rounds: 10, elimTarget: 15, minPlayers: 2, maxPlayers: 6, players: 6 });
   assert.equal(BOX_FIGHT.firstWarmup, 5);
   assert.equal(BOX_FIGHT.warmup, 5);
   assert.deepEqual({ ...BOX_FIGHT.origin }, { x: -240, z: 160 });
-  assert.deepEqual({ ...BOX_FIGHT.cells }, { 1: 6, 2: 8, 3: 10, 4: 10 });
+  assert.deepEqual({ ...BOX_FIGHT.cells }, { 1: 6, 2: 8, 3: 10, ffa: 10 });
   assert.equal(BOX_FIGHT.floorY, 300);
   assert.equal(BOX_FIGHT.levels, 2);
   assert.ok(Object.isFrozen(BOX_FIGHT) && Object.isFrozen(BOX_FIGHT.origin) && Object.isFrozen(BOX_FIGHT.cells));
@@ -47,16 +50,17 @@ test('normalizeBoxSize and mode mapping', () => {
   assert.equal(normalizeBoxSize(1), 1);
   assert.equal(normalizeBoxSize(2), 2);
   assert.equal(normalizeBoxSize(3), 3);
-  assert.equal(normalizeBoxSize(4), 4);
   assert.equal(normalizeBoxSize('2'), 2);
-  assert.equal(normalizeBoxSize('4'), 4);
-  for (const bad of [0, 5, NaN, -1, 1.5, null, undefined, {}, [], 'abc', '', '5', Infinity]) assert.equal(normalizeBoxSize(bad), 1, String(bad));
-  assert.deepEqual([1, 2, 3, 4].map(boxMode), ['solo', 'duo', 'trio', 'squad']);
+  // no 4v4 any more (max 6 players in a Box Fight)
+  for (const bad of [0, 4, '4', 5, NaN, -1, 1.5, null, undefined, {}, [], 'abc', '', '5', Infinity]) assert.equal(normalizeBoxSize(bad), 1, String(bad));
+  assert.deepEqual([1, 2, 3].map(boxMode), ['solo', 'duo', 'trio']);
+  assert.equal(boxMode(4), 'solo');
   assert.equal(boxMode(9), 'solo');
   assert.equal(boxSizeForMode('solo'), 1);
   assert.equal(boxSizeForMode('duo'), 2);
   assert.equal(boxSizeForMode('trio'), 3);
-  assert.equal(boxSizeForMode('squad'), 4);
+  assert.equal(boxSizeForMode('squad'), null);
+  assert.equal(boxSizeForMode('ffa'), null);
   assert.equal(boxSizeForMode('nope'), null);
   assert.equal(boxSizeForMode(undefined), null);
 });
@@ -64,7 +68,7 @@ test('normalizeBoxSize and mode mapping', () => {
 const inWall = (L, x, z, y) => L.colliders.some((c) => x >= c.minX && x <= c.maxX && z >= c.minZ && z <= c.maxZ && y >= c.y0 && y <= c.y1);
 const cover = (c, x, z) => x >= c.cx - c.hx && x <= c.cx + c.hx && z >= c.cz - c.hz && z <= c.cz + c.hz;
 
-for (const size of [1, 2, 3, 4]) {
+for (const size of [1, 2, 3, 'ffa']) {
   test(`arenaLayout(${size}): grid, height, walls, floor and ceiling`, () => {
     const L0 = arenaLayout(size);
     const L = { ...L0, colliders: L0.colliders.map((d) => makeBox({ ...d, id: 0 })) };
@@ -123,7 +127,7 @@ for (const size of [1, 2, 3, 4]) {
     assert.equal(hitsSite, false);
   });
 
-  test(`spawnLayout(${size})`, () => {
+  if (size !== 'ffa') test(`spawnLayout(${size})`, () => {
     const L = arenaLayout(size);
     const N = L.cells;
     const sp = spawnLayout(L, size);
@@ -182,7 +186,7 @@ test('spawnBoxPieces: four walls on the cell edges and a cone roof', () => {
 });
 
 test('createBoxFightState defaults', () => {
-  assert.deepEqual(createBoxFightState(), { phase: 'warmup', t: 5, round: 1, score: [0, 0], winner: null, winRounds: 3 });
+  assert.deepEqual(createBoxFightState(), { phase: 'warmup', t: 5, round: 1, score: [0, 0], elims: [0, 0], winner: null, winRounds: 5, ffa: false });
   assert.equal(createBoxFightState({ winRounds: 2 }).winRounds, 2);
 });
 
@@ -233,13 +237,13 @@ test('fight: both sides dead is a draw (score unchanged, round still advances)',
 });
 
 test('first to winRounds ends the match; matchOver fires exactly once', () => {
-  let r = stepBoxFight(deepFreeze(fight({ score: [2, 1], round: 4 })), 0.1, [1, 0]);
+  let r = stepBoxFight(deepFreeze(fight({ score: [2, 1], round: 4, winRounds: 3 })), 0.1, [1, 0]);
   assert.equal(r.state.phase, 'matchEnd');
   assert.equal(r.state.winner, 0);
   assert.deepEqual(r.state.score, [3, 1]);
   assert.equal(r.state.t, BOX_FIGHT.matchEndDelay);
   assert.deepEqual(r.events.map((e) => e.type), ['roundEnd', 'matchEnd']);
-  assert.deepEqual(r.events[1], { type: 'matchEnd', winnerSide: 0, score: [3, 1] });
+  assert.deepEqual(r.events[1], { type: 'matchEnd', winnerSide: 0, score: [3, 1], elims: [0, 0] });
   const types = [];
   for (let i = 0; i < 10; i++) { r = stepBoxFight(r.state, 1, [1, 0]); types.push(...r.events.map((e) => e.type)); }
   assert.deepEqual(types, ['matchOver']);
@@ -265,7 +269,7 @@ test('roundBanner and boxResultCopy', () => {
   assert.equal(roundBanner(s, 7), 'ROUND 2 · 1–0');
   assert.deepEqual(boxResultCopy({ victory: true, size: 2, score: [3, 1] }), { title: 'BOX FIGHT WON', sub: 'You won 3–1 in 2V2 Box Fights.', tile: '3–1' });
   assert.deepEqual(boxResultCopy({ victory: false, size: 3, score: [1, 3] }), { title: 'BOX FIGHT LOST', sub: 'You lost 1–3 in 3V3 Box Fights.', tile: '1–3' });
-  assert.match(boxResultCopy({ victory: true, size: 4, score: [3, 0] }).sub, /4V4/);
+  assert.match(boxResultCopy({ victory: true, size: 4, score: [3, 0] }).sub, /1V1/, 'no 4v4');
   assert.match(boxResultCopy({ victory: true, size: 9, score: [3, 0] }).sub, /1V1/);
 });
 
@@ -344,7 +348,7 @@ test('pickBoxLoadout is deterministic, covers all ids and survives bad rng', () 
 });
 
 test('arenaLayout divider: full-width, floor-to-ceiling wall across the middle, between the spawn rows', () => {
-  for (const size of [1, 2, 3, 4]) {
+  for (const size of [1, 2, 3]) {
     const L = arenaLayout(size);
     const d = makeBox(L.divider);
     const mid = L.rect.minZ + L.cells * 2;

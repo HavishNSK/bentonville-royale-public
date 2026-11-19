@@ -1399,6 +1399,9 @@ export class Structures {
     this.slots.set(key, piece);
     this.pieces.push(piece);
     this._addInstance(piece);
+    // match stats (Box Fights results): pieces each actor built. Host / solo are authoritative;
+    // a client's own count is not used (the host's end message carries everyone's).
+    if (owner && typeof owner === 'object') owner.buildsPlaced = (owner.buildsPlaced | 0) + 1;
 
     const c = this._center(piece, _p);
     if (!quiet) {

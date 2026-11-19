@@ -2833,6 +2833,49 @@
 .is-them .br-rounds-pips em.is-won {
   background: var(--br-coral);
 }
+/* Box Fights FFA: a compact leaderboard (place, name, elims) instead of the us / them pips */
+.br-rounds-board {
+  display: none;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: 'Nunito', sans-serif;
+  font-weight: 800;
+  font-size: calc(var(--u) * 12);
+  line-height: 1.25;
+}
+.br-rounds.is-ffa .br-rounds-side {
+  display: none;
+}
+.br-rounds.is-ffa .br-rounds-board {
+  display: grid;
+  gap: calc(var(--u) * 1);
+}
+.br-rounds-board li {
+  display: grid;
+  grid-template-columns: calc(var(--u) * 14) minmax(0, calc(var(--u) * 110)) auto;
+  align-items: center;
+  gap: calc(var(--u) * 6);
+  color: var(--br-cream);
+}
+.br-rounds-board li i {
+  font-style: normal;
+  opacity: 0.75;
+}
+.br-rounds-board li span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.br-rounds-board li b {
+  font-family: 'Lilita One', sans-serif;
+  font-weight: 400;
+  font-size: calc(var(--u) * 15);
+  text-align: right;
+}
+.br-rounds-board li.is-you {
+  color: var(--br-sun);
+}
 /* no map, storm or landmark tag in the void arena */
 .br-hud.is-boxfight .br-minimap,
 .br-hud.is-boxfight .br-storm,

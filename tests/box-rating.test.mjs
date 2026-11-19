@@ -19,7 +19,14 @@ test('boxStats defaults without mutating', () => {
 test('validate: accepts good results', () => {
   const r = validateBoxResult(good);
   assert.deepEqual(r, { ok: true, won: true, size: 2, oppElo: 1100, score: [3, 1], forfeit: false });
-  assert.equal(validateBoxResult({ size: 4, won: false, score: [1, 3], oppElo: 900 }).ok, true);
+  assert.equal(validateBoxResult({ size: 3, won: false, score: [1, 3], oppElo: 900 }).ok, true);
+  assert.equal(validateBoxResult({ size: 4, won: false, score: [1, 3], oppElo: 900 }).ok, false, 'no 4v4');
+  // host-picked rounds to win (default 5 in game; older clients omit it = 3)
+  assert.equal(validateBoxResult({ ...good, score: [5, 4], wins: 5 }).ok, true);
+  assert.equal(validateBoxResult({ ...good, won: false, score: [0, 9], wins: 9 }).ok, true);
+  assert.equal(validateBoxResult({ ...good, score: [3, 1], wins: 5 }).ok, false);
+  assert.equal(validateBoxResult({ ...good, score: [5, 5], wins: 5 }).ok, false);
+  for (const bad of [0, 10, 2.5, '5', null]) assert.equal(validateBoxResult({ ...good, wins: bad }).ok, false, String(bad));
   assert.equal(validateBoxResult({ ...good, oppElo: 99999 }).oppElo, 3000);
 });
 

@@ -9,6 +9,11 @@
 //   game.startMatch()                // drop phase -> play -> over
 //   game.startMatch(seed, { freeBuild: true })  // solo sandbox: no bots, storm off, full mats, start on the ground
 //   game.startMatch(seed, { mode: 'squad', fill: true })  // team mode vs bot teams (Teams.js); fill = bot teammates
+//   game.startMatch(seed, { boxFight: { mode, ffaPlayers, winRounds, botDifficulty } })  // Box Fights vs bots:
+//     mode 'solo'|'duo'|'trio' (1v1..3v3, first to winRounds 1..9, default 5) | 'ffa' (2..6 players,
+//     default 6; 10 rounds or first to 15 elims); botDifficulty 'easy'|'normal'|'hard' (default: the
+//     local setting). Legacy { size: 1..3 } still works. Hosted: HostSession opts.boxFight (same shape)
+//     + opts.slots (lobby slot list, see HostSession). Validated by BoxFights.boxMatchConfig.
 //   game.pause(on) / game.leave({ connectionLost? })    // back to the menu (quitting a Box Fight = a loss)
 //   game.applySettings(settings)
 //
@@ -66,7 +71,7 @@ import { createFpsMeter } from '../ui/fpsMeter.js';
 import { DynamicResolution } from '../render/DynamicResolution.js';
 import { graphicsQuality, FPS_UNLIMITED } from '../ui/settings.js';
 import { planBusRoute, makeRoute, routeWire, busPosAt, planBotTargets, DropBusMesh } from './DropBus.js';
-import { BOX_FIGHT, arenaLayout, spawnLayout, boxLoadout, boxMode, boxSizeForMode, normalizeBoxSize, createBoxFightState, stepBoxFight, roundBanner, boxResultCopy, sideOfTeam } from './BoxFights.js';
+import { BOX_FIGHT, arenaLayout, arenaKey, spawnLayout, ffaSpawnLayout, spawnBoxPieces, boxLoadout, boxMatchConfig, createBoxFightState, stepBoxFight, boxElim, boxStandings, boxReplacement, roundBanner, boxResultCopy, sideOfTeam } from './BoxFights.js';
 import { buildArenaMeshes } from '../render/BoxArena.js';
 import { sanitizeBoxStart, botEloFor, boxOpponentElo, reportedElo } from './boxEloMatch.js';
 import { ELO_START } from './BoxElo.js';
@@ -524,17 +529,19 @@ export class Game {
     this._deathPlacement = 0;
     this._winPending = false;
     const net0 = this.net && this.net.isHost ? this.net : null;
-    // Box Fights: local ({ boxFight: { size } }) or hosted (HostSession.matchType 'boxfights')
-    const boxSize = freeBuild
-      ? 0
+    // Box Fights: local ({ boxFight: { mode, ffaPlayers, winRounds, botDifficulty } }) or hosted
+    // (HostSession.matchType 'boxfights', its boxConfig()); validated by boxMatchConfig
+    const boxCfg = freeBuild
+      ? null
       : net0
         ? net0.matchType === 'boxfights'
-          ? boxSizeForMode(net0.mode) || 1
-          : 0
+          ? net0.boxConfig ? net0.boxConfig() : boxMatchConfig({ mode: net0.mode })
+          : null
         : opts.boxFight
-          ? normalizeBoxSize(opts.boxFight.size)
-          : 0;
-    this._setMode(freeBuild ? 'solo' : boxSize ? boxMode(boxSize) : net0 ? net0.mode : opts.mode);
+          ? boxMatchConfig(opts.boxFight)
+          : null;
+    // FFA plays as 'solo' (everyone their own team: no knocks, no team win)
+    this._setMode(freeBuild ? 'solo' : boxCfg ? (boxCfg.ffa ? 'solo' : boxCfg.mode) : net0 ? net0.mode : opts.mode);
 
     // world back to pristine
     this.combat.restoreWorld();
@@ -550,8 +557,8 @@ export class Game {
     if (this.pings) this.pings.reset();
     if (this.rebootMarkers) this.rebootMarkers.reset();
 
-    if (boxSize) {
-      this._startBoxFight(rng, boxSize, net0);
+    if (boxCfg) {
+      this._startBoxFight(rng, boxCfg, net0);
       return;
     }
 
@@ -715,10 +722,14 @@ export class Game {
     this._ensureSpectating();
   }
 
-  /** Host / solo: a Box Fights match (no bus, storm or loot; rounds in a sealed arena). */
-  _startBoxFight(rng, size, net) {
+  /**
+   * Host / solo: a Box Fights match (no bus, storm or loot; rounds in a sealed arena).
+   * cfg: boxMatchConfig(...). Team modes: two teams of cfg.teamSize; FFA: cfg.sides players, each
+   * their own team. Humans take their places first, bots (one shared profile) fill the rest.
+   */
+  _startBoxFight(rng, cfg, net) {
     const p = this.player;
-    const layout = arenaLayout(size);
+    const layout = arenaLayout(arenaKey(cfg.mode));
     this.matchDifficulty = null; // Box Fights never count toward the BR ranks (Box Elo uses boxFight.botElo)
     this.storm.reset(rng, { x: layout.center.x, z: layout.center.z });
     this.dropZone = DROP_ZONES[0];
@@ -727,26 +738,39 @@ export class Game {
     p.reset();
     p.team = p.id;
     p.god = p.invulnerable = false;
+    p.buildsPlaced = 0;
     this.combat.register(p);
     this.busRoute = null;
     p.inBus = false;
     p.mode = 'ground';
     if (this.dropBus) this.dropBus.root.visible = false;
 
-    this._enterBoxFight(size, {});
-    this.boxFight.botElo = botEloFor(this.settings.difficulty); // fixed bot rating, like chess engine levels
-    // two teams of `size`: humans first (host: the lobby / party plan), bots fill the rest
+    // one difficulty for every bot on every side: the match option (lobby) or the local setting
+    const difficulty = cfg.botDifficulty || this.settings.difficulty;
+    this._enterBoxFight(cfg, {});
+    this.boxFight.botElo = botEloFor(difficulty); // fixed bot rating, like chess engine levels
+    this.boxFight.botDifficulty = difficulty;
     let botTeams;
     let botCount;
     let idBase;
+    let botNames = null;
+    let sides = null;
     if (net) {
       const plan = net.prepareMatch(this, null);
       botCount = plan.botCount;
       idBase = plan.idBase;
-      botTeams = plan.botTeams || [];
+      botTeams = plan.botTeams || null;
+      botNames = plan.botNames || null;
+      sides = plan.sides || null;
       if (plan.playerTeam != null) p.team = plan.playerTeam;
+    } else if (cfg.ffa) {
+      // FFA: every bot is its own team (Bots' default team = its id); side order = id order
+      botCount = cfg.slots - 1;
+      idBase = p.id + 1;
+      botTeams = null;
+      sides = [p.team, ...Array.from({ length: botCount }, (_, i) => idBase + i)];
     } else {
-      const plan = assignTeams(boxMode(size), [{ ids: [p.id], allowBots: true }], { slots: 2 * size, bots: true });
+      const plan = assignTeams(cfg.mode, [{ ids: [p.id], allowBots: true }], { slots: cfg.slots, bots: true });
       p.team = plan.humanTeam.get(p.id);
       botTeams = plan.botTeams;
       botCount = botTeams.length;
@@ -757,44 +781,66 @@ export class Game {
     const positions = Array.from({ length: botCount }, () => ({ x: c.x, y: layout.floorY, z: layout.rect.minZ + 2, heading: 0 }));
     try {
       // one shared profile for every bot on both teams (src/core/botProfile.js): Bot Alpha, Bot Bravo, ...
-      this.bots.spawn(botCount, rng, { names: boxBotNames(botCount), difficulty: this.settings.difficulty, positions, teams: botTeams, loadout: boxLoadout(), idBase });
+      const opts = { names: boxBotNames(botCount), difficulty, positions, loadout: boxLoadout(), idBase };
+      if (botTeams && botTeams.length) opts.teams = botTeams;
+      this.bots.spawn(botCount, rng, opts);
+      // slot order names (spawn shuffles them): lobby-given names first, else Bot Alpha, Bravo, ...
+      const defaults = boxBotNames(botCount);
+      this.bots.list.forEach((b, i) => (b.name = (botNames && botNames[i]) || defaults[i]));
     } catch (err) {
       this._error('bots.spawn', err);
     }
+    for (const b of this.bots.list) b.buildsPlaced = 0;
     this.totalActors = 1 + (net ? net.remotes.size : 0) + this.bots.list.length;
     this._setupTeam();
-    // our team is side 0 (north end); the other team is side 1
-    const other = this.combat.actors.find((a) => a.team !== p.team);
-    this.boxFight.sides = [p.team, other ? other.team : -1];
+    const bf = this.boxFight;
+    if (!sides) {
+      // team modes: our team is side 0 (north end); the other team is side 1
+      const other = this.combat.actors.find((a) => a.team !== p.team);
+      sides = [p.team, other ? other.team : -1];
+    }
+    bf.sides = sides;
+    bf.state = createBoxFightState({ winRounds: cfg.winRounds, ffa: cfg.ffa, sides: sides.length });
+    bf.score = bf.state.score.slice();
+    bf.elims = bf.state.elims.slice();
     this._boxGoLive();
     if (net) net.matchStarted(this);
     this._boxRoundStart();
   }
 
-  /** Arena colliders + meshes, void visuals and Box Fights rules on (host, solo and client). */
-  _enterBoxFight(size, { client = false, sides = null, winRounds } = {}) {
-    const layout = arenaLayout(size);
+  /**
+   * Arena colliders + meshes, void visuals and Box Fights rules on (host, solo and client).
+   * cfg: boxMatchConfig(...) (mode, ffa, sides, winRounds); client: sides = team id per side.
+   */
+  _enterBoxFight(cfg, { client = false, sides = null } = {}) {
+    const key = arenaKey(cfg.mode);
+    const layout = arenaLayout(key);
     if (!this._arenaColliders) this._arenaColliders = {};
-    const cols = this._arenaColliders[size];
-    if (!cols) this._arenaColliders[size] = layout.colliders.map((d) => this.world.addBox(d));
+    const cols = this._arenaColliders[key];
+    if (!cols) this._arenaColliders[key] = layout.colliders.map((d) => this.world.addBox(d));
     else for (const col of cols) this.world.restore(col);
-    // the middle wall: its own collider, raised every round start and removed at FIGHT
+    // the middle wall (team modes): its own collider, raised every round start and removed at FIGHT
     if (!this._arenaDividers) this._arenaDividers = {};
-    if (!this._arenaDividers[size]) this._arenaDividers[size] = this.world.addBox(layout.divider);
+    if (!this._arenaDividers[key]) this._arenaDividers[key] = this.world.addBox(layout.divider);
     if (this.structures) this.structures.buildArea = layout.buildArea;
     this.combat.noKnock = true;
     if (this.bots.setArena) this.bots.setArena(layout);
     this.boxArena = buildArenaMeshes(layout);
     this.scene.add(this.boxArena.group);
-    const state = createBoxFightState(winRounds ? { winRounds } : {});
+    const n = sides ? sides.length : cfg.sides;
+    const state = createBoxFightState({ winRounds: cfg.winRounds, ffa: cfg.ffa, sides: n });
     this.boxFight = {
-      size,
+      size: cfg.teamSize,
+      mode: cfg.mode,
+      ffa: cfg.ffa,
+      key,
       layout,
       client,
       sides: sides || [this.player.team, -1],
       state,
       round: 1,
-      score: [0, 0],
+      score: state.score.slice(),
+      elims: state.elims.slice(),
       frozen: true,
       spawnOf: new Map(),
       botStorm: makeBotStorm(layout),
@@ -802,14 +848,18 @@ export class Game {
       phase: 'warmup',
       t: state.t,
       won: null,
+      draw: false,
       dividerUp: false,
       // Elo: bot rating, whether a round reached FIGHT (quitting after that is a loss), forfeit end
       botElo: botEloFor('normal'),
+      botDifficulty: null,
       foughtOnce: false,
       forfeit: false,
+      replaced: new Map(), // host: actor id -> name of the human a bot replaced (same id, same stats row)
+      players: null, // client: the host's final stats rows (end 'ps')
     };
     this._setVoid(true);
-    this._setDivider(true); // teams start apart; it lifts at FIGHT
+    this._setDivider(!cfg.ffa); // teams start apart (it lifts at FIGHT); FFA has no middle wall
     this.hud.setStormVisible(false);
     if (this.onBoxFightChange) this.onBoxFightChange(true);
   }
@@ -818,10 +868,11 @@ export class Game {
   _exitBoxFight() {
     const bf = this.boxFight;
     if (!bf) return;
-    const cols = this._arenaColliders && this._arenaColliders[bf.size];
+    const cols = this._arenaColliders && this._arenaColliders[bf.key];
     if (cols) for (const col of cols) this.world.remove(col);
-    const wall = this._arenaDividers && this._arenaDividers[bf.size];
+    const wall = this._arenaDividers && this._arenaDividers[bf.key];
     if (wall) this.world.remove(wall);
+    if (bf.ffa && this.player) this.player.invulnerable = false; // FFA countdown protection off again
     if (this.boxArena) {
       this.scene.remove(this.boxArena.group);
       this.boxArena.dispose();
@@ -889,56 +940,108 @@ export class Game {
     this.input.lock();
   }
 
-  /** Which side (0 | 1) the local player is on. */
+  /** Which side the local player is on (team modes 0 | 1; FFA 0..n-1). */
   _boxMySide() {
     const bf = this.boxFight;
     const s = bf ? sideOfTeam(bf.sides, this.player.team) : 0;
+    if (bf && bf.ffa) return s < 0 ? 0 : s;
     return s === 1 ? 1 : 0;
+  }
+
+  /** The actor playing side `side` (FFA: one each; team modes: the lowest id on it), or null. */
+  _boxSideActor(side) {
+    const bf = this.boxFight;
+    const team = bf && bf.sides[side];
+    let best = null;
+    for (const a of this.combat.actors) if (a.team === team && (!best || a.id < best.id)) best = a;
+    return best;
   }
 
   _boxHud() {
     const bf = this.boxFight;
     if (!bf || !this.hud.setRounds) return;
     const me = this._boxMySide();
+    if (bf.ffa) {
+      // compact leaderboard: top 3 by eliminations (+ you when you are lower down). Clients only hear
+      // the host's tally at round events, so live kills (snapshots / 'ts') top it up in between.
+      const elims = bf.client ? bf.elims.map((e, i) => Math.max(e | 0, (this._boxSideActor(i) || {}).kills | 0)) : bf.elims;
+      const rows = boxStandings(elims, bf.score);
+      const pick = rows.slice(0, 3);
+      const mine = rows.find((r) => r.side === me);
+      if (mine && !pick.includes(mine)) pick.push(mine);
+      const board = pick.map((r) => {
+        const a = this._boxSideActor(r.side);
+        return { place: r.place, name: a === this.player ? this.player.name || 'You' : a ? a.name : '?', elims: r.elims, you: r.side === me };
+      });
+      this.hud.setRounds({ ffa: true, round: bf.round, maxRounds: bf.state.maxRounds || BOX_FIGHT.ffa.rounds, board });
+      return;
+    }
     this.hud.setRounds({ round: bf.round, us: bf.score[me], them: bf.score[1 - me], target: bf.state.winRounds });
   }
 
   _boxBanner(secs) {
     const bf = this.boxFight;
     if (!bf) return;
-    const title = roundBanner({ round: bf.round, score: bf.score }, this._boxMySide());
+    const title = roundBanner({ round: bf.round, score: bf.score, elims: bf.elims, ffa: bf.ffa, maxRounds: bf.state.maxRounds }, this._boxMySide());
     this.menus.showDropBanner(true, Math.max(0, secs), null, { title, sub: 'Fight starts in' });
   }
 
+  /** "first to 5" / "first to 15 elims" for announcements. */
+  _boxGoal() {
+    const st = this.boxFight.state;
+    return this.boxFight.ffa ? `${st.maxRounds || BOX_FIGHT.ffa.rounds} rounds · first to ${st.elimTarget || BOX_FIGHT.ffa.elimTarget} elims` : `first to ${st.winRounds}`;
+  }
 
   /**
    * The middle wall between the two teams: up (round start, countdown) or lifted (FIGHT).
    * Collision, the no-build strip on its line and the mesh all follow; host, solo and clients alike.
+   * FFA never raises it.
    */
   _setDivider(up, animate = false) {
     const bf = this.boxFight;
     if (!bf) return;
-    const wall = this._arenaDividers && this._arenaDividers[bf.size];
+    up = !!up && !bf.ffa;
+    const wall = this._arenaDividers && this._arenaDividers[bf.key];
     if (wall) {
       if (up) this.world.restore(wall);
       else this.world.remove(wall);
     }
     if (this.structures) this.structures.buildBlock = up ? bf.layout.dividerBlock : null;
-    if (this.boxArena && this.boxArena.setDivider) this.boxArena.setDivider(up, { animate });
-    bf.dividerUp = !!up;
+    if (this.boxArena && this.boxArena.setDivider) this.boxArena.setDivider(up, { animate: animate && !bf.ffa });
+    bf.dividerUp = up;
   }
 
   /** Spawn slot per actor: each side's members (by id) take that side's spawn points in order. */
   _boxSpawns() {
     const bf = this.boxFight;
-    const spawns = spawnLayout(bf.layout, bf.size);
+    const spawns = bf.ffa ? ffaSpawnLayout(bf.layout, bf.sides.length) : spawnLayout(bf.layout, bf.size);
     const out = new Map();
-    for (let side = 0; side < 2; side++) {
+    for (let side = 0; side < bf.sides.length; side++) {
       const slots = spawns.filter((sp) => sp.side === side);
       const members = this.combat.actors.filter((a) => a.team === bf.sides[side] && !a.leftMatch).sort((a, b) => a.id - b.id);
       members.forEach((a, i) => slots[i] && out.set(a.id, slots[i]));
     }
     return out;
+  }
+
+  /**
+   * Everyone starts in a pre-built 1x1 box (4 walls + cone roof; the arena floor is the box floor,
+   * so no floor piece). Unowned pieces, full health, replicated by the round start's structure list.
+   */
+  _boxSpawnBoxes(spawnOf) {
+    const st = this.structures;
+    if (!st || !st.placeBuilt) return;
+    const floorY = this.boxFight.layout.floorY;
+    for (const sp of spawnOf.values()) {
+      for (const pc of spawnBoxPieces(sp, floorY)) {
+        try {
+          st.placeBuilt({ ...pc, valid: true }, 'wood', null);
+        } catch (err) {
+          this._error('box.spawnBox', err);
+          return;
+        }
+      }
+    }
   }
 
   /** Host / solo: wipe the arena, everyone back in a fresh box at full health with the loadout. */
@@ -957,7 +1060,10 @@ export class Game {
         const sp = bf.spawnOf.get(a.id);
         if (sp) this._boxResetActor(a, sp);
       }
-      // no spawn boxes: the middle wall hides each team's side until FIGHT
+      this._boxSpawnBoxes(bf.spawnOf);
+      // FFA has no middle wall: nobody can be hurt until FIGHT (a shot out of the box in the countdown)
+      if (bf.ffa) for (const a of this.combat.actors) a.invulnerable = true;
+      // team modes: the middle wall also keeps the two sides apart until FIGHT
       this._setDivider(true);
     };
     // the reset itself is silent on the wire: clients get one 'rs' event with the result
@@ -967,9 +1073,10 @@ export class Game {
     bf.frozen = true;
     bf.round = bf.state.round;
     bf.score = bf.state.score.slice();
+    bf.elims = bf.state.elims.slice();
     this._boxHud();
     this._boxBanner(bf.state.t);
-    if (net && net.boxRoundStart) net.boxRoundStart(this, { round: bf.round, score: bf.score, freeze: bf.state.t, spawnOf: bf.spawnOf });
+    if (net && net.boxRoundStart) net.boxRoundStart(this, { round: bf.round, score: bf.score, elims: bf.elims, freeze: bf.state.t, spawnOf: bf.spawnOf });
   }
 
   /** One actor (alive or not) back at a spawn with full health, shield and a fresh loadout. */
@@ -1019,8 +1126,10 @@ export class Game {
     for (const a of this.combat.actors.slice()) {
       if (a.alive && a.pos.y < bf.layout.killY) this.combat.applyDamage(a, 1e6, { source: null, fall: true });
     }
-    const present = [0, 0];
-    const alive = [0, 0];
+    if (!this.boxFight) return; // a fall elimination can end an FFA match (and the match can be left)
+    const n = bf.sides.length;
+    const present = Array(n).fill(0);
+    const alive = Array(n).fill(0);
     for (const a of this.combat.actors) {
       const side = sideOfTeam(bf.sides, a.team);
       if (side < 0) continue;
@@ -1029,17 +1138,37 @@ export class Game {
     }
     let st = bf.state;
     let events;
-    if (st.phase !== 'matchEnd' && (present[0] === 0 || present[1] === 0)) {
-      // a whole team left the match: the other team wins by forfeit
+    const empty = present.filter((c) => c === 0).length;
+    if (st.phase !== 'matchEnd' && !bf.ffa && empty > 0) {
+      // a whole team left the match (and no bot could take over): the other team wins by forfeit
       const w = present[0] === 0 ? 1 : 0;
       st = { ...st, phase: 'matchEnd', winner: w, t: BOX_FIGHT.matchEndDelay };
-      events = [{ type: 'matchEnd', winnerSide: w, score: st.score.slice(), forfeit: true }];
+      events = [{ type: 'matchEnd', winnerSide: w, score: st.score.slice(), elims: st.elims.slice(), forfeit: true }];
     } else ({ state: st, events } = stepBoxFight(st, dt, alive));
+    this._boxApply(st, events);
+  }
+
+  /** Host / solo: adopt a new round-machine state and run its events. */
+  _boxApply(st, events) {
+    const bf = this.boxFight;
     bf.state = st;
     bf.round = st.round;
     bf.score = st.score.slice();
+    bf.elims = st.elims.slice();
     for (const e of events) this._boxEvent(e);
     if (this.boxFight && st.phase === 'warmup') this._boxBanner(st.t);
+  }
+
+  /** Host / solo: an elimination during a Box Fight (FFA: elims decide the match). */
+  _boxOnElim(victim, killer) {
+    const bf = this.boxFight;
+    if (!bf || bf.client || !killer || killer === victim) return;
+    const ks = sideOfTeam(bf.sides, killer.team);
+    const vs = sideOfTeam(bf.sides, victim.team);
+    const { state, events } = boxElim(bf.state, ks, vs);
+    if (state === bf.state) return;
+    this._boxApply(state, events);
+    if (bf.ffa) this._boxHud();
   }
 
   _boxEvent(e) {
@@ -1049,39 +1178,138 @@ export class Game {
     if (e.type === 'fight') {
       bf.frozen = false;
       bf.foughtOnce = true;
+      if (bf.ffa) for (const a of this.combat.actors) a.invulnerable = false;
       this._setDivider(false, true);
       this.menus.showDropBanner(false);
-      this.hud.announce('FIGHT!', `Round ${bf.round} · first to ${bf.state.winRounds}`, 1400);
+      this.hud.announce('FIGHT!', `Round ${bf.round} · ${this._boxGoal()}`, 1400);
       sfx.play('zone_enter', { volume: 0.6 });
       if (net && net.boxFight) net.boxFight({ e: 'rf', rn: bf.round });
     } else if (e.type === 'roundEnd') {
       bf.frozen = true; // as on clients: nobody acts between rounds
       this._boxHud();
       this._boxRoundAnnounce(e.winnerSide, me, e.score);
-      if (net && net.boxFight) net.boxFight({ e: 're', rn: e.round, w: e.winnerSide == null ? -1 : e.winnerSide, sc: e.score });
+      if (net && net.boxFight) net.boxFight({ e: 're', rn: e.round, w: e.winnerSide == null ? -1 : e.winnerSide, sc: e.score, el: bf.elims.slice() });
     } else if (e.type === 'roundStart') {
       this._boxRoundStart();
     } else if (e.type === 'matchEnd') {
       bf.frozen = true;
       const won = e.winnerSide === me;
       bf.won = won;
+      bf.draw = e.winnerSide == null;
       bf.forfeit = !!e.forfeit;
       this._boxHud();
       if (e.forfeit) this.hud.announce(won ? 'BOX FIGHT WON' : 'BOX FIGHT LOST', 'The other team left the match', 2600);
+      else if (bf.ffa) this.hud.announce(won ? 'BOX FIGHT WON' : bf.draw ? 'BOX FIGHT DRAW' : 'BOX FIGHT OVER', this._boxWinnerLine(e.winnerSide), 2600);
       if (won && p0Alive(this.player) && this.player.character) this.player.character.emote(true, (this.emotes || []).find(Boolean));
-      if (net && net.boxFightEnd) net.boxFightEnd({ w: e.winnerSide, sc: e.score, team: bf.sides[e.winnerSide], forfeit: !!e.forfeit });
+      bf.players = this._boxPlayerStats();
+      if (net && net.boxFightEnd) net.boxFightEnd({ w: e.winnerSide == null ? -1 : e.winnerSide, sc: e.score, el: bf.elims.slice(), team: e.winnerSide == null ? -1 : bf.sides[e.winnerSide], forfeit: !!e.forfeit, players: bf.players });
     } else if (e.type === 'matchOver') {
       this._endMatch(bf.won === true);
     }
   }
 
+  /** FFA: "Name wins with 15 elims" / "Tied on eliminations". */
+  _boxWinnerLine(side) {
+    const bf = this.boxFight;
+    if (side == null || side < 0) return 'Tied on eliminations';
+    const a = this._boxSideActor(side);
+    const e = bf.elims[side] | 0;
+    return `${a === this.player ? 'You win' : `${a ? a.name : '?'} wins`} with ${e} elim${e === 1 ? '' : 's'}`;
+  }
+
   _boxRoundAnnounce(winnerSide, me, score) {
+    const bf = this.boxFight;
+    if (bf.ffa) {
+      const mine = bf.elims[me] | 0;
+      const line = `Round ${bf.round}/${bf.state.maxRounds || BOX_FIGHT.ffa.rounds} · you have ${mine} elim${mine === 1 ? '' : 's'}`;
+      if (winnerSide == null || winnerSide < 0) this.hud.announce('DRAW', line, 2200);
+      else if (winnerSide === me) this.hud.announce('ROUND WON', line, 2200);
+      else {
+        const a = this._boxSideActor(winnerSide);
+        this.hud.announce(`${a ? a.name.toUpperCase() : 'SOMEONE'} TOOK THE ROUND`, line, 2200);
+      }
+      return;
+    }
     const us = score[me] | 0;
     const them = score[1 - me] | 0;
-    const line = `${us}–${them} · first to ${this.boxFight.state.winRounds}`;
+    const line = `${us}–${them} · ${this._boxGoal()}`;
     if (winnerSide == null || winnerSide < 0) this.hud.announce('DRAW', `${line} · round replays`, 2200);
     else if (winnerSide === me) this.hud.announce('ROUND WON', line, 2200);
     else this.hud.announce('ROUND LOST', line, 2200);
+  }
+
+  /**
+   * Host / solo: one stats row per participant for the results screen, in side order.
+   * { id, name, isBot, side, team, elims, damage, builds, replaced? } — a bot that took over from a
+   * human who left keeps that human's row (same id, side and totals) with replaced = their name.
+   * FFA elims come from the round machine (what decided the match); team modes use Combat kills.
+   */
+  _boxPlayerStats() {
+    const bf = this.boxFight;
+    const rows = [];
+    for (const a of this.combat.actors) {
+      const side = sideOfTeam(bf.sides, a.team);
+      if (side < 0) continue;
+      const row = {
+        id: a.id,
+        name: a === this.player ? this.player.name || 'You' : a.name || '?',
+        isBot: !!(a.isBot || a._bot),
+        side,
+        team: a.team,
+        elims: bf.ffa ? bf.elims[side] | 0 : a.kills | 0,
+        damage: Math.round(a.damageDealt || 0),
+        builds: a.buildsPlaced | 0,
+      };
+      if (bf.replaced.has(a.id)) row.replaced = bf.replaced.get(a.id);
+      rows.push(row);
+    }
+    return rows.sort((x, y) => x.side - y.side || x.id - y.id);
+  }
+
+  /**
+   * Host: a human left mid-match. A bot (the match's shared profile) takes their place at once:
+   * same actor id (clients keep the puppet), team / side, stats row and spot (boxReplacement).
+   * Returns the bot, or null when nothing was replaced (no Box Fight, match over, no Bots support).
+   */
+  boxReplaceLeaver(a) {
+    const bf = this.boxFight;
+    if (!bf || bf.client || !a || bf.state.phase === 'matchEnd' || !this.bots.addBot || !this.bots.placeActor) return null;
+    const side = sideOfTeam(bf.sides, a.team);
+    const plan = boxReplacement({ leaver: a, side, phase: bf.state.phase, spawn: bf.spawnOf.get(a.id) || null, vitals: { health: BOX_FIGHT.health, shield: BOX_FIGHT.shield } });
+    if (!plan) return null;
+    const used = new Set(this.combat.actors.map((x) => x.name));
+    const name = boxBotNames(12).find((nm) => !used.has(nm)) || 'Bot';
+    const diff = bf.botDifficulty || this.settings.difficulty;
+    const pos = plan.pos || { x: bf.layout.center.x, y: bf.layout.floorY, z: bf.layout.center.z, heading: 0 };
+    let bot;
+    try {
+      this.combat.unregister(a);
+      bot = this.bots.addBot(diff, pos.x, pos.z, { id: a.id, name, team: a.team, heading: pos.heading, loadout: boxLoadout(), sandbox: false });
+      this.bots.placeActor(bot, pos, boxLoadout(), { health: plan.health, shield: plan.shield });
+    } catch (err) {
+      this._error('box.replaceLeaver', err);
+      if (bot) this.bots.removeBots((x) => x === bot);
+      this.combat.register(a);
+      return null;
+    }
+    if (this.bots.diff && this.bots.diffName === diff) bot.damageScale = this.bots.diff.damageScale; // as spawn() sets it
+    // the human's stats row carries on under the bot
+    bot.kills = a.kills | 0;
+    bot.assists = a.assists | 0;
+    bot.damageDealt = a.damageDealt || 0;
+    bot.buildsPlaced = a.buildsPlaced | 0;
+    if (!plan.alive) {
+      // out for the rest of this round; the next round start puts it in the box
+      bot.alive = false;
+      bot.health = 0;
+      bot.shield = 0;
+      if (bot.character) bot.character.root.visible = false;
+    }
+    bot.invulnerable = !!(bf.ffa && bf.state.phase === 'warmup');
+    bf.replaced.set(a.id, a.name);
+    this.hud.killFeed(`${a.name} left · ${bot.name} takes over`, 'elim', [a.name, bot.name], this.player.name);
+    if (bf.ffa) this._boxHud();
+    return bot;
   }
 
   /** Client: count the freeze down locally; the host is authoritative for everything else. */
@@ -1096,14 +1324,28 @@ export class Game {
       bf.t -= dt;
       if (bf.t <= 0) this._endMatch(bf.won === true);
     }
+    if (bf.ffa) {
+      bf.hudT = (bf.hudT || 0) - dt;
+      if (bf.hudT <= 0) {
+        bf.hudT = 0.5;
+        this._boxHud(); // live leaderboard (the HUD skips unchanged rows)
+      }
+    }
+  }
+
+  /** Client: elims per side from the host (FFA), or keep ours. */
+  _boxTakeElims(elims) {
+    const bf = this.boxFight;
+    if (Array.isArray(elims) && elims.length === bf.sides.length) bf.elims = elims.slice();
   }
 
   /** Client: the host started a round ('rs'). Spawns of other actors are applied by ClientSession. */
-  netRoundStart({ round, score, freeze, me }) {
+  netRoundStart({ round, score, elims, freeze, me }) {
     const bf = this.boxFight;
     if (!bf || bf.phase === 'over') return;
     bf.round = round;
     bf.score = score.slice();
+    this._boxTakeElims(elims);
     bf.phase = 'warmup';
     bf.t = freeze;
     bf.frozen = true;
@@ -1128,33 +1370,38 @@ export class Game {
     bf.foughtOnce = true;
     this._setDivider(false, true);
     this.menus.showDropBanner(false);
-    this.hud.announce('FIGHT!', `Round ${bf.round} · first to ${bf.state.winRounds}`, 1400);
+    this.hud.announce('FIGHT!', `Round ${bf.round} · ${this._boxGoal()}`, 1400);
     sfx.play('zone_enter', { volume: 0.6 });
   }
 
   /** Client: the host ended a round ('re'). */
-  netRoundEnd({ winnerSide, score }) {
+  netRoundEnd({ winnerSide, score, elims }) {
     const bf = this.boxFight;
     if (!bf || bf.phase === 'over') return;
     bf.score = score.slice();
+    this._boxTakeElims(elims);
     bf.phase = 'roundEnd';
     bf.frozen = true;
     this._boxHud();
     this._boxRoundAnnounce(winnerSide, this._boxMySide(), score);
   }
 
-  /** Client: the host ended the match; the result screen follows after a beat. */
-  netBoxEnd({ winnerSide, score, forfeit }) {
+  /** Client: the host ended the match; the result screen follows after a beat. players: the host's stats rows. */
+  netBoxEnd({ winnerSide, score, elims, forfeit, players = null }) {
     const bf = this.boxFight;
     if (!bf || bf.phase === 'over') return;
     bf.score = score.slice();
+    this._boxTakeElims(elims);
     bf.phase = 'over';
     bf.t = BOX_FIGHT.matchEndDelay;
     bf.frozen = true;
     bf.won = winnerSide === this._boxMySide();
+    bf.draw = bf.ffa && (winnerSide == null || winnerSide < 0);
     bf.forfeit = !!forfeit;
+    bf.players = Array.isArray(players) ? players : null;
     this._boxHud();
     if (forfeit) this.hud.announce(bf.won ? 'BOX FIGHT WON' : 'BOX FIGHT LOST', 'The other team left the match', 2600);
+    else if (bf.ffa) this.hud.announce(bf.won ? 'BOX FIGHT WON' : bf.draw ? 'BOX FIGHT DRAW' : 'BOX FIGHT OVER', this._boxWinnerLine(winnerSide), 2600);
     if (bf.won && p0Alive(this.player) && this.player.character) this.player.character.emote(true, (this.emotes || []).find(Boolean));
   }
 
@@ -1242,7 +1489,8 @@ export class Game {
     this._deathPlacement = 0;
     this._winPending = false;
     const box = start.game === 'boxfights' ? sanitizeBoxStart(start) : null;
-    this._setMode(box ? boxMode(box.size) : start.mode);
+    const boxCfg = box ? boxMatchConfig({ mode: box.mode, ffaPlayers: box.players, winRounds: box.wins }) : null;
+    this._setMode(boxCfg ? (boxCfg.ffa ? 'solo' : boxCfg.mode) : start.mode);
 
     this.combat.restoreWorld();
     this.combat.clear();
@@ -1289,7 +1537,7 @@ export class Game {
       p.inBus = false;
       p.mode = 'ground';
       if (this.dropBus) this.dropBus.root.visible = false;
-      this._enterBoxFight(box.size, { client: true, sides: box.teams, winRounds: box.wins });
+      this._enterBoxFight(boxCfg, { client: true, sides: box.teams });
       this.boxFight.botElo = box.botElo;
       // off the midline (the middle wall is up) until the host's first 'rs' places us
       const L0 = this.boxFight.layout;
@@ -1645,17 +1893,34 @@ export class Game {
       // Box Fights: no BR rank or coins; scored in rounds (placement 1 = won, 2 = lost) and rated by Box Elo
       const bf = this.boxFight;
       const me = this._boxMySide();
-      const score = [bf.score[me] | 0, bf.score[1 - me] | 0];
-      const copy = boxResultCopy({ victory, size: bf.size, score });
-      // Elo: the opposing team's average (reported ratings; the account server recomputes the change)
-      const oppElo = boxOpponentElo(this._boxEloActors(), this.player.team, bf.botElo);
-      Object.assign(this.result, {
-        placement: victory ? 1 : 2,
-        teams: 2,
-        difficulty: null,
-        ranked: false,
-        boxFight: { size: bf.size, score, ...copy, oppElo, won: !!victory, forfeit: !!bf.forfeit, rated: !!bf.foughtOnce },
-      });
+      // per-player stats (host / solo: computed now; client: the host's end message)
+      const players = (bf.client ? bf.players : bf.players || this._boxPlayerStats()) || [];
+      const common = { mode: bf.mode, ffa: bf.ffa, winRounds: bf.state.winRounds, rounds: bf.round, players, won: !!victory, forfeit: !!bf.forfeit };
+      if (bf.ffa) {
+        // FFA: placed by eliminations (then rounds won); not rated
+        const rows = boxStandings(bf.elims, bf.score);
+        const mine = rows.find((r) => r.side === me) || { place: rows.length, elims: 0 };
+        const copy = boxResultCopy({ victory, ffa: true, place: mine.place, players: rows.length, elims: mine.elims, draw: bf.draw });
+        Object.assign(this.result, {
+          placement: mine.place,
+          teams: rows.length,
+          difficulty: null,
+          ranked: false,
+          boxFight: { ...common, size: 1, score: bf.score.slice(), elims: bf.elims.slice(), place: mine.place, ffaPlayers: rows.length, draw: !!bf.draw, ...copy, oppElo: null, rated: false },
+        });
+      } else {
+        const score = [bf.score[me] | 0, bf.score[1 - me] | 0];
+        const copy = boxResultCopy({ victory, size: bf.size, score });
+        // Elo: the opposing team's average (reported ratings; the account server recomputes the change)
+        const oppElo = boxOpponentElo(this._boxEloActors(), this.player.team, bf.botElo);
+        Object.assign(this.result, {
+          placement: victory ? 1 : 2,
+          teams: 2,
+          difficulty: null,
+          ranked: false,
+          boxFight: { ...common, size: bf.size, score, ...copy, oppElo, rated: !!bf.foughtOnce },
+        });
+      }
     }
     if (this.net) {
       this.result.mp = true;
@@ -1728,6 +1993,7 @@ export class Game {
   _onEliminate(victim, killer, info) {
     const p = this.player;
     if (this.net && this.net.isHost) this.net.onEliminate(victim, killer, info);
+    if (this.boxFight && !this.boxFight.client) this._boxOnElim(victim, killer);
     // team modes: a reboot card for a teammate to bring to a reboot van
     if (this.reboot && this.teamMode && !this.boxFight && !info.left && !(this.net && this.net.isClient)) {
       try {

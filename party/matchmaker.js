@@ -1,5 +1,5 @@
 // BENTONVILLE ROYALE — matchmaker. One PartyKit room per queue: the BR modes
-// (solo/duo/trio/squad) and Box Fights 'bf-solo'/'bf-duo'/'bf-trio'/'bf-squad' (parseQueue).
+// (solo/duo/trio/squad) and Box Fights 'bf-solo'/'bf-duo'/'bf-trio'/'bf-ffa' (parseQueue; no 4v4).
 // Any other room name answers 404 and does nothing.
 //
 // Party rooms (party/partyRoom.js) POST to /parties/matchmaker/<queue>:
@@ -16,12 +16,13 @@
 //
 // Box Fights rooms instead pack exactly two teams of the mode's size with
 // packBoxFight (party/matchPack.js), as many matches as the queue allows; a match
-// waits for both teams to fill, or starts with bots after the pack window.
+// waits for both teams to fill, or starts with bots after the pack window. 'bf-ffa' packs up
+// to 6 humans, one per side (packBoxFfa).
 
 import { Server, getServerByName } from 'partyserver';
 import { MAX_HUMANS, randomCode } from '../src/net/protocol.js';
-import { modeSize, parseQueue } from './modes.js';
-import { packTeams, packBoxFight } from './matchPack.js';
+import { modeSize, parseQueue, PARTY_MAX, BOX_MAX_PLAYERS } from './modes.js';
+import { packTeams, packBoxFight, packBoxFfa } from './matchPack.js';
 import { ticketMembers, ticketTime } from './partyRules.js';
 
 export { packTeams };
@@ -102,11 +103,13 @@ export class Matchmaker extends Server {
   _checkBox() {
     clearTimeout(this.timer);
     this.timer = null;
+    const ffa = this.mode === 'ffa';
     const size = modeSize(this.mode);
     let nextAt = null;
     // bounded: each pass removes at least one ticket, and never more passes than tickets
     for (let pass = 0, max = this.tickets.size; pass < max; pass++) {
-      const r = packBoxFight([...this.tickets.values()], size, Date.now());
+      const list = [...this.tickets.values()];
+      const r = ffa ? packBoxFfa(list, BOX_MAX_PLAYERS, Date.now()) : packBoxFight(list, size, Date.now());
       nextAt = r.nextAt;
       if (!r.match) break;
       const used = new Set(r.match.used);
@@ -148,7 +151,8 @@ export class Matchmaker extends Server {
     } catch {
       return new Response('bad json', { status: 400 });
     }
-    const size = modeSize(this.mode);
+    // FFA: a whole party (up to PARTY_MAX) queues together, each member on their own side
+    const size = this.mode === 'ffa' ? PARTY_MAX : modeSize(this.mode);
     if (!msg || typeof msg !== 'object') return new Response('bad message', { status: 400 });
     // party ids are short room codes and ticket ids short random strings: one key form everywhere
     const partyId = typeof msg.partyId === 'string' && /^[A-Za-z0-9_-]{1,16}$/.test(msg.partyId) ? msg.partyId : null;

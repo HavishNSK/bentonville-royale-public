@@ -122,6 +122,7 @@ function hudHTML() {
   <span class="br-rounds-side is-us"><i class="br-rounds-pips" data-ref="roundsUsPips"></i><b class="br-ol" data-ref="roundsUs">0</b></span>
   <span class="br-rounds-mid"><small>ROUND</small><b data-ref="roundsNum">1</b></span>
   <span class="br-rounds-side is-them"><b class="br-ol" data-ref="roundsThem">0</b><i class="br-rounds-pips" data-ref="roundsThemPips"></i></span>
+  <ol class="br-rounds-board" data-ref="roundsBoard"></ol>
 </div>
 
 <div class="br-tl">
@@ -1190,14 +1191,43 @@ export function buildHud(root) {
 
   // ---- Box Fights round score (top centre, under the compass) -----------------------
   let lastRounds = '';
-  /** { round, us, them, target } shows the pill; null hides it. Also tags the HUD for Box Fights CSS. */
+  /**
+   * Team modes: { round, us, them, target } (target up to 9 pips). FFA: { ffa: true, round, maxRounds,
+   * board: [{ place, name, elims, you }] } (a compact leaderboard instead of pips). null hides the pill.
+   * Also tags the HUD for Box Fights CSS.
+   */
   function setRounds(v) {
-    const key = v ? `${int(v.round)}|${int(v.us)}|${int(v.them)}|${int(v.target)}` : '';
+    const board = v && v.ffa && Array.isArray(v.board) ? v.board.slice(0, 4) : null;
+    const key = v ? (board ? `f|${int(v.round)}|${int(v.maxRounds)}|${board.map((b) => `${int(b.place)}:${b.name}:${int(b.elims)}:${b.you ? 1 : 0}`).join(',')}` : `${int(v.round)}|${int(v.us)}|${int(v.them)}|${int(v.target)}`) : '';
     if (key === lastRounds) return;
     lastRounds = key;
     r.rounds.hidden = !v;
     hud.classList.toggle('is-boxfight', !!v);
+    r.rounds.classList.toggle('is-ffa', !!board);
     if (!v) return;
+    if (board) {
+      const round = Math.max(1, int(v.round));
+      const max = Math.max(round, int(v.maxRounds) || 10);
+      r.roundsNum.textContent = `${round}/${max}`;
+      // names are other players' text: DOM nodes + textContent, never innerHTML
+      r.roundsBoard.replaceChildren(
+        ...board.map((b) => {
+          const li = document.createElement('li');
+          if (b.you) li.className = 'is-you';
+          const place = document.createElement('i');
+          place.textContent = String(Math.max(1, int(b.place)));
+          const name = document.createElement('span');
+          name.textContent = String(b.name == null ? '' : b.name).slice(0, 16);
+          const el = document.createElement('b');
+          el.textContent = String(Math.max(0, int(b.elims)));
+          li.append(place, name, el);
+          return li;
+        }),
+      );
+      r.rounds.setAttribute('aria-label', `Round ${round} of ${max}. ` + board.map((b) => `${b.you ? 'You' : String(b.name || '')}: ${Math.max(0, int(b.elims))} eliminations`).join('. '));
+      return;
+    }
+    r.roundsBoard.replaceChildren();
     const target = Math.max(1, Math.min(9, int(v.target) || 3));
     const pips = (n) => Array.from({ length: target }, (_, i) => `<em class="${i < n ? 'is-won' : ''}"></em>`).join('');
     const us = Math.max(0, int(v.us));

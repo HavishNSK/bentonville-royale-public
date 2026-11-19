@@ -67,3 +67,34 @@ export function packBoxFight(tickets, size, now, { windowMs = 10000, soloWaitMs 
     nextAt: due,
   };
 }
+
+/**
+ * Box Fights FFA: up to `max` (6) humans, each on their own. tickets in queue order (oldest first),
+ * each {partyId, ticketId, fill, at, members:[{token, leader}]}; parties stay together in one match.
+ * A full lobby starts at once; otherwise after `soloWaitMs` from the oldest ticket, with bots filling
+ * the empty slots. A No Fill ticket in the batch means no bots, so it then needs 2+ humans.
+ * Returns {match, nextAt}; match = {teams:[{tokens:[one token], allowBots}...], hostToken, used} or null.
+ */
+export function packBoxFfa(tickets, max, now, { soloWaitMs = 30000 } = {}) {
+  const used = [];
+  let humans = 0;
+  for (const t of Array.isArray(tickets) ? tickets : []) {
+    const n = t.members.length;
+    if (n < 1 || humans + n > max) continue;
+    used.push(t);
+    humans += n;
+  }
+  if (!used.length) return { match: null, nextAt: null };
+  const allowBots = used.every((t) => t.fill !== false);
+  if (!allowBots && humans < 2) return { match: null, nextAt: null };
+  const due = humans >= max ? now : Math.min(...used.map((t) => t.at)) + soloWaitMs;
+  if (now < due) return { match: null, nextAt: due };
+  let host = null;
+  for (const t of used) if (!host || t.members.length > host.members.length) host = t;
+  const leader = host.members.find((m) => m.leader) || host.members[0];
+  const tokens = used.flatMap((t) => t.members.map((m) => m.token));
+  return {
+    match: { teams: tokens.map((tok) => ({ tokens: [tok], allowBots })), hostToken: leader.token, used: used.map((t) => t.ticketId) },
+    nextAt: due,
+  };
+}

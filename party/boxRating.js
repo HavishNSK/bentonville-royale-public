@@ -11,7 +11,7 @@ const UPSET_GAP = 600;
 const STREAK_MAX = 15;
 const WINRATE_MIN_GAMES = 20;
 const WINRATE_MAX = 0.85;
-const ALLOWED_KEYS = new Set(['op', 'token', 'size', 'won', 'score', 'oppElo', 'forfeit']);
+const ALLOWED_KEYS = new Set(['op', 'token', 'size', 'won', 'score', 'oppElo', 'forfeit', 'wins']);
 
 const int = (v, lo, hi) => (Number.isInteger(v) && v >= lo && v <= hi ? v : null);
 const count = (v) => (Number.isFinite(v) && v > 0 ? Math.min(1e9, Math.floor(v)) : 0);
@@ -26,14 +26,20 @@ export function boxStats(acc) {
   return { elo, games: count(b.games), wins: count(b.wins), peak: Math.max(peak, elo), last: stamp(b.last), streak: count(b.streak) };
 }
 
-/** Check a client-reported result. Returns {ok:true, won, size, oppElo, score, forfeit} or {ok:false, error}. */
+/**
+ * Check a client-reported result. Returns {ok:true, won, size, oppElo, score, forfeit} or {ok:false, error}.
+ * size: team size 1..3 (no 4v4; FFA is not rated). wins: rounds to win, 1..9 (optional, default 3 for
+ * older clients); a non-forfeit result must read wins-to-(less).
+ */
 export function validateBoxResult(body) {
   const no = (error) => ({ ok: false, error });
   if (!body || typeof body !== 'object' || Array.isArray(body)) return no('Bad result.');
   for (const k of Object.keys(body)) if (!ALLOWED_KEYS.has(k)) return no('Bad result.');
-  const size = int(body.size, 1, 4);
+  const size = int(body.size, 1, 3);
   if (size === null) return no('Bad team size.');
   if (typeof body.won !== 'boolean') return no('Bad result.');
+  const wins = body.wins === undefined ? 3 : int(body.wins, 1, 9);
+  if (wins === null) return no('Bad result.');
   const forfeit = body.forfeit === undefined ? false : body.forfeit;
   if (typeof forfeit !== 'boolean') return no('Bad result.');
   if (typeof body.oppElo !== 'number' || !Number.isFinite(body.oppElo)) return no('Bad opponent rating.');
@@ -44,7 +50,7 @@ export function validateBoxResult(body) {
   if (us === null || them === null) return no('Bad score.');
   if (!forfeit) {
     const [w, l] = body.won ? [us, them] : [them, us];
-    if (w !== 3 || l > 2) return no('Score does not match the result.');
+    if (w !== wins || l >= wins) return no('Score does not match the result.');
   }
   return { ok: true, won: body.won, size, oppElo: clampElo(body.oppElo), score: [us, them], forfeit };
 }

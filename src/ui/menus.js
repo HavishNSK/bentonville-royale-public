@@ -51,7 +51,7 @@ const MODE_IDS = Object.keys(TEAM_MODES);
 // BATTLE ROYALE | BOX FIGHTS; in Box Fights the team-size buttons read 1V1 / 2V2 / 3V3 / 4V4
 const GAME_IDS = ['br', 'boxfights'];
 const GAME_LABELS = { br: 'BATTLE ROYALE', boxfights: 'BOX FIGHTS' };
-const BOX_MODE_LABELS = { solo: '1V1', duo: '2V2', trio: '3V3', squad: '4V4' };
+const BOX_MODE_LABELS = { solo: '1V1', duo: '2V2', trio: '3V3', ffa: 'FFA' };
 const modeLabel = (game, mode) => (game === 'boxfights' ? BOX_MODE_LABELS[mode] || MODE_LABELS[mode] : MODE_LABELS[mode]);
 const gameSeg = (ref) => `<div class="mn-seg mn-seg-game" data-ref="${ref}" role="group" aria-label="Game">${GAME_IDS.map((g) => `<button type="button" data-game="${g}">${GAME_LABELS[g]}</button>`).join('')}</div>`;
 const PARTY_SLOTS = 4;
@@ -999,7 +999,7 @@ export function createMenus(root, opts = {}) {
         b.setAttribute('aria-pressed', String(on));
         b.disabled = !info.isHost;
       });
-      LB.gameHint.textContent = gameId === 'boxfights' ? `${modeLabel(gameId, mode)} indoor arena · first to 3 rounds` : '';
+      LB.gameHint.textContent = gameId === 'boxfights' ? (mode === 'ffa' ? 'FFA indoor arena · 10 rounds, first to 15 elims' : `${modeLabel(gameId, mode)} indoor arena · first to 5 rounds`) : '';
 
       LB.mode.querySelectorAll('button').forEach((b) => {
         const boxOnly = gameId === 'boxfights' && !BOX_MODE_LABELS[b.dataset.mode];

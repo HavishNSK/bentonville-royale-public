@@ -714,6 +714,17 @@ export class ClientSession {
         return this._panelEvent(e);
       case 'left':
         return;
+      case 'rb': {
+        // Box Fights: a bot took over a player who left (same actor id): rename the puppet
+        const pup = this.boxFights && Number.isInteger(e.a) ? this.puppets.get(e.a) : null;
+        if (!pup) return;
+        const old = pup.name;
+        pup.name = typeof e.n === 'string' ? e.n.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 16) || 'Bot' : 'Bot';
+        pup.human = false;
+        pup.boxElo = undefined;
+        if (g.hud && g.hud.killFeed) g.hud.killFeed(`${old} left · ${pup.name} takes over`, 'elim', [old, pup.name], g.player.name);
+        return;
+      }
       case 'rs':
         if (this.boxFights) this._roundStart(e);
         return;
@@ -722,19 +733,34 @@ export class ClientSession {
         if (this.boxFights && g.netFight) g.netFight();
         return;
       case 're':
-        if (this.boxFights && g.netRoundEnd) g.netRoundEnd({ winnerSide: e.w === 0 || e.w === 1 ? e.w : null, score: cleanScore(e.sc) });
+        if (this.boxFights && g.netRoundEnd) g.netRoundEnd({ winnerSide: this._side(e.w), score: this._boxScore(e.sc), elims: this._boxScore(e.el) });
         return;
       case 'end':
         this.ended = true;
         if (this.boxFights) {
           // a malformed winner still ends the match (as a loss) rather than leaving us stuck in it
-          if (g.netBoxEnd) g.netBoxEnd({ winnerSide: e.bw === 0 || e.bw === 1 ? e.bw : -1, score: cleanScore(e.sc), forfeit: e.ff === 1 });
+          if (g.netBoxEnd) g.netBoxEnd({ winnerSide: this._side(e.bw) ?? -1, score: this._boxScore(e.sc), elims: this._boxScore(e.el), forfeit: e.ff === 1, players: cleanStats(e.ps, this._sideCount()) });
           return;
         }
         if (e.w === this.id || (g.teamMode && e.tm != null && e.tm >= 0 && e.tm === g.player.team)) g.netWin();
         return;
       default:
     }
+  }
+
+  /** Box Fights: number of sides (2, or 2..6 in FFA). */
+  _sideCount() {
+    const bf = this.game.boxFight;
+    return bf && Array.isArray(bf.sides) ? bf.sides.length : 2;
+  }
+
+  /** A side index from the host, or null when it is not one of ours. */
+  _side(v) {
+    return Number.isInteger(v) && v >= 0 && v < this._sideCount() ? v : null;
+  }
+
+  _boxScore(sc) {
+    return cleanScore(sc, this._sideCount());
   }
 
   /**
@@ -789,7 +815,7 @@ export class ClientSession {
     }
     const rn = Number.isInteger(e.rn) ? Math.max(1, Math.min(99, e.rn)) : 1;
     const fz = Number.isFinite(e.fz) ? clampN(e.fz, 0, 10) : 3;
-    g.netRoundStart({ round: rn, score: cleanScore(e.sc), freeze: fz, me: spawns.get(this.id) || null });
+    g.netRoundStart({ round: rn, score: this._boxScore(e.sc), elims: this._boxScore(e.el), freeze: fz, me: spawns.get(this.id) || null });
   }
 
   _shot(e) {
@@ -1105,9 +1131,24 @@ function clampN(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-/** A Box Fights score from the host: two small non-negative integers. */
-function cleanScore(sc) {
+/** A Box Fights score / elims list from the host: `len` small non-negative integers. */
+function cleanScore(sc, len = 2) {
   const a = Array.isArray(sc) ? sc : [];
-  const n = (v) => (Number.isInteger(v) ? Math.max(0, Math.min(9, v)) : 0);
-  return [n(a[0]), n(a[1])];
+  const n = (v) => (Number.isInteger(v) ? Math.max(0, Math.min(99, v)) : 0);
+  return Array.from({ length: Math.max(2, Math.min(6, len)) }, (_, i) => n(a[i]));
+}
+
+/** Box Fights end stats rows from the host ('ps'), clamped; names are plain text (textContent only). */
+function cleanStats(ps, sides) {
+  if (!Array.isArray(ps)) return null;
+  const txt = (v) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 16) : '');
+  const num = (v, hi) => (Number.isFinite(v) ? Math.max(0, Math.min(hi, Math.round(v))) : 0);
+  const out = [];
+  for (const r of ps.slice(0, 12)) {
+    if (!Array.isArray(r) || !Number.isInteger(r[0]) || !Number.isInteger(r[1]) || r[1] < 0 || r[1] >= sides) continue;
+    const row = { id: r[0], name: txt(r[6]) || '?', isBot: r[5] === 1, side: r[1], elims: num(r[2], 999), damage: num(r[3], 1e6), builds: num(r[4], 1e5) };
+    if (txt(r[7])) row.replaced = txt(r[7]);
+    out.push(row);
+  }
+  return out;
 }

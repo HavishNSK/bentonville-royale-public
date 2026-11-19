@@ -12,7 +12,7 @@
 //   await acct.mod(op, body) -> lines[]     DEV panel actions (modBan, modTitle, ...); the server checks dev rights
 //   await acct.buy(id) / acct.equip({ skin, pickaxe, backbling, emotes })
 //   await acct.reward({ kills, placement, players, won, ranked }) -> { earned, saved, ranked, guest?, error? }
-//   await acct.boxResult({ won, size, oppElo, score:[us, them], forfeit })
+//   await acct.boxResult({ won, size, oppElo, score:[us, them], forfeit, wins })   (wins: rounds to win, 1..9)
 //     -> { ok:true, elo, delta, tier:{id,name}, games } | { guest:true } | { ok:false, rateLimited:true } | { ok:false, error }
 //   profile.box = { elo, games, wins, peak, tier:{id,name} }   Box Fights Elo (client-reported results, not verified)
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
@@ -302,12 +302,16 @@ export function createAccount() {
      * Box Fights result for the Elo ladder. The server computes the change from its stored rating;
      * the result itself is reported by this browser and is not verified. Guests are never sent.
      */
-    async boxResult({ won = false, size = 1, oppElo = ELO_START, score = [0, 0], forfeit = false } = {}) {
+    async boxResult({ won = false, size = 1, oppElo = ELO_START, score = [0, 0], forfeit = false, wins = 3 } = {}) {
       if (!acct.signedIn) return { guest: true };
       const sc = Array.isArray(score) ? [score[0] | 0, score[1] | 0] : [0, 0];
       try {
         // only the keys the server accepts (any other key is refused)
-        const r = await api('boxResult', { token, won: !!won, size: size | 0, oppElo: clampElo(oppElo), score: sc, forfeit: !!forfeit });
+        const w = Number.isInteger(wins) && wins >= 1 && wins <= 9 ? wins : 3;
+        // `wins` only when it is not the old fixed 3, so a not-yet-updated account server still takes first-to-3
+        const body = { token, won: !!won, size: size | 0, oppElo: clampElo(oppElo), score: sc, forfeit: !!forfeit };
+        if (w !== 3) body.wins = w;
+        const r = await api('boxResult', body);
         if (!r || r.ok !== true || !Number.isFinite(r.elo)) return { ok: false, rateLimited: !!(r && r.rateLimited), error: 'Box Fights Elo is unavailable right now.' };
         const elo = clampElo(r.elo);
         const delta = Number.isFinite(r.delta) ? Math.round(r.delta) : 0;

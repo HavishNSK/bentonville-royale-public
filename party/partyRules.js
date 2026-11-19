@@ -2,9 +2,9 @@
 // node tests can load it). party/partyRoom.js and party/matchmaker.js call these;
 // every input here comes from an untrusted client or peer room.
 
-import { normalizeGame, validGame, validGameMode, partyCap, fitMode, modeSize } from '../src/game/GameModes.js';
+import { normalizeGame, validGame, validGameMode, partyCap, fitMode, modeCapacity } from '../src/game/GameModes.js';
 
-const MODE_LABELS = [['solo', 'Solos'], ['duo', 'Duos'], ['trio', 'Trios'], ['squad', 'Squads']];
+const MODE_LABELS = [['solo', 'Solos'], ['duo', 'Duos'], ['trio', 'Trios'], ['squad', 'Squads'], ['ffa', 'Free-for-all']];
 // Oldest queue timestamp the matchmaker accepts from a ticket.
 const MAX_TICKET_AGE_MS = 600000;
 
@@ -19,7 +19,7 @@ export function modeLabel(mode) {
   return hit ? hit[1] : 'Solos';
 }
 
-/** A mode valid for `game` that holds `members` (squad is valid in both games); null if none. */
+/** A mode valid for `game` that holds `members` (squad is BR only; FFA is Box Fights only); null if none. */
 export function coerceMode(game, mode, members) {
   return fitMode(game, mode, members);
 }
@@ -48,16 +48,17 @@ export function joinMode(game, mode, members) {
 /** Leader's {t:'setGame'}: null = ignore, {error}, or {game, mode, modeChanged}. */
 export function setGameDecision({ game, mode, members, next }) {
   if (!validGame(next) || next === game) return null;
-  if (members > partyCap(next)) return { error: 'Box Fights teams are up to 4' };
+  if (members > partyCap(next)) return { error: 'Parties are up to 4 players' };
   const fit = coerceMode(next, mode, members);
-  if (!fit) return { error: 'Box Fights teams are up to 4' };
+  if (!fit) return { error: 'No mode fits your party' };
   return { game: next, mode: fit, modeChanged: fit !== mode };
 }
 
 /** Leader's {t:'setMode'}: null = ignore, {error}, or {mode}. */
 export function setModeDecision({ game, members, next }) {
   if (!validGameMode(game, next)) return null;
-  if (modeSize(next) < members) return { error: `Your party has ${members} players. That mode fits ${modeSize(next)}.` };
+  const cap = modeCapacity(game, next);
+  if (cap < members) return { error: `Your party has ${members} players. That mode fits ${cap}.` };
   return { mode: next };
 }
 
