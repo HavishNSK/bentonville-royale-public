@@ -1,0 +1,596 @@
+{
+  "brick_red": [
+    {
+      "ref": "entrance.jpg",
+      "rects": [
+        [
+          240,
+          170,
+          140,
+          60
+        ],
+        [
+          5,
+          60,
+          40,
+          150
+        ],
+        [
+          300,
+          240,
+          150,
+          35
+        ],
+        [
+          30,
+          250,
+          25,
+          20
+        ]
+      ]
+    }
+  ],
+  "brick_soldier_band": [
+    {
+      "ref": "entrance.jpg",
+      "rects": [
+        [
+          60,
+          302,
+          200,
+          24
+        ],
+        [
+          300,
+          360,
+          150,
+          20
+        ]
+      ]
+    }
+  ],
+  "buff_fascia": [
+    {
+      "ref": "walkwaybetweenschools.jpg",
+      "rects": [
+        [
+          20,
+          90,
+          60,
+          22
+        ],
+        [
+          330,
+          112,
+          60,
+          18
+        ]
+      ]
+    }
+  ],
+  "metal_panel_white": [
+    {
+      "ref": "entrance.jpg",
+      "rects": [
+        [
+          965,
+          100,
+          14,
+          300
+        ],
+        [
+          540,
+          72,
+          250,
+          38
+        ]
+      ]
+    }
+  ],
+  "metal_panel_grey": [
+    {
+      "ref": "entrance.jpg",
+      "rects": [
+        [
+          240,
+          30,
+          200,
+          60
+        ]
+      ]
+    }
+  ],
+  "curtain_glass": [
+    {
+      "ref": "entrance.jpg",
+      "rects": [
+        [
+          560,
+          130,
+          250,
+          90
+        ],
+        [
+          900,
+          40,
+          50,
+          120
+        ]
+      ]
+    }
+  ],
+  "canopy_fascia": [
+    {
+      "ref": "entrance.jpg",
+      "rects": [
+        [
+          480,
+          396,
+          340,
+          14
+        ]
+      ]
+    }
+  ],
+  "storefront_frame": [
+    {
+      "ref": "entrance.jpg",
+      "rects": [
+        [
+          60,
+          360,
+          40,
+          220
+        ],
+        [
+          370,
+          420,
+          12,
+          160
+        ]
+      ]
+    }
+  ],
+  "paving_concrete": [
+    {
+      "ref": "entrance.jpg",
+      "rects": [
+        [
+          100,
+          610,
+          600,
+          30
+        ]
+      ]
+    }
+  ],
+  "commons_wood_band": [
+    {
+      "ref": "viewofnorthbuildingcafeteriafrom2ndfloorbridge.jpg",
+      "rects": [
+        [
+          110,
+          20,
+          110,
+          15
+        ],
+        [
+          260,
+          20,
+          60,
+          15
+        ],
+        [
+          440,
+          70,
+          60,
+          30
+        ]
+      ]
+    },
+    {
+      "ref": "northbuildingcafeteriafirstfloor.jpg",
+      "rects": [
+        [
+          280,
+          60,
+          50,
+          30
+        ],
+        [
+          150,
+          150,
+          60,
+          20
+        ]
+      ]
+    }
+  ],
+  "commons_block_grey": [
+    {
+      "ref": "viewofnorthbuildingcafeteriafrom2ndfloorbridge.jpg",
+      "rects": [
+        [
+          110,
+          130,
+          100,
+          30
+        ],
+        [
+          360,
+          100,
+          40,
+          30
+        ]
+      ]
+    }
+  ],
+  "commons_column": [
+    {
+      "ref": "viewofnorthbuildingcafeteriafrom2ndfloorbridge.jpg",
+      "rects": [
+        [
+          75,
+          40,
+          20,
+          150
+        ],
+        [
+          230,
+          30,
+          15,
+          100
+        ]
+      ]
+    }
+  ],
+  "commons_floor_dark": [
+    {
+      "ref": "viewofnorthbuildingcafeteriafrom2ndfloorbridge.jpg",
+      "rects": [
+        [
+          10,
+          330,
+          120,
+          30
+        ]
+      ]
+    },
+    {
+      "ref": "northbuildingcafeteriafirstfloor.jpg",
+      "rects": [
+        [
+          300,
+          380,
+          80,
+          30
+        ]
+      ]
+    }
+  ],
+  "commons_floor_light": [
+    {
+      "ref": "viewofnorthbuildingcafeteriafrom2ndfloorbridge.jpg",
+      "rects": [
+        [
+          170,
+          385,
+          80,
+          25
+        ]
+      ]
+    },
+    {
+      "ref": "northbuildingcafeteriafirstfloor.jpg",
+      "rects": [
+        [
+          150,
+          360,
+          80,
+          30
+        ]
+      ]
+    }
+  ],
+  "commons_banner": [
+    {
+      "ref": "viewofnorthbuildingcafeteriafrom2ndfloorbridge.jpg",
+      "rects": [
+        [
+          560,
+          95,
+          30,
+          15
+        ],
+        [
+          670,
+          98,
+          30,
+          15
+        ]
+      ]
+    }
+  ],
+  "commons_upper_wall": [
+    {
+      "ref": "northbuildingcafeteriafirstfloor.jpg",
+      "rects": [
+        [
+          370,
+          70,
+          40,
+          30
+        ]
+      ]
+    }
+  ],
+  "library_wall_white": [
+    {
+      "ref": "bhslibrary.jpg",
+      "rects": [
+        [
+          230,
+          40,
+          50,
+          30
+        ],
+        [
+          20,
+          110,
+          40,
+          40
+        ]
+      ]
+    }
+  ],
+  "library_brick_pier": [
+    {
+      "ref": "bhslibrary.jpg",
+      "rects": [
+        [
+          320,
+          20,
+          20,
+          120
+        ],
+        [
+          430,
+          60,
+          12,
+          80
+        ]
+      ]
+    }
+  ],
+  "library_carpet_grey": [
+    {
+      "ref": "bhslibrary.jpg",
+      "rects": [
+        [
+          200,
+          250,
+          20,
+          50
+        ],
+        [
+          260,
+          330,
+          40,
+          15
+        ]
+      ]
+    },
+    {
+      "ref": "libraryimage2.jpg",
+      "rects": [
+        [
+          340,
+          240,
+          120,
+          50
+        ]
+      ]
+    }
+  ],
+  "library_carpet_red": [
+    {
+      "ref": "bhslibrary.jpg",
+      "rects": [
+        [
+          100,
+          345,
+          30,
+          15
+        ],
+        [
+          370,
+          345,
+          20,
+          15
+        ]
+      ]
+    }
+  ],
+  "library_shelf_wood": [
+    {
+      "ref": "bhslibrary.jpg",
+      "rects": [
+        [
+          60,
+          280,
+          30,
+          10
+        ],
+        [
+          325,
+          200,
+          30,
+          8
+        ]
+      ]
+    },
+    {
+      "ref": "libraryimage2.jpg",
+      "rects": [
+        [
+          200,
+          190,
+          60,
+          8
+        ]
+      ]
+    }
+  ],
+  "library_shelf_end_white": [
+    {
+      "ref": "bhslibrary.jpg",
+      "rects": [
+        [
+          145,
+          320,
+          30,
+          30
+        ],
+        [
+          230,
+          310,
+          30,
+          15
+        ]
+      ]
+    }
+  ],
+  "aac_seat": [
+    {
+      "ref": "bhsaacarendartscenter.jpg",
+      "rects": [
+        [
+          100,
+          220,
+          150,
+          20
+        ],
+        [
+          300,
+          230,
+          100,
+          20
+        ]
+      ]
+    }
+  ],
+  "aac_stage_wood": [
+    {
+      "ref": "bhsaacarendartscenter.jpg",
+      "rects": [
+        [
+          305,
+          120,
+          60,
+          50
+        ],
+        [
+          420,
+          135,
+          60,
+          40
+        ]
+      ]
+    }
+  ],
+  "aac_wall_panel": [
+    {
+      "ref": "bhsaacarendartscenter.jpg",
+      "rects": [
+        [
+          100,
+          80,
+          70,
+          60
+        ],
+        [
+          200,
+          90,
+          40,
+          50
+        ]
+      ]
+    }
+  ],
+  "aac_ceiling": [
+    {
+      "ref": "bhsaacarendartscenter.jpg",
+      "rects": [
+        [
+          300,
+          30,
+          120,
+          25
+        ],
+        [
+          80,
+          50,
+          60,
+          15
+        ]
+      ]
+    }
+  ],
+  "aac_curtain_gold": [
+    {
+      "ref": "bhsaacarendartscenter.jpg",
+      "rects": [
+        [
+          330,
+          80,
+          150,
+          15
+        ]
+      ]
+    }
+  ],
+  "cmu_light_north": [
+    {
+      "ref": "entrance.jpg",
+      "rects": [
+        [
+          840,
+          100,
+          40,
+          350
+        ],
+        [
+          845,
+          500,
+          40,
+          80
+        ]
+      ]
+    }
+  ],
+  "buff_brick_south": [
+    {
+      "ref": "walkwaybetweenschools.jpg",
+      "rects": [
+        [
+          210,
+          210,
+          35,
+          110
+        ],
+        [
+          600,
+          200,
+          25,
+          80
+        ],
+        [
+          715,
+          210,
+          20,
+          80
+        ]
+      ]
+    }
+  ]
+}

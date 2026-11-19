@@ -717,6 +717,23 @@ function postTable(S,c,x) {
   B(w*0.22,d*0.22,w*0.78,d*0.78,0,0.04,shade(c,0.45),TP|FR|BK);
 }
 
+// A single reserved footprint keeps the chairs paired with their table even in clipped rooms.
+function commonsTable({ w, d, H, oct, B }) {
+  const u = w / 2, v = d / 2;
+  const metal = 0x898d8c, seat = 0x303335;
+  oct(u, v, 0.58, 0.58, 0.34, 0.70, 0.75, 0xae977d);
+  B(u - 0.055, v - 0.055, u + 0.055, v + 0.055, 0.04, 0.70, metal, SIDES);
+  B(u - 0.27, v - 0.27, u + 0.27, v + 0.27, 0, 0.04, seat);
+  for (const side of [-1, 1]) {
+    const center = v + side * 0.78, back = center + side * 0.19;
+    B(u - 0.22, center - 0.20, u + 0.22, center + 0.20, 0.42, 0.46, seat);
+    B(u - 0.21, back - 0.025, u + 0.21, back + 0.025, 0.46, H, seat);
+    for (const offset of [-0.17, 0.17]) {
+      B(u + offset - 0.015, center - 0.12, u + offset + 0.015, center + 0.12, 0, 0.42, metal, SIDES);
+    }
+  }
+}
+
 function tank(S,c,x) {
   const {w,d,H,oct,cone,B,legs} = S;
   const cu = w/2, cv = d/2, ru = w/2-0.04, rv = d/2-0.04, k = Math.min(ru,rv)*0.6;
@@ -1088,7 +1105,7 @@ const SHAPES = {
   locker_bank: lockerBank, seat_row: seatRow, stage, bleachers, hoop, court_lines: courtLines,
   long_table: longTable, serving_line: servingLine, pew, judge_bench: judgeBench,
   witness_stand: witnessStand, jury_box: juryBox, railing, bar_counter: barCounter,
-  high_top: postTable, cafe_table: postTable, tank, food_stall: foodStall, record_bin: recordBin,
+  high_top: postTable, cafe_table: postTable, commons_table: commonsTable, tank, food_stall: foodStall, record_bin: recordBin,
   easel, banquet_table: banquetTable, podium, installation, gallery_bench: galleryBench,
   painting: (S,c,x,R,p) => hasArt(p) ? artwork(S,R,p,false) : painting(S,c,x,R,false),
   painting_large: (S,c,x,R,p) => hasArt(p) ? artwork(S,R,p,true) : painting(S,c,x,R,true),

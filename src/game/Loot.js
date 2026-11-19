@@ -358,6 +358,31 @@ export class Loot {
     return rec;
   }
 
+  /**
+   * Collider c was just destroyed (already removed from the world): every unopened record resting on
+   * its top drops to the highest surface left below it. Returns the number of records moved.
+   */
+  dropFrom(c) {
+    if (!c || !this.world) return 0;
+    const top = c.h != null ? c.h : c.y1;
+    if (!Number.isFinite(top)) return 0;
+    const x0 = c.minX ?? (c.x != null ? c.x - (c.r || 0) : -Infinity);
+    const x1 = c.maxX ?? (c.x != null ? c.x + (c.r || 0) : Infinity);
+    const z0 = c.minZ ?? (c.z != null ? c.z - (c.r || 0) : -Infinity);
+    const z1 = c.maxZ ?? (c.z != null ? c.z + (c.r || 0) : Infinity);
+    let moved = 0;
+    for (const r of this.records) {
+      if (r.opened || Math.abs(r.y - top) > 0.2 || r.x < x0 || r.x > x1 || r.z < z0 || r.z > z1) continue;
+      const below = this.world.groundHeight(r.x, r.z, r.y - 0.1, 0);
+      if (!Number.isFinite(below) || below >= r.y - 0.05) continue;
+      r.y = below;
+      if (r.info && r.info.position) r.info.position.y = below;
+      moved++;
+    }
+    if (moved) this._blipsDirty = true;
+    return moved;
+  }
+
   _remove(rec) {
     this._fxOff(rec);
     const last = this.records.pop();

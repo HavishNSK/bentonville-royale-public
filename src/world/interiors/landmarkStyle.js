@@ -14,6 +14,8 @@
 // language (warm concrete, timber-beamed galleries on wood floors, limestone circulation, a cool
 // glass-tinted bridge). No artwork, titles or artist names are taken from that project.
 
+import { BHS_STYLE } from './bhs.js';
+
 const CONCRETE = 0xd8d1c2;
 const CEILING = 0xe9e4d8;
 const THRESHOLD = 0x555047;
@@ -25,6 +27,7 @@ const LIMESTONE = Object.freeze({ wall: CONCRETE, floor: 0xc5c0b5, ceiling: CEIL
 const BRIDGE = Object.freeze({ ...GALLERY, wall: 0xbecac0 });
 
 export const LANDMARK_STYLE = Object.freeze({
+  ...BHS_STYLE,
   8240824: Object.freeze({
     kinds: Object.freeze({ gallery: GALLERY, lobby: LIMESTONE, hall: LIMESTONE, corridor: LIMESTONE, open: LIMESTONE }),
     labels: Object.freeze({

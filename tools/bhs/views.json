@@ -1,0 +1,195 @@
+[
+  {
+    "name": "north-entrance",
+    "ref": "entrance.jpg",
+    "cam": {
+      "x": -53,
+      "y": 1.7,
+      "z": 238.5,
+      "tx": -39,
+      "ty": 6,
+      "tz": 248.5,
+      "hfov": 68
+    }
+  },
+  {
+    "name": "north-entrance-drawing",
+    "ref": "drawingofnorthbuildingentrance.jpg",
+    "cam": {
+      "x": -56.5,
+      "y": 2,
+      "z": 230,
+      "tx": -39,
+      "ty": 7,
+      "tz": 249,
+      "hfov": 66
+    }
+  },
+  {
+    "name": "north-oblique",
+    "ref": "3Dfrontview.png",
+    "cam": {
+      "x": -170,
+      "y": 85,
+      "z": 238,
+      "tx": 0,
+      "ty": 0,
+      "tz": 215,
+      "hfov": 55
+    },
+    "tp": [
+      -70,
+      230
+    ]
+  },
+  {
+    "name": "commons-floor",
+    "ref": "northbuildingcafeteriafirstfloor.jpg",
+    "cam": {
+      "x": -33,
+      "y": 1.7,
+      "z": 238,
+      "tx": -14,
+      "ty": 5.8,
+      "tz": 214,
+      "hfov": 72
+    },
+    "tp": [
+      -30,
+      237
+    ]
+  },
+  {
+    "name": "commons-bridge",
+    "ref": "viewofnorthbuildingcafeteriafrom2ndfloorbridge.jpg",
+    "cam": {
+      "x": -8.8,
+      "y": 6.2,
+      "z": 238,
+      "tx": -24,
+      "ty": 1.5,
+      "tz": 207,
+      "hfov": 72
+    },
+    "tp": [
+      -8.5,
+      238
+    ]
+  },
+  {
+    "name": "south-court",
+    "ref": "south.png",
+    "cam": {
+      "x": -10,
+      "y": 42,
+      "z": 268,
+      "tx": -10,
+      "ty": 2,
+      "tz": 320,
+      "hfov": 60
+    },
+    "tp": [
+      -10,
+      285
+    ]
+  },
+  {
+    "name": "walkway",
+    "ref": "walkwaybetweenschools.jpg",
+    "cam": {
+      "x": -24,
+      "y": 1.7,
+      "z": 292,
+      "tx": -6,
+      "ty": 3.5,
+      "tz": 280,
+      "hfov": 66
+    },
+    "tp": [
+      -24,
+      292
+    ]
+  },
+  {
+    "name": "campus-oblique",
+    "ref": "labeled3Dview.png",
+    "cam": {
+      "x": -60,
+      "y": 120,
+      "z": 150,
+      "tx": 10,
+      "ty": 0,
+      "tz": 330,
+      "hfov": 60
+    },
+    "tp": [
+      -60,
+      270
+    ]
+  },
+  {
+    "name": "north-from-south",
+    "ref": "north.png",
+    "cam": {
+      "x": -6,
+      "y": 24,
+      "z": 300,
+      "tx": -6,
+      "ty": 6,
+      "tz": 250,
+      "hfov": 62
+    },
+    "tp": [
+      -6,
+      290
+    ]
+  },
+  {
+    "name": "north-corridor",
+    "cam": {
+      "x": -20,
+      "y": 1.6,
+      "z": 245.3,
+      "tx": 30,
+      "ty": 1.4,
+      "tz": 245.3,
+      "hfov": 70
+    },
+    "tp": [
+      -20,
+      245.3
+    ]
+  },
+  {
+    "name": "court-from-class",
+    "cam": {
+      "x": 9,
+      "y": 1.6,
+      "z": 241.5,
+      "tx": 12,
+      "ty": 1.2,
+      "tz": 215,
+      "hfov": 72
+    },
+    "tp": [
+      9,
+      241.5
+    ]
+  },
+  {
+    "name": "lobby-inside",
+    "cam": {
+      "x": -33,
+      "y": 1.7,
+      "z": 246,
+      "tx": 0,
+      "ty": 2,
+      "tz": 245,
+      "hfov": 72
+    },
+    "tp": [
+      -33,
+      246
+    ]
+  }
+]
