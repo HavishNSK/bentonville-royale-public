@@ -611,6 +611,17 @@
   filter: drop-shadow(0 calc(var(--u) * 4) 0 rgba(21, 16, 58, 0.35));
   animation: mt-pop 0.3s var(--br-spring);
 }
+/* bundles: a wide banner card (its art is one 16:9 poster drawn by Showcase.bundleArt) */
+.mt-item.is-bundle {
+  grid-column: span 2;
+}
+.mt-item.is-bundle .mt-item-art {
+  aspect-ratio: 16 / 9;
+}
+.mt-item.is-bundle .mt-item-art img {
+  object-fit: cover;
+  filter: none;
+}
 @keyframes mt-pop {
   from {
     opacity: 0;

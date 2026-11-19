@@ -46,7 +46,7 @@ function cleanName(name) {
   return s && nameIsClean(s) ? s : 'Player'; // names with swear words show as Player
 }
 
-/** Look shown in the lobby line-up: "skin|pickaxe|backbling" (Cosmetics.lookString; unchecked, cosmetic only). */
+/** Look shown in the lobby line-up: "skin|pickaxe|backbling|glider" (Cosmetics.lookString; unchecked, cosmetic only). */
 function cleanSkin(s) {
   const v = String(s || '').replace(/[^a-z0-9_|]/g, '').slice(0, 96);
   return v.startsWith('skin_') ? v : null;

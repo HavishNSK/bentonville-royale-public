@@ -8,10 +8,12 @@ import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { damp, clamp, WEAPONS, SWIM } from '../core/config.js';
 import { toToon } from '../render/Toon.js';
-import { emoteClips, emoteDef, pickaxeDef, backblingDef, swingClips, skinDef } from './Cosmetics.js';
+import { emoteClips, emoteDef, pickaxeDef, backblingDef, gliderDef, swingClips, skinDef } from './Cosmetics.js';
 import { normalizeSkin, paintKey, recolorPixels, KIT_PARTS, PART_SLOTS, RECIPE_KITS, RIGID_SLOT_BONE, ADDON_BONES } from './skinRecipe.js';
 import { addonGeometries, addonMaterial } from '../render/SkinAddons.js';
 import { buildPaddle } from '../render/Paddle.js';
+import { buildPawPickaxe, buildGecko } from '../render/PupGear.js';
+import { attachFurGear } from '../render/FurGear.js';
 import { grenadeModel } from './Grenades.js';
 
 // Characters and their weapons are cel-shaded; colours get a small saturation lift.
@@ -24,6 +26,7 @@ const LOCO_CLIP = { idle: 'Idle', walk: 'Walking_A', run: 'Running_A', back: 'Wa
 const UPPER_CLIP = {
   aim2: '2H_Ranged_Aiming', aim1: '1H_Ranged_Aiming', shoot2: '2H_Ranged_Shoot', shoot1: '1H_Ranged_Shoot', swing: '2H_Melee_Attack_Chop', use: 'Use_Item',
   reload: '2H_Ranged_Reload', reload1: '1H_Ranged_Reload', hit: 'Hit_A', throw: 'Throw', pickup: 'PickUp',
+  paws: 'Blocking', // 'Paws Up' glider (Cosmetics.GLIDERS.gl_paws): both fists held up in front of the chest
 };
 // Ground speed (m/s) each gait clip looks right at: the cycle is played faster / slower around
 // it, and forward motion cross-fades walk -> run between WALK_TO_RUN speeds (no foot sliding
@@ -281,6 +284,7 @@ export function cosmeticMesh(id, pickSrc) {
   if (!def) return null;
   if (def.src) return accessory(def.src[0], def.src[1], def.tint);
   if (pk && pk.proc) return proceduralPickaxe(pk.proc);
+  if (bb && bb.proc) return proceduralBackbling(bb.proc);
   if (pk && pickSrc) {
     const g = pickSrc.clone(true);
     g.traverse((o) => {
@@ -296,10 +300,22 @@ export function cosmeticMesh(id, pickSrc) {
 const PICKAXES_ID = /^pick_/;
 
 /** Pickaxes built in code (Cosmetics PICKAXES[id].proc), toon-shaded like the kit meshes. */
+const procMat = (color) => toToon(new THREE.MeshStandardMaterial({ color, roughness: 0.6 }), TOON_CHAR);
 function proceduralPickaxe(kind) {
-  if (kind !== 'paddle') return null;
-  return buildPaddle((color) => toToon(new THREE.MeshStandardMaterial({ color, roughness: 0.6 }), TOON_CHAR));
+  if (kind === 'paddle') return buildPaddle(procMat);
+  if (kind === 'paw') return buildPawPickaxe(procMat);
+  return null;
 }
+
+/** Back blings built in code (Cosmetics BACKBLINGS[id].proc), in their own frame. */
+function proceduralBackbling(kind) {
+  if (kind === 'gecko') return buildGecko(procMat);
+  return null;
+}
+// where a procedural back bling sits on the chest bone (same frame as BACK_POSE)
+const PROC_BACK_POSE = {
+  gecko: { p: [0, 0.12, -0.36], r: [0, Math.PI, 0], s: 0.95 },
+};
 
 // a hand item moved onto the back (chest bone frame: +Y up the spine, +Z forward)
 const BACK_POSE = {
@@ -345,6 +361,8 @@ export class Character {
       if (o.isBone) this.bones[o.name] = o;
     });
     const recipe = opts.skin ? skinRecipe(opts.skin) : null;
+    // an outfit's own standing-still pose (SKINS[id].idle): 'paws' = both paws held up in front
+    this.idlePose = opts.skin && opts.skin.idle === 'paws' ? 'paws' : null;
     const tint = opts.tint != null ? opts.tint : recipe ? recipe.tint : null;
     if (recipe && recipe.custom) dressParts(this.model, this.bones, recipe);
     this.model.traverse((o) => {
@@ -359,6 +377,8 @@ export class Character {
       }
     });
     if (recipe && recipe.addons.length) attachAddons(this.model, this.bones, recipe.addons);
+    // realistic shell-fur paw boots and gloves (SKINS[id].gear === 'furPaws', render/FurGear.js)
+    if (opts.skin && opts.skin.gear === 'furPaws') attachFurGear(this.bones);
 
     this.mixer = new THREE.AnimationMixer(this.model);
     this.lo = {};
@@ -441,6 +461,9 @@ export class Character {
     canopy.visible = false;
     this.root.add(canopy);
     this.canopy = canopy;
+    this.gliderId = null;
+    this.gliderPose = null;
+    this.setLoadout({ glider: opts.glider || 'gl_default' });
 
     // knocked (team modes): a pulsing red ring on the ground under the crawling body (its own
     // material: the toon materials above are shared by every clone and must not be tinted)
@@ -640,7 +663,13 @@ export class Character {
    * Pickaxe (Cosmetics.PICKAXES id) in the right hand and back bling (BACKBLINGS id) on the
    * chest; swapped in place (no rebuild), keeping whether the pickaxe is currently shown.
    */
-  setLoadout({ pickaxe, backbling } = {}) {
+  setLoadout({ pickaxe, backbling, glider } = {}) {
+    if (glider && glider !== this.gliderId) {
+      const def = gliderDef(glider);
+      this.gliderPose = def.pose || null;
+      if (def.canopy != null) this.canopy.material.color.setHex(def.canopy);
+      this.gliderId = glider;
+    }
     if (pickaxe && pickaxe !== this.pickaxeId) {
       const def = pickaxeDef(pickaxe);
       let g = null;
@@ -672,7 +701,7 @@ export class Character {
       if (this._backItem && this._backItem.parent) this._backItem.parent.remove(this._backItem);
       this._backItem = null;
       // the outfit's own cape shows only with 'bb_outfit'
-      const own = !def.src && !def.none;
+      const own = !def.src && !def.none && !def.proc;
       this.model.traverse((o) => {
         if (o.isMesh && !o.isSkinnedMesh && (/_Cape/.test(o.name) || (o.parent && /_Cape/.test(o.parent.name)))) o.visible = own;
       });
@@ -682,6 +711,19 @@ export class Character {
         const chest = this.bones.chest;
         if (g && chest) {
           const pose = slot === 'back' && BACK_POSE[name];
+          if (pose) {
+            g.position.set(...pose.p);
+            g.rotation.set(...pose.r);
+            g.scale.setScalar(pose.s);
+          }
+          chest.add(g);
+          this._backItem = g;
+        }
+      } else if (def.proc) {
+        const g = proceduralBackbling(def.proc);
+        const chest = this.bones.chest;
+        const pose = PROC_BACK_POSE[def.proc];
+        if (g && chest) {
           if (pose) {
             g.position.set(...pose.p);
             g.rotation.set(...pose.r);
@@ -777,6 +819,8 @@ export class Character {
     this.model.rotation.z = 0;
     this.downRing.visible = false;
     this.model.rotation.x = 0;
+    this.model.rotation.y = 0;
+    this._paws = this._kick = this._spin = this._beg = this._arms = 0;
     this.model.position.copy(this._modelPos);
     const eq = this.equipped;
     this.equipped = null;
@@ -797,7 +841,25 @@ export class Character {
     // body yaw eases toward the heading (shortest way round): no snapping when a bot or a
     // remote player's heading arrives in steps
     this.turn(dt, s.heading);
-    this.canopy.visible = !!s.gliding && this.mode !== 'dead';
+    const gliding = !!s.gliding && this.mode !== 'dead';
+    this.canopy.visible = gliding && !this.gliderPose;
+    // glider poses (Cosmetics.GLIDERS[id].pose), no canopy for any of them:
+    //   'paws' Paws Up: belly-down, both paws held up in front
+    //   'kick' Puppy Kick: belly-down, paws up, legs kicking back and forth behind
+    //   'spin' Tail Spin: upright, paws up, one knee up, twirling slowly on the way down
+    const pose = gliding && !this.downed ? this.gliderPose : null;
+    const blend = (cur, on, rate) => {
+      const v = damp(cur || 0, on ? 1 : 0, rate, dt);
+      return v < 0.002 && !on ? 0 : v;
+    };
+    this._paws = blend(this._paws, pose === 'paws', 6);
+    this._kick = blend(this._kick, pose === 'kick', 6);
+    this._spin = blend(this._spin, pose === 'spin', 6);
+    // outfit idle: paws up while standing still with nothing but the pickaxe in hand
+    const begT =
+      this.idlePose === 'paws' && this.mode === 'alive' && s.grounded && !gliding && (s.speed || 0) < 0.3 && !this.downed && !this.seated && !this.swimming && !this.shot && (!this.equipped || this.equipped === 'pickaxe');
+    this._beg = blend(this._beg, begT, 5);
+    this._arms = Math.max(this._paws, this._kick, this._spin, this._beg); // weight of the paws arm layer
     // prone blend (runs even when the skeleton is not animated this frame)
     const downT = this.downed ? 1 : 0;
     if (this._down !== downT || this.downed) {
@@ -916,13 +978,14 @@ export class Character {
         this._emFade = null;
       }
     }
-    const over = Math.max(this.aim, this.shotW);
+    const over = Math.max(this.aim, this.shotW, this._arms);
     const aimKey = this.twoHanded ? 'aim2' : 'aim1';
     for (const key in this.ov) {
       const a = this.ov[key];
       if (a === this.shot) a.setEffectiveWeight(this.shotW * fullW);
       else if (a === this._shotOld) a.setEffectiveWeight(this._oldW * (1 - this.shotW) * fullW);
-      else if (key === aimKey) a.setEffectiveWeight(this.aim * (1 - this.shotW) * fullW);
+      else if (key === aimKey) a.setEffectiveWeight(this.aim * (1 - this.shotW) * (1 - this._arms) * fullW);
+      else if (key === 'paws') a.setEffectiveWeight(this._arms * (1 - this.shotW) * fullW);
       else a.setEffectiveWeight(0);
     }
     // Walk / run / backpedal / strafes share one gait phase so blending between them never
@@ -974,6 +1037,37 @@ export class Character {
     } else if (this._lean) {
       this._lean = 0;
       this.model.rotation.z = 0;
+    }
+
+    // glide poses on top of the clips (see the pose blends above)
+    const posing = this._paws > 0 || this._kick > 0 || this._spin > 0;
+    if (!this.downed && (posing || this._pawsTilt)) {
+      const t = this._clock;
+      const P = this._paws;
+      const K = this._kick;
+      const S = this._spin;
+      // belly-down tilt (Paws Up, Puppy Kick) with a slow side-to-side drift; Tail Spin leans back a touch
+      this.model.rotation.x = P * (0.95 + 0.06 * Math.sin(t * 2.1)) + K * (0.85 + 0.05 * Math.sin(t * 2.6)) - S * 0.12;
+      this.model.rotation.z = (this._lean || 0) + P * 0.12 * Math.sin(t * 1.3) + K * 0.07 * Math.sin(t * 1.7);
+      // Tail Spin: a slow twirl (it settles back when the glide ends)
+      if (S > 0) this._spinAng = ((this._spinAng || 0) + dt * 3.0 * S) % (Math.PI * 2);
+      else this._spinAng = 0;
+      this.model.rotation.y = this._spinAng;
+      const b = this.bones;
+      if (b.head) b.head.rotateX(-(P * (0.55 + 0.08 * Math.sin(t * 4.2)) + K * (0.5 + 0.06 * Math.sin(t * 5))) + S * 0.15 * Math.sin(t * 3));
+      // Puppy Kick: knees bent, feet kicking up behind, left and right in turn
+      if (K > 0) {
+        for (const [side, ph] of [['l', 0], ['r', Math.PI]]) {
+          if (b['upperleg' + side]) b['upperleg' + side].rotateX(K * 0.3);
+          if (b['lowerleg' + side]) b['lowerleg' + side].rotateX(K * (1.1 + 0.45 * Math.sin(t * 7 + ph)));
+        }
+      }
+      // Tail Spin: one knee up, the other leg straight
+      if (S > 0) {
+        if (b.upperlegl) b.upperlegl.rotateX(S * 0.9);
+        if (b.lowerlegl) b.lowerlegl.rotateX(-S * 1.3);
+      }
+      this._pawsTilt = posing;
     }
 
     if (!dead && this.aim > 0.02) {

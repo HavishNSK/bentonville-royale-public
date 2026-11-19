@@ -209,10 +209,10 @@ export class ClientSession {
       }
       const kit = kits[info.k] || kits.player;
       // bots' pickaxe / back bling follow from their id; humans send theirs
-      const look = info.h ? { pickaxe: info.px || undefined, backbling: info.bb || undefined } : botLoadout(info.id);
+      const look = info.h ? { pickaxe: info.px || undefined, backbling: info.bb || undefined, glider: info.gl || undefined } : botLoadout(info.id);
       const ch =
         info.sk && SKINS[info.sk] && game.makeSkinCharacter
-          ? game.makeSkinCharacter(info.sk, info.c, look.pickaxe, look.backbling)
+          ? game.makeSkinCharacter(info.sk, info.c, look.pickaxe, look.backbling, look.glider)
           : kit
             ? new Character(kit, { weapons: game.weaponScenes, canopyColor: info.c, ...look })
             : null;
@@ -229,7 +229,7 @@ export class ClientSession {
     this.aliveCount = start.roster.length;
     if (game.pumps && start.pumps) game.pumps.applySnapshot(start.pumps); // gas pumps already hurt / gone
     // tell the host (and through it everyone) which outfit we wear
-    if (game.skin && SKINS[game.skin]) this.action({ k: 'sk', id: game.skin, px: game.pickaxe, bb: game.backbling });
+    if (game.skin && SKINS[game.skin]) this.action({ k: 'sk', id: game.skin, px: game.pickaxe, bb: game.backbling, gl: game.glider });
     // Box Fights: our reported Box Elo (the host relays it; opponents use it for their result)
     if (this.boxFights) {
       const own = reportedElo(game.boxEloSelf);
@@ -544,7 +544,7 @@ export class ClientSession {
       case 'sk': {
         if (e.a === this.id) return;
         const pup = this.puppets.get(e.a);
-        if (pup && g.reskinActor) g.reskinActor(pup, SKINS[e.id] ? e.id : null, e.px, e.bb);
+        if (pup && g.reskinActor) g.reskinActor(pup, SKINS[e.id] ? e.id : null, e.px, e.bb, e.gl);
         return;
       }
       case 'elo': {

@@ -19,7 +19,7 @@
 // User text always goes through textContent.
 
 import './meta.css';
-import { SKINS, EMOTES, PICKAXES, BACKBLINGS, EMOTE_SLOTS, PRICES, featuredToday, emoteDef, cosmeticDef } from '../game/Cosmetics.js';
+import { SKINS, EMOTES, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, EMOTE_SLOTS, PRICES, featuredToday, emoteDef, cosmeticDef } from '../game/Cosmetics.js';
 import { createShowcase } from './Showcase.js';
 import { PATCH_NOTES, LATEST_VERSION } from '../data/patchNotes.js';
 import { RANKED_NOTE } from '../core/config.js';
@@ -87,7 +87,7 @@ function btn(label, cls = 'mn-btn mn-btn-small', act) {
   return b;
 }
 const RARITY_CSS = { common: 'var(--br-common)', uncommon: 'var(--br-uncommon)', rare: 'var(--br-rare)', epic: 'var(--br-epic)', legendary: 'var(--br-legendary)' };
-const KIND_LABEL = { skin: 'Outfit', pickaxe: 'Pickaxe', backbling: 'Back Bling', emote: 'Emote' };
+const KIND_LABEL = { skin: 'Outfit', pickaxe: 'Pickaxe', backbling: 'Back Bling', glider: 'Glider', bundle: 'Bundle', emote: 'Emote' };
 
 export function createMeta(menus, account, opts = {}) {
   const titleEl = menus.el.querySelector('.mn-title');
@@ -123,7 +123,7 @@ export function createMeta(menus, account, opts = {}) {
 
   function lineUp() {
     const eq = account.profile.equipped;
-    const me = { name: account.profile.guest ? '' : account.profile.name, skin: eq.skin, pickaxe: eq.pickaxe, backbling: eq.backbling, you: true };
+    const me = { name: account.profile.guest ? '' : account.profile.name, skin: eq.skin, pickaxe: eq.pickaxe, backbling: eq.backbling, glider: eq.glider, you: true };
     const others = (opts.partyMembers ? opts.partyMembers() : [])
       .filter((m) => !m.you)
       .map((m) => ({ name: m.name, skin: m.skin || 'skin_rogue', pickaxe: m.pickaxe, backbling: m.backbling, ready: m.ready }));
@@ -1141,7 +1141,7 @@ export function createMeta(menus, account, opts = {}) {
   function itemCard(id, { owned, equipped, onClick, action, selected }) {
     const c = cosmeticDef(id);
     const d = c.def;
-    const card = h('button', 'mt-item');
+    const card = h('button', 'mt-item' + (c.kind === 'bundle' ? ' is-bundle' : ''));
     card.type = 'button';
     card.dataset.rarity = d.rarity;
     card.dataset.id = id;
@@ -1195,16 +1195,20 @@ export function createMeta(menus, account, opts = {}) {
   }
 
   let pending = null; // shop item awaiting BUY confirm
+  // a bundle counts as owned once every item in it is (bought one by one or as the bundle)
+  const ownsAll = (p, id) => p.owned.includes(id) || (!!BUNDLES[id] && BUNDLES[id].items.every((it) => p.owned.includes(it)));
   const forSale = (table) => Object.keys(table).filter((k) => PRICES[k]);
   function renderShop() {
     panelTitle.textContent = 'ITEM SHOP';
     const p = account.profile;
     const eq = p.equipped;
     const sections = [
+      ['BUNDLES', forSale(BUNDLES), 'is-featured'],
       ['FEATURED TODAY', featuredToday(4), 'is-featured'],
       ['OUTFITS', forSale(SKINS)],
       ['PICKAXES', forSale(PICKAXES)],
       ['BACK BLINGS', forSale(BACKBLINGS)],
+      ['GLIDERS', forSale(GLIDERS)],
       ['EMOTES', forSale(EMOTES)],
     ];
     for (const [label, ids, cls] of sections) {
@@ -1213,12 +1217,12 @@ export function createMeta(menus, account, opts = {}) {
       for (const id of ids) {
         grid.appendChild(
           itemCard(id, {
-            owned: p.owned.includes(id),
-            equipped: eq.skin === id || eq.pickaxe === id || eq.backbling === id,
+            owned: ownsAll(p, id),
+            equipped: eq.skin === id || eq.pickaxe === id || eq.backbling === id || eq.glider === id,
             selected: pending === id,
             onClick: () => {
               tryOn(id);
-              pending = p.owned.includes(id) ? null : id;
+              pending = ownsAll(p, id) ? null : id;
               for (const el of panelBody.querySelectorAll('.mt-item.is-sel')) el.classList.remove('is-sel');
               for (const el of panelBody.querySelectorAll(`.mt-item[data-id="${id}"]`)) el.classList.add('is-sel');
               renderBuy();
@@ -1252,7 +1256,7 @@ export function createMeta(menus, account, opts = {}) {
       bar.appendChild(h('span', 'mt-hint', 'Pick an item to try it on. Earn coins in matches: placing well, eliminations and wins.'));
       // rewarded ad: +coins (opts.adCoins: { can() -> bool, watch() -> Promise<string> })
       if (opts.adCoins && opts.adCoins.can()) {
-        const ad = btn('WATCH AD +100', 'mn-btn mt-buy-ad');
+        const ad = btn('WATCH AD +50', 'mn-btn mt-buy-ad'); // party/accounts.js AD_REWARD_COINS
         ad.firstChild.prepend(h('i', 'mt-coin'), ' ');
         ad.addEventListener('click', async () => {
           click();
@@ -1302,6 +1306,7 @@ export function createMeta(menus, account, opts = {}) {
     ['skin', 'OUTFIT', SKINS],
     ['backbling', 'BACK BLING', BACKBLINGS],
     ['pickaxe', 'PICKAXE', PICKAXES],
+    ['glider', 'GLIDER', GLIDERS],
     ['emotes', 'EMOTES', EMOTES],
   ];
   function renderLocker() {

@@ -21,6 +21,7 @@ Implemented systems include:
 - Cartoon rendering, quality settings, synthesized audio with recorded sample fallbacks, and saved player preferences.
 - Friend lobbies via PartyServer/WebSocket rooms; optional Google Photorealistic 3D Tiles as a visual layer.
 - Optional accounts (username/password or Google sign-in) for coins, shop, locker, and friends on the Cloudflare Accounts Durable Object.
+  Match coins (server-side, `party/accounts.js` `REWARD_*`): up to 120 for placement, 35 per elimination, 200 for a win, at most 600 per match and one paid match every 2 minutes; a rewarded ad pays 50 (5 a day). Changing these needs a party Worker redeploy.
 
 There is no traditional database, paid checkout, or model-provider integration. Bots are scripted game logic. The game loads the USGS terrain heightfield (`public/data/bentonville-terrain.*`); canopy and other imagery outputs are not wired into the runtime.
 
@@ -298,6 +299,8 @@ Outfits live in `SKINS` in `src/game/Cosmetics.js` (pure data, also read by the 
 - `addons`: a few low-poly primitives or presets (`horns`, `visor`, `crown`, `mask`, `ears`, `antenna`) on a bone, vertex-coloured in the toon style.
 
 `src/game/skinRecipe.js` holds the schema, region tables and per-skin caps (8 addons, 2,400 addon triangles, 4 addon bones); `Character.js` builds recipes and shares recoloured textures and addon geometry between characters in the same outfit. Old tint-only outfits build exactly as before. `skin_catfish_ken` (Catfish Ken Superfan) is the first recipe outfit.
+
+**Scruff set and gliders.** `skin_scruff` (Scruff), the `pick_paw` pickaxe (Paw Pounder) and the `bb_gecko` back bling (Sticky Buddy) are an outside design contribution; the pickaxe and back bling are built in code in `src/render/PupGear.js` (`proc` items, like the pickleball paddle). Gliders are a cosmetic slot (`GLIDERS` in `Cosmetics.js`, `gl_` ids): `gl_default` is the free classic canopy, and `gl_paws` (Paws Up) hides the canopy and flies the character belly-down with both arms up. The glider is sold in the shop, picked in the locker, saved with the account (the account server's `equip` accepts `glider`, so the deployed party Worker must be redeployed for signed-in accounts to keep it), sent to the host in the match-start `sk` action (`gl`, checked against `GLIDERS`) and included in the lobby look string (`skin|pickaxe|backbling|glider`; older three-part strings still parse). `tests/gliders.test.mjs` covers the catalog and look strings.
 
 Outfits can be checked without the game: `skinlab.html` is a dev-only page (not in the production build), and `node tools/skins/render.mjs --skin <id> | --recipe <file> | --swatches <kit> | --probe <kit> | --all` renders it to PNGs in `tools/skins/out/` with the QA harness's headless Chromium. `tests/skin-recipes.test.mjs` validates every outfit. See [tools/skins/README.md](tools/skins/README.md) for the recipe format, region names per kit, addon shapes and the workflow from a description or reference image to a new outfit.
 
