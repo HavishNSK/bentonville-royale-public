@@ -7,6 +7,19 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.19.3',
+    date: '2026-11-19',
+    title: 'FPS details',
+    sections: [
+      {
+        heading: 'Settings',
+        items: [
+          'Show FPS now also shows what each frame costs, mouse events per second, your resolution, mouse lock and fullscreen, and your graphics card. If your FPS drops, a screenshot of it helps us find out why.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.19.2',
     date: '2026-11-19',
     title: 'FPS limit and raw mouse',
