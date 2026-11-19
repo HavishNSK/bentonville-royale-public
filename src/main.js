@@ -392,7 +392,7 @@ async function joinMultiplayer(code, name, match = null) {
       if (mp !== me) return;
       mp = null;
       matchStatus = '';
-      if (game.state !== 'menu') game.leave();
+      if (game.state !== 'menu') game.leave({ connectionLost: true }); // the host left: not our forfeit
       sfx.playMusic('menu');
       menus.showNotice(reason);
       renderParty();
@@ -823,7 +823,13 @@ try {
       if (party) party.setName(name);
     },
   });
+  // Box Fights Elo we report to other players in a match (guests: the 1000 start)
+  const syncBoxElo = (p) => {
+    game.boxEloSelf = !p.guest && p.box && Number.isFinite(p.box.elo) ? p.box.elo : 1000;
+  };
+  syncBoxElo(account.profile);
   account.on('change', (p) => {
+    syncBoxElo(p);
     if (p.guest) menus.setAccountName(null);
     syncPresence();
   });
@@ -851,8 +857,24 @@ try {
   game.onBoxFightChange = (on) => googleTiles.setEnabled(!on && !!settings.googleTiles && !settings.performanceMode);
   game.onMatchEnd = async (r) => {
     if (r.boxFight) {
-      // Box Fights are unranked practice: no coins, no leaderboard
-      if (meta) meta.matchReward(0, 'Box Fights are unranked.');
+      // Box Fights: no coins; a Box Elo change computed by the account server from this browser's report
+      const bf = r.boxFight;
+      if (!account.signedIn) {
+        if (meta) meta.matchReward(0, 'Sign in to earn a Box Fights Elo.');
+        return;
+      }
+      if (!bf.rated) {
+        if (meta) meta.matchReward(0, 'No round was fought, so this Box Fight is not rated.');
+        return;
+      }
+      const out = await account.boxResult({ won: !!bf.won, size: bf.size, oppElo: bf.oppElo, score: bf.score, forfeit: !!bf.forfeit });
+      if (!meta) return;
+      if (out.guest) meta.matchReward(0, 'Sign in to earn a Box Fights Elo.');
+      else if (out.ok) {
+        menus.showBoxElo({ elo: out.elo, delta: out.delta, tier: out.tier });
+        meta.matchReward(0, `Box Elo ${out.elo} (${out.delta >= 0 ? '+' : '−'}${Math.abs(out.delta)})`);
+      } else if (out.rateLimited) meta.matchReward(0, 'Too soon to rate another Box Fight.');
+      else meta.matchReward(0, 'Box Fights Elo is unavailable right now.');
       return;
     }
     // Humans-only private match: no coins, no rank, no match counted.

@@ -480,6 +480,15 @@
   font-size: calc(var(--u) * 13);
   font-weight: 800;
 }
+.mt-board-wide {
+  grid-column: 1 / -1;
+}
+.mt-board-row-tier {
+  grid-template-columns: calc(var(--u) * 28) 1fr auto calc(var(--u) * 44);
+}
+.mt-board-row-tier .mt-board-stat {
+  text-align: right;
+}
 .mt-board-row.is-you {
   outline: 2px solid var(--br-sun);
   background: rgba(255, 194, 31, 0.12);

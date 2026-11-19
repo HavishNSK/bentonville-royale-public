@@ -29,7 +29,7 @@
 
 import { WEAPONS, TAU } from '../core/config.js';
 
-export const PROTO_VERSION = 6; // 2: teams (roster tm, start mode, snapshot xflags, knock / revive events); 3: ballistic sniper rounds ('sh' b/d, 'ph' claims); 4: drivable cars ('veh' / 'drv' actions, 've' 'vw' 'vd' 'vx' 'vh' 'vf' events, 'cars' poses, XFLAG.lean); 5: gas pump nozzles and pump damage ('pmp' action, 'pmd' 'pmf' 'pmx' 'pmn' events, start.pumps); 6: Box Fights (start game/bf, rs / rf / re events, end bw/sc/ff)
+export const PROTO_VERSION = 7; // 2: teams (roster tm, start mode, snapshot xflags, knock / revive events); 3: ballistic sniper rounds ('sh' b/d, 'ph' claims); 4: drivable cars ('veh' / 'drv' actions, 've' 'vw' 'vd' 'vx' 'vh' 'vf' events, 'cars' poses, XFLAG.lean); 5: gas pump nozzles and pump damage ('pmp' action, 'pmd' 'pmf' 'pmx' 'pmn' events, start.pumps); 6: Box Fights (start game/bf, rs / rf / re events, end bw/sc/ff); 7: Box Fights Elo ('elo' action/event, bf.botElo)
 export const MAX_HUMANS = 16;
 export const SNAP_HZ = 20;
 export const STATE_HZ = 30;

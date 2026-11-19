@@ -17,6 +17,7 @@
 //   rename {token, name}  only while profile.mustRename (the current name has a swear word / slur)
 //   buy {token, item}   equip {token, skin?, emotes?}
 //   reward {token, kills, placement, players, won, ranked} -> {profile, earned, ranked}
+//   boxResult {token, size, won, score:[us,them], oppElo, forfeit?} -> {ok, elo, delta, tier, games} (429 {ok:false, rateLimited:true} when under 30 s apart)
 //   adReward {token}                                      -> {profile, earned}  (rewarded ad; AD_REWARD_DAILY a day)
 //     (wins/kills reach the boards only when ranked === true: a HARD match that includes bots)
 //   friendAdd {token, name}  friendAccept {token, name}  friendDecline {token, name}  friendRemove {token, name}
@@ -51,6 +52,8 @@ import { Server, getServerByName } from 'partyserver';
 import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS } from '../src/game/Cosmetics.js';
 import { verifyGoogleIdToken } from './googleIdToken.js';
 import { applyMatchStats } from './matchStats.js';
+import { boxStats, validateBoxResult, applyBoxResult, boxRateLimited, boxFlags } from './boxRating.js';
+import { tierOf } from '../src/game/BoxElo.js';
 import { nameIsClean } from '../src/net/chatFilter.js';
 import { publicItem, sanitizeFeedbackText, addReply, removeReply, canModerateFeedback, feedbackKind } from '../src/net/feedbackBoard.js';
 import { isDevName, customTitleProblem } from '../src/net/devs.js';
@@ -82,6 +85,8 @@ const PBKDF2_ROUNDS = 100000;
 const MAX_SESSIONS = 10; // per account; the oldest is signed out when an 11th device signs in
 const SECLOG_KEEP = 500; // newest security-log rows kept (seclog:<time>)
 const MAX_FRIENDS = 100;
+const BOX_BOARD_TOP = 25;
+const BOX_BOARD_MIN_GAMES = 10; // games needed to be listed on the Box Fights board
 const REWARD_GAP_MS = 60 * 1000; // at most one match reward per minute per account
 // Rewarded ads (src/net/Ads.js): coins for watching an ad to the end. The server can't see the
 // ad itself, so it caps how often the client may claim: AD_REWARD_DAILY per UTC day, one per gap.
@@ -152,6 +157,12 @@ function upgradeAccount(acc) {
   return acc;
 }
 
+/** Box Fights ladder numbers shown to the owner (defaults for accounts that never played). */
+function boxPublic(acc) {
+  const b = boxStats(acc);
+  return { elo: b.elo, games: b.games, wins: b.wins, peak: b.peak, tier: tierOf(b.elo) };
+}
+
 /** What the owner sees about their own account. */
 function profileOf(acc) {
   upgradeAccount(acc);
@@ -164,6 +175,7 @@ function profileOf(acc) {
     incoming: acc.incoming.slice(),
     outgoing: acc.outgoing.slice(),
     stats: acc.stats,
+    box: boxPublic(acc),
     adRewardsLeft: adRewardsLeft(acc),
     // a name made before the username filter: the client blocks play until it is renamed
     mustRename: !nameIsClean(acc.name),
@@ -397,7 +409,7 @@ export class Accounts extends Server {
         return reply(`Unbanned ${target.name}. Their next ban still escalates (offences: ${next.offences | 0}).`, { target: lower, banned: false });
       }
       case 'modResetStats': {
-        const next = { ...target, stats: { ...target.stats, wins: 0, kills: 0 }, modTrack: undefined };
+        const next = { ...target, stats: { ...target.stats, wins: 0, kills: 0 }, modTrack: undefined, box: undefined };
         await this._save(next);
         await log('resetstats');
         return reply(`Reset ${target.name}'s ranked wins and kills to 0.`, { target: lower });
@@ -455,7 +467,7 @@ export class Accounts extends Server {
     const s = acc.stats || {};
     const lines = [
       `${acc.name}: ${b ? `BANNED (${b.permanent ? 'permanent' : `${timeLeft(b.until, now)} left`})` : 'not banned'}, ` +
-        `offences ${acc.offences | 0}, flags ${acc.flagCount | 0}, ranked ${s.wins | 0} wins / ${s.kills | 0} kills`,
+        `offences ${acc.offences | 0}, flags ${acc.flagCount | 0}, ranked ${s.wins | 0} wins / ${s.kills | 0} kills, box ${boxStats(acc).elo} elo / ${boxStats(acc).games} games`,
     ];
     for (const h of (acc.banHistory || []).slice(-5)) {
       const what = h.type === 'ban' ? `ban ${BAN_LABEL[h.duration] || ''}` : h.type;
@@ -538,6 +550,7 @@ export class Accounts extends Server {
   async _leaderboard() {
     const listed = await this.ctx.storage.list({ prefix: 'user:' });
     const rows = [];
+    const boxRows = [];
     const now = Date.now();
     for (const acc of listed.values()) {
       if (!acc || typeof acc !== 'object' || !acc.name || !acc.stats) continue;
@@ -546,7 +559,10 @@ export class Accounts extends Server {
       if (!nameIsClean(acc.name)) continue; // hidden from the boards until renamed
       if (isBanned(acc, now)) continue; // banned accounts are hidden while the ban lasts
       rows.push({ name: String(acc.name).slice(0, 16), wins, kills });
+      const bx = boxStats(acc);
+      if (bx.games >= BOX_BOARD_MIN_GAMES) boxRows.push({ name: String(acc.name).slice(0, 16), elo: bx.elo, games: bx.games, tier: tierOf(bx.elo) });
     }
+    const byElo = boxRows.sort((a, b) => b.elo - a.elo || b.games - a.games || a.name.localeCompare(b.name)).slice(0, BOX_BOARD_TOP);
     const byWins = rows
       .slice()
       .sort((a, b) => b.wins - a.wins || b.kills - a.kills || a.name.localeCompare(b.name))
@@ -559,6 +575,7 @@ export class Accounts extends Server {
       online: this.online.size + ONLINE_DISPLAY_PAD,
       wins: byWins,
       kills: byKills,
+      box: byElo,
     });
   }
 
@@ -851,6 +868,20 @@ export class Accounts extends Server {
         if (next.flagCount !== acc.flagCount) await this.ctx.storage.put('flagged:' + lower, { at: now });
         await this._save(next);
         return json({ profile: profileOf(next), earned, rateLimited, ranked });
+      }
+      case 'boxResult': {
+        // Box Fights ladder: client-reported (not verifiable), rate-limited, flagged for review.
+        const now = Date.now();
+        const result = validateBoxResult(m);
+        if (!result.ok) return err(result.error);
+        const stats = boxStats(acc);
+        if (boxRateLimited(stats, now)) return json({ ok: false, rateLimited: true, error: 'One rated result at a time: try again in a few seconds.' }, 429);
+        const applied = applyBoxResult(stats, result, now);
+        let next = { ...acc, box: applied.stats };
+        for (const kind of boxFlags(stats, result, now)) next = addFlag(next, { kind, why: `box ${result.size}v${result.size} ${result.won ? 'win' : 'loss'} (${result.score.join('-')}${result.forfeit ? ', forfeit' : ''}) vs ${result.oppElo}, elo ${stats.elo}` }, now);
+        if (next.flagCount !== acc.flagCount) await this.ctx.storage.put('flagged:' + lower, { at: now });
+        await this._save(next);
+        return json({ ok: true, elo: applied.stats.elo, delta: applied.delta, tier: applied.tier, games: applied.stats.games });
       }
       case 'adReward': {
         // watched a rewarded ad to the end (client-reported; capped per day, see AD_REWARD_*)

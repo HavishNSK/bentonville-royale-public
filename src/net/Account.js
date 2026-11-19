@@ -12,6 +12,9 @@
 //   await acct.mod(op, body) -> lines[]     DEV panel actions (modBan, modTitle, ...); the server checks dev rights
 //   await acct.buy(id) / acct.equip({ skin, pickaxe, backbling, emotes })
 //   await acct.reward({ kills, placement, players, won, ranked }) -> { earned, saved, ranked, guest?, error? }
+//   await acct.boxResult({ won, size, oppElo, score:[us, them], forfeit })
+//     -> { ok:true, elo, delta, tier:{id,name}, games } | { guest:true } | { ok:false, rateLimited:true } | { ok:false, error }
+//   profile.box = { elo, games, wins, peak, tier:{id,name} }   Box Fights Elo (client-reported results, not verified)
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
 //   await acct.leaderboard() -> { online, wins:[{name,wins,kills}], kills:[...] }
 //   acct.setStatus('lobby'|'match', partyCode)
@@ -25,6 +28,7 @@
 
 import { partyHost, isLocal } from './Net.js';
 import { DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, SKINS, EMOTES, PICKAXES, BACKBLINGS } from '../game/Cosmetics.js';
+import { ELO_START, clampElo, tierOf } from '../game/BoxElo.js';
 
 const TOKEN_KEY = 'bentonville-royale.account';
 const GUEST_KEY = 'bentonville-royale.guest';
@@ -83,9 +87,19 @@ async function api(op, body = {}) {
   if (!res.ok || !data || data.error) {
     const e = new Error((data && data.error) || 'Account server error.');
     e.status = res.status;
+    e.rateLimited = !!(data && data.rateLimited);
     throw e;
   }
   return data;
+}
+
+/** Box Fights ladder numbers from the server (or defaults), clamped; the tier follows the Elo. */
+export function boxProfile(b) {
+  const src = b && typeof b === 'object' ? b : {};
+  const n = (v) => (Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+  const elo = Number.isFinite(src.elo) ? clampElo(src.elo) : ELO_START;
+  const peak = Number.isFinite(src.peak) ? clampElo(src.peak) : elo;
+  return { elo, games: n(src.games), wins: n(src.wins), peak: Math.max(peak, elo), tier: tierOf(elo) };
 }
 
 function guestProfile() {
@@ -117,6 +131,7 @@ function guestProfile() {
     incoming: [],
     outgoing: [],
     stats: { matches: 0, wins: 0, kills: 0 },
+    box: boxProfile(null),
   };
 }
 
@@ -281,6 +296,30 @@ export function createAccount() {
       }
     },
 
+    /**
+     * Box Fights result for the Elo ladder. The server computes the change from its stored rating;
+     * the result itself is reported by this browser and is not verified. Guests are never sent.
+     */
+    async boxResult({ won = false, size = 1, oppElo = ELO_START, score = [0, 0], forfeit = false } = {}) {
+      if (!acct.signedIn) return { guest: true };
+      const sc = Array.isArray(score) ? [score[0] | 0, score[1] | 0] : [0, 0];
+      try {
+        // only the keys the server accepts (any other key is refused)
+        const r = await api('boxResult', { token, won: !!won, size: size | 0, oppElo: clampElo(oppElo), score: sc, forfeit: !!forfeit });
+        if (!r || r.ok !== true || !Number.isFinite(r.elo)) return { ok: false, rateLimited: !!(r && r.rateLimited), error: 'Box Fights Elo is unavailable right now.' };
+        const elo = clampElo(r.elo);
+        const delta = Number.isFinite(r.delta) ? Math.round(r.delta) : 0;
+        const prev = boxProfile(acct.profile.box);
+        const games = Number.isFinite(r.games) ? r.games : prev.games + 1;
+        acct.profile = { ...acct.profile, box: boxProfile({ elo, games, wins: prev.wins + (won ? 1 : 0), peak: Math.max(prev.peak, elo) }) };
+        emit('change', acct.profile);
+        return { ok: true, elo, delta, tier: tierOf(elo), games };
+      } catch (err) {
+        if (err && (err.rateLimited || err.status === 429)) return { ok: false, rateLimited: true };
+        return { ok: false, error: err && err.message ? err.message : 'Box Fights Elo is unavailable right now.', status: err && err.status };
+      }
+    },
+
     async friendAdd(name) {
       return friendOp('friendAdd', name);
     },
@@ -342,7 +381,7 @@ export function createAccount() {
   function setProfile(p) {
     // an older server may not send the newer loadout slots yet
     const eq = { ...DEFAULT_EQUIPPED, ...(p.equipped || {}) };
-    acct.profile = { ...p, owned: [...new Set([...(p.owned || []), ...DEFAULT_OWNED])], equipped: eq, guest: false };
+    acct.profile = { ...p, owned: [...new Set([...(p.owned || []), ...DEFAULT_OWNED])], equipped: eq, guest: false, box: boxProfile(p.box) };
     emit('change', acct.profile);
   }
 

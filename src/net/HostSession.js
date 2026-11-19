@@ -28,6 +28,9 @@
 //   the whole structure list), rf (fight), re (round end: winning side, score), and `end`
 //   once at match end. Round resets are applied silently on the host (muted) and replicated
 //   by `rs` alone.
+// - Box Fights Elo (proto 7): `bf.botElo` (the host's bot rating) in the start message; each guest
+//   sends action {k:'elo', v} once, the host clamps it and relays {e:'elo', a, v} to everyone (its
+//   own value too). These are reported numbers from browsers, not verified ratings.
 
 import * as THREE from 'three';
 import { PLAYER, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, MATCH, REBOOT, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
@@ -43,6 +46,8 @@ import { busPosAt, routeWire } from '../game/DropBus.js';
 import { normalizeMode, packHumans, assignTeams, sameTeam, teamAlive } from '../game/Teams.js';
 import { normalizeGame, boxTeams, modeSize } from '../game/GameModes.js';
 import { BOX_FIGHT, boxSizeForMode } from '../game/BoxFights.js';
+import { reportedElo } from '../game/boxEloMatch.js';
+import { ELO_START } from '../game/BoxElo.js';
 
 
 // Bots.js colours its canopies with this palette by spawn index (kept in sync by hand).
@@ -325,7 +330,7 @@ export class HostSession {
       t: 'start',
       seed: game.seed,
       game: bf ? 'boxfights' : 'br',
-      bf: bf ? { size: bf.size, wins: bf.state.winRounds, teams: bf.sides.slice(0, 2) } : undefined,
+      bf: bf ? { size: bf.size, wins: bf.state.winRounds, teams: bf.sides.slice(0, 2), botElo: bf.botElo } : undefined,
       mode: this.mode,
       diff: game.matchDifficulty || null, // bot difficulty: only hard matches with bots count toward the ranks
       bots: game.bots ? game.bots.list.length : 0,
@@ -341,6 +346,12 @@ export class HostSession {
     for (const c of this.room.clients.values()) {
       if (!this.remotes.has(c.id)) continue;
       this.stats.startBytes += this.room.sendTo(c.id, { ...msg, you: c.id });
+    }
+    if (bf) {
+      // Box Fights Elo: forget last match's reported values; tell everyone ours (guests answer with 'elo')
+      for (const a of this.remotes.values()) a.boxElo = undefined;
+      const own = reportedElo(game.boxEloSelf);
+      this.events.push({ e: 'elo', a: 0, v: own == null ? ELO_START : own });
     }
     // per-client byte counters measure the match from here on (the start message is reported separately)
     for (const c of this.room.clients.values()) c.bytesOut = 0;
@@ -847,6 +858,7 @@ export class HostSession {
     const a = this.remotes.get(c.id);
     if (!a || !this.started) return;
     if (msg.seq > a.ack) a.ack = msg.seq;
+    if (msg.k === 'elo') return this._boxEloAction(a, msg);
     if (!a.alive) return;
     // Box Fights countdown: everything is allowed; the middle wall (a world collider) keeps the
     // teams apart and stops shots, and Structures.buildBlock refuses builds on its line
@@ -857,6 +869,15 @@ export class HostSession {
     } catch (err) {
       this.game._error('net action ' + msg.k, err);
     }
+  }
+
+  /** Box Fights: a guest's reported Box Elo (once per match; clamped; relayed to everyone). */
+  _boxEloAction(a, m) {
+    if (this.matchType !== 'boxfights' || !this.game.boxFight || a.boxElo != null) return;
+    const v = reportedElo(m.v);
+    if (v == null) return;
+    a.boxElo = v;
+    this.events.push({ e: 'elo', a: a.id, v });
   }
 
   _action(a, m) {

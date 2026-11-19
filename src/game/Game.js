@@ -9,7 +9,7 @@
 //   game.startMatch()                // drop phase -> play -> over
 //   game.startMatch(seed, { freeBuild: true })  // solo sandbox: no bots, storm off, full mats, start on the ground
 //   game.startMatch(seed, { mode: 'squad', fill: true })  // team mode vs bot teams (Teams.js); fill = bot teammates
-//   game.pause(on) / game.leave()    // back to the menu
+//   game.pause(on) / game.leave({ connectionLost? })    // back to the menu (quitting a Box Fight = a loss)
 //   game.applySettings(settings)
 //
 // window.__game exposes { state, player, bots, storm, combat, loot, structures, debug } for QA,
@@ -67,6 +67,10 @@ import { graphicsQuality, FPS_UNLIMITED } from '../ui/settings.js';
 import { planBusRoute, makeRoute, routeWire, busPosAt, planBotTargets, DropBusMesh } from './DropBus.js';
 import { BOX_FIGHT, arenaLayout, spawnLayout, boxLoadout, boxMode, boxSizeForMode, normalizeBoxSize, createBoxFightState, stepBoxFight, roundBanner, boxResultCopy, sideOfTeam } from './BoxFights.js';
 import { buildArenaMeshes } from '../render/BoxArena.js';
+import { sanitizeBoxStart, botEloFor, boxOpponentElo, reportedElo } from './boxEloMatch.js';
+import { ELO_START } from './BoxElo.js';
+
+export { sanitizeBoxStart };
 
 const BUS_CAM_DIST = 34; // third-person distance behind the Drop Bus
 const DEATH_SCREEN_DELAY = 3.5;
@@ -136,6 +140,7 @@ export class Game {
     this.emotes = DEFAULT_EQUIPPED.emotes.slice();
     this.pickaxe = DEFAULT_EQUIPPED.pickaxe;
     this.backbling = DEFAULT_EQUIPPED.backbling;
+    this.boxEloSelf = ELO_START; // Box Fights Elo we report to the other players (main.js: account profile)
     this.state = 'menu'; // 'menu' | 'loading' | 'drop' | 'play' | 'over'
     this.paused = false;
     this.loaded = false;
@@ -709,7 +714,7 @@ export class Game {
   _startBoxFight(rng, size, net) {
     const p = this.player;
     const layout = arenaLayout(size);
-    this.matchDifficulty = null; // Box Fights never count toward the ranks
+    this.matchDifficulty = null; // Box Fights never count toward the BR ranks (Box Elo uses boxFight.botElo)
     this.storm.reset(rng, { x: layout.center.x, z: layout.center.z });
     this.dropZone = DROP_ZONES[0];
     this.hud.setStormVisible(false);
@@ -724,6 +729,7 @@ export class Game {
     if (this.dropBus) this.dropBus.root.visible = false;
 
     this._enterBoxFight(size, {});
+    this.boxFight.botElo = botEloFor(this.settings.difficulty); // fixed bot rating, like chess engine levels
     // two teams of `size`: humans first (host: the lobby / party plan), bots fill the rest
     let botTeams;
     let botCount;
@@ -791,6 +797,10 @@ export class Game {
       t: state.t,
       won: null,
       dividerUp: false,
+      // Elo: bot rating, whether a round reached FIGHT (quitting after that is a loss), forfeit end
+      botElo: botEloFor('normal'),
+      foughtOnce: false,
+      forfeit: false,
     };
     this._setVoid(true);
     this._setDivider(true); // teams start apart; it lifts at FIGHT
@@ -1032,6 +1042,7 @@ export class Game {
     const me = this._boxMySide();
     if (e.type === 'fight') {
       bf.frozen = false;
+      bf.foughtOnce = true;
       this._setDivider(false, true);
       this.menus.showDropBanner(false);
       this.hud.announce('FIGHT!', `Round ${bf.round} · first to ${bf.state.winRounds}`, 1400);
@@ -1048,6 +1059,7 @@ export class Game {
       bf.frozen = true;
       const won = e.winnerSide === me;
       bf.won = won;
+      bf.forfeit = !!e.forfeit;
       this._boxHud();
       if (e.forfeit) this.hud.announce(won ? 'BOX FIGHT WON' : 'BOX FIGHT LOST', 'The other team left the match', 2600);
       if (won && p0Alive(this.player) && this.player.character) this.player.character.emote(true, (this.emotes || []).find(Boolean));
@@ -1107,6 +1119,7 @@ export class Game {
     bf.phase = 'fight';
     bf.t = 0;
     bf.frozen = false;
+    bf.foughtOnce = true;
     this._setDivider(false, true);
     this.menus.showDropBanner(false);
     this.hud.announce('FIGHT!', `Round ${bf.round} · first to ${bf.state.winRounds}`, 1400);
@@ -1133,6 +1146,7 @@ export class Game {
     bf.t = BOX_FIGHT.matchEndDelay;
     bf.frozen = true;
     bf.won = winnerSide === this._boxMySide();
+    bf.forfeit = !!forfeit;
     this._boxHud();
     if (forfeit) this.hud.announce(bf.won ? 'BOX FIGHT WON' : 'BOX FIGHT LOST', 'The other team left the match', 2600);
     if (bf.won && p0Alive(this.player) && this.player.character) this.player.character.emote(true, (this.emotes || []).find(Boolean));
@@ -1270,6 +1284,7 @@ export class Game {
       p.mode = 'ground';
       if (this.dropBus) this.dropBus.root.visible = false;
       this._enterBoxFight(box.size, { client: true, sides: box.teams, winRounds: box.wins });
+      this.boxFight.botElo = box.botElo;
       // off the midline (the middle wall is up) until the host's first 'rs' places us
       const L0 = this.boxFight.layout;
       p.pos.set(L0.center.x, L0.floorY, L0.rect.minZ + 2);
@@ -1561,12 +1576,21 @@ export class Game {
     }
   }
 
-  /** Back to the main menu. */
-  leave() {
+  /**
+   * Back to the main menu. `connectionLost`: the host went away (not our choice), so an
+   * undecided Box Fight is not counted as our loss.
+   */
+  leave({ connectionLost = false } = {}) {
     // Leaving while dead / after a win still counts the match (rewards + leaderboard).
-    // Box Fights only count once the match is over (a death mid-match is just a lost round).
+    // Box Fights: a death mid-match is just a lost round (quitting is handled below).
     if (!this.boxFight && this.state === 'play' && this.player && (!this.player.alive || this._winPending)) {
       this._postMatchEnd(!!this._winPending);
+    }
+    // Box Fights: quitting after a round reached FIGHT counts as a loss (like resigning in chess)
+    const bfq = this.boxFight;
+    if (bfq && bfq.foughtOnce && (this.state === 'play' || this.state === 'over') && this.player && (bfq.won != null || !connectionLost)) {
+      if (bfq.won == null) bfq.forfeit = true;
+      this._postMatchEnd(bfq.won === true);
     }
     if (this.net) {
       this.net.dispose(this);
@@ -1612,12 +1636,20 @@ export class Game {
       ranked: isRankedMatch(this.matchDifficulty, this.matchBots),
     };
     if (this.boxFight) {
-      // Box Fights: unranked, scored in rounds (placement 1 = won, 2 = lost)
+      // Box Fights: no BR rank or coins; scored in rounds (placement 1 = won, 2 = lost) and rated by Box Elo
       const bf = this.boxFight;
       const me = this._boxMySide();
       const score = [bf.score[me] | 0, bf.score[1 - me] | 0];
       const copy = boxResultCopy({ victory, size: bf.size, score });
-      Object.assign(this.result, { placement: victory ? 1 : 2, teams: 2, difficulty: null, ranked: false, boxFight: { size: bf.size, score, ...copy } });
+      // Elo: the opposing team's average (reported ratings; the account server recomputes the change)
+      const oppElo = boxOpponentElo(this._boxEloActors(), this.player.team, bf.botElo);
+      Object.assign(this.result, {
+        placement: victory ? 1 : 2,
+        teams: 2,
+        difficulty: null,
+        ranked: false,
+        boxFight: { size: bf.size, score, ...copy, oppElo, won: !!victory, forfeit: !!bf.forfeit, rated: !!bf.foughtOnce },
+      });
     }
     if (this.net) {
       this.result.mp = true;
@@ -1632,6 +1664,24 @@ export class Game {
       }
     }
     return this.result;
+  }
+
+  /** Everyone else in this Box Fight as { team, bot, elo } (host: RemoteActor / bots; client: Puppets). */
+  _boxEloActors() {
+    const out = [];
+    for (const a of this.combat.actors) {
+      if (!a || a === this.player) continue;
+      const bot = a.isPuppet ? !a.human : !!a.isBot;
+      out.push({ team: a.team, bot, elo: a.boxElo });
+    }
+    return out;
+  }
+
+  /** A player's reported Box Elo (HostSession / ClientSession 'elo'); clamped, null ignored. */
+  setBoxElo(actor, v) {
+    const r = reportedElo(v);
+    if (actor && r != null) actor.boxElo = r;
+    return r;
   }
 
   _endMatch(victory) {
@@ -3272,19 +3322,6 @@ function makeBotStorm(layout) {
   const c = layout.center;
   const r = layout.cells * 4;
   return { cx: c.x, cz: c.z, r, nextCx: c.x, nextCz: c.z, nextR: r, phase: 1, phaseIndex: 0, mode: 'waiting', secondsLeft: 999, dps: 0, dormant: true, isOutside: () => false, intensityAt: () => 0 };
-}
-
-/**
- * Box Fights fields of a host's start message, clamped (the host is another player's browser).
- * Returns { size, wins, teams: [a, b] }.
- */
-export function sanitizeBoxStart(start) {
-  const bf = start && typeof start.bf === 'object' && start.bf ? start.bf : {};
-  const size = normalizeBoxSize(bf.size);
-  const wins = Number.isInteger(bf.wins) && bf.wins >= 1 && bf.wins <= 5 ? bf.wins : BOX_FIGHT.winRounds;
-  const t = Array.isArray(bf.teams) ? bf.teams : [];
-  const teams = [Number.isInteger(t[0]) ? t[0] : -1, Number.isInteger(t[1]) ? t[1] : -2];
-  return { size, wins, teams };
 }
 
 /**

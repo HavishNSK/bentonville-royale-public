@@ -27,6 +27,7 @@
 //   menus.showTitle() / showSettings(from) / showLoading(pct, label) / showPause()
 //   menus.showResult({ victory, placement, kills, total, time, killer, difficulty, ranked, boxFight? })
 //                    boxFight = { size, score:[us, them], title, sub, tile } (Box Fights copy)
+//   menus.showBoxElo({ elo, delta, tier:{id,name} })  Box Fights result: the Elo row (after the server replies)
 //   menus.showDropBanner(on, secondsLeft, zoneLabel, { title, sub }?)  // Drop Bus banner
 //   menus.hideAll()
 
@@ -44,6 +45,7 @@ import { nameIsClean } from '../net/chatFilter.js';
 import { nameplate } from '../net/devs.js';
 import { TEAM_MODES, MODE_LABELS, teamSize } from '../game/Teams.js';
 import { partyCap } from '../game/GameModes.js';
+import { tierOf } from '../game/BoxElo.js';
 
 const MODE_IDS = Object.keys(TEAM_MODES);
 // BATTLE ROYALE | BOX FIGHTS; in Box Fights the team-size buttons read 1V1 / 2V2 / 3V3 / 4V4
@@ -395,6 +397,9 @@ export function createMenus(root, opts = {}) {
        <div class="mn-result-place br-ol-xl" data-ref="place">#1</div>
        <div class="mn-result-title br-ol-xl" data-ref="title"></div>
        <div class="mn-result-sub" data-ref="sub"></div>
+       <div class="mn-box-elo" data-ref="boxElo" role="status" hidden>
+         <span class="br-tier" data-ref="boxTier"></span><b class="br-ol" data-ref="boxEloNum"></b><span class="mn-box-elo-delta br-ol" data-ref="boxDelta"></span>
+       </div>
        <div class="mn-stats">
          <div class="mn-stat">${icon('crown')}<b class="br-ol" data-ref="placement"></b><span>PLACED</span></div>
          <div class="mn-stat">${icon('skull')}<b class="br-ol" data-ref="kills"></b><span>ELIMS</span></div>
@@ -412,6 +417,7 @@ export function createMenus(root, opts = {}) {
   wrap.appendChild(result);
   const R = {};
   result.querySelectorAll('[data-ref]').forEach((e) => (R[e.dataset.ref] = e));
+  let boxResultShown = false;
 
   // ---------------------------------------------------------------- drop banner
   const banner = el(
@@ -1069,6 +1075,8 @@ export function createMenus(root, opts = {}) {
       const team = r.mode && r.mode !== 'solo' && r.teams > 0;
       const noun = { duo: 'duo', trio: 'trio', squad: 'squad' }[r.mode] || 'team';
       const left = r.placement - 1;
+      R.boxElo.hidden = true; // filled by showBoxElo when the account server answers
+      boxResultShown = !!r.boxFight;
       if (r.boxFight) {
         // Box Fights: rounds won, not placement (copy built by BoxFights.boxResultCopy)
         const bf = r.boxFight;
@@ -1127,6 +1135,23 @@ export function createMenus(root, opts = {}) {
       R.adBtn.hidden = !show;
       R.adText.textContent = text;
       R.adBtn.disabled = !!disabled;
+    },
+    /** Box Fights: the Elo row on the result screen (only while a Box Fights result is showing). */
+    showBoxElo({ elo, delta, tier } = {}) {
+      if (!boxResultShown || current !== result || !Number.isFinite(elo)) return;
+      const d = Number.isFinite(delta) ? Math.round(delta) : 0;
+      // the tier comes from our own list (by the Elo), never from text the server sent
+      const t = tierOf(elo);
+      R.boxTier.textContent = t.name;
+      R.boxTier.dataset.tier = t.id;
+      R.boxTier.hidden = !R.boxTier.textContent;
+      R.boxEloNum.textContent = `${Math.round(elo)} ELO`;
+      // the sign is text (+ / −), never colour alone
+      R.boxDelta.textContent = `(${d >= 0 ? '+' : '−'}${Math.abs(d)})`;
+      R.boxDelta.classList.toggle('is-up', d > 0);
+      R.boxDelta.classList.toggle('is-down', d < 0);
+      R.boxDelta.setAttribute('aria-label', d >= 0 ? `up ${d}` : `down ${Math.abs(d)}`);
+      R.boxElo.hidden = false;
     },
     showReward(n) {
       if (!(n > 0) || !result.classList.contains('is-reveal')) return;

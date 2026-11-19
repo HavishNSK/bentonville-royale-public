@@ -19,6 +19,8 @@ import { Inventory } from '../game/Inventory.js';
 import { SKINS, EMOTES, botLoadout } from '../game/Cosmetics.js';
 import { itemLabel } from '../game/Player.js';
 import { impactSound, placeOnShoulder } from '../game/Combat.js';
+import { reportedElo } from '../game/boxEloMatch.js';
+import { ELO_START } from '../game/BoxElo.js';
 import {
   STATE_HZ, INTERP_DELAY, FLAG, XFLAG, EQUIP, SURF, decodeSnapshot, encodeState, seqNewer, rnd, resolvePanelEvent,
 } from './protocol.js';
@@ -228,6 +230,11 @@ export class ClientSession {
     if (game.pumps && start.pumps) game.pumps.applySnapshot(start.pumps); // gas pumps already hurt / gone
     // tell the host (and through it everyone) which outfit we wear
     if (game.skin && SKINS[game.skin]) this.action({ k: 'sk', id: game.skin, px: game.pickaxe, bb: game.backbling });
+    // Box Fights: our reported Box Elo (the host relays it; opponents use it for their result)
+    if (this.boxFights) {
+      const own = reportedElo(game.boxEloSelf);
+      this.action({ k: 'elo', v: own == null ? ELO_START : own });
+    }
     // Follow-up rounds of a burst gun are scheduled by Combat; forward each one like a trigger pull.
     game.combat.onBurstShot = (s, it, o, dirs, res) => {
       if (s === game.player) this.sendFire(s, it, o, dirs, res);
@@ -538,6 +545,18 @@ export class ClientSession {
         if (e.a === this.id) return;
         const pup = this.puppets.get(e.a);
         if (pup && g.reskinActor) g.reskinActor(pup, SKINS[e.id] ? e.id : null, e.px, e.bb);
+        return;
+      }
+      case 'elo': {
+        // a player's reported Box Elo (relayed by the host): clamped, only for known players
+        if (!this.boxFights || !Number.isInteger(e.a)) return;
+        const v = reportedElo(e.v);
+        if (v == null) return;
+        if (e.a === this.id) g.player.boxElo = v;
+        else {
+          const pup = this.puppets.get(e.a);
+          if (pup && pup.human) pup.boxElo = v;
+        }
         return;
       }
       case 'em': {

@@ -23,6 +23,7 @@ import { SKINS, EMOTES, PICKAXES, BACKBLINGS, EMOTE_SLOTS, PRICES, featuredToday
 import { createShowcase } from './Showcase.js';
 import { PATCH_NOTES, LATEST_VERSION } from '../data/patchNotes.js';
 import { RANKED_NOTE } from '../core/config.js';
+import { tierOf } from '../game/BoxElo.js';
 import { boardPosts } from '../net/feedbackBoard.js';
 
 const SEEN_KEY = 'bentonville-royale.seenPatch';
@@ -62,6 +63,14 @@ function loadGoogleGis() {
     document.head.appendChild(s);
   });
   return gisLoad;
+}
+
+/** Box Fights tier pill (menus.css .br-tier); the tier always follows the shown Elo. */
+function tierPill(elo) {
+  const t = tierOf(elo);
+  const pill = h('span', 'br-tier', t.name);
+  pill.dataset.tier = t.id;
+  return pill;
 }
 
 function h(tag, cls, text) {
@@ -624,6 +633,14 @@ export function createMeta(menus, account, opts = {}) {
       const wrap = h('div', 'mt-boards');
       wrap.appendChild(boardColumn('MOST WINS', data.wins || [], 'wins'));
       wrap.appendChild(boardColumn('MOST ELIMS', data.kills || [], 'kills'));
+      // Box Fights Elo ladder: full width under the two battle royale boards
+      const box = boardColumn('BOX FIGHTS', Array.isArray(data.box) ? data.box : [], 'elo', {
+        tier: true,
+        empty: 'No rated Box Fighters yet.',
+      });
+      box.classList.add('mt-board-wide');
+      box.insertBefore(h('p', 'mt-hint', '10+ Box Fights to appear. Results are reported by players’ browsers, so this ladder is not verified.'), box.children[1] || null);
+      wrap.appendChild(box);
       const old = panelBody.querySelector('.mt-boards');
       if (old) old.replaceWith(wrap);
       else panelBody.appendChild(wrap);
@@ -642,21 +659,20 @@ export function createMeta(menus, account, opts = {}) {
     }
   }
 
-  function boardColumn(title, rows, key) {
+  function boardColumn(title, rows, key, { tier = false, empty = 'No ranked players yet. Sign in and play matches.' } = {}) {
     const col = h('div', 'mt-board');
     col.appendChild(h('div', 'mn-party-label mt-sub', title));
     if (!rows.length) {
-      col.appendChild(h('p', 'mt-hint', 'No ranked players yet. Sign in and play matches.'));
+      col.appendChild(h('p', 'mt-hint', empty));
       return col;
     }
     const list = h('ol', 'mt-board-list');
     rows.forEach((row, i) => {
-      const li = h('li', 'mt-board-row');
-      li.append(
-        h('span', 'mt-board-rank', String(i + 1)),
-        h('span', 'mt-board-name', row.name),
-        h('span', 'mt-board-stat', String(row[key] | 0))
-      );
+      if (!row || typeof row !== 'object') return;
+      const li = h('li', tier ? 'mt-board-row mt-board-row-tier' : 'mt-board-row');
+      li.append(h('span', 'mt-board-rank', String(i + 1)), h('span', 'mt-board-name', String(row.name || '').slice(0, 24)));
+      if (tier) li.appendChild(tierPill(row[key]));
+      li.appendChild(h('span', 'mt-board-stat', String(row[key] | 0)));
       if (account.signedIn && account.profile.name === row.name) li.classList.add('is-you');
       list.appendChild(li);
     });
@@ -1575,7 +1591,8 @@ export function createMeta(menus, account, opts = {}) {
   function renderBar() {
     const p = account.profile;
     whoName.textContent = p.guest ? 'GUEST' : p.name;
-    whoSub.textContent = p.guest ? 'Sign in for coins & skins' : p.banned ? 'Banned' : `${p.stats.wins} wins · ${p.stats.kills} elims`;
+    const box = p.box && Number.isFinite(p.box.elo) ? ` · Box ${p.box.elo | 0} ${tierOf(p.box.elo).name}` : '';
+    whoSub.textContent = p.guest ? 'Sign in for coins & skins' : p.banned ? 'Banned' : `${p.stats.wins} wins · ${p.stats.kills} elims${box}`;
     coinsNum.textContent = p.coins.toLocaleString();
     bAuth.querySelector('span').textContent = account.signedIn ? 'SIGN OUT' : 'SIGN IN';
     bAuth.classList.toggle('mt-chip-sun', !account.signedIn);
