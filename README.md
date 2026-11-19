@@ -153,6 +153,7 @@ bentonville-royale/
 ├── public/data/            # Processed map and supplemental data
 ├── scripts/                # Optional map-data generation tools
 ├── tools/qa/               # Standalone Playwright smoke harness
+├── tools/skins/            # Outfit recipe tools: skin lab renderer, atlas swatch lister
 ├── credits/                # Asset and data provenance
 ├── agents/                 # Historical contracts and handoff reports
 ├── AGENTS.md               # Engineering and security policy
@@ -263,6 +264,18 @@ node tools/qa/smoke.mjs --url http://localhost:5173 --script tools/qa/crystal-br
 - The galleries are rectangular rooms with bowed long walls; the real fan-shaped curved plans are simplified.
 - Bots navigate the museum with the generic open-world steering and can look clumsy on stairs.
 - Measured frame rate held at the 60 fps vsync cap inside and outside the museum in headless Chromium on an Apple M4; a typical laptop has not been measured.
+
+## Outfits (Skins)
+
+Outfits live in `SKINS` in `src/game/Cosmetics.js` (pure data, also read by the account server for prices and ownership). An outfit is one of the four KayKit character kits (`player` rogue, `bot_a` knight, `bot_b` barbarian, `bot_c` mage) with an optional `tint`, or a recipe on top of one:
+
+- `parts`: head, hat, body, arms, legs and cape borrowed from any kit (all four share one skeleton); `hat` / `cape` can be `null`.
+- `colors`: named atlas regions (`shirt`, `pants`, `hair`, `fur`, `armor`...) recoloured with their shading kept.
+- `addons`: a few low-poly primitives or presets (`horns`, `visor`, `crown`, `mask`, `ears`, `antenna`) on a bone, vertex-coloured in the toon style.
+
+`src/game/skinRecipe.js` holds the schema, region tables and per-skin caps (8 addons, 2,400 addon triangles, 4 addon bones); `Character.js` builds recipes and shares recoloured textures and addon geometry between characters in the same outfit. Old tint-only outfits build exactly as before. `skin_catfish_ken` (Catfish Ken Superfan) is the first recipe outfit.
+
+Outfits can be checked without the game: `skinlab.html` is a dev-only page (not in the production build), and `node tools/skins/render.mjs --skin <id> | --recipe <file> | --swatches <kit> | --probe <kit> | --all` renders it to PNGs in `tools/skins/out/` with the QA harness's headless Chromium. `tests/skin-recipes.test.mjs` validates every outfit. See [tools/skins/README.md](tools/skins/README.md) for the recipe format, region names per kit, addon shapes and the workflow from a description or reference image to a new outfit.
 
 ## Map and Asset Maintenance
 

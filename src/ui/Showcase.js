@@ -23,6 +23,12 @@ const TOP = 2.1; // frame from just under the feet to just over the head (metres
 const BOTTOM = -0.62; // below the plinth's foot (0.34 tall under y = 0) + its nameplate
 const HEADROOM = 1.25;
 
+/** Rebuild key of an outfit: model + tint, plus the id for recipe skins (parts / colours / addons). */
+function skinKey(id) {
+  const def = skinDef(id);
+  return def.model + '|' + def.tint + '|' + (def.parts || def.colors || def.addons ? id : '');
+}
+
 export function createShowcase(parent) {
   const wrap = document.createElement('div');
   wrap.className = 'mn-showcase';
@@ -136,7 +142,7 @@ export function createShowcase(parent) {
     for (let i = 0; i < MAX_SHOWN; i++) {
       const w = want[i];
       const s = slots[i];
-      const key = w ? skinDef(w.skin).model + '|' + skinDef(w.skin).tint : null;
+      const key = w ? skinKey(w.skin) : null;
       if (s && s.key === key) {
         s.ch.setLoadout({ pickaxe: w.pickaxe || 'pick_default', backbling: w.backbling || 'bb_outfit' });
         s.holder.position.set(at[i].x, 0, at[i].z);
@@ -157,7 +163,7 @@ export function createShowcase(parent) {
         continue;
       }
       if (my !== gen) return;
-      const ch = new Character(kit, { weapons, tint: def.tint ?? undefined, pickaxe: w.pickaxe || 'pick_default', backbling: w.backbling || 'bb_outfit' });
+      const ch = new Character(kit, { weapons, tint: def.tint ?? undefined, skin: def, pickaxe: w.pickaxe || 'pick_default', backbling: w.backbling || 'bb_outfit' });
       const holder = new THREE.Group();
       holder.position.set(at[i].x, 0, at[i].z);
       const ped = new THREE.Mesh(pedGeo, pedMat);
@@ -336,7 +342,7 @@ export function createShowcase(parent) {
     if (c.kind === 'skin' || c.kind === 'emote' || ownCape) {
       const def = skinDef(c.kind === 'skin' ? id : 'skin_rogue');
       const kit = await kitFor(def.model);
-      ch = new Character(kit, { weapons: {}, tint: def.tint ?? undefined });
+      ch = new Character(kit, { weapons: {}, tint: def.tint ?? undefined, skin: def });
       const st = { fwd: 0, side: 0, speed: 0, grounded: true, gliding: false, heading: Math.PI, pitch: 0 };
       if (c.kind === 'emote') {
         ch.emote(true, id);

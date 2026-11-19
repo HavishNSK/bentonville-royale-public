@@ -4,7 +4,10 @@
 // account server (party/accounts.js checks prices and ownership), so it imports nothing.
 //
 // Outfits are one of the four KayKit character models (see credits/characters.md) with an
-// optional colour tint multiplied into its texture. Emotes are clips every model already
+// optional colour tint multiplied into its texture, or a recipe on top of one: body parts
+// borrowed from the other kits, recoloured atlas regions and small procedural addons
+// (`parts` / `colors` / `addons`, see src/game/skinRecipe.js and tools/skins/README.md).
+// Emotes are clips every model already
 // carries (all four share one skeleton and the same 76 clips). Pickaxes and back blings reuse
 // the rigid accessory meshes inside those same files (src: [kit key, mesh name]), so every
 // model can wear any of them (Character.setLoadout).
@@ -27,6 +30,32 @@ export const SKINS = {
   skin_mage_rose: { name: 'Rose Mage', model: 'bot_c', tint: 0xffa8d6, rarity: 'epic', price: 1500 },
   skin_mage_void: { name: 'Void Mage', model: 'bot_c', tint: 0x8f7bd8, rarity: 'legendary', price: 2000 },
   skin_rogue_dusk: { name: 'Dusk Runner', model: 'player', tint: 0xc9a2ff, rarity: 'rare', price: 1200 },
+  // recipe skin: the reboot van's catfish colours (violet, cream, sun-gold, ink) on a kitbash
+  // of the rogue's tunic, the mage's head and the barbarian's legs, with a finned cap and barbels
+  skin_catfish_ken: {
+    name: 'Catfish Ken Superfan',
+    model: 'player',
+    tint: null,
+    rarity: 'epic',
+    price: 1500,
+    parts: { head: 'bot_c', hat: null, legs: 'bot_b', cape: null },
+    colors: {
+      shirt: '#8a5cf0',
+      cloak: '#6a3fd0',
+      leather: '#2a2540',
+      metal: '#ffc21f',
+      pouch: '#ffc21f',
+      gloves: '#ffc21f',
+      pants: '#fff1d6',
+      boots: '#ffc21f',
+      hair: '#3a2a20',
+    },
+    addons: [
+      { shape: 'dome', bone: 'head', pos: [0, 0.42, -0.02], scale: [1, 0.86, 1], color: '#8a5cf0' }, // cap
+      { shape: 'cone', bone: 'head', pos: [0, 0.9, -0.08], rot: [-20, 0, 0], scale: [0.05, 0.3, 0.36], color: '#ffc21f' }, // dorsal fin
+      { shape: 'cylinder', bone: 'head', pos: [0.27, 0.12, 0.36], rot: [0, 0, 64], scale: [0.028, 0.3, 0.028], color: '#1b1d24', mirror: true }, // barbels
+    ],
+  },
 };
 
 /**

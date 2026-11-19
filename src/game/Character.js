@@ -8,7 +8,9 @@ import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { damp, clamp, WEAPONS, SWIM } from '../core/config.js';
 import { toToon } from '../render/Toon.js';
-import { emoteClips, emoteDef, pickaxeDef, backblingDef, swingClips } from './Cosmetics.js';
+import { emoteClips, emoteDef, pickaxeDef, backblingDef, swingClips, skinDef } from './Cosmetics.js';
+import { normalizeSkin, paintKey, recolorPixels, KIT_PARTS, PART_SLOTS, RECIPE_KITS, RIGID_SLOT_BONE, ADDON_BONES } from './skinRecipe.js';
+import { addonGeometries, addonMaterial } from '../render/SkinAddons.js';
 import { buildPaddle } from '../render/Paddle.js';
 import { grenadeModel } from './Grenades.js';
 
@@ -98,6 +100,149 @@ function tinted(mat, tint) {
   return m;
 }
 
+// ---- skin recipes (Cosmetics.SKINS parts / colors / addons, see src/game/skinRecipe.js)
+
+// normalized recipe per skin def object (catalog defs live forever; lab recipes are few)
+const _recipes = new WeakMap();
+/** A skin id or def object -> normalizeSkin() result (cached per def object). */
+export function skinRecipe(skin) {
+  const def = typeof skin === 'string' ? skinDef(skin) : skin;
+  if (!def || typeof def !== 'object') return null;
+  let r = _recipes.get(def);
+  if (!r) _recipes.set(def, (r = normalizeSkin(def)));
+  return r;
+}
+
+const RECOLOR_SIZE = 512; // recoloured atlases: 8 x 4 flat gradients lose nothing at half size
+const _recolored = new Map(); // kit|paintKey -> toon material with a recoloured copy of the atlas
+/** Toon material `mat` (kit `kitKey`'s atlas) with atlas cells repainted; cached, shared by clones. */
+function recolored(mat, kitKey, map) {
+  if (Array.isArray(mat)) return mat.map((m) => recolored(m, kitKey, map));
+  const img = mat.map && mat.map.image;
+  if (!img || typeof document === 'undefined') return mat; // no canvas (tests): keep the original
+  const key = kitKey + '|' + mat.uuid + '|' + paintKey(map);
+  let m = _recolored.get(key);
+  if (!m) {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = RECOLOR_SIZE;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, RECOLOR_SIZE, RECOLOR_SIZE);
+    const px = ctx.getImageData(0, 0, RECOLOR_SIZE, RECOLOR_SIZE);
+    recolorPixels(px.data, RECOLOR_SIZE, RECOLOR_SIZE, map);
+    ctx.putImageData(px, 0, 0);
+    const src = mat.map;
+    const t = new THREE.CanvasTexture(cv);
+    t.flipY = src.flipY;
+    t.colorSpace = src.colorSpace;
+    t.wrapS = src.wrapS;
+    t.wrapT = src.wrapT;
+    t.magFilter = src.magFilter;
+    t.minFilter = src.minFilter;
+    t.anisotropy = src.anisotropy;
+    m = mat.clone();
+    m.map = t;
+    _recolored.set(key, m);
+  }
+  return m;
+}
+
+const _addonGeo = new Map(); // JSON of normalized addons -> Map(bone -> geometry)
+function addonGeometryFor(addons) {
+  const key = JSON.stringify(addons);
+  let g = _addonGeo.get(key);
+  if (!g) _addonGeo.set(key, (g = addonGeometries(addons)));
+  return g;
+}
+
+/** Which kit a cloned model was built from (by its head mesh), or null. */
+function baseKitOf(model) {
+  return RECIPE_KITS.find((k) => KIT_PARTS[k].head.some((n) => model.getObjectByName(n))) || null;
+}
+
+/**
+ * Swaps body parts in a freshly cloned model for other kits' parts (shared skeleton) and
+ * marks meshes whose atlas cells are recoloured (userData.skinPaint, applied with the toon
+ * material). Runs before materials are converted. Slots whose kit is not loaded keep the base part.
+ */
+function dressParts(model, bones, recipe) {
+  const base = baseKitOf(model);
+  if (!base) return;
+  const byName = {};
+  model.traverse((o) => {
+    if (o.isMesh) byName[o.name] = o;
+  });
+  const skinParent = (byName[KIT_PARTS[base].body[0]] || {}).parent || model;
+  for (const slot of PART_SLOTS) {
+    const want = recipe.parts[slot];
+    const paint = want ? recipe.paint[want] && recipe.paint[want][slot] : null;
+    if (want === base || (want && !KITS[want])) {
+      if (want === base && paint) for (const n of KIT_PARTS[base][slot]) if (byName[n]) byName[n].userData.skinPaint = { kit: base, map: paint };
+      continue;
+    }
+    for (const n of KIT_PARTS[base][slot]) {
+      const m = byName[n];
+      if (!m) continue;
+      m.removeFromParent();
+      if (m.isSkinnedMesh && m.skeleton) m.skeleton.dispose();
+    }
+    if (!want) continue;
+    const scene = KITS[want].scene;
+    for (const n of KIT_PARTS[want][slot]) {
+      const src = scene.getObjectByName(n);
+      if (!src) continue;
+      let m;
+      if (src.isSkinnedMesh) {
+        const sb = src.skeleton.bones.map((b) => bones[b.name]);
+        if (sb.some((b) => !b)) continue;
+        m = new THREE.SkinnedMesh(src.geometry, src.material);
+        m.name = src.name;
+        m.position.copy(src.position);
+        m.quaternion.copy(src.quaternion);
+        m.scale.copy(src.scale);
+        m.bindMode = src.bindMode;
+        skinParent.add(m);
+        m.bind(new THREE.Skeleton(sb, src.skeleton.boneInverses.map((x) => x.clone())), src.bindMatrix);
+      } else {
+        const bone = bones[RIGID_SLOT_BONE[slot]];
+        if (!bone) continue;
+        m = src.clone(true);
+        bone.add(m);
+      }
+      m.visible = true;
+      if (paint) m.traverse((o) => o.isMesh && (o.userData.skinPaint = { kit: want, map: paint }));
+    }
+  }
+}
+
+/**
+ * Recipe addons on their bones: one merged, vertex-coloured mesh per bone. The addon frame is
+ * the character's own at rest (+Y up, +Z the way it faces, +X its left), in metres, centred
+ * on the bone, so a recipe reads the same on every kit.
+ */
+function attachAddons(model, bones, addons) {
+  if (!addons.length) return;
+  const geos = addonGeometryFor(addons);
+  const mat = addonMaterial();
+  const want = new THREE.Matrix4();
+  const p = new THREE.Vector3();
+  for (const [boneKey, geo] of geos) {
+    const bone = bones[ADDON_BONES[boneKey]];
+    if (!bone) continue;
+    bone.updateWorldMatrix(true, false);
+    model.updateWorldMatrix(true, false);
+    // the bone's rest frame relative to the model's parent (the character root at rest)
+    const rel = new THREE.Matrix4().copy(model.parent ? model.parent.matrixWorld : new THREE.Matrix4()).invert().multiply(bone.matrixWorld);
+    p.setFromMatrixPosition(rel);
+    want.makeTranslation(p.x, p.y, p.z);
+    const local = rel.clone().invert().multiply(want);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = 'skin_addon_' + boneKey;
+    mesh.castShadow = true;
+    local.decompose(mesh.position, mesh.quaternion, mesh.scale);
+    bone.add(mesh);
+  }
+}
+
 const _v = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 
@@ -181,6 +326,8 @@ export class Character {
    * @param {{ weapons: Object<string, THREE.Object3D>, canopyColor?: number, tint?: number }} opts
    *        weapons: source scenes keyed by weapon id (+ 'pickaxe'); cloned here.
    *        tint: outfit colour multiplied into the body texture (Cosmetics.SKINS).
+   *        skin: Cosmetics.SKINS id or a skin def / recipe object (parts, colors, addons;
+   *        src/game/skinRecipe.js). Its tint is used when opts.tint is not given.
    */
   constructor(kit, opts = {}) {
     this.kit = kit;
@@ -196,14 +343,22 @@ export class Character {
     this.bones = {};
     this.model.traverse((o) => {
       if (o.isBone) this.bones[o.name] = o;
+    });
+    const recipe = opts.skin ? skinRecipe(opts.skin) : null;
+    const tint = opts.tint != null ? opts.tint : recipe ? recipe.tint : null;
+    if (recipe && recipe.custom) dressParts(this.model, this.bones, recipe);
+    this.model.traverse((o) => {
       if (o.isMesh) {
         o.castShadow = true;
         o.material = toToon(o.material, TOON_CHAR); // cached per source: all clones share it
-        if (opts.tint != null) o.material = tinted(o.material, opts.tint);
+        const paint = o.userData.skinPaint;
+        if (paint) o.material = recolored(o.material, paint.kit, paint.map);
+        if (tint != null) o.material = tinted(o.material, tint);
         o.frustumCulled = false; // skinned bounds are unreliable; the Group is culled by distance instead
         if (kit.hide.has(o.name)) o.visible = false;
       }
     });
+    if (recipe && recipe.addons.length) attachAddons(this.model, this.bones, recipe.addons);
 
     this.mixer = new THREE.AnimationMixer(this.model);
     this.lo = {};

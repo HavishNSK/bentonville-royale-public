@@ -399,7 +399,7 @@ export class Game {
   makeSkinCharacter(skinId, canopyColor, pickaxe, backbling) {
     const def = skinDef(skinId);
     const kit = this.kits && (this.kits[def.model] || this.kits.player);
-    return kit ? new Character(kit, { weapons: this.weaponScenes, canopyColor, tint: def.tint ?? undefined, pickaxe, backbling }) : null;
+    return kit ? new Character(kit, { weapons: this.weaponScenes, canopyColor, tint: def.tint ?? undefined, skin: def, pickaxe, backbling }) : null;
   }
 
   /** Swaps a remote human's / puppet's character for outfit `skinId` (keeps visibility, pose state resets). */
@@ -436,13 +436,13 @@ export class Game {
     const kit = this.kits && (this.kits[def.model] || this.kits.player);
     const p = this.player;
     if (!kit || !p) return;
-    const key = def.model + '|' + def.tint;
+    const key = def.model + '|' + def.tint + '|' + (def.parts || def.colors || def.addons ? this.skin : ''); // recipe skins rebuild per id
     if (p.character && p._skinKey === key) {
       p.character.setLoadout({ pickaxe: this.pickaxe, backbling: this.backbling });
       return;
     }
     const old = p.character;
-    const ch = new Character(kit, { weapons: this.weaponScenes, canopyColor: 0xffc21f, tint: def.tint ?? undefined, pickaxe: this.pickaxe, backbling: this.backbling });
+    const ch = new Character(kit, { weapons: this.weaponScenes, canopyColor: 0xffc21f, tint: def.tint ?? undefined, skin: def, pickaxe: this.pickaxe, backbling: this.backbling });
     if (old) {
       ch.root.visible = old.root.visible;
       ch.root.position.copy(old.root.position);
