@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   publicItem, addReply, removeReply, canModerateFeedback, sanitizeFeedbackText,
-  feedbackKind, boardPosts, FEEDBACK_TAB_KIND, FEEDBACK_KINDS,
+  feedbackKind, boardPosts, FEEDBACK_FILTERS, FEEDBACK_KINDS,
 } from '../src/net/feedbackBoard.js';
 
 test('legacy posts without replies still list in the public board', () => {
@@ -56,7 +56,7 @@ test('the accounts worker still lists the old fb: keys', () => {
   assert.match(src, /canModerateFeedback/);
 });
 
-// ---- separate SUGGEST / REPORT A BUG tabs
+// ---- one FEEDBACK tab: ALL / IDEAS / BUGS filters over the shared list
 
 const stored = [
   { id: 'a', kind: 'idea', text: 'More chests', by: 'P1', at: 10, votes: 3, voters: ['a:x'] },
@@ -76,22 +76,26 @@ test('feedbackKind is a two-value enum; missing or unknown means suggestion', ()
   }
 });
 
-test('old posts without a kind still appear in SUGGEST', () => {
-  const ideas = boardPosts(listed, FEEDBACK_TAB_KIND.feedback);
+test('old posts without a kind still appear under IDEAS', () => {
+  const ideas = boardPosts(listed, 'idea');
   assert.deepEqual(ideas.map((x) => x.id), ['b', 'a', 'd'], 'every non-bug post, most votes first');
   assert.equal(ideas.find((x) => x.id === 'b').text, 'Old post saved before kinds existed');
   // also works on raw rows that never went through publicItem
   assert.ok(boardPosts(stored, 'idea').some((x) => x.id === 'b'));
 });
 
-test('bug posts appear only in REPORT A BUG, with replies kept', () => {
-  const bugs = boardPosts(listed, FEEDBACK_TAB_KIND.bugs);
+test('bug posts appear only under BUGS, with replies kept', () => {
+  const bugs = boardPosts(listed, 'bug');
   assert.deepEqual(bugs.map((x) => x.id), ['c']);
   assert.equal(bugs[0].replies.length, 1);
   assert.equal(boardPosts(listed, 'idea').some((x) => x.id === 'c'), false);
 });
 
-test('the two tabs together still show every stored post', () => {
+test('ALL shows every stored post, and IDEAS + BUGS split it exactly', () => {
+  assert.deepEqual([...FEEDBACK_FILTERS], ['all', 'idea', 'bug']);
+  assert.equal(boardPosts(listed, 'all').length, stored.length);
+  assert.equal(boardPosts(listed).length, stored.length, 'all by default');
+  assert.deepEqual(boardPosts(listed, 'all').map((x) => x.votes), [9, 3, 2, 0], 'most votes first');
   const ideas = boardPosts(listed, 'idea');
   const bugs = boardPosts(listed, 'bug');
   assert.equal(ideas.length + bugs.length, stored.length);
@@ -106,8 +110,7 @@ test('boardPosts does not mutate the shared list and tolerates junk', () => {
   assert.deepEqual(boardPosts([null, undefined], 'idea'), []);
 });
 
-test('SUGGEST posts kind idea and REPORT A BUG posts kind bug', () => {
-  assert.deepEqual({ ...FEEDBACK_TAB_KIND }, { feedback: 'idea', bugs: 'bug' });
+test('the post sends its kind (SUGGESTION = idea, BUG REPORT = bug) to the worker', () => {
   const acct = readFileSync(new URL('../src/net/Account.js', import.meta.url), 'utf8');
   assert.match(acct, /api\('feedback', \{ kind, text,/, 'client sends the kind field to the worker');
 });

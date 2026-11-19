@@ -23,7 +23,7 @@ import { SKINS, EMOTES, PICKAXES, BACKBLINGS, EMOTE_SLOTS, PRICES, featuredToday
 import { createShowcase } from './Showcase.js';
 import { PATCH_NOTES, LATEST_VERSION } from '../data/patchNotes.js';
 import { RANKED_NOTE } from '../core/config.js';
-import { boardPosts, FEEDBACK_TAB_KIND } from '../net/feedbackBoard.js';
+import { boardPosts } from '../net/feedbackBoard.js';
 
 const SEEN_KEY = 'bentonville-royale.seenPatch';
 const seenPatch = () => {
@@ -155,12 +155,11 @@ export function createMeta(menus, account, opts = {}) {
   const bShop = tab('ITEM SHOP', 'shop');
   const bBoard = tab('RANKS', 'leaderboard');
   const bNews = tab('PATCH NOTES', 'news');
-  const bFeedback = tab('SUGGEST', 'feedback');
-  const bBugs = tab('REPORT A BUG', 'bugs');
+  const bFeedback = tab('FEEDBACK', 'feedback'); // suggestions and bug reports, one board
   const newBadge = h('em', 'mt-badge mt-badge-new', 'NEW');
   newBadge.hidden = seenPatch() === LATEST_VERSION;
   bNews.appendChild(newBadge);
-  tabs.append(bPlay, bLocker, bShop, bBoard, bNews, bFeedback, bBugs);
+  tabs.append(bPlay, bLocker, bShop, bBoard, bNews, bFeedback);
   const bFriends = btn('FRIENDS', 'mn-chip mt-chip', 'friends');
   const badge = h('em', 'mt-badge');
   bFriends.appendChild(badge);
@@ -288,7 +287,7 @@ export function createMeta(menus, account, opts = {}) {
     panelBody.replaceChildren();
     close.hidden = open === 'rename' && mustRename(); // no way around a forced rename
     if (open === 'news') renderNews();
-    else if (open === 'feedback' || open === 'bugs') renderFeedback(open);
+    else if (open === 'feedback') renderFeedback();
     else if (open === 'auth') renderAuth();
     else if (open === 'signout') renderSignOut();
     else if (open === 'rename') renderRename();
@@ -345,8 +344,8 @@ export function createMeta(menus, account, opts = {}) {
   renderOnlineChip();
 
   // ---------------------------------------------------------------- patch notes + board
-  // One shared list from the server (both kinds). Each tab filters it: SUGGEST = 'idea' (and old
-  // posts saved without a kind), REPORT A BUG = 'bug'. Nothing is dropped from storage.
+  // One shared list from the server (both kinds) in one FEEDBACK tab: post a suggestion or a bug
+  // report, and list all / ideas / bugs. Posts saved without a kind count as ideas.
   let board = null; // last loaded posts
   function renderNews() {
     panelTitle.textContent = 'PATCH NOTES';
@@ -371,6 +370,8 @@ export function createMeta(menus, account, opts = {}) {
     }
   }
 
+  let postKind = 'idea'; // what POST sends (the form's SUGGESTION / BUG switch)
+  let listFilter = 'all'; // what the list shows: all / idea / bug
   const BOARD_COPY = {
     idea: {
       title: 'SUGGEST',
@@ -390,44 +391,86 @@ export function createMeta(menus, account, opts = {}) {
     },
   };
 
-  function renderFeedback(tabId) {
-    const kind = FEEDBACK_TAB_KIND[tabId] || 'idea';
-    const copy = BOARD_COPY[kind];
-    panelTitle.textContent = copy.title;
+  /** A row of two or three pressed / unpressed chips; `on` = current value, pick(value). */
+  function segmented(label, options, on, pick) {
+    const row = h('div', 'mt-seg');
+    row.setAttribute('role', 'group');
+    row.setAttribute('aria-label', label);
+    for (const [value, text] of options) {
+      const b = btn(text, 'mn-chip mt-seg-chip' + (value === on ? ' is-on' : ''));
+      b.setAttribute('aria-pressed', value === on ? 'true' : 'false');
+      b.dataset.value = value;
+      b.addEventListener('click', () => {
+        click();
+        pick(value);
+      });
+      row.appendChild(b);
+    }
+    return row;
+  }
+
+  function renderFeedback() {
+    panelTitle.textContent = 'FEEDBACK';
     const form = h('form', 'mt-form mt-board-form');
     const text = h('textarea', 'mn-field mt-board-text');
     text.maxLength = 500;
     text.rows = 3;
-    text.placeholder = copy.placeholder;
-    text.setAttribute('aria-label', copy.label);
+    const applyKind = () => {
+      const copy = BOARD_COPY[postKind];
+      text.placeholder = copy.placeholder;
+      text.setAttribute('aria-label', copy.label);
+    };
+    applyKind();
+    const kinds = segmented('What are you posting?', [['idea', 'SUGGESTION'], ['bug', 'BUG REPORT']], postKind, (v) => {
+      postKind = v;
+      for (const c of kinds.children) {
+        const on = c.dataset.value === v;
+        c.classList.toggle('is-on', on);
+        c.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+      applyKind();
+      text.focus();
+    });
     const send = btn('POST', 'mn-btn');
     send.type = 'submit';
-    form.append(text, send);
+    form.append(kinds, text, send);
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       click();
       send.disabled = true;
+      const kind = postKind;
       try {
         const item = await account.feedback(kind, text.value);
         text.value = '';
         board = [item, ...(board || []).filter((x) => x.id !== item.id)];
-        say(copy.posted);
-        renderBoard(list, kind);
+        say(BOARD_COPY[kind].posted);
+        renderBoard(list);
       } catch (err) {
         say(err.offline ? 'Could not reach the server. Try again in a moment.' : err.message, true);
       }
       send.disabled = false;
     });
     panelBody.appendChild(form);
-    panelBody.appendChild(h('div', 'mn-party-label mt-sub', copy.sub));
+    const filters = segmented('Show', [['all', 'ALL'], ['idea', 'IDEAS'], ['bug', 'BUGS']], listFilter, (v) => {
+      listFilter = v;
+      for (const c of filters.children) {
+        const on = c.dataset.value === v;
+        c.classList.toggle('is-on', on);
+        c.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+      renderBoard(list);
+    });
+    filters.classList.add('mt-seg-filter');
+    panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'FROM PLAYERS (UPVOTE WHAT MATTERS TO YOU)'));
+    panelBody.appendChild(filters);
     const list = h('div', 'mt-posts');
     panelBody.appendChild(list);
-    renderBoard(list, kind);
+    renderBoard(list);
     account
       .feedbackList()
       .then((items) => {
         board = items;
-        if (open === tabId) renderBoard(list, kind);
+        if (open === 'feedback') renderBoard(list);
       })
       .catch(() => {
         if (!board) {
@@ -436,15 +479,15 @@ export function createMeta(menus, account, opts = {}) {
       });
   }
 
-  function renderBoard(list, kind) {
+  function renderBoard(list) {
     list.replaceChildren();
     if (!board) {
       list.appendChild(h('p', 'mt-hint', 'Loading…'));
       return;
     }
-    const items = boardPosts(board, kind);
+    const items = boardPosts(board, listFilter);
     if (!items.length) {
-      list.appendChild(h('p', 'mt-hint', BOARD_COPY[kind].empty));
+      list.appendChild(h('p', 'mt-hint', listFilter === 'all' ? 'Nothing posted yet. Be the first!' : BOARD_COPY[listFilter].empty));
       return;
     }
     const canMod = account.signedIn && isDevName(account.profile.name);
@@ -458,7 +501,7 @@ export function createMeta(menus, account, opts = {}) {
         try {
           const up = await account.feedbackVote(it.id);
           board = board.map((x) => (x.id === up.id ? up : x));
-          renderBoard(list, kind);
+          renderBoard(list);
         } catch (err) {
           say(err.message, true);
         }
@@ -474,7 +517,7 @@ export function createMeta(menus, account, opts = {}) {
             await account.feedbackDelete(it.id);
             board = board.filter((x) => x.id !== it.id);
             say('Deleted.');
-            renderBoard(list, kind);
+            renderBoard(list);
           } catch (err) {
             say(err.message, true);
           }
@@ -496,7 +539,7 @@ export function createMeta(menus, account, opts = {}) {
                 const up = await account.feedbackDelete(it.id, rp.id);
                 board = board.map((x) => (x.id === up.id ? up : x));
                 say('Deleted.');
-                renderBoard(list, kind);
+                renderBoard(list);
               } catch (err) {
                 say(err.message, true);
               }
@@ -525,7 +568,7 @@ export function createMeta(menus, account, opts = {}) {
           board = board.map((x) => (x.id === up.id ? up : x));
           replyIn.value = '';
           say('Reply posted.');
-          renderBoard(list, kind);
+          renderBoard(list);
         } catch (err) {
           say(err.offline ? 'Could not reach the server. Try again in a moment.' : err.message, true);
         }

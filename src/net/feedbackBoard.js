@@ -14,14 +14,17 @@ export function feedbackKind(raw) {
   return raw === 'bug' ? 'bug' : 'idea';
 }
 
-/** Title-screen tab -> board kind. SUGGEST shows ideas, REPORT A BUG shows bugs. */
-export const FEEDBACK_TAB_KIND = Object.freeze({ feedback: 'idea', bugs: 'bug' });
+/** The FEEDBACK tab's list filters: everything, suggestions only, bug reports only. */
+export const FEEDBACK_FILTERS = Object.freeze(['all', 'idea', 'bug']);
 
-/** Posts for one tab, most upvoted first (newest breaks ties). Does not mutate the input. */
-export function boardPosts(items, kind) {
-  const want = feedbackKind(kind);
+/**
+ * Posts for a list filter ('all', or a kind), most upvoted first (newest breaks ties). Does not
+ * mutate the input. Posts saved without a kind count as suggestions.
+ */
+export function boardPosts(items, kind = 'all') {
+  const want = kind === 'all' ? null : feedbackKind(kind);
   return (Array.isArray(items) ? items : [])
-    .filter((it) => it && feedbackKind(it.kind) === want)
+    .filter((it) => it && (!want || feedbackKind(it.kind) === want))
     .sort((a, b) => (b.votes | 0) - (a.votes | 0) || (Number(b.at) || 0) - (Number(a.at) || 0));
 }
 

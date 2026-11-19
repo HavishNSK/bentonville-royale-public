@@ -967,6 +967,19 @@
   gap: calc(var(--u) * 2);
   min-width: 0;
 }
+/* FEEDBACK tab: SUGGESTION / BUG REPORT switch on the form, ALL / IDEAS / BUGS list filter */
+.mt-seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 6);
+}
+.mt-seg-filter {
+  margin-bottom: calc(var(--u) * 6);
+}
+.mt-seg .mn-chip.is-on {
+  background: var(--br-sun);
+  color: var(--br-ink);
+}
 .mt-post-kind {
   align-self: flex-start;
   padding: 0 calc(var(--u) * 6);
