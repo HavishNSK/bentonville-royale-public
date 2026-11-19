@@ -95,36 +95,47 @@
   top: 0;
   right: 0;
   left: 0;
+  /* one row: tabs left, account cluster right, everything on the same centre line */
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
-  gap: calc(var(--u) * 8) calc(var(--u) * 16);
-  padding: calc(var(--u) * 10) 16px calc(var(--u) * 14);
+  gap: calc(var(--u) * 24);
+  min-height: calc(var(--u) * 64);
+  padding: calc(var(--u) * 8) 20px calc(var(--u) * 12);
   background: linear-gradient(180deg, rgba(21, 16, 58, 0.92), rgba(21, 16, 58, 0.55) 70%, rgba(21, 16, 58, 0));
   z-index: 5;
 }
 .mt-tabs,
 .mt-right {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: calc(var(--u) * 4);
+  gap: calc(var(--u) * 2);
+  min-width: 0;
 }
 .mt-right {
+  flex: none;
   gap: calc(var(--u) * 10);
   margin-left: auto;
+}
+/* every control in the account cluster is the same height, so the row reads as one line */
+.mt-right > .mn-chip,
+.mt-right > .mt-coins {
+  height: calc(var(--u) * 34);
+  min-height: 0;
+  box-sizing: border-box;
 }
 .mt-tab {
   position: relative;
   display: inline-flex;
   align-items: center;
-  padding: calc(var(--u) * 6) calc(var(--u) * 12) calc(var(--u) * 9);
+  padding: calc(var(--u) * 6) calc(var(--u) * 11) calc(var(--u) * 9);
   border: 0;
   background: none;
   color: var(--br-cream);
   font-family: var(--br-display);
-  font-size: calc(var(--u) * 21);
+  font-size: calc(var(--u) * 19);
   letter-spacing: 0.03em;
   white-space: nowrap;
   text-shadow: 0 calc(var(--u) * 2) 0 var(--br-ink);
@@ -166,8 +177,9 @@
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  line-height: 1.05;
-  max-width: calc(var(--u) * 170);
+  gap: calc(var(--u) * 2);
+  line-height: 1.1;
+  max-width: calc(var(--u) * 240);
   min-width: 0;
 }
 .mt-who b {
@@ -183,17 +195,19 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: calc(var(--u) * 11);
-  opacity: 0.8;
+  font-size: calc(var(--u) * 12);
+  font-weight: 700;
+  opacity: 0.85;
 }
 .mt-coins {
   display: inline-flex;
   align-items: center;
   gap: calc(var(--u) * 6);
-  padding: calc(var(--u) * 4) calc(var(--u) * 12) calc(var(--u) * 4) calc(var(--u) * 6);
-  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  padding: 0 calc(var(--u) * 12) 0 calc(var(--u) * 6);
+  border: calc(var(--u) * 2) solid var(--br-ink);
   border-radius: 999px;
   background: var(--br-panel);
+  box-shadow: 0 calc(var(--u) * 3) 0 var(--br-ink);
 }
 .mt-coins b {
   font-size: calc(var(--u) * 18);
@@ -982,6 +996,7 @@
     order: 3;
   }
   .mt-bar {
+    flex-wrap: wrap;
     justify-content: center;
   }
   .mt-panel {

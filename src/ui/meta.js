@@ -1600,7 +1600,10 @@ export function createMeta(menus, account, opts = {}) {
     const p = account.profile;
     whoName.textContent = p.guest ? 'GUEST' : p.name;
     const box = p.box && Number.isFinite(p.box.elo) ? ` · Box ${p.box.elo | 0} ${tierOf(p.box.elo).name}` : '';
-    whoSub.textContent = p.guest ? 'Sign in for coins & skins' : p.banned ? 'Banned' : `${p.stats.wins} wins · ${p.stats.kills} elims${box}`;
+    // short enough for one line in the top bar; the full line is the hover title
+    const full = `${p.stats.wins} wins · ${p.stats.kills} elims${box}`;
+    whoSub.textContent = p.guest ? 'Sign in for coins & skins' : p.banned ? 'Banned' : box ? `${p.stats.wins} wins${box}` : full;
+    who.title = p.guest || p.banned ? '' : full;
     coinsNum.textContent = p.coins.toLocaleString();
     bAuth.querySelector('span').textContent = account.signedIn ? 'SIGN OUT' : 'SIGN IN';
     bAuth.classList.toggle('mt-chip-sun', !account.signedIn);

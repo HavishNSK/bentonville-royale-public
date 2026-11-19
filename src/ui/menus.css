@@ -349,6 +349,9 @@
   border-radius: calc(var(--u) * 10);
   overflow: hidden;
 }
+.mn-seg[hidden] {
+  display: none;
+}
 .mn-seg button {
   padding: calc(var(--u) * 6) calc(var(--u) * 12);
   border: 0;
@@ -1157,6 +1160,13 @@
   align-items: center;
   gap: calc(var(--u) * 16);
 }
+/* the global chat docks bottom-left over this column: keep the buttons clear of it */
+body:has(.br-chat:not(.is-match):not(.is-collapsed)) .mn-title-side {
+  margin-bottom: 224px;
+}
+body:has(.br-chat.is-collapsed:not(.is-match)) .mn-title-side {
+  margin-bottom: 72px;
+}
 .mn-title-side .mn-stack-row {
   /* PRIVATE MATCH across the top, SANDBOX + SETTINGS under it: a short, even block */
   display: grid;
@@ -1207,7 +1217,9 @@
 
 .mn-party {
   width: min(calc(var(--u) * 600), 100%);
-  gap: calc(var(--u) * 12);
+  gap: calc(var(--u) * 16);
+  /* nearly solid: the town's lit windows behind it read as stray bars through the blur */
+  background: rgba(21, 16, 58, 0.93);
 }
 .mn-party-head {
   display: flex;
@@ -1490,8 +1502,12 @@
   margin: 0;
   min-height: 1.2em;
   text-align: center;
-  font-weight: 800;
+  font-weight: 700;
   font-size: calc(var(--u) * 15);
+  opacity: 0.85;
+}
+.mn-party-status:empty {
+  display: none;
 }
 .mn-party-status.is-queued {
   color: var(--br-sun);
@@ -1520,8 +1536,11 @@
   /* name on its own row, then code + join: both fields keep a readable width */
   grid-template-columns: minmax(0, 1fr);
   gap: calc(var(--u) * 10);
-  padding-top: calc(var(--u) * 10);
-  border-top: 1px solid rgba(255, 246, 220, 0.12);
+  padding-top: calc(var(--u) * 4);
+}
+/* signed in, the name is the account's (read-only and already in the top bar) */
+.mn-name[hidden] {
+  display: none;
 }
 @media (max-width: 520px) {
   .mn-party-foot {

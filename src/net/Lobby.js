@@ -37,9 +37,15 @@ export const LOBBY_MSG = {
 /** Public lobbies from the index (waiting ones first; `full` rows can be greyed out). */
 export async function listLobbies() {
   const host = partyHost();
-  const res = await fetch(`${isLocal(host) ? 'http' : 'https'}://${host}/parties/lobby-index/index`, { cache: 'no-store' });
-  if (!res.ok) throw new Error(LOBBY_MSG.offline);
-  const body = await res.json();
+  // a network / CORS failure surfaces as a bare "Failed to fetch": show our own message instead
+  let body;
+  try {
+    const res = await fetch(`${isLocal(host) ? 'http' : 'https'}://${host}/parties/lobby-index/index`, { cache: 'no-store' });
+    if (!res.ok) throw new Error('status');
+    body = await res.json();
+  } catch {
+    throw new Error(LOBBY_MSG.offline);
+  }
   return cleanList(body && body.list);
 }
 

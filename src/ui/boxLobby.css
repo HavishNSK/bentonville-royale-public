@@ -202,6 +202,20 @@
 .mn-bf-panel-msg p {
   margin: 0;
 }
+.mn-bf-panel-msg p + p {
+  font-family: var(--br-body);
+  font-weight: 700;
+  font-size: calc(var(--u) * 16);
+  opacity: 0.85;
+}
+.mn-bf-panel-acts {
+  display: flex;
+  gap: calc(var(--u) * 12);
+  margin-top: calc(var(--u) * 14);
+}
+.mn-bf-panel-acts .mn-btn-small {
+  margin-top: 0;
+}
 .mn-bf-foot {
   display: flex;
   align-items: center;

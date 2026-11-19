@@ -823,7 +823,7 @@ export function createMenus(root, opts = {}) {
 
   function partyStatus(v) {
     if (v.match) return v.match;
-    if (!v.online) return v.connecting ? 'Connecting to the party server…' : 'Party server offline. PLAY starts a match with bots.';
+    if (!v.online) return v.connecting ? 'Connecting to the party server…' : ''; // offline: PLAY still starts a bot match
     if (v.state === 'matched') return 'Match found!';
     const others = v.searching > 0 ? `${v.searching} other${v.searching === 1 ? '' : 's'} searching` : '';
     if (v.state === 'queued') return `Finding match… ${fmt((performance.now() - (v.queuedSince || performance.now())) / 1000)}` + (others ? ` · ${others}` : '');
@@ -831,7 +831,7 @@ export function createMenus(root, opts = {}) {
     if (v.isLeader) {
       if (waiting) return `Waiting for ${waiting} to ready up`;
       if (others) return `${others} in this mode. Press PLAY to join them.`;
-      return v.members.length > 1 ? 'Everyone is ready. Press PLAY.' : 'Invite friends, or press PLAY to find a match.';
+      return v.members.length > 1 ? 'Everyone is ready. Press PLAY.' : '';
     }
     const me = v.members.find((m) => m.you);
     return me && me.ready ? 'Ready. Waiting for the leader…' : 'Ready up when you are set.';
@@ -890,7 +890,7 @@ export function createMenus(root, opts = {}) {
     // bots and rounds. No party matchmaking for Box Fights from the title.
     const box = gameId === 'boxfights';
     T.pmode.hidden = box;
-    T.pfill.hidden = box;
+    T.pfill.hidden = box || teamSize(v.mode) === 1; // fill means nothing in Solo
     T.pgame.querySelectorAll('button').forEach((b) => {
       const on = b.dataset.game === gameId;
       b.classList.toggle('is-on', on);
@@ -940,7 +940,7 @@ export function createMenus(root, opts = {}) {
     go.dataset.kind = kind;
     go.disabled = disabled;
     go.classList.toggle('is-disabled', disabled);
-    T.pstatus.textContent = box && idle ? (v.isLeader ? 'PLAY opens Box Fights lobbies: join one, host one, or play with bots.' : 'PLAY opens Box Fights lobbies. Share a lobby code with your party.') : partyStatus(v);
+    T.pstatus.textContent = box && idle ? (v.isLeader ? '' : 'PLAY opens Box Fights lobbies. Share a lobby code with your party.') : partyStatus(v);
     T.pstatus.classList.toggle('is-queued', v.state === 'queued' || !!v.match || v.state === 'matched');
 
     clearInterval(queueTimer);
@@ -1090,9 +1090,11 @@ export function createMenus(root, opts = {}) {
         T.name.value = String(name).slice(0, 16);
         T.name.readOnly = true;
         T.name.title = 'Your account name';
+        T.name.closest('.mn-name').hidden = true;
       } else {
         T.name.readOnly = false;
         T.name.title = '';
+        T.name.closest('.mn-name').hidden = false;
         T.name.value = savedName() || T.name.value;
       }
       if (partyView && !partyView.online) renderParty();

@@ -103,7 +103,15 @@ export function createBoxLobbyUI(menus, opts = {}) {
       const rows = v.rows || [];
       let body;
       if (v.loading && !rows.length) body = h('p.mn-bf-panel-msg', { role: 'status' }, 'Looking for lobbies…');
-      else if (v.error && !rows.length) body = h('p.mn-bf-panel-msg.mn-error', { role: 'alert' }, v.error);
+      else if (v.error && !rows.length)
+        body = h('div.mn-bf-panel-msg', null,
+          h('p.mn-error', { role: 'alert' }, v.error),
+          h('p', null, 'Public lobbies are down right now. You can still play with bots.'),
+          h('div.mn-bf-panel-acts', null,
+            btn('mn-btn-small', 'TRY AGAIN', () => fire('refresh'), { dataset: { key: 'err-retry' } }),
+            btn('mn-btn-small', 'PLAY WITH BOTS', () => fire('bots'), { dataset: { key: 'err-bots' } }),
+          ),
+        );
       else if (!rows.length)
         body = h('div.mn-bf-panel-msg', null, h('p', null, v.filter && v.filter !== 'any' ? `No ${MODE_LABEL[v.filter]} lobbies — Host one!` : 'No lobbies — Host one!'), btn('mn-btn-small', 'HOST A LOBBY', () => fire('hostPublic'), { dataset: { key: 'empty-host' } }));
       else body = h('ul.mn-bf-lobbies', { 'aria-label': 'Public lobbies' }, rows.map((r) => lobbyRow(r, v)));
