@@ -60,13 +60,13 @@ export const SKINS = {
   // recoloured as a big dusky-purple sweater, the mage's bare head with a curly ink mop, floppy
   // dog ears, cheek blush, a ribbed sweater collar and a fluffy tail with a lighter tip
   skin_scruff: {
-    name: 'Scruff',
+    name: 'Femboy Jaithra',
     model: 'player',
     idle: 'paws', // stands with both paws held up in front (Character idlePose)
     gear: 'furPaws', // realistic furry paw boots and paw gloves (render/FurGear.js)
     tint: null,
     rarity: 'legendary',
-    price: 5000,
+    price: 15000,
     parts: { head: 'bot_c', hat: null, cape: null },
     colors: {
       skin: '#c98a5e',
@@ -115,7 +115,7 @@ export const PICKAXES = {
   pick_paddle: { name: 'Pickleball Paddle', src: null, proc: 'paddle', tint: null, swing: ['1H_Melee_Attack_Slice_Horizontal', '1H_Melee_Attack_Slice_Diagonal'], rarity: 'rare', price: 700 },
   pick_mug: { name: 'Root Beer Float', src: ['bot_b', 'Mug'], tint: null, swing: ['Unarmed_Melee_Attack_Punch_A', 'Unarmed_Melee_Attack_Punch_B'], rarity: 'legendary', price: 1500 },
   // Scruff set: a big fuzzy pink paw on a handle (src/render/PupGear.js), bopped pads-first
-  pick_paw: { name: 'Paw Pounder', src: null, proc: 'paw', tint: null, swing: ['1H_Melee_Attack_Chop', 'Unarmed_Melee_Attack_Punch_A'], rarity: 'epic', price: 2000 },
+  pick_paw: { name: 'Paw Pounder', src: null, proc: 'paw', tint: null, swing: ['1H_Melee_Attack_Chop', 'Unarmed_Melee_Attack_Punch_A'], rarity: 'epic', price: 5500 },
 };
 
 /**
@@ -136,7 +136,7 @@ export const BACKBLINGS = {
   bb_shield_badge: { name: 'Bentonville Badge', src: ['bot_a', 'Badge_Shield', 'back'], tint: null, rarity: 'rare', price: 800 },
   bb_spellbook: { name: 'Spellbook', src: ['bot_c', 'Spellbook', 'back'], tint: null, rarity: 'rare', price: 700 },
   // Scruff set: a chubby rainbow gecko plush clinging to the back (proc: built in src/render/PupGear.js)
-  bb_gecko: { name: 'Sticky Buddy', src: null, proc: 'gecko', tint: null, rarity: 'epic', price: 1000 },
+  bb_gecko: { name: 'Rainbow Gecko', src: null, proc: 'gecko', tint: null, rarity: 'epic', price: 3500 },
 };
 
 /**
@@ -148,7 +148,7 @@ export const BACKBLINGS = {
 export const GLIDERS = {
   gl_default: { name: 'Classic Canopy', canopy: null, rarity: 'common', price: 0 },
   // Scruff set: dog-DNA powers, no glider needed
-  gl_paws: { name: 'Paws Up', pose: 'paws', rarity: 'epic', price: 1000 },
+  gl_paws: { name: 'Paws Up', pose: 'paws', rarity: 'epic', price: 3500 },
   // legs kicking behind you, paws up, belly-down
   gl_kick: { name: 'Puppy Kick', pose: 'kick', rarity: 'epic', price: 1200 },
   // upright with one knee up, paws up, twirling slowly on the way down
@@ -156,11 +156,12 @@ export const GLIDERS = {
 };
 
 /**
- * Bundles: one purchase grants every item in `items` (the ones you don't own yet). Bought for its
- * full price; refused when you already own them all (party/accounts.js 'buy').
+ * Bundles: one purchase grants every item in `items` (the ones you don't own yet). Each item is
+ * also sold on its own; the bundle costs less than all of them together, and drops in price for
+ * the pieces you already own (bundlePrice). Refused when you own them all (party/accounts.js 'buy').
  */
 export const BUNDLES = {
-  bundle_scruff: { name: 'Femboy Jaithra Bundle', items: ['skin_scruff', 'pick_paw', 'bb_gecko', 'gl_paws'], rarity: 'legendary', price: 10000 },
+  bundle_scruff: { name: 'Femboy Jaithra Bundle', items: ['skin_scruff', 'pick_paw', 'bb_gecko', 'gl_paws'], rarity: 'legendary', price: 25000 }, // 27,500 bought separately
 };
 
 /** clip: animation name; loop: keeps going until you move; hold: clip to loop after `clip` once;
@@ -193,6 +194,25 @@ for (const [id, e] of Object.entries(PICKAXES)) if (e.price > 0) PRICES[id] = e.
 for (const [id, e] of Object.entries(BACKBLINGS)) if (e.price > 0) PRICES[id] = e.price;
 for (const [id, e] of Object.entries(GLIDERS)) if (e.price > 0) PRICES[id] = e.price;
 for (const [id, e] of Object.entries(BUNDLES)) PRICES[id] = e.price;
+
+/**
+ * What a bundle costs given what you already own: its price scaled by the share (by item price)
+ * of the pieces you still need, rounded to 100 and never more than buying those pieces one by one.
+ * 0 once you own everything in it.
+ */
+export function bundlePrice(id, owned = []) {
+  const b = BUNDLES[id];
+  if (!b) return null;
+  const total = b.items.reduce((t, it) => t + (PRICES[it] || 0), 0);
+  const rest = b.items.filter((it) => !owned.includes(it)).reduce((t, it) => t + (PRICES[it] || 0), 0);
+  if (!rest || !total) return 0;
+  return Math.min(rest, Math.round((b.price * rest) / total / 100) * 100);
+}
+
+/** Shop price of any item for an account that owns `owned` (bundles discount owned pieces). */
+export function priceFor(id, owned = []) {
+  return BUNDLES[id] ? bundlePrice(id, owned) : PRICES[id];
+}
 
 /** Owned by every new account. */
 export const DEFAULT_OWNED = [SKINS, PICKAXES, BACKBLINGS, GLIDERS, EMOTES].flatMap((t) => Object.keys(t).filter((k) => t[k].price === 0));

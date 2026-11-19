@@ -33,12 +33,28 @@ test('Puppy Kick and Tail Spin are pose gliders for sale; Scruff idles with paws
   assert.equal(SKINS.skin_scruff.idle, 'paws');
 });
 
-test('Scruff Set bundle: 10,000 coins for the four Scruff items, kept out of Featured', async () => {
+test('Scruff Set bundle: 25,000 coins for the four Scruff items, kept out of Featured', async () => {
   const { BUNDLES, featuredToday } = await import('../src/game/Cosmetics.js');
   const b = BUNDLES.bundle_scruff;
   assert.deepEqual(b.items, ['skin_scruff', 'pick_paw', 'bb_gecko', 'gl_paws']);
-  assert.equal(PRICES.bundle_scruff, 10000);
-  assert.deepEqual([PRICES.skin_scruff, PRICES.pick_paw, PRICES.bb_gecko, PRICES.gl_paws], [5000, 2000, 1000, 1000]);
+  assert.equal(PRICES.bundle_scruff, 25000);
+  assert.deepEqual([PRICES.skin_scruff, PRICES.pick_paw, PRICES.bb_gecko, PRICES.gl_paws], [15000, 5500, 3500, 3500]);
+  const separately = b.items.reduce((t, id) => t + PRICES[id], 0);
+  assert.ok(PRICES.bundle_scruff < separately, 'the bundle is cheaper than buying each item');
   assert.equal(cosmeticDef('bundle_scruff').kind, 'bundle');
   for (let d = 0; d < 60; d++) assert.ok(!featuredToday(4, new Date(Date.UTC(2026, 10, 1 + d))).includes('bundle_scruff'));
+});
+
+test('bundle price drops for the pieces you already own, never above buying the rest', async () => {
+  const { bundlePrice, priceFor } = await import('../src/game/Cosmetics.js');
+  assert.equal(bundlePrice('bundle_scruff', []), 25000);
+  assert.equal(priceFor('bundle_scruff', []), 25000);
+  // own the outfit (15,000 of 27,500): pay for the other 12,500 worth, at the bundle discount
+  const rest = bundlePrice('bundle_scruff', ['skin_scruff']);
+  assert.ok(rest < 12500 && rest > 0, String(rest));
+  assert.equal(rest % 100, 0);
+  // one piece left: never more than buying that piece alone
+  assert.ok(bundlePrice('bundle_scruff', ['skin_scruff', 'pick_paw', 'bb_gecko']) <= PRICES.gl_paws);
+  assert.equal(bundlePrice('bundle_scruff', ['skin_scruff', 'pick_paw', 'bb_gecko', 'gl_paws']), 0);
+  assert.equal(priceFor('pick_paw', ['skin_scruff']), PRICES.pick_paw, 'single items keep their price');
 });

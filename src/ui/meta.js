@@ -19,7 +19,7 @@
 // User text always goes through textContent.
 
 import './meta.css';
-import { SKINS, EMOTES, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, EMOTE_SLOTS, PRICES, featuredToday, emoteDef, cosmeticDef } from '../game/Cosmetics.js';
+import { SKINS, EMOTES, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, EMOTE_SLOTS, PRICES, priceFor, featuredToday, emoteDef, cosmeticDef } from '../game/Cosmetics.js';
 import { createShowcase } from './Showcase.js';
 import { PATCH_NOTES, LATEST_VERSION } from '../data/patchNotes.js';
 import { RANKED_NOTE } from '../core/config.js';
@@ -1163,16 +1163,17 @@ export function createMeta(menus, account, opts = {}) {
     const info = h('span', 'mt-item-info');
     info.append(h('b', 'mt-item-name', d.name), h('small', 'mt-item-kind', `${d.rarity} ${KIND_LABEL[c.kind]}`));
     const foot = h('span', 'mt-item-foot');
+    const price = priceFor(id, account.profile.owned);
     if (equipped) foot.textContent = 'EQUIPPED';
     else if (owned) foot.textContent = action || 'OWNED';
     else {
       foot.appendChild(h('i', 'mt-coin'));
-      foot.appendChild(document.createTextNode(PRICES[id].toLocaleString()));
+      foot.appendChild(document.createTextNode(price.toLocaleString()));
     }
     card.classList.toggle('is-owned', !!owned);
     card.classList.toggle('is-equipped', !!equipped);
     card.classList.toggle('is-sel', !!selected);
-    card.setAttribute('aria-label', `${d.name}, ${d.rarity} ${KIND_LABEL[c.kind]}${equipped ? ', equipped' : owned ? ', owned' : `, ${PRICES[id]} coins`}`);
+    card.setAttribute('aria-label', `${d.name}, ${d.rarity} ${KIND_LABEL[c.kind]}${equipped ? ', equipped' : owned ? ', owned' : `, ${price} coins`}`);
     card.append(art, info, foot);
     card.addEventListener('click', () => {
       click();
@@ -1203,13 +1204,15 @@ export function createMeta(menus, account, opts = {}) {
     const p = account.profile;
     const eq = p.equipped;
     const sections = [
-      ['BUNDLES', forSale(BUNDLES), 'is-featured'],
+      // spotlight: each bundle across the top, then every piece of it sold on its own
+      ['FEATURED', forSale(BUNDLES).flatMap((b) => [b, ...BUNDLES[b].items.filter((it) => PRICES[it])]), 'is-spotlight'],
       ['FEATURED TODAY', featuredToday(4), 'is-featured'],
       ['OUTFITS', forSale(SKINS)],
       ['PICKAXES', forSale(PICKAXES)],
       ['BACK BLINGS', forSale(BACKBLINGS)],
       ['GLIDERS', forSale(GLIDERS)],
       ['EMOTES', forSale(EMOTES)],
+      ['BUNDLES', forSale(BUNDLES), 'is-featured'],
     ];
     for (const [label, ids, cls] of sections) {
       panelBody.appendChild(h('div', 'mt-sub', label));
@@ -1271,7 +1274,7 @@ export function createMeta(menus, account, opts = {}) {
       return;
     }
     const c = cosmeticDef(pending);
-    const price = PRICES[pending];
+    const price = priceFor(pending, account.profile.owned);
     const can = account.profile.coins >= price;
     const name = h('span', 'mt-buy-name');
     name.append(h('b', null, c.def.name), h('small', 'mt-item-kind', `${c.def.rarity} ${KIND_LABEL[c.kind]}`));

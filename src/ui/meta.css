@@ -615,6 +615,10 @@
 .mt-item.is-bundle {
   grid-column: span 2;
 }
+/* the FEATURED row: the bundle poster takes the whole row, its pieces sit underneath */
+.mt-grid.is-spotlight .mt-item.is-bundle {
+  grid-column: 1 / -1;
+}
 .mt-item.is-bundle .mt-item-art {
   aspect-ratio: 16 / 9;
 }

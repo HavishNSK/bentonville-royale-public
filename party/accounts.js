@@ -49,7 +49,7 @@
 // The shop catalog's prices are mirrored here (PRICES) so a client cannot buy for free.
 
 import { Server, getServerByName } from 'partyserver';
-import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES } from '../src/game/Cosmetics.js';
+import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, priceFor } from '../src/game/Cosmetics.js';
 import { verifyGoogleIdToken } from './googleIdToken.js';
 import { applyMatchStats } from './matchStats.js';
 import { boxStats, validateBoxResult, applyBoxResult, boxRateLimited, boxFlags } from './boxRating.js';
@@ -815,8 +815,8 @@ export class Accounts extends Server {
       }
       case 'buy': {
         const id = String(m.item || '');
-        const price = PRICES[id];
-        if (price == null) return err('That item is not in the shop.');
+        if (PRICES[id] == null) return err('That item is not in the shop.');
+        const price = priceFor(id, acc.owned); // bundles knock off the pieces you already own
         const bundle = BUNDLES[id];
         const grant = bundle ? bundle.items.filter((it) => !acc.owned.includes(it)) : [id];
         if (bundle ? !grant.length : acc.owned.includes(id)) return err(bundle ? 'You already own everything in that bundle.' : 'You already own that.');
