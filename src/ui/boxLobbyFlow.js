@@ -19,7 +19,7 @@
 //
 // Lobby codes are joining conveniences, not authentication; the host's browser runs the match.
 
-import { lookString, SKINS } from '../game/Cosmetics.js';
+import { lookString } from '../game/Cosmetics.js';
 import { nameIsClean } from '../net/chatFilter.js';
 import { sameWorld } from '../net/worldIdentity.js';
 import { createBoxLobbyUI } from './boxLobby.js';
@@ -87,8 +87,6 @@ export function createBoxLobbyFlow({ game, menus, sfx, deps }) {
       },
       bots: () => openSettings({ offline: true }),
       back: () => exitToTitle(),
-      name: (v) => setName(v),
-      outfit: (dir) => cycleOutfit(dir),
       filter: (f) => {
         filter = f;
         renderHome();
@@ -130,52 +128,15 @@ export function createBoxLobbyFlow({ game, menus, sfx, deps }) {
   });
 
   // ---------------------------------------------------------------- A: home
-  function outfitInfo() {
-    const p = deps.account.profile;
-    const SK = SKINS;
-    const owned = (p.owned || []).filter((id) => SK[id]);
-    const idx = Math.max(0, owned.indexOf(p.equipped.skin));
-    const def = SK[owned[idx]] || { name: 'Outfit', rarity: 'common' };
-    return { owned, idx, view: { name: def.name, rarity: def.rarity, index: idx, count: owned.length } };
-  }
-
-  async function cycleOutfit(dir) {
-    const { owned, idx } = outfitInfo();
-    if (owned.length < 2) return;
-    const next = owned[(idx + dir + owned.length) % owned.length];
-    try {
-      await deps.account.equip({ skin: next });
-      if (deps.onCosmetics) deps.onCosmetics({ ...deps.account.profile.equipped });
-    } catch (err) {
-      homeNotice = { text: err && err.message ? err.message : 'Could not change the outfit.', error: true };
-    }
-    if (phase === 'home') renderHome();
-  }
-
-  function setName(v) {
-    const n = String(v || '').trim().slice(0, 16);
-    if (!n || !nameIsClean(n)) {
-      homeNotice = { text: 'That name is not allowed. Pick one without swear words.', error: true };
-      renderHome();
-      return;
-    }
-    menus.setPlayerName(n);
-    homeNotice = { text: '', error: false };
-    renderHome();
-  }
-
   /** '' when the name can play, else the reason (shown on Home). */
   function nameProblem() {
     const n = menus.playerName();
-    return nameIsClean(n) ? '' : 'Your name is not allowed. Change it on this screen first.';
+    return nameIsClean(n) ? '' : 'Your name is not allowed. Change it on the title screen first.';
   }
 
   function renderHome() {
     if (phase !== 'home') return;
     ui.showHome({
-      name: menus.playerName(),
-      nameLocked: menus.nameLocked(),
-      outfit: outfitInfo().view,
       notice: homeNotice.text,
       noticeError: homeNotice.error,
       filter,

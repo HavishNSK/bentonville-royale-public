@@ -18,7 +18,6 @@ import './boxLobby.css';
 import { icon } from './icons.js';
 import { MODE_LABEL, DIFF_LABEL, LOBBY_MODES, LOBBY_DIFFICULTIES, BOT_TAG, ruleLine, sanitizeCodeInput, countdownLabel } from './boxLobbyModel.js';
 
-const RARITY_CSS = { common: 'var(--br-common)', uncommon: 'var(--br-uncommon)', rare: 'var(--br-rare)', epic: 'var(--br-epic)', legendary: 'var(--br-legendary)' };
 
 /** Tiny DOM helper: h('button.mn-btn', { type: 'button', onclick }, ...children). Strings are text. */
 function h(spec, props, ...kids) {
@@ -101,12 +100,6 @@ export function createBoxLobbyUI(menus, opts = {}) {
 
   function showHome(v = {}) {
     render('home', () => {
-      const name = h('input.mn-field.mn-bf-name', { maxLength: 16, autocomplete: 'nickname', spellcheck: 'false', value: v.name || '', readOnly: !!v.nameLocked, title: v.nameLocked ? 'Your account name' : '', 'aria-label': 'Your name', dataset: { key: 'name' } });
-      name.addEventListener('change', () => on.name && on.name(name.value));
-      const o = v.outfit || { name: 'Hooded Rogue', rarity: 'common', index: 0, count: 1 };
-      const sw = h('i.mn-bf-swatch', { 'aria-hidden': 'true' });
-      sw.style.background = RARITY_CSS[o.rarity] || RARITY_CSS.common;
-      const many = (o.count || 1) > 1;
       const rows = v.rows || [];
       let body;
       if (v.loading && !rows.length) body = h('p.mn-bf-panel-msg', { role: 'status' }, 'Looking for lobbies…');
@@ -128,15 +121,6 @@ export function createBoxLobbyUI(menus, opts = {}) {
         h('div.mn-bf-browser', { 'aria-hidden': v.privateOpen ? 'true' : null, inert: !!v.privateOpen },
           h('div.mn-bf-strip', null,
             h('h2.mn-bf-title.br-ol', null, 'BOX FIGHTS'),
-            h('label.mn-bf-field', null, h('span', null, 'NAME'), name),
-            h('div.mn-bf-field', { role: 'group', 'aria-label': 'Outfit' },
-              h('span', null, 'OUTFIT'),
-              h('div.mn-bf-outfit', null,
-                h('button.mn-chip', { type: 'button', 'aria-label': 'Previous outfit', disabled: !many, onclick: () => fire('outfit', -1), dataset: { key: 'o-prev' } }, '◀'),
-                h('b.mn-bf-outfit-name', { 'aria-live': 'polite', title: o.name }, sw, o.name),
-                h('button.mn-chip', { type: 'button', 'aria-label': 'Next outfit', disabled: !many, onclick: () => fire('outfit', 1), dataset: { key: 'o-next' } }, '▶'),
-              ),
-            ),
             btn('mn-bf-bots', 'PLAY WITH BOTS', () => fire('bots'), { dataset: { key: 'bots' } }),
           ),
           h('div.mn-bf-filters', null,
@@ -150,7 +134,6 @@ export function createBoxLobbyUI(menus, opts = {}) {
           status(v.joinError || v.notice, !!v.joinError || v.noticeError),
           h('div.mn-bf-foot', null,
             btn('mn-bf-outline', [h('span', { html: icon('back') }), h('span', null, 'BACK')], () => fire('back'), { dataset: { key: 'back' } }),
-            h('span.mn-bf-hint', null, 'More outfits and emotes in the Locker on the title screen.'),
             btn('mn-bf-outline', [h('span', { html: icon('crown') }), h('span', null, 'HOST')], () => fire('hostPublic'), { dataset: { key: 'host' } }),
             btn('mn-btn-hero', [h('span', { html: icon('people') }), h('span', null, 'PRIVATE LOBBY')], () => fire('privateOpen'), { dataset: { key: 'private' } }),
           ),

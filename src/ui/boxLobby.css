@@ -59,8 +59,8 @@
 }
 .mn-bf-strip {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1.2fr) auto;
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: calc(var(--u) * 14);
   padding: calc(var(--u) * 10) calc(var(--u) * 14);
   border: calc(var(--u) * 3) solid var(--br-ink);
@@ -80,48 +80,6 @@
   min-height: calc(var(--u) * 46);
   font-size: calc(var(--u) * 17);
   padding: 0 calc(var(--u) * 16);
-}
-.mn-bf-field {
-  display: flex;
-  flex-direction: column;
-  gap: calc(var(--u) * 4);
-  min-width: 0;
-}
-.mn-bf-field > span {
-  font-family: var(--br-display);
-  font-size: calc(var(--u) * 12);
-  letter-spacing: 0.08em;
-  color: var(--br-sky-hi);
-}
-.mn-bf-name {
-  width: 100%;
-}
-.mn-bf-name[readonly] {
-  background: rgba(255, 246, 220, 0.85);
-}
-.mn-bf-outfit {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: calc(var(--u) * 6);
-  min-height: calc(var(--u) * 46);
-}
-.mn-bf-outfit-name {
-  display: flex;
-  align-items: center;
-  gap: calc(var(--u) * 6);
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: calc(var(--u) * 16);
-}
-.mn-bf-swatch {
-  flex: none;
-  width: calc(var(--u) * 12);
-  height: calc(var(--u) * 12);
-  border: calc(var(--u) * 2) solid var(--br-ink);
-  border-radius: 50%;
 }
 .mn-bf-filters {
   display: flex;
