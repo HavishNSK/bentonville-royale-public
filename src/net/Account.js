@@ -11,7 +11,8 @@
 //   await acct.report(name, reason, note) -> confirmation text   private player report for the devs
 //   await acct.mod(op, body) -> lines[]     DEV panel actions (modBan, modTitle, ...); the server checks dev rights
 //   await acct.buy(id) / acct.equip({ skin, pickaxe, backbling, emotes })
-//   await acct.reward({ kills, placement, players, won, ranked }) -> { earned, saved, ranked, guest?, error? }
+//   acct.matchStart()  asks the server for a match ticket; reward() sends it back (one result per match)
+//   await acct.reward({ kills, placement, players, won, ranked }) -> { earned, saved, ranked, rankedReason, guest?, error? }
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
 //   await acct.leaderboard() -> { online, wins:[{name,wins,kills}], kills:[...] }
 //   acct.setStatus('lobby'|'match', partyCode)
@@ -126,6 +127,7 @@ export function createAccount() {
   let ws = null;
   let wsTimer = 0;
   let status = { s: 'lobby', party: null };
+  let matchTicket = null; // Promise<matchId|null> from matchStart, used once by reward
   let friendsData = { list: [], incoming: [], outgoing: [] };
 
   const acct = {
@@ -265,6 +267,17 @@ export function createAccount() {
       return r.profile;
     },
 
+    /** A match began: ask the server for the ticket that reward() must send back. */
+    matchStart() {
+      if (!acct.signedIn) {
+        matchTicket = null;
+        return;
+      }
+      matchTicket = api('matchStart', { token })
+        .then((r) => (r && typeof r.matchId === 'string' ? r.matchId : null))
+        .catch(() => null);
+    },
+
     /**
      * Match payout + stats. Guests earn nothing — sign in required.
      * Returns { earned, saved, guest?, error? }.
@@ -272,9 +285,12 @@ export function createAccount() {
     async reward({ kills = 0, placement = 1, players = 1, won = false, ranked = false } = {}) {
       if (!acct.signedIn) return { earned: 0, saved: false, guest: true };
       try {
-        const r = await api('reward', { token, kills, placement, players, won, ranked: !!ranked });
+        const matchId = await matchTicket;
+        matchTicket = null;
+        if (!matchId) return { earned: 0, saved: false, error: 'This match was not registered with the server, so it was not saved.' };
+        const r = await api('reward', { token, matchId, kills, placement, players, won, ranked: !!ranked });
         setProfile(r.profile);
-        return { earned: r.earned || 0, saved: true, rateLimited: !!r.rateLimited, ranked: r.ranked === true };
+        return { earned: r.earned || 0, saved: true, rateLimited: !!r.rateLimited, ranked: r.ranked === true, rankedReason: r.rankedReason || null };
       } catch (err) {
         return { earned: 0, saved: false, error: err && err.message ? err.message : 'Could not save match stats.' };
       }
