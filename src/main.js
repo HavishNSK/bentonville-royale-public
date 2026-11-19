@@ -810,6 +810,8 @@ try {
     if (!p.guest) menus.setAccountName(p.name);
   };
   account.init().then(afterAuth);
+  // the server only saves a result that closes the ticket opened here (party/matchStats.js)
+  game.onMatchStart = () => account.matchStart();
   // coins + leaderboard stats for every finished match
   game.onMatchEnd = async (r) => {
     // Humans-only private match: no coins, no rank, no match counted.
@@ -825,6 +827,7 @@ try {
     if (out.guest) meta.matchReward(0, 'Sign in to save eliminations and coins.');
     else if (out.saved && out.earned > 0) meta.matchReward(out.earned);
     else if (out.saved && !ranked) meta.matchReward(0, `Not ranked. ${RANKED_NOTE}`);
+    else if (out.saved && out.rankedReason === 'daily') meta.matchReward(0, 'Daily ranked limit reached. Ranked results count again tomorrow (UTC).');
     else if (out.saved && (r.kills | 0) > 0) meta.matchReward(0, `Saved ${r.kills | 0} elim${(r.kills | 0) === 1 ? '' : 's'} to the ranks.`);
     else if (!out.saved && out.error) meta.matchReward(0, out.error);
   };
