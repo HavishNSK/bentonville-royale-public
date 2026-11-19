@@ -93,6 +93,29 @@ const TRAP_TIME = 20; // s a trap is worked before the bot moves on
 const TRAP_SEEN = 1.0; // s: a target seen this recently may still be trapped (a closed box peek hides it)
 // normal bots trap now and then (DIFFICULTY.normal has no `trap`); easy never does
 const TRAP_FALLBACK = { normal: 0.4 };
+// shot by the trapped target through our trap window (_trapSwitch): reset it and run round to
+// another face of the trap, window there. At most one switch per TRAP_SWITCH_CD s; a move that
+// takes longer than TRAP_MOVE_MAX s is given up (peek from wherever we got to)
+const TRAP_SWITCH_CD = 1.2;
+const TRAP_MOVE_MAX = 2.5;
+const TRAP_CORNER = CELL_HALF * Math.SQRT2 + 1.0; // m from a trap's centre: the corner waypoint, clear of both walls
+// hard: the target breaks out of the trap into the next cell -> box that cell too (_trapExpand),
+// at most TRAP_EXPANDS times per trap; "breaking out" = a trap wall gone and the target within
+// TRAP_BREACH m of it (or already over in the neighbouring cell)
+const TRAP_EXPANDS = 3;
+const TRAP_BREACH = 0.7;
+const TRAP_CLEAR = 1.0; // m: closer than this to a cell being walled in, the bot steps clear first (_trapExpand)
+// our own box (b.box): the SAME wall slot broken this many times (rolled per box, inclusive)
+// and the bot gives up rebuilding it (_boxBreaks): health below BOX_FLEE_HEALTH (health only,
+// not shield) runs out the far side for BOX_FLEE_TIME..+1.5 s; otherwise it builds at them
+const BOX_BREAKS_MIN = 2;
+const BOX_BREAKS_MAX = 5;
+const BOX_FLEE_HEALTH = 50;
+const BOX_FLEE_TIME = 3;
+const BOX_PUSH_WAIT = 4; // s the build push toward the breaker may wait (walking out the door) to start
+const BOX_HIT_HOLD = 1.0; // s after a hit with no box rebuilding (_boxTick): fight back instead
+const BOX_PLUG_CD = 1.75; // s of no box building after the one emergency wall placed under fire
+const PUSH_STOP = 6; // m: the push (_buildPush) runs on until this close (a normal rush stops at RUSH_TRAP_DIST)
 // getting shot: how much of DIFFICULTY.reaction is left before the first shot back (notifyDamage)
 const HIT_REACT = { easy: 0.35, normal: 0.12, hard: 0 };
 // grudge (_grudgeTick): an enemy that shot us (or that we shot at) is hunted until it dies,
@@ -663,7 +686,7 @@ export class Bots {
 
   _onDamage(b, victim, amount, info) {
     const src = info && info.source;
-    this._resetPeekOnHit(b);
+    this._resetPeekOnHit(b, src);
     if (sameTeam(src, victim)) return;
     const t = this.time;
     b.alertUntil = t + 5;
@@ -685,11 +708,17 @@ export class Bots {
       const far = Math.hypot(src.pos.x - b.actor.pos.x, src.pos.z - b.actor.pos.z) > FAR_SHOT;
       if (far) b.farHitAt = t; // _maybeBuild ramp-rushes toward them
       const pushing = t - (b.lastRushAt ?? -Infinity) < 6;
-      if (b.tower || pushing) {
+      // out of a box that kept getting broken (_abandonBox): running, or about to build at them;
+      // or running round our trap to another face (_trapSwitch): no hit-build to hold us there
+      const leaving = t < (b.fleeUntil || 0) || !!b.boxPush || !!(b.trap && b.trap.moving);
+      if (b.tower || pushing || leaving) {
         // up on (or climbing) our tower, or mid ramp-rush at them: those walls are the cover
         // (a hit-wall would block the next ramp of the push)
       } else if (!far && this._tryTower(b, src)) {
         b.hitDmg = 0; // hard, shot from range: height now (any other build is dropped for it)
+      } else if (b.box) {
+        // in our own box: it is the cover (no hit-walls stacked in and around it; _boxTick
+        // decides what gets rebuilt while under fire)
       } else if (fresh) {
         if (this._wallOnHit(b, src)) b.hitDmg = 0;
       } else if (b.hitDmg >= WALL_EVERY_DMG && this._wallOnHit(b, src)) b.hitDmg -= WALL_EVERY_DMG;
@@ -784,7 +813,7 @@ export class Bots {
   _tryTower(b, src) {
     const a = b.actor;
     const t = this.time;
-    if (this.diffName !== 'hard' || !this.structures || !src || !src.alive || !src.pos || b.tower || b.trap || a.downed || b.stormUrgent) return false;
+    if (this.diffName !== 'hard' || !this.structures || !src || !src.alive || !src.pos || b.tower || b.trap || b.boxPush || a.downed || b.stormUrgent) return false;
     const d = Math.hypot(src.pos.x - a.pos.x, src.pos.z - a.pos.z);
     // far off (FAR_SHOT+): go at them instead (ramp rush toward, _maybeBuild), not up
     if (d < TOWER_NEAR || d > Math.min(TOWER_FAR, FAR_SHOT)) return false;
@@ -1133,8 +1162,21 @@ export class Bots {
     // replace a broken wall (the enemy shot one out): the box must stay a box
     if (t > bx.fixAt) {
       bx.fixAt = t + 0.25;
-      for (let q = 0; q < 4; q++) {
+      // the same wall broken again and again: give the box up (run, or build at them)
+      if (this._boxBreaks(b)) return;
+      // under fire (hit in the last BOX_HIT_HOLD s): no rebuilding, fight back. One emergency
+      // wall may plug the side the hits come from if it is open, then BOX_PLUG_CD s of no box
+      // building at all (the break counting above goes on regardless)
+      const hot = t - (b.hurtAt ?? -Infinity) < BOX_HIT_HOLD;
+      let only = null;
+      if (hot && t >= (bx.buildHold || 0)) {
+        const src = b.lastHitBy && b.lastHitBy.pos ? b.lastHitBy : b.target;
+        if (src && src.pos) only = (Math.round(Math.atan2(src.pos.x - bx.x, -(src.pos.z - bx.z)) / (Math.PI / 2)) * Math.PI) / 2;
+      }
+      const hold = t < (bx.buildHold || 0) || (hot && only == null);
+      for (let q = 0; q < 4 && !hold; q++) {
         const h = face + (q * Math.PI) / 2;
+        if (only != null && Math.abs(angleDelta(h, only)) > 0.1) continue;
         if (this._boxWall(b, h)) continue;
         const mat = bestMat(a.inventory);
         if (!mat) break;
@@ -1148,8 +1190,15 @@ export class Bots {
           return;
         }
         if (pl.valid && a.inventory.spendMats(mat, BUILD.cost)) {
-          if (st.place({ ...pl }, mat, a)) b.builds++;
-          else a.inventory.mats[mat] += BUILD.cost;
+          if (st.place({ ...pl }, mat, a)) {
+            b.builds++;
+            bx.rebuilt = (bx.rebuilt || 0) + 1;
+            if (bx.had) bx.had[pl.key] = true; // up again: its next break counts (_boxBreaks)
+            if (hot) {
+              bx.buildHold = t + BOX_PLUG_CD; // the emergency plug: then nothing for a while
+              bx.plugs = (bx.plugs || 0) + 1;
+            }
+          } else a.inventory.mats[mat] += BUILD.cost;
           if (bx.peek === 'open' && q === 0) bx.peek = 'closed'; // the peek wall was the one replaced
         }
         break; // one piece per tick, like a player
@@ -1227,6 +1276,185 @@ export class Bots {
       bx.peek = 'closed';
       bx.peekT = t + diff.peekClosed * (0.7 + this.rng() * 0.8);
     }
+  }
+
+  /** Break limit for one box: BOX_BREAKS_MIN..BOX_BREAKS_MAX (inclusive). */
+  _rollBreakLimit() {
+    const span = BOX_BREAKS_MAX - BOX_BREAKS_MIN + 1;
+    return BOX_BREAKS_MIN + Math.min(span - 1, Math.floor(this.rng() * span));
+  }
+
+  /**
+   * Counts breaks per wall slot of our box (a wall that was up and is gone now; the rebuild
+   * below puts it back). When one slot reaches the box's rolled limit the box is given up
+   * (_abandonBox) instead of rebuilt. True when the box was left.
+   */
+  _boxBreaks(b) {
+    const bx = b.box;
+    const st = this.structures;
+    if (!bx.had) {
+      bx.had = {};
+      bx.breaks = {};
+      bx.breakLimit = this._rollBreakLimit();
+    }
+    for (let q = 0; q < 4; q++) {
+      const h = (q * Math.PI) / 2;
+      _bpos.x = bx.x;
+      _bpos.y = bx.y;
+      _bpos.z = bx.z;
+      const key = st.plan('wall', _bpos, h, 0, _pl).key;
+      const w = st.slots.get(key);
+      if (w && w.alive) {
+        bx.had[key] = true;
+        continue;
+      }
+      if (!bx.had[key]) continue; // never up (or already counted): nothing was broken
+      bx.had[key] = false;
+      const n = (bx.breaks[key] || 0) + 1;
+      bx.breaks[key] = n;
+      if (n >= bx.breakLimit) {
+        this._abandonBox(b, h);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Who keeps breaking the wall on side `h`: Structures does not record a piece's attacker, so
+   * of the enemies we know of (target, grudge, last hitter, threat) the one most squarely on
+   * that side of the box. Null when there is none.
+   */
+  _boxBreaker(b, h) {
+    const bx = b.box;
+    const a = b.actor;
+    const nx = Math.sin(h);
+    const nz = -Math.cos(h);
+    let best = null;
+    let bs = -Infinity;
+    for (const e of [b.target, b.grudge && b.grudge.actor, b.lastHitBy, b.threat]) {
+      if (!e || !e.alive || !e.pos || e === a || sameTeam(e, a)) continue;
+      const dx = e.pos.x - bx.x;
+      const dz = e.pos.z - bx.z;
+      const s = (dx * nx + dz * nz) / (Math.hypot(dx, dz) || 1);
+      if (s > bs + 1e-6) {
+        bs = s;
+        best = e;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * The wall on side `h` was broken breakLimit times: stop rebuilding. Health (not shield)
+   * under BOX_FLEE_HEALTH: door out the side AWAY from the breaker and retreat (b.retreatUntil,
+   * the 'retreat' state runs from b.lastSeenX/Z). Otherwise: door out toward them and a ramp
+   * push at them once outside (b.boxPush, _boxPushTick). No new box for a while either way.
+   */
+  _abandonBox(b, h) {
+    const a = b.actor;
+    const t = this.time;
+    const bx = b.box;
+    const src = this._boxBreaker(b, h);
+    b.boxRollAt = t + 8;
+    if (!src) {
+      this._endBox(b);
+      return;
+    }
+    this._setGrudge(b, src);
+    b.target = src;
+    b.lastSeenX = src.pos.x;
+    b.lastSeenZ = src.pos.z;
+    const snap = (ang) => (Math.round(ang / (Math.PI / 2)) * Math.PI) / 2;
+    const toward = Math.atan2(src.pos.x - bx.x, -(src.pos.z - bx.z));
+    if (a.health < BOX_FLEE_HEALTH) {
+      this._leaveBox(b, snap(toward + Math.PI));
+      b.retreatUntil = t + BOX_FLEE_TIME + this.rng() * 1.5;
+      b.fleeUntil = b.retreatUntil;
+      b.boxPush = null;
+      b.boxLeft = { mode: 'flee', src, at: t };
+    } else {
+      this._leaveBox(b, snap(toward));
+      b.boxPush = { src, until: t + BOX_PUSH_WAIT };
+      b.boxLeft = { mode: 'push', src, at: t };
+    }
+    b.thinkIn = 0;
+  }
+
+  /** Out of our box through side `face` (a door edited in it, or the gap where it was). */
+  _leaveBox(b, face) {
+    const bx = b.box;
+    const a = b.actor;
+    this._closePeek(bx);
+    const d = this._boxWall(b, face);
+    if (d) this._botEdit(b, d, DOOR);
+    const inside = Math.hypot(a.pos.x - bx.x, a.pos.z - bx.z) < CELL_HALF + 0.3 && Math.abs(a.pos.y - bx.y) < 2.5;
+    if (inside) {
+      const ux = Math.sin(face);
+      const uz = -Math.cos(face);
+      b.boxExit = { cx: bx.x, cz: bx.z, y: bx.y, face, seal: null, dx: bx.x + ux * (CELL_HALF - 0.2), dz: bx.z + uz * (CELL_HALF - 0.2), x: bx.x + ux * (CELL_HALF + 1.4), z: bx.z + uz * (CELL_HALF + 1.4), until: this.time + 3 };
+    }
+    b.box = null;
+    b.holdUntil = 0;
+  }
+
+  /**
+   * Engage-state: out of an abandoned box with health to spare, build at whoever broke it (a
+   * ramp push, _buildPush) once through the door. True when the push started.
+   */
+  _boxPushTick(b) {
+    const p = b.boxPush;
+    const t = this.time;
+    if (!p) return false;
+    if (t > p.until || !p.src || !p.src.alive || b.stormUrgent) {
+      b.boxPush = null;
+      return false;
+    }
+    if (b.boxExit || b.bqI < b.bqN || !b.actor.grounded) return false; // still walking out
+    if (!this._buildPush(b, p.src)) return false;
+    b.boxPush = null;
+    return true;
+  }
+
+  /**
+   * A ramp push straight at `src` (ramps, a wall on each with pieces to spare: the same chain
+   * as _maybeBuild's rush), run up while it goes up. b.pushRushUntil keeps the run going
+   * inside RUSH_TRAP_DIST (a normal rush stops there) down to PUSH_STOP: this one is meant to
+   * reach them (then the rush follow-up traps them, or the fight goes on from there).
+   */
+  _buildPush(b, src) {
+    const st = this.structures;
+    const a = b.actor;
+    const t = this.time;
+    const diff = this.diff;
+    if (!st || a.downed || !a.grounded || b.bqI < b.bqN || !src || !src.pos) return false;
+    if (st.count >= BUILD.maxPieces * BUILD_ROOM) return false;
+    const mat = bestMat(a.inventory);
+    if (!mat) return false;
+    let afford = 0;
+    for (const m of MATERIALS) afford += Math.floor((a.inventory.mats[m] || 0) / BUILD.cost);
+    const maxN = Math.min(diff.buildPieces || 1, afford, BUILD_Q);
+    if (maxN < 1) return false;
+    const hs = (Math.round(Math.atan2(src.pos.x - a.pos.x, -(src.pos.z - a.pos.z)) / (Math.PI / 2)) * Math.PI) / 2;
+    const high = src.pos.y - a.pos.y > 1.5;
+    // up to them, not over their heads: on flat ground the chain stops a cell or so short
+    const d = Math.hypot(src.pos.x - a.pos.x, src.pos.z - a.pos.z);
+    const ramps = Math.max(1, Math.min(maxN, high ? 2 + Math.ceil((src.pos.y - a.pos.y) / BUILD.level) : Math.min(3, Math.floor((d - PUSH_STOP) / BUILD.cell))));
+    const covered = maxN >= ramps * 2;
+    let n = 0;
+    for (let i = 0; i < ramps && n < maxN; i++) {
+      n = chainStep(b, n, 'ramp', hs);
+      if (covered && i > 0) n = chainStep(b, n, 'wall', hs, 0, 1);
+    }
+    if (covered) n = chainStep(b, n, 'wall', hs);
+    b.chainRamp = null;
+    b.chainRamps = 0;
+    this._startQueue(b, n, 'rush', mat, Math.sin(hs), -Math.cos(hs));
+    b.rushUntil = t + 0.6 + n * Math.max(0.5, diff.buildRate * 2.5);
+    b.pushRushUntil = b.rushUntil;
+    b.lastRushAt = t;
+    b.target = src;
+    return true;
   }
 
   /**
@@ -1382,9 +1610,10 @@ export class Bots {
 
   /**
    * Shot while a peek (box or trap window / door) is open: reset the edit at once, like a player
-   * taking a hit mid-peek, then reopen after a short beat (hard bots reopen sooner).
+   * taking a hit mid-peek, then reopen after a short beat (hard bots reopen sooner). A trap
+   * window the trapped target shot us through: the next peek is from another face (_trapSwitch).
    */
-  _resetPeekOnHit(b) {
+  _resetPeekOnHit(b, src = null) {
     const st = this.structures;
     if (!st || this.diffName === 'easy') return false;
     const t = this.time;
@@ -1393,9 +1622,126 @@ export class Bots {
       this._closePeek(pk);
       pk.peek = 'closed';
       pk.peekT = t + this.diff.peekClosed * (this.diffName === 'hard' ? 0.6 : 1) * (0.7 + this.rng() * 0.6);
+      if (pk === b.trap) this._trapSwitch(b, src);
       return true;
     }
     return false;
+  }
+
+  /** The cell whose side tr.face is (tr.fx / fz, set by _trapSwitch on an expanded trap; else the target's cell). */
+  _faceCell(tr) {
+    return tr.fx != null ? { x: tr.fx, z: tr.fz } : { x: tr.x, z: tr.z };
+  }
+
+  /**
+   * Run round the trap to side `face` of cell (cx, cz) (default: the target's cell). tr.route
+   * holds the waypoints (the engage case steers along it), tr.moving until there. Round one
+   * cell: its corner waypoints, the short way. To a side of another cell of an expanded trap
+   * (_trapSwitch: straight on along the wall, or into the inside corner): straight there.
+   */
+  _trapGo(b, face, cx = null, cz = null) {
+    const tr = b.trap;
+    const a = b.actor;
+    const q4 = Math.PI / 2;
+    const fc = this._faceCell(tr);
+    const ox = cx == null ? tr.x : cx;
+    const oz = cz == null ? tr.z : cz;
+    const route = [];
+    if (Math.abs(ox - fc.x) < 0.1 && Math.abs(oz - fc.z) < 0.1) {
+      const at = Math.atan2(a.pos.x - ox, -(a.pos.z - oz));
+      const a0 = Math.round(at / q4) * q4;
+      const delta = angleDelta(a0, face);
+      const steps = Math.round(Math.abs(delta) / q4);
+      const sgn = steps === 2 ? (angleDelta(a0, at) >= 0 ? 1 : -1) : Math.sign(delta) || 1;
+      for (let i = 0; i < steps; i++) {
+        const c = a0 + sgn * (Math.PI / 4 + i * q4);
+        // a corner of an expanded (L-shaped) trap can sit in another of its cells: go round
+        // that one too (further out on the diagonal), never through the inside
+        let r = TRAP_CORNER;
+        for (let k = 0; k < 2 && tr.cells && this._trapCellAt(tr, ox + Math.sin(c) * r, oz - Math.cos(c) * r, 0.6) >= 0; k++) r += BUILD.cell * Math.SQRT2;
+        route.push({ x: ox + Math.sin(c) * r, z: oz - Math.cos(c) * r });
+      }
+    }
+    if (Math.abs(ox - tr.x) < 0.1 && Math.abs(oz - tr.z) < 0.1) {
+      tr.fx = null;
+      tr.fz = null;
+    } else {
+      tr.fx = ox;
+      tr.fz = oz;
+    }
+    tr.face = Math.atan2(Math.sin(face), Math.cos(face));
+    tr.route = route;
+    tr.moving = true;
+    tr.moveSince = this.time;
+  }
+
+  /** Our trap wall on side h of the cell centred (cx, cz) at the trap's level, or null. */
+  _trapWallAt(b, cx, cz, h) {
+    const w = this._slotWall(cx, b.trap.y, cz, h);
+    return w && w.owner === b.actor ? w : null;
+  }
+
+  /**
+   * The outer face next to side h of cell c, going round the trap's outline in tangent
+   * direction t (h +- 90 deg): the same cell's side t (an outside corner), the next cell's
+   * side h (straight on), or the cell round an inside corner, its side -t. One cell: its side t.
+   */
+  _perimeterNext(tr, cx, cz, h, t) {
+    const C = BUILD.cell;
+    const hx = Math.round(Math.sin(h)) * C;
+    const hz = Math.round(-Math.cos(h)) * C;
+    const tx = Math.round(Math.sin(t)) * C;
+    const tz = Math.round(-Math.cos(t)) * C;
+    const inT = tr.cells && this._trapCellAt(tr, cx + tx, cz + tz) >= 0;
+    if (inT && this._trapCellAt(tr, cx + tx + hx, cz + tz + hz) >= 0) return { x: cx + tx + hx, z: cz + tz + hz, h: t + Math.PI };
+    if (inT) return { x: cx + tx, z: cz + tz, h };
+    return { x: cx, z: cz, h: t };
+  }
+
+  /**
+   * Shot through our trap window by the one inside it: they have that window lined up. Move
+   * to one of the two faces next to it (round the trap's outline; 50/50 when both are walled,
+   * the walled one when only one is, another walled side of their cell when neither is) and
+   * window-peek from there. One switch per TRAP_SWITCH_CD s; TRAP_TIME still ends the trap.
+   * True when a switch started.
+   */
+  _trapSwitch(b, src) {
+    const tr = b.trap;
+    const a = b.actor;
+    const t = this.time;
+    if (!tr || !src || !src.alive || !src.pos || src === a || sameTeam(src, a)) return false;
+    const inTrap = tr.cells ? this._trapCellAt(tr, src.pos.x, src.pos.z, 0.6) >= 0 : Math.hypot(src.pos.x - tr.x, src.pos.z - tr.z) <= CELL_HALF + 0.6;
+    if (!inTrap || Math.abs(src.pos.y - tr.y) > 2.5) return false; // not the trapped one
+    if (t < (tr.switchAt || 0)) return false;
+    const q4 = Math.PI / 2;
+    const fc = this._faceCell(tr);
+    const h = Math.round(tr.face / q4) * q4;
+    const sides = this.rng() < 0.5 ? [h + q4, h - q4] : [h - q4, h + q4];
+    let pick = null;
+    for (const tdir of sides) {
+      const n = this._perimeterNext(tr, fc.x, fc.z, h, tdir);
+      if (this._trapWallAt(b, n.x, n.z, n.h)) {
+        pick = n;
+        break;
+      }
+    }
+    if (!pick) {
+      // neither neighbour face is walled: another walled outer side of their cell
+      for (let q = 0; q < 4 && !pick; q++) {
+        const hh = q * q4;
+        if (Math.abs(fc.x - tr.x) < 0.1 && Math.abs(fc.z - tr.z) < 0.1 && Math.abs(angleDelta(hh, h)) < 0.1) continue; // the shot face
+        if (tr.cells && this._trapCellAt(tr, tr.x + Math.round(Math.sin(hh)) * BUILD.cell, tr.z + Math.round(-Math.cos(hh)) * BUILD.cell) >= 0) continue; // inside
+        if (this._trapWallAt(b, tr.x, tr.z, hh)) pick = { x: tr.x, z: tr.z, h: hh };
+      }
+    }
+    if (!pick) return false;
+    this._trapGo(b, pick.h, pick.x, pick.z);
+    tr.switchAt = t + TRAP_SWITCH_CD;
+    tr.switches = (tr.switches || 0) + 1;
+    tr.blind = false;
+    tr.extended = false;
+    tr.sawOpen = false;
+    return true;
   }
 
   /** Leaves the box: closes the peek, or edits a door toward the target to push out. */
@@ -1491,9 +1837,10 @@ export class Bots {
   /** The trap's wall on side `h`, or null if it is gone. */
   _trapWall(b, h) {
     const tr = b.trap;
-    _bpos.x = tr.x;
+    const fc = this._faceCell(tr);
+    _bpos.x = fc.x;
     _bpos.y = tr.y;
-    _bpos.z = tr.z;
+    _bpos.z = fc.z;
     const pl = this.structures.plan('wall', _bpos, h, 0, _pl);
     const w = this.structures.slots.get(pl.key);
     return w && w.alive && w.owner === b.actor ? w : null;
@@ -1528,6 +1875,231 @@ export class Bots {
     return true;
   }
 
+  /** Any live wall (anyone's) on side `h` of the cell centred at (x, y, z), or null. */
+  _slotWall(x, y, z, h) {
+    const st = this.structures;
+    _bpos.x = x;
+    _bpos.y = y;
+    _bpos.z = z;
+    const w = st.slots.get(st.plan('wall', _bpos, h, 0, _pl).key);
+    return w && w.alive ? w : null;
+  }
+
+  /** The trap's cells (the first one, plus any _trapExpand added). */
+  _trapCells(tr) {
+    if (!tr.cells) tr.cells = [{ x: tr.x, z: tr.z }];
+    return tr.cells;
+  }
+
+  /** Index of the trap cell (x, z) is in (Chebyshev, `pad` m past its edges), or -1. */
+  _trapCellAt(tr, x, z, pad = 0) {
+    const cells = this._trapCells(tr);
+    for (let i = 0; i < cells.length; i++) if (Math.max(Math.abs(x - cells[i].x), Math.abs(z - cells[i].z)) < CELL_HALF + pad) return i;
+    return -1;
+  }
+
+  /**
+   * Hard, expanded trap: the target walked into another cell of it. Work that cell: its side
+   * facing us is the wall to window (the open peek elsewhere is shut).
+   */
+  _trapFollow(b, tg) {
+    const tr = b.trap;
+    const i = this._trapCellAt(tr, tg.pos.x, tg.pos.z);
+    if (i < 0) return;
+    const c = tr.cells[i];
+    if (Math.abs(c.x - tr.x) < 0.1 && Math.abs(c.z - tr.z) < 0.1) return;
+    const a = b.actor;
+    this._closePeek(tr);
+    tr.x = c.x;
+    tr.z = c.z;
+    tr.fx = null;
+    tr.fz = null;
+    const want = Math.atan2(a.pos.x - c.x, -(a.pos.z - c.z));
+    tr.peek = 'closed';
+    tr.peekT = Math.min(tr.peekT, this.time + 0.15);
+    tr.moving = false;
+    tr.route = null;
+    // the side of that cell nearest us that is (or is going up as) our wall: a side shared
+    // with another cell of the trap is open, run round to a walled one
+    let best = null;
+    let bd = Infinity;
+    for (let q = 0; q < 4; q++) {
+      const h = (q * Math.PI) / 2;
+      if (this._trapCellAt(tr, c.x + Math.round(Math.sin(h)) * BUILD.cell, c.z + Math.round(-Math.cos(h)) * BUILD.cell) >= 0) continue;
+      if (!this._trapWall(b, h) && b.bqI >= b.bqN) continue;
+      const d = Math.abs(angleDelta(want, h));
+      if (d < bd) {
+        bd = d;
+        best = h;
+      }
+    }
+    if (best == null) best = (Math.round(want / (Math.PI / 2)) * Math.PI) / 2;
+    if (bd > Math.PI / 4 + 0.01 && bd !== Infinity) this._trapGo(b, best);
+    else tr.face = best;
+  }
+
+  /** The cell an escaped target is in, when it borders the trap (same level), or null. */
+  _trapEscapeCell(b, tg) {
+    const tr = b.trap;
+    if (Math.abs(tg.pos.y - tr.y) > 2) return null; // up and away (a ramp / jump): not boxable
+    const x = (Math.floor(tg.pos.x / BUILD.cell) + 0.5) * BUILD.cell;
+    const z = (Math.floor(tg.pos.z / BUILD.cell) + 0.5) * BUILD.cell;
+    if (this._trapCellAt(tr, x, z) >= 0) return null;
+    for (const c of this._trapCells(tr)) {
+      if (Math.abs(x - c.x) + Math.abs(z - c.z) < BUILD.cell + 0.1) return { x, z }; // shares a side
+    }
+    return null; // long gone
+  }
+
+  /**
+   * Still in the trap but going out: a wall of the cell they are in is gone (to the outside,
+   * not to another cell of the trap) and they are within TRAP_BREACH m of that edge or past
+   * it. Returns the cell beyond, or null.
+   */
+  _trapBreach(b, tg) {
+    const tr = b.trap;
+    if (b.bqI < b.bqN || Math.abs(tg.pos.y - tr.y) > 2) return null; // walls still going up
+    const i = this._trapCellAt(tr, tg.pos.x, tg.pos.z, 0.9);
+    if (i < 0) return null;
+    const c = tr.cells[i];
+    const ox = tg.pos.x - c.x;
+    const oz = tg.pos.z - c.z;
+    for (let q = 0; q < 4; q++) {
+      const h = (q * Math.PI) / 2;
+      const nx = Math.round(Math.sin(h));
+      const nz = Math.round(-Math.cos(h));
+      if (ox * nx + oz * nz < CELL_HALF - TRAP_BREACH) continue;
+      const x = c.x + nx * BUILD.cell;
+      const z = c.z + nz * BUILD.cell;
+      if (this._trapCellAt(tr, x, z) >= 0) continue; // the inside of the expanded trap
+      if (this._slotWall(c.x, tr.y, c.z, h)) continue;
+      return { x, z };
+    }
+    return null;
+  }
+
+  /**
+   * Hard bots: the target broke out of the trap (into, or on its way into, the neighbouring
+   * cell (cx, cz)): wall that cell in too and join it to the trap. Its sides go up except the
+   * ones it shares with trap cells (left open: one bigger box), plus a roof if the old cell has
+   * one. Same trap: TRAP_TIME runs on, the windows and _trapSwitch carry over (_trapFollow
+   * moves the work to whichever cell they are in). At most TRAP_EXPANDS per trap, not into a
+   * cell we stand in, only with mats and build room. True when queued.
+   */
+  _trapExpand(b, tg, cx, cz) {
+    const tr = b.trap;
+    const st = this.structures;
+    const a = b.actor;
+    if (!tr || !st || this.diffName !== 'hard' || (tr.expands || 0) >= TRAP_EXPANDS) return false;
+    if (b.bqI < b.bqN || a.downed || !a.grounded) return false;
+    // never wall ourselves in: not the cell we stand in; standing on / next to its wall line
+    // (a wall going up there pushes a body either way): step clear first (b.boxExit)
+    const ox = a.pos.x - cx;
+    const oz = a.pos.z - cz;
+    if (Math.max(Math.abs(ox), Math.abs(oz)) < CELL_HALF + 0.3) return false;
+    const brush = Math.max(Math.abs(ox), Math.abs(oz)) < CELL_HALF + TRAP_CLEAR;
+    if (st.count >= BUILD.maxPieces * BUILD_ROOM) return false;
+    const mat = bestMat(a.inventory);
+    let afford = 0;
+    for (const m of MATERIALS) afford += Math.floor((a.inventory.mats[m] || 0) / BUILD.cost);
+    if (!mat || afford < 4) return false;
+    _bpos.x = tr.x;
+    _bpos.y = tr.y;
+    _bpos.z = tr.z;
+    const roof = st.slots.get(st.plan('cone', _bpos, tr.face, 1, _pl).key);
+    const hadRoof = !!(roof && roof.alive && roof.owner === a);
+    this._trapCells(tr);
+    const face = (Math.round(Math.atan2(a.pos.x - cx, -(a.pos.z - cz)) / (Math.PI / 2)) * Math.PI) / 2;
+    // far side first (the way they are heading), the sides, the one facing us last
+    let n = 0;
+    for (const h of [face + Math.PI, face + Math.PI / 2, face - Math.PI / 2, face]) {
+      const x = cx + Math.round(Math.sin(h)) * BUILD.cell;
+      const z = cz + Math.round(-Math.cos(h)) * BUILD.cell;
+      if (this._trapCellAt(tr, x, z) >= 0) continue; // shared with the trap: stays open
+      n = queueStep(b, n, 'wall', cx, tr.y, cz, h, 0);
+    }
+    if (hadRoof) n = queueStep(b, n, 'cone', cx, tr.y, cz, face, 1);
+    if (!n) return false;
+    this._closePeek(tr);
+    tr.cells.push({ x: cx, z: cz });
+    this._startQueue(b, n, 'trap', mat, Math.sin(face), -Math.cos(face));
+    tr.peek = 'closed';
+    tr.peekT = this.time + n * this.diff.buildRate + 0.12;
+    tr.moving = false;
+    tr.route = null;
+    tr.blind = false;
+    tr.extended = false;
+    tr.sawOpen = false;
+    tr.expands = (tr.expands || 0) + 1;
+    b.trapExpands = (b.trapExpands || 0) + 1;
+    if (brush) {
+      const ax = Math.abs(ox) >= Math.abs(oz);
+      const ux = ax ? Math.sign(ox) : 0;
+      const uz = ax ? 0 : Math.sign(oz);
+      const px = ax ? cx + ux * (CELL_HALF + TRAP_CLEAR + 0.6) : a.pos.x;
+      const pz = ax ? a.pos.z : cz + uz * (CELL_HALF + TRAP_CLEAR + 0.6);
+      b.boxExit = { cx, cz, y: tr.y, face: Math.atan2(ux, -uz), seal: null, dx: px, dz: pz, x: px, z: pz, until: this.time + 1.5 };
+    }
+    this._trapFollow(b, tg); // already over there: work the new cell
+    return true;
+  }
+
+  /**
+   * The bot is inside a cell of its own trap: edit a door in that cell's outer wall facing
+   * away from the target and walk out (b.boxExit); the door is shut again once we are out.
+   * A wall that is not ours (cannot edit): the trap ends and _breakOut pickaxes through.
+   * True while getting out (the trap loop waits).
+   */
+  _trapGetOut(b, tg) {
+    const tr = b.trap;
+    const st = this.structures;
+    const a = b.actor;
+    if (tr.exitKey && !b.boxExit) {
+      const w = st.slots.get(tr.exitKey);
+      if (w && w.alive && w.edit) st.edit(w, 0);
+      tr.exitKey = null;
+    }
+    if (b.boxExit) return true;
+    const cells = tr.cells || [{ x: tr.x, z: tr.z }];
+    const c = cells.find((q) => Math.max(Math.abs(a.pos.x - q.x), Math.abs(a.pos.z - q.z)) < CELL_HALF - 0.15);
+    if (!c || Math.abs(a.pos.y - tr.y) > 2) return false;
+    const ax = tg ? a.pos.x - tg.pos.x : 0;
+    const az = tg ? a.pos.z - tg.pos.z : 1;
+    let best = null;
+    let bs = -Infinity;
+    for (let q = 0; q < 4; q++) {
+      const h = (q * Math.PI) / 2;
+      const nx = Math.round(Math.sin(h));
+      const nz = Math.round(-Math.cos(h));
+      if (cells.some((o) => Math.abs(o.x - (c.x + nx * BUILD.cell)) < 0.1 && Math.abs(o.z - (c.z + nz * BUILD.cell)) < 0.1)) continue; // inside
+      const sc = nx * ax + nz * az;
+      if (sc > bs) {
+        bs = sc;
+        best = h;
+      }
+    }
+    if (best == null) return false;
+    this._closePeek(tr);
+    tr.peek = 'closed';
+    tr.moving = false;
+    tr.route = null;
+    const w = this._slotWall(c.x, tr.y, c.z, best);
+    if (w && w.owner !== a) {
+      this._endTrap(b);
+      return false;
+    }
+    if (w) {
+      this._botEdit(b, w, DOOR);
+      tr.exitKey = w.key;
+    }
+    const ux = Math.sin(best);
+    const uz = -Math.cos(best);
+    b.boxExit = { cx: c.x, cz: c.z, y: tr.y, face: best, seal: null, dx: c.x + ux * (CELL_HALF - 0.2), dz: c.z + uz * (CELL_HALF - 0.2), x: c.x + ux * (CELL_HALF + 1.4), z: c.z + uz * (CELL_HALF + 1.4), until: this.time + 3 };
+    tr.gotOut = (tr.gotOut || 0) + 1;
+    tr.peekT = Math.max(tr.peekT, this.time + 0.3);
+    return true;
+  }
+
   _endTrap(b) {
     const tr = b.trap;
     const st = this.structures;
@@ -1541,11 +2113,32 @@ export class Bots {
     const a = b.actor;
     const t = this.time;
     const diff = this.diff;
-    const escaped = !target || !target.alive || Math.hypot(target.pos.x - tr.x, target.pos.z - tr.z) > CELL_HALF + 0.9 || Math.abs(target.pos.y - tr.y) > 2.5;
-    if (!st || !a.alive || a.downed || escaped || dist > TRAP_RANGE + 6 || t - tr.since > TRAP_TIME) {
+    let escaped = !target || !target.alive || Math.hypot(target.pos.x - tr.x, target.pos.z - tr.z) > CELL_HALF + 0.9 || Math.abs(target.pos.y - tr.y) > 2.5;
+    const over = !st || !a.alive || a.downed || dist > TRAP_RANGE + 6 || t - tr.since > TRAP_TIME;
+    // hard: out (or on the way out through a broken wall) into the next cell: box that cell too
+    // and keep working the bigger box (_trapExpand / _trapFollow)
+    if (!over && this.diffName === 'hard' && target && target.alive && Math.abs(target.pos.y - tr.y) <= 2.5) {
+      if (tr.cells) {
+        escaped = this._trapCellAt(tr, target.pos.x, target.pos.z, 0.9) < 0;
+        this._trapFollow(b, target);
+      }
+      const cell = escaped ? this._trapEscapeCell(b, target) : this._trapBreach(b, target);
+      if (cell && this._trapExpand(b, target, cell.x, cell.z)) escaped = false;
+    }
+    if (over || escaped) {
       this._endTrap(b);
       b.trapRollAt = t + 3;
       return false;
+    }
+    // never work a trap from inside it: in one of its cells with them (pushed in by a wall
+    // going up, or walked in through a gap) -> door out on the side away from them first
+    if (this._trapGetOut(b, target)) return true;
+    if (tr.moving) {
+      // running round to another face (_trapSwitch; the engage case steers and says when we
+      // are there): no peek on the way. Too long getting there: peek from where we are
+      if (t - tr.moveSince <= TRAP_MOVE_MAX) return true;
+      tr.moving = false;
+      tr.route = null;
     }
     if (b.bqI < b.bqN || t < tr.peekT) return true; // still going up / between edits
     if (b.reloading > 0) {
@@ -2176,6 +2769,8 @@ export class Bots {
         }
         // they are in a box of our own walls (a trap that lapsed, or a box they walked into): work
         // it from outside again instead of walking at it and "breaking out" of our own trap
+        // out of a box they kept breaking, with health to spare: build at them (_abandonBox)
+        if (b.boxPush) this._boxPushTick(b);
         if (!b.trap && !b.box) this._retrap(b, target);
         // a ramp rush that got us close: drop on them and box them in. One whose ramp was shot
         // out from under us: box ourselves and edit-fight from there.
@@ -2185,16 +2780,35 @@ export class Bots {
         }
         const rushTrap = t - (b.rushEndedAt ?? -Infinity) < RUSH_FOLLOW && !b.trap && !b.box;
         const rushBox = t - (b.rampLostAt ?? -Infinity) < RUSH_FOLLOW && !b.trap && !b.box;
-        if (this._maybeTrap(b, target, d, rushTrap)) {
+        if ((b.trap || !b.boxPush) && this._maybeTrap(b, target, d, rushTrap)) {
           // trapping them: stand square in front of the wall we peek through (a window lines up
           // with them from there; from a corner the line runs through two walls' edges and the
           // windows show nothing), and work the window edits
           const tr = b.trap;
-          gx = tr.x + Math.sin(tr.face) * TRAP_STAND;
-          gz = tr.z - Math.cos(tr.face) * TRAP_STAND;
-          speed = Math.hypot(gx - a.pos.x, gz - a.pos.z) > 0.4 ? PLAYER.walkSpeed : 0;
-          stop = 0.15;
           b.wantJump = false;
+          // shot through the window: running round the corner(s) to another face (_trapSwitch)
+          if (tr.route && tr.route.length && Math.hypot(tr.route[0].x - a.pos.x, tr.route[0].z - a.pos.z) < 0.8) tr.route.shift();
+          if (tr.moving && tr.route && tr.route.length) {
+            gx = tr.route[0].x;
+            gz = tr.route[0].z;
+            speed = this.diffName === 'hard' ? PLAYER.sprintSpeed : PLAYER.runSpeed;
+            stop = 0;
+            break;
+          }
+          const fc = this._faceCell(tr);
+          gx = fc.x + Math.sin(tr.face) * TRAP_STAND;
+          gz = fc.z - Math.cos(tr.face) * TRAP_STAND;
+          const left = Math.hypot(gx - a.pos.x, gz - a.pos.z);
+          if (tr.moving) {
+            if (left < 0.45) {
+              // there: window the new face right away (hard sooner)
+              tr.moving = false;
+              tr.route = null;
+              tr.peekT = Math.min(tr.peekT, t + (this.diffName === 'hard' ? 0.05 : 0.15));
+              speed = 0;
+            } else speed = left > 1.5 ? (this.diffName === 'hard' ? PLAYER.sprintSpeed : PLAYER.runSpeed) : PLAYER.walkSpeed;
+          } else speed = left > 0.4 ? PLAYER.walkSpeed : 0;
+          stop = 0.15;
           break;
         }
         if (this._boxFight(b, target, d, rushBox)) {
@@ -2214,7 +2828,7 @@ export class Bots {
           break;
         }
         // box fighters skip loose walls at box range: they would block their own peeks
-        if (!(this.diff.boxFight && d < BOX_RANGE)) this._maybeBuild(b, fx, fz, d);
+        if (!(this.diff.boxFight && d < BOX_RANGE) && !b.boxPush) this._maybeBuild(b, fx, fz, d);
         if (t < b.rushUntil) {
           // ramp rush: run straight up the ramps being built toward the target
           gx = a.pos.x + b.bqDirX * 6;
@@ -2227,8 +2841,9 @@ export class Bots {
             b.rampLostAt = t;
             b.rushUntil = 0;
             b.rushing = false;
-          } else if (d < RUSH_TRAP_DIST) {
-            // close enough: off the ramp toward them, then the trap (above)
+          } else if (d < (t < (b.pushRushUntil || 0) ? PUSH_STOP : RUSH_TRAP_DIST)) {
+            // close enough: off the ramp toward them, then the trap (above). A push out of a
+            // broken box (_buildPush) keeps going until PUSH_STOP
             b.rushUntil = 0;
           }
         } else if (b.bqMode === 'box' && t < b.holdUntil) {
@@ -4476,6 +5091,7 @@ export class Bots {
     const a = b.actor;
     if (b.trap) this._endTrap(b);
     b.box = null;
+    b.boxPush = null;
     b.state = 'dead';
     a.botState = 'dead';
     b.deadTime = 0;
