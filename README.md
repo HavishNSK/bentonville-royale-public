@@ -16,6 +16,7 @@ Implemented systems include:
 - Walls, floors, ramps, and cones using wood, brick, or metal; damage and structural collapse.
 - Scripted bots, difficulty settings, storm phases, victory/defeat screens, minimap, and full map.
 - Team modes: an eliminated player drops a reboot card (it lands on the ground under them); a teammate carries it to one of Catfish Ken's reboot vans and holds interact for 5 seconds (`src/game/Reboot.js`, `REBOOT` in `src/core/config.js`).
+- Gas stations: six generic "Gas Station" forecourts (canopy, pumps, kiosk, a gas can on each) beside the streets, at least one per map quadrant, placed deterministically from the map data (`src/game/vehicles/gasStations.js`). A car stopped at a pump refuels at 10 fuel/s; the host or solo game decides and clients get the fuel updates. They are not the real stations: none of the real fuel stations in the raw OSM extract fall inside the composed tile map.
 - In-game patch notes (`src/data/patchNotes.js`) and an update flyer (`src/data/updateFlyer.js`, `src/ui/updateFlyer.js`) that opens by itself the first time the title screen shows after an update, once per version (`localStorage` key `bentonville-royale.seenFlyer`).
 - Cartoon rendering, quality settings, synthesized audio with recorded sample fallbacks, and saved player preferences.
 - Friend lobbies via PartyServer/WebSocket rooms; optional Google Photorealistic 3D Tiles as a visual layer.

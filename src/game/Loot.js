@@ -901,6 +901,11 @@ export class Loot {
     for (const f of w.fixedLoot || []) {
       if (area && Math.hypot(f.x - area.x, f.z - area.z) > area.r) continue;
       if (f.kind === 'item') {
+        if (f.item && f.item.type) {
+          // a fixed item (a gas station's gas can): no roll
+          this._add('item', f.x, f.y, f.z, f.yaw || 0, { ...f.item });
+          continue;
+        }
         const mix = pickWeighted(rng, LOOT.floorMix);
         const item = mix === 'weapon' ? rollWeapon(rng, LOOT.floorRarity) : mix === 'consumable' ? rollConsumable(rng) : rollAmmo(rng);
         this._add('item', f.x, f.y, f.z, f.yaw || 0, item);

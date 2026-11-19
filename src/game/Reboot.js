@@ -129,6 +129,7 @@ export class Reboot {
       if (world.blockedAt && world.blockedAt(x, z, clear)) continue;
       if (world.areaAt && world.areaAt(x, z) === 'water') continue;
       if (world.interiorAt && world.interiorAt(x, z)) continue;
+      if (world.gasStationAt && world.gasStationAt(x, z, clear)) continue; // not parked on a gas station forecourt
       return { x, z };
     }
     const p = world.randomOpenPoint ? world.randomOpenPoint(rng, cx, cz, radius * 2, clear, { x: cx, z: cz }) : { x: cx, z: cz };

@@ -12,6 +12,9 @@
 //   v.onEvent = (e) => {}             // host: replicate (see HostSession / ClientSession)
 //   v.applyEvent(e, actorById)        // client: mirror the host's events
 //   v.poses() / v.applyPoses(rows)    // host -> clients: where the moving cars are
+//   v.stations = [...]                // gas stations (vehicles/gasStations.js): a car stopped at a
+//                                     // pump refuels (authoritative; clients get 'vf' events)
+//   v.pumpStatus(car)                 // HUD: 'fill' | 'full' | 'stop' | null
 //
 // Authoritative (solo / host) decides seats, damage, explosions and run-overs. A multiplayer
 // client drives its own car (local physics, sent to the host with 'drv' actions) and mirrors
@@ -23,6 +26,7 @@
 import { CAR, CAR_TYPES, CAR_TYPE_IDS, carGeom, makeCar, pickSeat, nextSeat, seatOf, ramDamage, worldToCar } from './vehicles/cars.js';
 import { rayCars, seatWorldPos, exitSpot, distToCar } from './vehicles/carHit.js';
 import { stepCar } from './vehicles/carPhysics.js';
+import { refuelAtPump, pumpStatus, STATION } from './vehicles/gasStations.js';
 import { sameTeam } from './Teams.js';
 
 const DRAW_DIST = 260; // m: cars further than this from the camera are hidden
@@ -30,6 +34,8 @@ const MIN_GAP = 20; // m between spawn spots
 const LOT_AREA = 400; // m2 of parking lot per car
 const LOT_MAX = 4; // cars in one lot at most
 const MAJOR = new Set(['primary', 'secondary', 'tertiary', 'trunk']);
+const PUMP_SEND = 2; // fuel gained at a pump between 'vf' events (and one more when it stops)
+const PUMP_GRACE = 1; // s after pump fuel a remote driver's (stale, lower) fuel report is ignored
 
 /** Small deterministic RNG from a string (same car spots on every machine). */
 function seeded(str) {
@@ -75,6 +81,7 @@ export class Vehicles {
     this.local = null; // the local player (a client simulates the car it drives)
     this.time = 0;
     this._smokeT = 0;
+    this.stations = null; // gas stations (vehicles/gasStations.js), set by Game
     // the orbit camera keeps its lens out of cars too (Player.placeOrbitCamera)
     if (world) world.carRay = (ox, oy, oz, dx, dy, dz, maxT, ignoreCar) => (this.cars.length ? rayCars(this.cars, ox, oy, oz, dx, dy, dz, maxT, ignoreCar) : null);
   }
@@ -245,6 +252,8 @@ export class Vehicles {
       Object.assign(car, { x: h.x, y: h.y, z: h.z, heading: h.heading, fuel: h.fuel, vx: 0, vy: 0, vz: 0, speed: 0, steer: 0, pitch: 0, roll: 0, hp: car.maxHp, alive: true, wreckT: 0, lastAttacker: null, boostT: 0, boostCd: 0, impact: 0, net: null, gone: false });
       car.windows.fill(CAR.windowHp);
       car._broken = null;
+      car._pumpT = -Infinity;
+      car._pumpSent = null;
       car.input.throttle = car.input.steer = 0;
       car.input.handbrake = car.input.boost = false;
       this._placeBoxes(car);
@@ -425,6 +434,27 @@ export class Vehicles {
     return true;
   }
 
+  /** HUD: is `car` at a gas pump? 'fill' | 'full' | 'stop' (moving) | null. */
+  pumpStatus(car) {
+    return this.stations && this.stations.length ? pumpStatus(car, this.stations) : null;
+  }
+
+  /** Authoritative: a car stopped at a pump fills up; clients hear about it every few units. */
+  _pump(car, dt) {
+    const add = refuelAtPump(car, this.stations, dt);
+    if (add > 0) {
+      car._pumpT = this.time;
+      if (car._pumpSent == null) car._pumpSent = car.fuel - add;
+      if (car.fuel >= CAR.fuelMax || car.fuel - car._pumpSent >= PUMP_SEND) {
+        car._pumpSent = car.fuel;
+        this._emit({ e: 'vf', c: car.id, f: Math.round(car.fuel) });
+      }
+    } else if (car._pumpSent != null) {
+      if (Math.round(car._pumpSent) !== Math.round(car.fuel)) this._emit({ e: 'vf', c: car.id, f: Math.round(car.fuel) });
+      car._pumpSent = null;
+    }
+  }
+
   // ---------------------------------------------------------------- damage
 
   /** Damage a car (authoritative). Glass soaks hits until it breaks; the body loses HP. */
@@ -555,6 +585,7 @@ export class Vehicles {
       if (this.authoritative) {
         this._runOver(car, actors);
         this._ramPieces(car, dt);
+        if (this.stations) this._pump(car, dt);
       }
       for (let i = 0; i < car.seats.length; i++) if (car.seats[i]) this._pin(car, i, car.seats[i]);
     }
@@ -708,6 +739,7 @@ export class Vehicles {
 
   /** Meshes: pose, distance culling, engine smoke / fire. */
   _present(dt) {
+    this._presentStations();
     this._smokeT -= dt;
     const puff = this._smokeT <= 0;
     if (puff) this._smokeT = 0.2;
@@ -729,6 +761,14 @@ export class Vehicles {
       const p = { x: car.x + fx * (g.hl - 0.6), y: car.y + g.body.y1 + 0.2, z: car.z + fz * (g.hl - 0.6) };
       this.fx.carSmoke(p, f <= CAR.fireAt);
     }
+  }
+
+  /** Gas station meshes: hidden beyond STATION.drawDist from the camera. */
+  _presentStations() {
+    const v = this.viewer;
+    if (!this.stations) return;
+    const lim = STATION.drawDist * STATION.drawDist;
+    for (const st of this.stations) if (st.mesh) st.mesh.visible = !v || (v.x - st.x) ** 2 + (v.z - st.z) ** 2 < lim;
   }
 
   // ---------------------------------------------------------------- network
@@ -777,7 +817,9 @@ export class Vehicles {
     const b = this.world && this.world.bounds;
     if (b && (x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ)) return false;
     this.setNetPose(car, x, y, z, h, m.p, m.r, Math.max(-car.spec.reverse, Math.min(car.spec.top * CAR.boostMul, +m.sp || 0)), m.st);
-    if (Number.isFinite(+m.f)) car.fuel = Math.max(0, Math.min(car.fuel, +m.f)); // fuel only goes down from the driver's side
+    // fuel only goes down from the driver's side (not while / just after a pump filled it here:
+    // until the driver hears our 'vf' its report is the old, lower level)
+    if (Number.isFinite(+m.f) && !(this.time - (car._pumpT ?? -Infinity) < PUMP_GRACE)) car.fuel = Math.max(0, Math.min(car.fuel, +m.f));
     return true;
   }
 

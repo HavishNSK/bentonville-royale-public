@@ -48,6 +48,8 @@ import { RebootMarkers, rebootMarkerTargets } from './RebootMarkers.js';
 import { Reboot } from './Reboot.js';
 import { Vehicles } from './Vehicles.js';
 import { buildCarMesh } from '../render/CarMesh.js';
+import { planGasStations, buildGasStations, STATION } from './vehicles/gasStations.js';
+import { buildGasStationMesh } from '../render/GasStationMesh.js';
 import { CAR } from './vehicles/cars.js';
 import { Grenades, launcherModel } from './Grenades.js';
 import { Player, placeOrbitCamera, itemLabel } from './Player.js';
@@ -213,6 +215,8 @@ export class Game {
 
     P(0.5, 'Building Bentonville');
     this.world = new World(mapData);
+    // gas stations: planned from the map data before the scatter so trees / rocks keep off the lots
+    this.gasStations = planGasStations(this.world);
     this.atmosphere = new Atmosphere({ scene: this.scene, renderer: this.renderer, camera: this.camera, quality: graphicsQuality(this.settings) });
     this.view = await buildWorldMeshes({
       world: this.world,
@@ -342,6 +346,12 @@ export class Game {
       const net = this.net;
       if (net && net.isHost && net.started && net.events) net.events.push({ e: 'em', a: a.id, id });
     };
+    // gas stations: colliders, meshes and a gas can each (before the reboot vans pick their spots)
+    try {
+      buildGasStations(this.world, this.gasStations, { scene: this.scene, meshFactory: buildGasStationMesh });
+    } catch (err) {
+      this._error('gasStations.build', err);
+    }
     // Catfish Ken's reboot vans (one per POI) and reboot cards (team modes)
     this.reboot = new Reboot({ scene: this.scene, world: this.world, fx: this.fx, sfx });
     try {
@@ -364,6 +374,7 @@ export class Game {
     }
     this.vehicles.viewer = this.camera.position;
     this.vehicles.local = this.player;
+    this.vehicles.stations = this.gasStations; // a car stopped at a pump refuels
     this.vehicles.onEvent = (e) => {
       if (this.net && this.net.isHost && this.net.started && this.net.events) this.net.events.push(e);
     };
@@ -1821,6 +1832,10 @@ export class Game {
         if (h && h.car.alive && (h.car.hp < h.car.maxHp || h.car.seats.some(Boolean))) info = { name: h.car.spec.name, hp: h.car.hp, maxHp: h.car.maxHp, target: true };
       }
       this.hud.setCar(info);
+    }
+    // gas stations: always on the map, labelled on the full map (and the mini view when in sight)
+    if (this.gasStations && (this.state === 'play' || this.state === 'drop')) {
+      for (const st of this.gasStations) blips.push({ x: st.x, z: st.z, kind: 'fuel', label: STATION.label.toUpperCase() });
     }
     // drivable cars nearby (not the one we ride in: our own arrow is on it)
     if (this.vehicles && (this.state === 'play' || this.state === 'drop')) {

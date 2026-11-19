@@ -630,7 +630,19 @@ export class Player {
       this._carHintT = 6;
     }
     this._carHintT = Math.max(0, (this._carHintT || 0) - dt);
-    if (this.useT <= 0 && this._carHintT <= 0) g.hud.prompt(null);
+    // at a gas station pump: stopping there fills the tank (Vehicles / gasStations.js)
+    const pump = veh && veh.pumpStatus && car ? veh.pumpStatus(car) : null;
+    if (this.useT <= 0 && pump) {
+      g.hud.prompt(
+        pump === 'fill'
+          ? `Refuelling at the pump  ${Math.floor(car.fuel)}/${CAR.fuelMax}`
+          : pump === 'full'
+            ? 'Tank full'
+            : driver
+              ? 'Stop at the pump to refuel'
+              : 'Gas pump: the driver can stop here to refuel',
+      );
+    } else if (this.useT <= 0 && this._carHintT <= 0) g.hud.prompt(null);
     else if (this.useT <= 0) {
       g.hud.prompt(
         driver
