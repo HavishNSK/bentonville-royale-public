@@ -7,7 +7,7 @@
 
 export const PATCH_NOTES = [
   {
-    version: '0.20.0',
+    version: '0.19.5',
     date: '2026-11-19',
     title: 'Back to School: Bentonville High, rebuilt',
     sections: [

@@ -1,6 +1,6 @@
 # Patch Notes
 
-## [2026-11-19] — v0.20.0: Back to School, Bentonville High rebuilt
+## [2026-11-19] — v0.19.5: Back to School, Bentonville High rebuilt
 The biggest POI revamp yet. Bentonville High School is rebuilt from the ground up, inside and out, matched against real photos of the campus. It's packed with loot.
 
 - **Two real buildings, fully built out:** both school buildings are bespoke landmarks (`src/world/bhs/`) instead of generic map boxes:
