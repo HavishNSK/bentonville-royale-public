@@ -231,3 +231,19 @@ test('art: no brand names, logos or brand colour schemes in the station code', (
   }
   assert.equal(STATION.label, 'Gas Station');
 });
+
+test('chests never give gas cans; floor loot still can', async () => {
+  const { rollConsumable } = await import('../src/game/Loot.js');
+  let seed = 7;
+  const rng = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  let chestGas = 0;
+  let floorGas = 0;
+  for (let i = 0; i < 4000; i++) {
+    if (rollConsumable(rng, { noGas: true }).id === 'gascan') chestGas++;
+    if (rollConsumable(rng).id === 'gascan') floorGas++;
+  }
+  assert.equal(chestGas, 0);
+  assert.ok(floorGas > 0, 'gas cans still turn up as floor loot');
+  const src = (await import('node:fs')).readFileSync(new URL('../src/game/Loot.js', import.meta.url), 'utf8');
+  assert.match(src, /if \(rec\.kind === 'chest'\)[\s\S]{0,400}rollConsumable\(rng, \{ noGas: true \}\)/, 'the chest roll asks for no gas');
+});

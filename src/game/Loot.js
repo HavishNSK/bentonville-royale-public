@@ -162,13 +162,14 @@ export function ammoFor(weaponId) {
   const kind = WEAPONS[weaponId].ammo;
   return { type: 'ammo', ammo: kind, count: AMMO[kind].pickup };
 }
-export function rollConsumable(rng) {
+/** opts.noGas: never a gas can (chests: gas comes from floor loot and the gas stations). */
+export function rollConsumable(rng, opts = null) {
   if (rng() < LOOT.grenadeShare) {
     const id = rng() < 0.4 ? 'smoke' : 'grenade';
     return { type: 'consumable', id, count: CONSUMABLES[id].pickup };
   }
   // gas cans for the drivable cars: an occasional drop
-  if (rng() < LOOT.gasCanShare) return { type: 'consumable', id: 'gascan', count: 1 };
+  if (!(opts && opts.noGas) && rng() < LOOT.gasCanShare) return { type: 'consumable', id: 'gascan', count: 1 };
   const id = rng() < 0.55 ? 'medkit' : 'tonic';
   return { type: 'consumable', id, count: id === 'medkit' ? 1 : 1 + (rng() < 0.3 ? 1 : 0) };
 }
@@ -1008,7 +1009,7 @@ export class Loot {
     if (rec.kind === 'chest') {
       const wpn = rollWeapon(rng, rec.tier === 'high' ? LOOT.highChestRarity : LOOT.chestRarity);
       items.push(wpn, ammoFor(wpn.id));
-      items.push(rng() < 0.65 ? rollConsumable(rng) : rollAmmo(rng));
+      items.push(rng() < 0.65 ? rollConsumable(rng, { noGas: true }) : rollAmmo(rng)); // no gas cans from chests
       items.push({ type: 'material', mat: 'wood', count: LOOT.chestMats });
     } else {
       items.push(rollAmmo(rng), rollAmmo(rng));
