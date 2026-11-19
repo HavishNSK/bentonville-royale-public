@@ -48,7 +48,7 @@ export function inPoly(p, x, z) {
 }
 
 /** x-intervals of polygon p on the horizontal line z (sorted). */
-function scan(p, z) {
+export function scan(p, z) {
   const xs = [];
   for (let i = 0, j = p.length - 1; i < p.length; j = i++) {
     const a = p[i];
@@ -585,5 +585,5 @@ export function buildPlan(K, P) {
   // ------------------------------------------------------------------ zones (interior mood / nav / streaming)
   for (const r of rooms) K.zone({ id: r.id, building: P.name, level: r.level, tall: r.tall || 1, x0: r.x0, x1: r.x1, z0: r.z0, z1: r.z1, y0: levelY(r.level), y1: levelY(r.level + (r.tall || 1)), kind: r.kind, label: r.label });
 
-  return { name: P.name, rooms, levelY, roomAt, inside };
+  return { name: P.name, rooms, levelY, roomAt, inside, outline: P.outline };
 }

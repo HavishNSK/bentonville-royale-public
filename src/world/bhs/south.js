@@ -61,6 +61,9 @@ function rooms() {
     // ---- south corridor along the south wall (behind the gyms)
     out.push(corridor(`corSW${t}`, L, -94, -44, 396, 402.6));
     // ---- gyms block
+    // (QA: the gap between the arena's north wall and the outer wall was an open back alley joining
+    // corridors W and C) a walled mechanical chase, closed at both ends
+    out.push(R({ id: `chase${t}`, level: L, x0: -94, x1: -44, z0: 306, z1: 312, kind: 'chase', label: 'Mechanical', fixtures: false }));
     if (L === 0) {
       out.push(R({ id: 'arena', level: 0, ...ARENA, tall: 2, kind: 'gym', label: 'Tiger Arena', floor: 'none', wall: 'blockGrey', ceiling: 'none', ceilingTop: ARENA.top, fixtures: false, hero: 'gym', doors: [{ side: 'x0', at: 8, w: 2.4 }, { side: 'x0', at: 50, w: 2.4 }, { side: 'x1', at: 30, w: 2.4 }] }));
       out.push(R({ id: 'auxgym', level: 0, ...AUX_GYM, tall: 2, kind: 'gym', label: 'Auxiliary Gym', floor: 'none', wall: 'blockGrey', ceiling: 'none', ceilingTop: AUX_GYM.top, fixtures: false, hero: 'gym', doors: [{ side: 'x0', at: 12, w: 2.0 }, { side: 'z1', at: 15, w: 2.0 }] }));
@@ -95,9 +98,11 @@ function rooms() {
       out.push(R({ id: 'arendStage', level: 0, ...AREND_STAGE, tall: 2, kind: 'stage', label: 'Stage', floor: 'none', wall: 'blockGrey', ceiling: 'none', ceilingTop: AREND_STAGE.top, fixtures: false, hero: 'arend', walls: true, doors: [{ side: 'z1', at: 4, w: 2.4 }] }));
     }
     // backstage / music + art between the theatre and the main hall
-    out.push(R({ id: `shop${t}`, level: L, x0: 84, x1: 98, z0: 330, z1: 350, kind: 'storage', label: L ? 'Dressing Rooms' : 'Scene Shop', doors: [{ side: 'x1', at: 10, w: L ? 1.0 : 3.0 }] }));
-    out.push(R({ id: `green${t}`, level: L, x0: 84, x1: 98, z0: 350, z1: 362, kind: 'office', label: L ? 'Costume Storage' : 'Green Room', doors: [{ side: 'x1', at: 6, w: 1.0 }] }));
+    out.push(R({ id: `shop${t}`, level: L, x0: 84, x1: 94, z0: 330, z1: 350, kind: 'storage', label: L ? 'Dressing Rooms' : 'Scene Shop', doors: [{ side: 'x1', at: 10, w: L ? 1.0 : 3.0 }] }));
+    out.push(R({ id: `green${t}`, level: L, x0: 84, x1: 94, z0: 350, z1: 362, kind: 'office', label: L ? 'Costume Storage' : 'Green Room', doors: [{ side: 'x1', at: 6, w: 1.0 }] }));
     out.push(R({ id: `stB${t}`, level: L, x0: 88, x1: 94, z0: 362, z1: 372, kind: 'stair', label: 'Stairwell', floor: 'stairTread', wall: 'blockGrey', doors: [{ side: 'z1', at: 1, w: 2.0 }] }));
+    // (QA: an unroomed, grass-floored pocket) custodial closet between the choir room and stair B
+    out.push(R({ id: `jan${t}`, level: L, x0: 84, x1: 88, z0: 362, z1: 372, kind: 'storage', label: 'Custodial', doors: [{ side: 'z1', at: 2, w: 1.0 }] }));
     out.push(R({ id: `mus0${t}`, level: L, x0: 40, x1: 62, z0: 336, z1: 372, kind: 'music', label: L ? 'Orchestra Room' : 'Band Room', floor: 'woodFloor', doors: [{ side: 'z1', at: 4, w: 2.0 }] }));
     out.push(R({ id: `mus1${t}`, level: L, x0: 62, x1: 84, z0: 336, z1: 372, kind: 'music', label: L ? 'Piano Lab' : 'Choir Room', floor: 'woodFloor', doors: [{ side: 'z1', at: 4, w: 2.0 }] }));
     out.push(classroom(`art0${t}`, L, 18, 29, 336, 372, 'z1', L ? 'Art Studio' : 'Gallery', L ? 'classroom' : 'gallery'));
@@ -126,6 +131,10 @@ function rooms() {
     // ... and the block west of the south classrooms, off the main hall and corridor C
     out.push(classroom(`sw0${t}`, L, -40, -22, 376.5, 389.5, 'z0', subj()));
     out.push(classroom(`sw1${t}`, L, -40, -22, 389.5, 403, 'x0', subj()));
+    // (QA: the rest of the old classroom w5 was an empty, grass-floored hole) a short hall from stair C
+    // to corridor W and a storage room south of the stair
+    out.push(corridor(`stCv${t}`, L, -102, -98.5, 380, 392));
+    out.push(R({ id: `cust${t}`, level: L, x0: -114, x1: -98.5, z0: 392, z1: 396.5, kind: 'storage', label: 'Storage', doors: [{ side: 'x1', at: 2.2, w: 1.0 }] }));
     out.push(R({ id: `stC${t}`, level: L, x0: -108, x1: -102, z0: 380, z1: 392, kind: 'stair', label: 'Stairwell', floor: 'stairTread', wall: 'blockGrey', doors: [{ side: 'x1', at: 1, w: 2.0 }] }));
   }
   // the west classroom at L*380..396 overlaps stair C: drop it from the rect list (stair takes its place)

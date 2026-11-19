@@ -24,7 +24,7 @@ import { buildGym } from './interior/gym/index.js';
 import { buildLibrary } from './interior/library/index.js';
 import { buildArend } from './interior/arend/index.js';
 import { dressClassrooms } from './interior/classrooms/index.js';
-import { dressFill } from './fill.js';
+import { dressFill, fillGroundGaps } from './fill.js';
 import { onCampus } from './entering.js';
 
 export { hasBhs };
@@ -45,6 +45,7 @@ export function createBhs(world, mapData) {
   const south = buildSouth(kit, { gym: buildGym, library: buildLibrary, arend: buildArend });
   dressClassrooms(kit, [...north.rooms, ...south.rooms].filter((r) => ['classroom', 'lab', 'music', 'gallery'].includes(r.kind)));
   dressFill(kit, [north, south]);
+  fillGroundGaps(kit, [north, south]);
   world.fixedLoot = (world.fixedLoot || []).concat(kit.lootSpots);
   // bots: a waypoint graph generated from both plans, alongside Crystal Bridges' graph (Bots.js world.siteNav)
   const nav = createKitNav(kit, [north, south]);

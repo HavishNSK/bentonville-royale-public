@@ -41,6 +41,8 @@ export const COMMONS = { x0: -38.4, x1: -6, z0: 205, z1: 241 };
 export const ATRIUM = { x0: -38.4, x1: -11, z0: 205, z1: 241 }; // open through all 3 storeys
 export const LOBBY = { x0: -34.6, x1: -24, z0: 241, z1: 250.6 }; // 2 storeys, under the curtain wall
 export const ENTRY = { z0: 242.2, z1: 249.4 }; // door run on the west wall
+// the feature stair's top landing in the atrium: it meets the 2nd-floor walkway at x ATRIUM.x1
+export const LANDING = { x0: -14.15, cx: -13, z0: 210.4, z1: 212.6 };
 export const TOWER = { x0: -39.0, x1: -32.5, z0: 250.6, z1: 261 };
 
 const R = (o) => ({ walls: true, floor: 'vct', wall: 'paint', ceiling: 'ceilingTile', ...o });
@@ -56,6 +58,9 @@ function rooms() {
     const nx = [-38.4, -28.7, -19.3, -10, 0]; // starts at the NW stairwell (x -46.3..-38.4)
     for (let i = 0; i + 1 < nx.length; i++) out.push(classroom(`n${i}${t}`, L, nx[i], nx[i + 1], 164, 176, 'z1', ['English Classroom', 'Math Classroom', 'History Classroom', 'Language Classroom'][(i + L) % 4]));
     out.push(corridor(`corN${t}`, L, -46.3, 27.2, 176, 179.2));
+    // (QA: the zig-zag bay north of the corridor was an empty, grass-floored hole) a study nook; the
+    // rect is clipped to the outline by the plan
+    out.push(R({ id: `nook${t}`, level: L, x0: 0, x1: 27.2, z0: 164, z1: 176, kind: 'lounge', label: 'Study Nook', floor: 'carpet', doors: [{ side: 'z1', at: 6, w: 1.8 }, { side: 'z1', at: 20, w: 1.8 }] }));
     out.push(R({ id: `stNW${t}`, level: L, x0: -46.3, x1: -38.4, z0: 164, z1: 176, kind: 'stair', label: 'Stairwell', floor: 'stairTread', wall: 'blockGrey', doors: [{ side: 'z1', at: 3.6, w: 2.0 }] }));
     out.push(R({ id: `rwA${t}`, level: L, x0: -46.3, x1: -42.2, z0: 179.2, z1: 187.3, kind: 'restroom', label: 'Restroom', wall: 'blockGrey', doors: [{ side: 'z0', at: 1.0, w: 0.95 }] }));
     out.push(R({ id: `rwB${t}`, level: L, x0: -42.2, x1: -38.4, z0: 179.2, z1: 187.3, kind: 'restroom', label: 'Restroom', wall: 'blockGrey', doors: [{ side: 'z0', at: 1.0, w: 0.95 }] }));
@@ -95,7 +100,8 @@ function rooms() {
     out.push(R({ id: `stNE${t}`, level: L, x0: 44.2, x1: 52, z0: 205.2, z1: 217, kind: 'stair', label: 'Stairwell', floor: 'stairTread', wall: 'blockGrey', doors: [{ side: 'x0', at: 10.6, w: 2.4 }] }));
     out.push(R({ id: `prep${t}`, level: L, x0: 52, x1: 58.3, z0: 203, z1: 217, kind: 'storage', label: 'Lab Prep', doors: [{ side: 'z1', at: 2, w: 1.0 }] }));
     const labs = ['Chemistry Lab', 'Biology Lab', 'Physics Lab'];
-    [[217, 227], [227, 237.3], [237.3, 247.6]].forEach(([z0, z1], i) => out.push(R({ id: `lab${i}${t}`, level: L, x0: 44.2, x1: 58.3, z0, z1, kind: 'lab', label: labs[(i + L) % 3], doors: [{ side: 'x0', at: 2, w: 1.0 }] })));
+    // (QA: the third lab ran 4.6 m into the south corridor) the labs stop at the corridor (z 243)
+    [[217, 226], [226, 234.5], [234.5, 243]].forEach(([z0, z1], i) => out.push(R({ id: `lab${i}${t}`, level: L, x0: 44.2, x1: 58.3, z0, z1, kind: 'lab', label: labs[(i + L) % 3], doors: [{ side: 'x0', at: 2, w: 1.0 }] })));
     out.push(R({ id: `rwC${t}`, level: L, x0: 34, x1: 41, z0: 203, z1: 209, kind: 'restroom', label: 'Restroom', wall: 'blockGrey', doors: [{ side: 'x1', at: 1, w: 0.95 }] }));
     out.push(R({ id: `rwD${t}`, level: L, x0: 34, x1: 41, z0: 209, z1: 215, kind: 'restroom', label: 'Restroom', wall: 'blockGrey', doors: [{ side: 'x1', at: 1, w: 0.95 }] }));
     out.push(R({ id: `sto${t}`, level: L, x0: 34, x1: 41, z0: 215, z1: 226, kind: 'storage', label: 'Storage', doors: [{ side: 'x1', at: 2, w: 1.0 }] }));
@@ -359,6 +365,8 @@ function commonsHero(K) {
     for (let z = C.z0 + 3.4; z < C.z1 - 2.5; z += 4.2) {
       const jx = x + (rnd() - 0.5) * 0.6;
       const jz = z + (rnd() - 0.5) * 0.6;
+      // (QA) keep the tables and their chairs off the feature stair, its foot and its landing
+      if (jx > LANDING.x0 - 1.8 && jz > LANDING.z0 - 1.5 && jz < 230.5) continue;
       const top = K.box({ cx: jx, cz: jz, hx: 0.6, hz: 0.6, yaw: 0, y0: 0.72, y1: 0.76 }, { mat: 'wood', hp: 120, look: 'none', role: 'prop' });
       K.decor({ cx: jx, cz: jz, hx: 0.6, hz: 0.6, yaw: 0, y0: 0.72, y1: 0.76 }, '#3a3a3c', { shape: 'cyl', dep: top });
       K.decor({ cx: jx, cz: jz, hx: 0.6, hz: 0.6, yaw: 0, y0: 0.755, y1: 0.765 }, '#dcd8d0', { shape: 'cyl', dep: top });
@@ -391,8 +399,8 @@ function commonsHero(K) {
   // 2nd / 3rd floor walkway + lounge: glass railings over the atrium [C1, CB]
   for (const L of [1, 2]) {
     K.setGroup(`int:north:${L}`);
-    K.railing([ATRIUM.x1, ATRIUM.z0], [ATRIUM.x1, 211], L * H, { style: 'glass' });
-    K.railing([ATRIUM.x1, L === 1 ? 215.6 : 211], [ATRIUM.x1, ATRIUM.z1], L * H, { style: 'glass' });
+    K.railing([ATRIUM.x1, ATRIUM.z0], [ATRIUM.x1, L === 1 ? LANDING.z0 : 211], L * H, { style: 'glass' });
+    K.railing([ATRIUM.x1, L === 1 ? LANDING.z1 : 211], [ATRIUM.x1, ATRIUM.z1], L * H, { style: 'glass' });
     K.railing([ATRIUM.x0 + 0.3, ATRIUM.z0], [ATRIUM.x1, ATRIUM.z0], L * H, { style: 'glass' });
     // the south walkway (corSW, lockers along it) over the atrium; west of LOBBY.x1 the lobby is
     // double-height on floor 2 (railed below) and a walled office on floor 3
@@ -404,7 +412,14 @@ function commonsHero(K) {
   }
   // feature stair: commons floor up to the 2nd-floor walkway (glass rails)
   K.setGroup('int:north:0');
-  K.stairs([-13, 228], [-13, 212.6], 0, H, 2.1, { rail: 'glass' });
+  K.stairs([-13, 228], [LANDING.cx, LANDING.z1], 0, H, 2.1, { rail: 'glass' });
+  // (QA: the flight topped out over the open atrium, 1 m short of the bridge) a top landing that runs
+  // east onto the 2nd-floor walkway, glass-railed on its open sides
+  K.setGroup('int:north:1');
+  K.slab({ x0: LANDING.x0, x1: ATRIUM.x1, z0: LANDING.z0, z1: LANDING.z1 }, H, { t: 0.3, lookTop: 'terrazzo', lookBottom: 'wood', lookEdge: 'wood' });
+  K.railing([LANDING.x0, LANDING.z0], [ATRIUM.x1, LANDING.z0], H, { style: 'glass' });
+  K.railing([LANDING.x0, LANDING.z0], [LANDING.x0, LANDING.z1], H, { style: 'glass' });
+  K.setGroup('int:north:0');
   // exposed round blue ductwork across the atrium ceiling [CB]
   K.setGroup('int:north:2');
   K.decor({ cx: (ATRIUM.x0 + ATRIUM.x1) / 2, cz: 214, hx: (ATRIUM.x1 - ATRIUM.x0) / 2, hz: 0.28, yaw: 0, y0: ROOF - 1.2, y1: ROOF - 0.75 }, 'duct');
