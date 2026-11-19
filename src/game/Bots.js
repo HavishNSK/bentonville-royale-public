@@ -130,6 +130,11 @@ const CB_FULL = 60;
 const CB_MAX = 8;
 const WINDOW = 1 << 4; // wall edit: middle tile (chest / eye height)
 const BOTTOM_ROW = 0b111; // wall edit: the three bottom tiles
+const RAMP_BOX_CHANCE = { normal: 0.55, hard: 0.8 }; // a hit is answered with a ramp box (4 walls + ramp) this often
+const RAMP_PEEK_UP = 1.15; // m from the box centre up the ramp: eyes over the front wall
+const RAMP_PEEK_DOWN = 1.3; // m down the ramp: covered
+const COVER_TIME = 7; // s a defensive wall is peeked through before the bot moves on
+const REACQUIRE_MEM = 6; // s: the same target seen again this soon is shot at with a short reaction
 const PEEK_HOLD = 1.6; // s: a window that showed the target stays open this long at most waiting for the shot
 const SHOOT_BUILD_MIN = 6; // m: farther than this a walled-off target's wall is shot (closer: pickaxe)
 const UNDER_HIGH = 3; // m: a target this far above us on builds may get the piece under it shot out
@@ -903,13 +908,27 @@ export class Bots {
     const low = a.health + a.shield < 60;
     let n;
     let mode = 'wall';
-    if (low && diff.buildPieces >= 5 && this.rng() < diff.boxHeal) {
+    let afford = 0;
+    for (const m of MATERIALS) afford += Math.floor(a.inventory.mats[m] / BUILD.cost);
+    if (diff.buildPieces >= 5 && afford >= 5 && !b.box && this.rng() < (RAMP_BOX_CHANCE[this.diffName] || 0)) {
+      // a ramp box: four walls with a ramp up the middle toward the shooter; peek over the front
+      // wall from the top of the ramp, shoot, drop back down into cover (_boxTick, ramp peeks)
+      n = this._queuePreset(b, 0, 'tower', hs);
+      const cx = (Math.floor(a.pos.x / BUILD.cell) + 0.5) * BUILD.cell;
+      const cz = (Math.floor(a.pos.z / BUILD.cell) + 0.5) * BUILD.cell;
+      b.box = { x: cx, y: a.pos.y, z: cz, since: this.time, peek: 'closed', peekT: this.time + n * diff.buildRate + 0.2, editKey: null, fixAt: 0, fails: 0, blocked: 0, checked: false, ramp: true, face: hs };
+      this._startQueue(b, n, 'box', mat, Math.sin(hs), -Math.cos(hs));
+      b.holdUntil = Infinity;
+      return true;
+    } else if (low && diff.buildPieces >= 5 && this.rng() < diff.boxHeal) {
       n = this._queueBox(b, 0, hs);
       mode = 'box';
     } else if (diff.buildPieces >= 3 && this.rng() < COVER_ON_HIT * (diff.wallOnHit || 0)) {
       n = this._queuePreset(b, 0, 'cover', hs); // three walls: covered from the shot and both flanks
     } else n = queueStep(b, 0, 'wall', a.pos.x, a.pos.y, a.pos.z, ang, 0);
     this._startQueue(b, n, mode, mat, Math.sin(hs), -Math.cos(hs));
+    // a lone wall is cover to fight from, not to hide behind: peek through it (_coverTick)
+    if (mode === 'wall') b.cover = { h: ang, x: a.pos.x, y: a.pos.y, z: a.pos.z, until: this.time + COVER_TIME, open: false, openedAt: 0, shots: 0 };
     return true;
   }
 
@@ -956,7 +975,7 @@ export class Bots {
     if (b.box) {
       const bx = b.box;
       const gone = !target || !target.alive || t - b.lastSeen > BOX_MEMORY || dist > BOX_LEAVE;
-      const left = Math.hypot(a.pos.x - bx.x, a.pos.z - bx.z) > CELL_HALF + 0.6 || Math.abs(a.pos.y - bx.y) > 2.5;
+      const left = Math.hypot(a.pos.x - bx.x, a.pos.z - bx.z) > CELL_HALF + 0.6 || Math.abs(a.pos.y - bx.y) > (bx.ramp ? 3.2 : 2.5);
       // cracked enemy: edit a door out and push them (box ends, the push logic takes over)
       const push = target && target.alive && b.targetVisible && target.health + target.shield < 60 && a.health + a.shield > 90 && this.rng() < diff.pushWeak * 0.15;
       if (gone || left || push || (this._storm && this._storm.isOutside(a.pos.x, a.pos.z))) {
@@ -1076,6 +1095,29 @@ export class Bots {
     // edit peek loop: closed (heal / reload behind it) -> window / door open -> reset
     if (t < bx.peekT) return;
     const diff = this.diff;
+    if (bx.ramp) {
+      // ramp box: "open" = up the ramp with the eyes over the front wall (engage moves us there)
+      if (bx.peek === 'closed') {
+        if (b.healing > 0 || b.reloading > 0 || !this._readyToShoot(b)) {
+          bx.peekT = t + 0.1;
+          return;
+        }
+        bx.peek = 'open';
+        bx.openedAt = t;
+        bx.shotsAt = b.shots;
+        bx.peekT = t + 0.45; // time to walk up before looking
+        return;
+      }
+      // up there: look, shoot (held until the shot goes off, capped), then back down
+      if (b.target) this._lookNow(b, b.target);
+      if (b.shots === bx.shotsAt && t - bx.openedAt < PEEK_HOLD + 0.45 && b.target && b.target.alive) {
+        bx.peekT = t + 0.06;
+        return;
+      }
+      bx.peek = 'closed';
+      bx.peekT = t + diff.peekClosed * (0.8 + this.rng() * 0.8);
+      return;
+    }
     if (bx.peek === 'closed') {
       // stay closed while healing / reloading (and patch up when hurt); otherwise open the
       // side facing them
@@ -1393,6 +1435,35 @@ export class Bots {
     return w && w.alive && w.owner === b.actor ? w : null;
   }
 
+  /** Our four walls round the target's cell (its level): their box, or null. */
+  _boxedTarget(b, tg) {
+    const st = this.structures;
+    if (!st || !tg || !tg.alive) return null;
+    const cx = (Math.floor(tg.pos.x / BUILD.cell) + 0.5) * BUILD.cell;
+    const cz = (Math.floor(tg.pos.z / BUILD.cell) + 0.5) * BUILD.cell;
+    _bpos.x = cx;
+    _bpos.y = tg.pos.y;
+    _bpos.z = cz;
+    for (let q = 0; q < 4; q++) {
+      const pl = st.plan('wall', _bpos, (q * Math.PI) / 2, 0, _pl);
+      const w = st.slots.get(pl.key);
+      if (!w || !w.alive || w.owner !== b.actor) return null;
+    }
+    return { x: cx, z: cz, y: tg.pos.y };
+  }
+
+  _retrap(b, tg) {
+    const a = b.actor;
+    if (a.downed || !a.grounded) return false;
+    const box = this._boxedTarget(b, tg);
+    if (!box) return false;
+    if (Math.hypot(a.pos.x - box.x, a.pos.z - box.z) < CELL_HALF + 0.2) return false; // in there with them
+    const t = this.time;
+    const face = (Math.round(Math.atan2(a.pos.x - box.x, -(a.pos.z - box.z)) / (Math.PI / 2)) * Math.PI) / 2;
+    b.trap = { x: box.x, y: box.y, z: box.z, face, since: t, peek: 'closed', peekT: t + 0.15, editKey: null };
+    return true;
+  }
+
   _endTrap(b) {
     const tr = b.trap;
     const st = this.structures;
@@ -1498,6 +1569,60 @@ export class Bots {
     b.shootUnder = c;
     b.shootUnderUntil = t + 2.5;
     return c;
+  }
+
+  /**
+   * A defensive wall we put up when hit: fight from it. When the gun is ready and the wall is
+   * between us and them, edit a window in it toward them, shoot, close it again (for COVER_TIME).
+   */
+  _coverTick(b) {
+    const cv = b.cover;
+    const st = this.structures;
+    const t = this.time;
+    const tg = b.target;
+    if (!st || t > cv.until || !tg || !tg.alive || b.box || b.trap) {
+      if (cv.wallKey && cv.open) this._closeCover(b);
+      b.cover = null;
+      return;
+    }
+    if (!cv.wallKey) {
+      _bpos.x = cv.x;
+      _bpos.y = cv.y;
+      _bpos.z = cv.z;
+      const pl = st.plan('wall', _bpos, cv.h, 0, _pl);
+      const w = st.slots.get(pl.key);
+      if (!w) return; // still going up
+      cv.wallKey = w.key;
+    }
+    const w = st.slots.get(cv.wallKey);
+    if (!w || !w.alive || w.owner !== b.actor) {
+      b.cover = null;
+      return;
+    }
+    if (!cv.open) {
+      if (!this._readyToShoot(b) || t < (cv.nextAt || 0)) return;
+      if (this._ownBlocker(b, tg.pos.x, tg.pos.y, tg.pos.z) !== w) return; // not behind it now: just shoot
+      let m = this._peekMask(b, w, tg.pos.x, tg.pos.y, tg.pos.z, false) & ~BOTTOM_ROW;
+      if (!m) m = WINDOW;
+      if (!this._botEdit(b, w, m)) return;
+      cv.open = true;
+      cv.openedAt = t;
+      cv.shots = b.shots;
+      this._lookNow(b, tg);
+      b.reactLeft = Math.min(b.reactLeft, this.diff.reaction * 0.3);
+      return;
+    }
+    if (b.targetVisible === false && t - cv.openedAt > 0.3) this._lookNow(b, tg);
+    if (b.shots === cv.shots && t - cv.openedAt < PEEK_HOLD) return;
+    this._closeCover(b);
+    cv.nextAt = t + this.diff.peekClosed * (0.8 + this.rng() * 0.8);
+  }
+
+  _closeCover(b) {
+    const cv = b.cover;
+    const w = cv && cv.wallKey && this.structures.slots.get(cv.wallKey);
+    if (w && w.alive && w.edit) this.structures.edit(w, 0);
+    if (cv) cv.open = false;
   }
 
   /** Is a gun in hand? */
@@ -1983,6 +2108,9 @@ export class Bots {
           b.wantJump = false; // no strafe hops on a tower top
           break;
         }
+        // they are in a box of our own walls (a trap that lapsed, or a box they walked into): work
+        // it from outside again instead of walking at it and "breaking out" of our own trap
+        if (!b.trap && !b.box) this._retrap(b, target);
         if (this._maybeTrap(b, target, d)) {
           // trapping them: stand square in front of the wall we peek through (a window lines up
           // with them from there; from a corner the line runs through two walls' edges and the
@@ -1996,9 +2124,17 @@ export class Bots {
           break;
         }
         if (this._boxFight(b, target, d)) {
-          // boxed: hold the middle of the box; the edit peeks do the fighting
+          // boxed: hold the middle of the box; the edit peeks do the fighting. A ramp box: stand
+          // up the ramp to peek over the front wall, back down for cover
           gx = b.box.x;
           gz = b.box.z;
+          if (b.box.ramp) {
+            const up = b.box.peek === 'open';
+            const k = up ? RAMP_PEEK_UP : -RAMP_PEEK_DOWN;
+            gx += Math.sin(b.box.face) * k;
+            gz -= Math.cos(b.box.face) * k;
+            b.wantJump = false;
+          }
           speed = Math.hypot(gx - a.pos.x, gz - a.pos.z) > 0.4 ? PLAYER.walkSpeed : 0;
           stop = 0.15;
           break;
@@ -2483,8 +2619,11 @@ export class Bots {
     if (b.target !== o || !b.targetVisible) {
       // fresh sighting: reaction delay before the first shot
       if (b.target !== o || t - b.lastSeen > 1.2) {
-        b.reactLeft = this.diff.reaction * (0.7 + this.rng() * 0.6);
-        b.trackTime = 0;
+        // the same target back in view soon after (a peek, a wall coming down, a build done):
+        // already on them, short reaction; a new one or long gone: the full reaction time
+        const again = b.target === o && t - b.lastSeen < REACQUIRE_MEM;
+        b.reactLeft = this.diff.reaction * (again ? 0.3 : 0.7 + this.rng() * 0.6);
+        if (!again) b.trackTime = 0;
         b.burstLeft = 0;
       }
     }
@@ -2537,8 +2676,8 @@ export class Bots {
     inv.select(slot);
     b.reloading = 0;
     if (this.combat && this.combat.cancelBurst) this.combat.cancelBurst(a);
-    b.switchAt = this.time + 0.6;
-    b.fireCd = Math.max(b.fireCd, 0.3);
+    b.switchAt = this.time + 0.4;
+    b.fireCd = Math.max(b.fireCd, 0.18);
     b.burstLeft = 0;
     b.bloom = 0;
     const it = inv.current();
@@ -3001,6 +3140,14 @@ export class Bots {
     const pz = a.pos.z;
     const hurt = a.health + a.shield < 70 || t - b.hurtAt < 1.2;
     const high = tgt.pos.y - py > 1.5;
+    // build for a reason, not because someone is in view: we were just hit, they are shooting,
+    // or they hold high ground (a ramp up to them). Otherwise just fight.
+    const now = performance.now() / 1000;
+    const underFire = t - (b.hurtAt ?? -Infinity) < 3 || (tgt.shotAt && now - tgt.shotAt < 1.5);
+    if (!underFire && !high) {
+      b.buildCooldown = t + 1 + this.rng();
+      return;
+    }
     let n = 0;
     let mode;
     if (maxN >= 5 && hurt && d < 40) {
@@ -3655,6 +3802,7 @@ export class Bots {
       const pl = st.plan('wall', _bpos, h, 0, _pl);
       const w = st.slots.get(pl.key);
       if (!w || !w.alive || Math.abs(w.y - a.pos.y) > 1.5) continue;
+      if (this._wallOfTargetBox(b, w)) continue; // that's our trap round them: never open it
       b.breakOutAt = t + 1.2;
       if (w.owner === a && (w.edit | 0) !== DOOR && this._botEdit(b, w, DOOR)) {
         b.editsOut = (b.editsOut || 0) + 1;
@@ -3676,6 +3824,7 @@ export class Bots {
       const hit = st.pickPiece(_origin, _dir, 2.2);
       if (!hit) continue;
       const p = hit.piece;
+      if (this._wallOfTargetBox(b, p)) continue;
       b.breakOutAt = t + 1.2;
       if (p.kind === 'wall' && p.owner === a && ((p.edit | 0) & DOOR) !== DOOR && this._botEdit(b, p, DOOR)) {
         b.editsOut = (b.editsOut || 0) + 1;
@@ -3689,6 +3838,12 @@ export class Bots {
       return true;
     }
     return false;
+  }
+
+  /** Is piece p one of the walls of our box round the target (do not door / smash it)? */
+  _wallOfTargetBox(b, p) {
+    const box = p && p.kind === 'wall' ? this._boxedTarget(b, b.target) : null;
+    return !!box && Math.abs(Math.abs(p.x - box.x) + Math.abs(p.z - box.z) - CELL_HALF) < 0.3 && Math.abs(p.y - box.y) < 1.5;
   }
 
   /** The closed (not door-edited) wall on our own cell's side `h` at our level, or null. */
@@ -3767,6 +3922,7 @@ export class Bots {
     // Sandbox bots: infinite mats (kept at the cap, like the player there)
     if (a.infiniteMats && inv.mats) for (const m of MATERIALS) if (inv.mats[m] < PLAYER.matCap) inv.mats[m] = PLAYER.matCap;
     if (b.bqI < b.bqN) this._buildStep(b);
+    if (b.cover) this._coverTick(b);
     if (b.box) this._boxTick(b);
     else this._enclosureCheck(b);
     if (b.healing > 0) {

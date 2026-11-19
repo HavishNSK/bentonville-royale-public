@@ -26,7 +26,9 @@ import { stepCar } from './vehicles/carPhysics.js';
 import { sameTeam } from './Teams.js';
 
 const DRAW_DIST = 260; // m: cars further than this from the camera are hidden
-const MIN_GAP = 40; // m between spawn spots
+const MIN_GAP = 20; // m between spawn spots
+const LOT_AREA = 400; // m2 of parking lot per car
+const LOT_MAX = 4; // cars in one lot at most
 const MAJOR = new Set(['primary', 'secondary', 'tertiary', 'trunk']);
 
 /** Small deterministic RNG from a string (same car spots on every machine). */
@@ -156,14 +158,31 @@ export class Vehicles {
           ang = Math.atan2(q[1] - p[1], q[0] - p[0]);
         }
       }
-      for (let k = 0; k < 10; k++) {
-        const x = cx + (rng() - 0.5) * 24;
-        const z = cz + (rng() - 0.5) * 24;
+      // big lots hold a few cars (about one per LOT_AREA m2, up to LOT_MAX), spread over the lot
+      let area = 0;
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minZ = Infinity;
+      let maxZ = -Infinity;
+      for (let i = 0; i < a.p.length; i++) {
+        const p = a.p[i];
+        const q = a.p[(i + 1) % a.p.length];
+        area += p[0] * q[1] - q[0] * p[1];
+        minX = Math.min(minX, p[0]);
+        maxX = Math.max(maxX, p[0]);
+        minZ = Math.min(minZ, p[1]);
+        maxZ = Math.max(maxZ, p[1]);
+      }
+      const want = Math.max(1, Math.min(LOT_MAX, Math.floor(Math.abs(area) / 2 / LOT_AREA)));
+      let got = 0;
+      for (let k = 0; k < 12 * want && got < want; k++) {
+        const x = got === 0 ? cx + (rng() - 0.5) * 24 : minX + rng() * (maxX - minX);
+        const z = got === 0 ? cz + (rng() - 0.5) * 24 : minZ + rng() * (maxZ - minZ);
         if (!pointInPoly(a.p, x, z) || !clear(x, z)) continue;
         // facing along the lot (heading: forward = (sin h, -cos h))
         const heading = Math.atan2(Math.cos(ang), -Math.sin(ang)) + (rng() < 0.5 ? Math.PI : 0);
         cands.push({ x, z, heading, w: 2 });
-        break;
+        got++;
       }
     }
     // main roads: parked at the curb, pointing along the road
@@ -173,7 +192,7 @@ export class Vehicles {
         const [ax, az] = r.p[i];
         const [bx, bz] = r.p[i + 1];
         const len = Math.hypot(bx - ax, bz - az);
-        if (len < 24 || rng() > 0.5) continue;
+        if (len < 16 || rng() > 0.85) continue;
         const ux = (bx - ax) / len;
         const uz = (bz - az) / len;
         const side = rng() < 0.5 ? 1 : -1;
