@@ -42,7 +42,7 @@ import { Minimap } from '../ui/Minimap.js';
 import { CharacterKit, Character, registerKits } from './Character.js';
 import { skinDef, emoteDef, pickaxeDef, DEFAULT_EQUIPPED, PICKAXES, BACKBLINGS } from './Cosmetics.js';
 import { Combat, rayActor } from './Combat.js';
-import { canFastTravel, poiTargets, nearestPoi, landAt } from './fastTravel.js';
+import { canFastTravel, travelTargets, nearestPoi, landAt } from './fastTravel.js';
 import { Pings } from './Pings.js';
 import { RebootMarkers, rebootMarkerTargets } from './RebootMarkers.js';
 import { Reboot } from './Reboot.js';
@@ -272,7 +272,7 @@ export class Game {
       const w = this.minimap.fullClientToWorld(e.clientX, e.clientY);
       if (!w || !w.inBounds) return;
       if (canFastTravel(this)) {
-        const hit = nearestPoi(poiTargets(this.world.landmarks), w.x, w.z);
+        const hit = nearestPoi(travelTargets(this), w.x, w.z); // a POI or a gas station
         if (hit) return this.fastTravelTo(hit.key);
       }
       const mk = this.pings.markerOf(this.player.id);
@@ -1775,7 +1775,7 @@ export class Game {
       }
     }
     if (fullOpen && this.freeBuild && hud.setMapTravel) {
-      const travel = poiTargets(this.world.landmarks);
+      const travel = travelTargets(this);
       const here = nearestPoi(travel, p.pos.x, p.pos.z, 160);
       hud.setMapTravel(travel, here && here.key);
     } else if (fullOpen && hud.setMapStats) {
@@ -2304,9 +2304,10 @@ export class Game {
   /** Free build only: stand on the named POI and close the map. */
   fastTravelTo(key) {
     if (!canFastTravel(this)) return false;
-    const t = poiTargets(this.world.landmarks).find((p) => p.key === key);
+    const t = travelTargets(this).find((p) => p.key === key);
     if (!t) return false;
-    const land = landAt(this.world, t.x, t.z, this.rng);
+    // a gas station: land on its forecourt, not somewhere up to 40 m off
+    const land = landAt(this.world, t.x, t.z, this.rng, t.gas ? 12 : 40);
     const p = this.player;
     p.pos.set(land.x, land.y, land.z);
     p.vel.set(0, 0, 0);

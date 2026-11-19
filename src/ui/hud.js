@@ -255,7 +255,7 @@ function hudHTML() {
       <div class="br-mapstats" data-ref="mapStats"></div>
       <ul class="br-fullmap-keys">
         <li class="br-map-hint-marker"><kbd class="br-key">LMB</kbd>Place marker</li>
-        <li class="br-map-hint-travel"><kbd class="br-key">LMB</kbd>Travel to a POI</li>
+        <li class="br-map-hint-travel"><kbd class="br-key">LMB</kbd>Travel to a POI or gas station</li>
         <li class="br-map-hint-marker"><kbd class="br-key">RMB</kbd>Remove marker</li>
         <li><kbd class="br-key" data-ref="pingKey">MMB</kbd>Ping in the world</li>
         <li class="br-map-hint-sandbox"><kbd class="br-key" data-ref="creativeMapKey">N</kbd>Sandbox map</li>

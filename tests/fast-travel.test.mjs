@@ -58,3 +58,27 @@ test('landAt stands on the ground, preferring an open spot next to the POI', () 
   assert.equal(p.z, 19);
   assert.equal(p.y, 13 + 19);
 });
+
+test('gas stations are sandbox travel targets: labelled by map direction, clickable, after the POIs', async () => {
+  const { gasTargets, travelTargets, nearestPoi } = await import('../src/game/fastTravel.js');
+  const bounds = { minX: -500, maxX: 500, minZ: -500, maxZ: 500 };
+  const stations = [
+    { key: 'gas0', x: -300, z: -300 }, // north-west (north = -z)
+    { key: 'gas1', x: 300, z: 300 }, // south-east
+    { key: 'gas2', x: 0, z: -400 }, // north
+  ];
+  const gas = gasTargets(stations, bounds);
+  assert.deepEqual(gas.map((g) => g.label), ['Gas Station (N)', 'Gas Station (NW)', 'Gas Station (SE)']);
+  assert.ok(gas.every((g) => g.gas && g.key.startsWith('gas')));
+  assert.deepEqual(gasTargets(null, bounds), []);
+  // two in one direction get numbers, west to east
+  const twin = gasTargets([{ key: 'a', x: 200, z: 300 }, { key: 'b', x: 350, z: 250 }], bounds);
+  assert.deepEqual(twin.map((g) => g.label), ['Gas Station (SE 1)', 'Gas Station (SE 2)']);
+  // with the POIs: POIs first, then the stations; a click near a station picks it
+  const game = { world: { landmarks: {}, bounds }, gasStations: stations };
+  const all = travelTargets(game);
+  assert.equal(all.length, 3);
+  assert.equal(all.find((g) => g.key === 'gas0').label, 'Gas Station (NW)');
+  assert.equal(nearestPoi(all, -290, -310).key, 'gas0');
+  assert.equal(nearestPoi(all, 0, 0), null, 'nothing near the middle');
+});

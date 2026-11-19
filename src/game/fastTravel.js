@@ -20,6 +20,40 @@ export function poiTargets(landmarks, zones = DROP_ZONES) {
   return out;
 }
 
+const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+
+/**
+ * Gas stations as travel targets ({ key, label, x, z, gas }), labelled by where they sit on the
+ * map ("Gas Station (NW)"; north = -z). `stations` from planGasStations, `bounds` the map's.
+ */
+export function gasTargets(stations, bounds) {
+  if (!Array.isArray(stations) || !stations.length) return [];
+  const cx = bounds ? (bounds.minX + bounds.maxX) / 2 : 0;
+  const cz = bounds ? (bounds.minZ + bounds.maxZ) / 2 : 0;
+  const out = [];
+  for (let i = 0; i < stations.length; i++) {
+    const s = stations[i];
+    if (!s || !Number.isFinite(s.x) || !Number.isFinite(s.z)) continue;
+    const ang = Math.atan2(s.x - cx, -(s.z - cz)); // 0 = north, clockwise
+    const dir = COMPASS[((Math.round(ang / (Math.PI / 4)) % 8) + 8) % 8];
+    out.push({ key: s.key || 'gas' + i, dir, label: `Gas Station (${dir})`, x: s.x, z: s.z, gas: true });
+  }
+  // two in the same direction: number them, west to east (or north to south)
+  const byDir = new Map();
+  for (const g of out) byDir.set(g.dir, [...(byDir.get(g.dir) || []), g]);
+  for (const [dir, list] of byDir) {
+    if (list.length < 2) continue;
+    list.sort((a, b) => a.x - b.x || a.z - b.z).forEach((g, k) => (g.label = `Gas Station (${dir} ${k + 1})`));
+  }
+  return out.sort((a, b) => a.label.localeCompare(b.label)); // listed in order (E, N, NW, SE 1, SE 2...)
+}
+
+/** Everything the sandbox map can send you to: the named POIs, then the gas stations. */
+export function travelTargets(game) {
+  if (!game || !game.world) return [];
+  return [...poiTargets(game.world.landmarks), ...gasTargets(game.gasStations, game.world.bounds)];
+}
+
 export function nearestPoi(targets, x, z, maxM = TRAVEL_CLICK_M) {
   if (!targets || !targets.length || !Number.isFinite(x) || !Number.isFinite(z)) return null;
   let best = null;
@@ -35,13 +69,13 @@ export function nearestPoi(targets, x, z, maxM = TRAVEL_CLICK_M) {
 }
 
 /** Open ground next to (x, z), same search as free-build spawn. */
-export function landAt(world, x, z, rng = Math.random) {
+export function landAt(world, x, z, rng = Math.random, radius = 40) {
   let lx = x;
   let lz = z;
   if (world && typeof world.randomOpenPoint === 'function') {
     const roll = typeof rng === 'function' ? rng : Math.random;
     for (let i = 0; i < 40; i++) {
-      const pt = world.randomOpenPoint(roll, x, z, 40, 6);
+      const pt = world.randomOpenPoint(roll, x, z, radius, 6);
       if (!pt) continue;
       const blocked = world.polyAt && world.polyAt(pt.x, pt.z);
       const solid = world.blockedAt && world.blockedAt(pt.x, pt.z, 6);
