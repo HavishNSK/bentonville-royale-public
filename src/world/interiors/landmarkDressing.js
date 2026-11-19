@@ -19,6 +19,8 @@
 // reservations (door lanes, loot spots, stairs, footprint containment), so any piece that would
 // collide with them is simply skipped.
 
+import { bhsDressing } from './bhs.js';
+
 const r3 = (x) => Math.round(x * 1000) / 1000;
 const OPP = { a0: 'a+', a1: 'a-', b0: 'b+', b1: 'b-' };
 const TOWARD = { a0: 'a-', a1: 'a+', b0: 'b-', b1: 'b+' };
@@ -554,61 +556,8 @@ export const LANDMARK_DRESSING = {
     d('Auditorium Balcony', 'walls', 'railing', { sides: ['b1'], gap: 0.2, max: 16 }, 1),
   ],
 
-  // Bentonville High School (main building) — locker-lined corridors, classroom desk grids facing
-  // whiteboards, science-lab benches, a library with stacks and reading tables, cafeteria serving
-  // line, Tiger Arena court with hoops and bleachers, and the Arend Arts Center house facing its
-  // stage. Approximation from bentonvillek12.org / talkbusiness / Wikipedia (landmarks.js).
-  952075842: [
-    ...lobby('Main Lobby', { entrance: 'b0' }),
-    d('Main Lobby', 'walls', 'display_case', { gap: 0.6, max: 6 }),
-    d('Main Office', 'at', 'reception_desk', { fa: 0.5, fb: 0.3, face: 'b-' }),
-    ...offices('Main Office', { desks: 8 }),
-    ...gym('Tiger Arena', 73.2, { court: [16, 28], bleachers: 8 }),
-    ...lockers('Main Corridor', ['b0', 'b1'], 48),
-    ...lockers('West Corridor', ['b0', 'b1'], 30),
-    ...library('Library', { stacks: 24, tables: 3 }),
-    ...cafeteria('Cafeteria', 'a1', { tables: 20 }),
-    ...kitchen('Kitchen', { islands: 2 }),
-    d('Commons', 'grid', 'cafe_table', { aisle: 1.8, margin: 2, max: 24 }),
-    d('Commons', 'walls', 'bench', { gap: 3, max: 6 }),
-    d('Commons', 'walls', 'planter', { gap: 6, max: 4 }),
-    ...lobby('Arts Center Lobby', { entrance: 'b1' }),
-    d('Arend Arts Center', 'grid', 'seat_row', { face: 'a+', aisle: 1.2, margin: 1.6, max: 56 }),
-    d('Stage', 'centre', 'stage', { w: 24, d: 16, face: 'a-' }),
-    d('Stage', 'at', 'podium', { fa: 0.2, fb: 0.5, face: 'a-' }),
-    ...range(6, 101).flatMap((n) => classroom('Room ' + n, 'b0', 39, { desks: 28 })),
-    ...range(6, 201).flatMap((n) => classroom('Room ' + n, 'b0', 14, { desks: 20 })),
-    ...range(6, 207).flatMap((n) => classroom('Room ' + n, 'b1', 35, { desks: 28 })),
-    ...range(8, 110).flatMap((n) => classroom('Room ' + n, 'b1', 24.5, { desks: 20 })),
-    ...range(4).flatMap((n) => classroom('Science Lab ' + n, 'b1', 23.3, { lab: true, desks: 8 })),
-  ],
-
-  // Bentonville High School (North Building) — a lecture hall with a lectern stage and tiered
-  // seat rows, commons and commons dining, a two-level media center, courtyard planters, locker
-  // corridors and classroom / science-lab grids. Approximation from schooldesigns.com / bentonvillek12.org.
-  952075843: [
-    ...auditorium('Lecture Hall', 'b0', { w: 10, dd: 4, seats: 20, level: 0 }),
-    d('Lecture Hall', 'wall_mount', 'whiteboard', { sides: ['b0'], max: 2, gap: 2 }, 0),
-    d('Commons', 'grid', 'cafe_table', { aisle: 1.8, margin: 2, max: 20 }, 0),
-    d('Commons', 'walls', 'bench', { gap: 3, max: 6 }, 0),
-    ...cafeteria('Commons Dining', 'b1', { tables: 12, level: 0 }),
-    ...library('Media Center', { stacks: 14, tables: 3, level: 0 }),
-    ...library('Media Center Upper', { stacks: 14, tables: 2, level: 1 }),
-    d('Courtyard', 'grid', 'planter', { aisle: 4, margin: 4, max: 10 }, 0),
-    d('Courtyard', 'walls', 'bench', { gap: 4, max: 8 }, 0),
-    d('Courtyard Balcony', 'walls', 'railing', { gap: 0.2, max: 12 }, 1),
-    d('Courtyard Balcony', 'walls', 'planter', { gap: 6, max: 4 }, 1),
-    ...lobby('Stair Tower', { desk: false, level: 0 }),
-    d('Stair Tower Landing', 'walls', 'planter', { max: 2 }, 1),
-    ...lockers('East Corridor', ['a0', 'a1'], 24, 0),
-    ...lockers('Upper Corridor', ['b0', 'b1'], 24, 1),
-    ...offices('Department Offices', { desks: 16, level: 1 }),
-    ...range(4, 101).flatMap((n) => classroom('Room N' + n, 'b0', 22, { desks: 24, level: 0 })),
-    ...range(4).flatMap((n) => classroom('Science Lab ' + n, 'b1', 18, { lab: true, desks: 8, level: 0 })),
-    ...range(10, 201).flatMap((n) => classroom('Room N' + n, 'b0', n <= 205 ? 20 : 14, { desks: 20, level: 1 })),
-    ...range(3, 211).flatMap((n) => classroom('Room N' + n, 'a0', 25, { desks: 20, level: 1 })),
-    ...range(3, 214).flatMap((n) => classroom('Room N' + n, 'a1', 25, { desks: 20, level: 1 })),
-  ],
+  // Bentonville High School (main + North Building): src/world/interiors/bhs.js
+  ...bhsDressing({ d, classroom, gym, auditorium, offices, kitchen, lockers, library, cafeteria, lobby, storage, breakRoom, lounge, reserve, range }),
 
   // Bentonville West High School — 900-seat-style performing arts center (stage + house), a
   // competition arena (court, hoops, bleachers; upper bowl above), commons with café tables and a

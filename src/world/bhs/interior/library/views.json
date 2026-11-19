@@ -1,0 +1,36 @@
+[
+  {
+    "name": "library-atrium",
+    "ref": "bhslibrary.jpg",
+    "cam": {
+      "x": 68.5,
+      "y": 7.9,
+      "z": 390.2,
+      "tx": 66.5,
+      "ty": 0.0,
+      "tz": 410.0,
+      "hfov": 70
+    },
+    "tp": [
+      70,
+      395
+    ]
+  },
+  {
+    "name": "library-computers",
+    "ref": "libraryimage2.jpg",
+    "cam": {
+      "x": 92.8,
+      "y": 1.55,
+      "z": 427.4,
+      "tx": 84.0,
+      "ty": 1.1,
+      "tz": 407.0,
+      "hfov": 70
+    },
+    "tp": [
+      90,
+      426
+    ]
+  }
+]

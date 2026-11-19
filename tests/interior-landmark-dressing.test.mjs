@@ -2,17 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { LANDMARK_DRESSING } from '../src/world/interiors/landmarkDressing.js';
 import { LANDMARK_IDS, LANDMARK_RECIPES } from '../src/world/interiors/landmarks.js';
+import { CATALOG } from '../src/world/interiors/furnishings.js';
 
 // Catalog kinds from the interior contract (floor + wall).
-const KINDS = new Set([
-  'bed', 'nightstand', 'dresser', 'wardrobe', 'sofa', 'armchair', 'coffee_table', 'tv_stand', 'rug', 'dining_table', 'chair', 'stool',
-  'counter', 'fridge', 'stove', 'kitchen_island', 'toilet', 'sink', 'bathtub', 'toilet_stall', 'shelf', 'checkout', 'crate', 'pallet_rack',
-  'desk', 'office_chair', 'filing_cabinet', 'bookcase', 'plant', 'bench', 'reception_desk', 'safe', 'workbench', 'car', 'planter', 'plinth',
-  'display_case', 'school_desk', 'teacher_desk', 'locker_bank', 'seat_row', 'stage', 'bleachers', 'hoop', 'court_lines', 'long_table',
-  'serving_line', 'pew', 'judge_bench', 'witness_stand', 'jury_box', 'railing', 'bar_counter', 'high_top', 'cafe_table', 'tank',
-  'food_stall', 'record_bin', 'easel', 'banquet_table', 'podium', 'installation', 'gallery_bench',
-  'painting', 'painting_large', 'whiteboard', 'tv', 'menu_board', 'mirror', 'cabinet_upper', 'tap_board', 'wall_label',
-]);
+const KINDS = new Set(Object.keys(CATALOG));
 const PLACES = new Set(['grid', 'walls', 'centre', 'at', 'wall_mount', 'hang', 'reserve']);
 const HANG_KINDS = new Set(['painting', 'painting_large', 'mixed']);
 const ART_STYLES = new Set(['landscape', 'portrait', 'abstract', 'still_life']);

@@ -18,6 +18,7 @@
 
 import { leaf, cut, row } from './layout.js';
 import { RECIPES } from './archetypes.js';
+import { bhsRecipes } from './bhs.js';
 
 // ------------------------------------------------------------------ helpers
 
@@ -352,71 +353,8 @@ def(949466246, 126.1, 84.1, 'b', () => {
   return { levels: [ground, work(1), work(2), work(3)], stairs: [{ a: 100, b: 33.5, dir: 'a' }] };
 });
 
-// Bentonville High School, main building (952075842; 228 x 137 m). A long main corridor
-// (lockers) from the main lobby; classrooms either side; library and cafeteria in the west
-// block; the Tiger Arena gym; the Arend Arts Center (1,100+ seat auditorium, opened 2003) in
-// the south-east block where the map's Arend Arts Center POI is.
-// Sources: bentonvillek12.org/o/bhs/page/history, bentonvillek12.org/page/arend-arts-center,
-// talkbusiness.net/2012/02/arend-arts-center-celebrates-10-years, en.wikipedia.org (Bentonville High School).
-def(952075842, 228.2, 137.2, 'b', () => {
-  return cut(
-    'b',
-    { abs: 39 },
-    cut(
-      'a',
-      { abs: 92 },
-      roomsAt('a', 5.8, 90.4, 6, 'classroom', 'Room ', 101),
-      rowAt('a', [129, 155], [R('lobby', 'Main Lobby'), R('office', 'Main Office'), R('gym', 'Tiger Arena')])
-    ),
-    cut(
-      'b',
-      { abs: 45.5 },
-      R('corridor', 'Main Corridor'),
-      cut(
-        'a',
-        { abs: 91 },
-        cut('b', { abs: 82 }, rowAt('a', [45, 78], [R('library', 'Library'), R('cafeteria', 'Cafeteria'), R('kitchen', 'Kitchen')]), rowAt('b', [96, 102], [roomsAt('a', 4, 90.6, 6, 'classroom', 'Room ', 201), R('corridor', 'West Corridor'), roomsAt('a', 4, 90.6, 6, 'classroom', 'Room ', 207)])),
-        cut(
-          'b',
-          { abs: 93.3 },
-          cut('a', { abs: 130 }, R('hall', 'Commons'), cut('b', { abs: 70 }, roomsAt('a', 130, 211.6, 8, 'classroom', 'Room ', 110), roomsAt('a', 130, 211.6, 4, 'classroom', 'Science Lab ', 1))),
-          rowAt('a', [140, 200], [R('lobby', 'Arts Center Lobby'), R('auditorium', 'Arend Arts Center'), R('open', 'Stage')])
-        )
-      )
-    )
-  );
-});
-
-// Bentonville High School, second building (952075843; 112 x 103 m, 2 storeys). The plan note
-// guessed a gym; research says the north building is the 2006 academic "North Building": a
-// commons opening onto a central courtyard, a multi-storey media center, science labs, a
-// 200-seat lecture hall on the main level and a main stair tower at the entry (no gym listed).
-// Sources: schooldesigns.com/Projects/bentonville-high-school-north-building,
-// bentonvillek12.org/o/bhs/page/history.
-def(952075843, 111.8, 103, 'b', () => {
-  const ground = cut(
-    'a',
-    { abs: 95 },
-    cut(
-      'b',
-      { abs: 40 },
-      cut('a', { abs: 30 }, R('auditorium', 'Lecture Hall'), cut('b', { abs: 22 }, roomsAt('a', 30, 95, 4, 'classroom', 'Room N', 101), roomsAt('a', 30, 95, 4, 'classroom', 'Science Lab ', 1))),
-      cut('a', { abs: 50 }, cut('b', { abs: 80 }, R('hall', 'Commons'), R('cafeteria', 'Commons Dining')), cut('b', { abs: 65 }, R('library', 'Media Center'), R('open', 'Courtyard')))
-    ),
-    cut('b', { abs: 19 }, R('lobby', 'Stair Tower'), R('corridor', 'East Corridor'))
-  );
-  const upper = cut(
-    'a',
-    { abs: 95 },
-    rowAt('b', [34, 41], [
-      cut('b', { abs: 20 }, roomsAt('a', 8.3, 95, 5, 'classroom', 'Room N', 201), roomsAt('a', 8.3, 95, 5, 'classroom', 'Room N', 206)),
-      R('corridor', 'Upper Corridor'),
-      cut('a', { abs: 50 }, cut('a', { abs: 25 }, roomsAt('b', 41, 103, 3, 'classroom', 'Room N', 211), roomsAt('b', 41, 103, 3, 'classroom', 'Room N', 214)), cut('b', { abs: 65 }, R('library', 'Media Center Upper'), R('open', 'Courtyard Balcony'))),
-    ]),
-    cut('b', { abs: 19 }, R('lobby', 'Stair Tower Landing'), R('office', 'Department Offices'))
-  );
-  return { levels: [ground, upper], stairs: [{ a: 99, b: 8, dir: 'b' }, { a: 30, b: 58, dir: 'a' }] };
-});
+// Bentonville High School (952075842 main, 952075843 North Building): src/world/interiors/bhs.js
+bhsRecipes({ def, R, cut, rowAt, roomsAt, evenAt });
 
 // Bentonville West High School (651787776; 309 x 200 m, 4 storeys in the map). Opened 2016 in
 // Centerton: 900-seat performing arts center, a competition arena for 2,000+ (state-championship

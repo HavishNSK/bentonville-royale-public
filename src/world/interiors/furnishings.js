@@ -26,6 +26,7 @@ export const FURNISHING_LIMITS = Object.freeze({
 // kind: [w (along the front/wall), d (depth), h, flags, lift]. Flags: S solid, B blocks bullets,
 // M wall mounted, Z sized (w/d come from the directive or the room).
 const RAW = {
+  commons_table: [1.36, 2.05, 0.82],
   bed: [1.6, 2.1, 0.55, 'S'], nightstand: [0.5, 0.45, 0.55], dresser: [1.2, 0.5, 0.95, 'SB'], wardrobe: [1.2, 0.6, 2.0, 'SB'],
   sofa: [2.0, 0.85, 0.8, 'S'], armchair: [0.85, 0.85, 0.8, 'S'], coffee_table: [1.1, 0.6, 0.42], tv_stand: [1.6, 0.45, 0.55, 'S'],
   rug: [2.4, 1.7, 0.02, 'Z'], dining_table: [1.8, 0.95, 0.75, 'S'], chair: [0.45, 0.45, 0.9], stool: [0.4, 0.4, 0.75],

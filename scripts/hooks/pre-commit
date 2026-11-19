@@ -1,0 +1,29 @@
+#!/bin/sh
+# BENTONVILLE ROYALE — pre-commit guard for the Bentonville High School reference photos.
+# Install: cp scripts/hooks/pre-commit .git/hooks/pre-commit  (docs/bhs/BHS_CONTRACT.md)
+#
+# Rejects a commit that:
+#   1. touches any path containing "bhs-refs" (the private reference photo folder, kept outside
+#      the repo), or
+#   2. adds an image / video file (.jpg .jpeg .png .heic .webp .avif .mp4 .mov) outside the asset
+#      folders this project creates itself (ALLOW below).
+
+ALLOW='^(public/art/|public/ui/|public/data/|public/assets/|docs/musewalk-reference/|docs/crystal-bridges/|agents/reports/|docs/bhs/slice/)'
+status=0
+
+refs=$(git diff --cached --name-only | grep -i 'bhs-refs')
+if [ -n "$refs" ]; then
+  echo "pre-commit: refusing paths containing 'bhs-refs' (reference photos never enter the repo):" >&2
+  echo "$refs" >&2
+  status=1
+fi
+
+media=$(git diff --cached --name-only --diff-filter=AR | grep -iE '\.(jpe?g|png|heic|webp|avif|mp4|mov)$' | grep -vE "$ALLOW")
+if [ -n "$media" ]; then
+  echo "pre-commit: refusing image/video files outside the project's asset folders:" >&2
+  echo "$media" >&2
+  echo "(allowed: $ALLOW)" >&2
+  status=1
+fi
+
+exit $status
