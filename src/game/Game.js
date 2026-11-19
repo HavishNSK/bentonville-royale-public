@@ -62,7 +62,8 @@ import { heldSlot } from './Inventory.js';
 import * as StructMod from './Structures.js';
 import * as BotsMod from './Bots.js';
 import { createFpsMeter } from '../ui/fpsMeter.js';
-import { graphicsQuality } from '../ui/settings.js';
+import { DynamicResolution } from '../render/DynamicResolution.js';
+import { graphicsQuality, FPS_UNLIMITED } from '../ui/settings.js';
 import { planBusRoute, makeRoute, routeWire, busPosAt, planBotTargets, DropBusMesh } from './DropBus.js';
 
 const BUS_CAM_DIST = 34; // third-person distance behind the Drop Bus
@@ -158,11 +159,13 @@ export class Game {
     // post chain (ink outlines + bloom + tone mapping); plain render when the preset disables both
     const q0 = QUALITY[graphicsQuality(this.settings)] || QUALITY.medium;
     this.post = new Post(this.renderer, this.scene, this.camera, { outline: q0.outline, bloom: q0.bloom, msaa: q0.msaa });
+    this.dynRes = new DynamicResolution(); // lowers the render resolution while the GPU can't keep up
     this._applyPixelRatio();
 
     this.input = new Input(canvas);
     this.input.onLockChange = (locked) => this._onLockChange(locked);
     this.input.setBindings(this.settings.bindings); // remappable actions (src/ui/settings.js)
+    this.input.rawMouse = !!this.settings.rawMouse;
     this._lockAndFullscreen = () => {
       this.input.lock();
       if (!document.fullscreenElement) {
@@ -1336,6 +1339,16 @@ export class Game {
 
   _loop(now) {
     requestAnimationFrame(this._loop);
+    // FPS limit (settings.fpsCap): skip display refreshes until the next frame is due
+    const cap = this.settings.fpsCap;
+    if (cap && cap < FPS_UNLIMITED) {
+      const interval = 1000 / cap;
+      const due = this._nextFrameAt || 0;
+      if (now < due - 1) return; // 1 ms slack for refresh jitter
+      let next = due + interval; // from the due time, so the average stays on the cap
+      if (next < now) next = now + interval; // fell behind: start again from now
+      this._nextFrameAt = next;
+    }
     let dt = (now - this._last) / 1000;
     this._last = now;
     if (!(dt > 0)) dt = 0;
@@ -1389,6 +1402,7 @@ export class Game {
     input.endFrame();
     // rolling averages (window.__game.perf): sim / present CPU ms, frame interval, draw calls
     const t2 = performance.now();
+    this._updateDynRes(dt, t2 - t0, live && !this.paused);
     const k = 0.05;
     pf.sim += (t1 - t0 - pf.sim) * k;
     pf.present += (t2 - t1 - pf.present) * k;
@@ -1948,7 +1962,10 @@ export class Game {
     if (sfx.setUiVolume) sfx.setUiVolume(this.settings.uiVolume ?? 1);
     if (this.settings.musicVolume != null) sfx.setMusicVolume(this.settings.musicVolume);
     if (typeof document !== 'undefined') createFpsMeter(document.body).setVisible(!!this.settings.showFps); // shared with the settings screen
-    if (this.input) this.input.setBindings(this.settings.bindings);
+    if (this.input) {
+      this.input.setBindings(this.settings.bindings);
+      this.input.rawMouse = !!this.settings.rawMouse;
+    }
     if (this.hud && this.hud.setKeyLabels && this.input) this.hud.setKeyLabels((a) => this.input.label(a));
     if (this.hud && this.hud.setCrosshairStyle) this.hud.setCrosshairStyle(this.settings);
     if (this.invPanel && this.input) this.invPanel.setKeyLabels((a) => this.input.label(a));
@@ -1961,12 +1978,40 @@ export class Game {
     this._cullT = 0;
   }
 
+  /**
+   * Dynamic resolution (settings.dynamicResolution): fed every frame of a match in a visible,
+   * focused window; re-applies the pixel ratio when the controller changes its scale.
+   */
+  _updateDynRes(dt, cpuMs, active) {
+    const dyn = this.dynRes;
+    if (!dyn) return;
+    // an FPS limit under 50 would read as a struggling GPU: leave the resolution alone then
+    const capped = this.settings.fpsCap && this.settings.fpsCap < 50;
+    const on = this.settings.dynamicResolution !== false && !this.settings.performanceMode && !capped;
+    if (!on) {
+      if (dyn.scale !== 1) {
+        dyn.reset();
+        this._setPixelRatio();
+      }
+      return;
+    }
+    if (!active || document.hidden || (document.hasFocus && !document.hasFocus())) return;
+    if (dyn.update(dt * 1000, cpuMs)) this._setPixelRatio();
+  }
+
   _applyPixelRatio() {
     const q = QUALITY[graphicsQuality(this.settings)] || QUALITY.medium;
-    const pr = Math.min(window.devicePixelRatio || 1, q.pixelRatio) * (q.renderScale || 1);
+    if (this.post) this.post.configure({ outline: q.outline, bloom: q.bloom, msaa: q.msaa });
+    if (this.dynRes) this.dynRes.reset(); // new preset: start again from full resolution
+    this._setPixelRatio();
+  }
+
+  _setPixelRatio() {
+    const q = QUALITY[graphicsQuality(this.settings)] || QUALITY.medium;
+    const dyn = this.dynRes ? this.dynRes.scale : 1;
+    const pr = Math.min(window.devicePixelRatio || 1, q.pixelRatio) * (q.renderScale || 1) * dyn;
     this.renderer.setPixelRatio(pr);
     if (this.post) {
-      this.post.configure({ outline: q.outline, bloom: q.bloom, msaa: q.msaa });
       this.post.setPixelRatio(pr);
       this.post.setSize(window.innerWidth, window.innerHeight);
     }
@@ -1977,6 +2022,7 @@ export class Game {
     const h = window.innerHeight;
     this.renderer.setSize(w, h, false);
     if (this.post) this.post.setSize(w, h);
+    this._setPixelRatio(); // dragged to a monitor with other display scaling
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }

@@ -86,11 +86,22 @@ export class Input {
 
   lock() {
     if (this.locked) return;
+    const plain = () => {
+      try {
+        const p = this.canvas.requestPointerLock();
+        if (p && p.catch) p.catch(() => {});
+      } catch (err) {
+        /* not allowed right now (no user gesture) */
+      }
+    };
+    if (!this.rawMouse) return plain();
     try {
-      const p = this.canvas.requestPointerLock();
-      if (p && p.catch) p.catch(() => {});
+      // raw input (settings.rawMouse); browsers without it reject or throw: plain lock instead
+      const p = this.canvas.requestPointerLock({ unadjustedMovement: true });
+      if (p && p.catch) p.catch((err) => (err && err.name === 'NotSupportedError' ? plain() : undefined));
+      else if (!p) plain();
     } catch (err) {
-      /* not allowed right now (no user gesture) */
+      plain();
     }
   }
 
