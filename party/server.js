@@ -23,8 +23,8 @@
 
 import { Server, routePartykitRequest } from 'partyserver';
 import { MAX_HUMANS } from '../src/net/protocol.js';
-import { handleCleverAuth } from './cleverAuth.js';
 import { nameIsClean } from '../src/net/chatFilter.js';
+import { originAllowed } from './authLimits.js';
 
 // The party lobby, matchmaker, accounts and online list run in the same Worker (wrangler.jsonc binds them all).
 export { Party } from './partyRoom.js';
@@ -76,6 +76,15 @@ export class Main extends Server {
   }
 
   onConnect(conn, ctx) {
+    // only the game's own pages may open sockets (party/authLimits.js originAllowed)
+    if (!originAllowed(ctx.request.headers.get('origin'), this.env && this.env.ALLOWED_ORIGINS)) {
+      try {
+        conn.close(4003, 'origin');
+      } catch {
+        /* gone */
+      }
+      return;
+    }
     const url = new URL(ctx.request.url);
     const role = url.searchParams.get('role');
     const v = url.searchParams.get('v') || '';
@@ -194,9 +203,14 @@ export class Main extends Server {
 
 export default {
   async fetch(request, env) {
-    // Clever OAuth start/callback (needs Worker secrets; not a PartyServer room).
-    const clever = await handleCleverAuth(request, env);
-    if (clever) return clever;
+    // Internal-only endpoints: the matchmaker, the party rooms' match-plan POST and the presence
+    // account-update POST are called by other Durable Objects through bindings, never by browsers.
+    // Refuse them from the internet.
+    const path = new URL(request.url).pathname;
+    const internalPost = path.startsWith('/parties/party/') || path.startsWith('/parties/presence/');
+    if (path.startsWith('/parties/matchmaker/') || (internalPost && request.method === 'POST')) {
+      return new Response('Not found', { status: 404 });
+    }
     return (await routePartykitRequest(request, env)) || new Response('Not found', { status: 404 });
   },
 };

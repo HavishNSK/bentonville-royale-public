@@ -4,8 +4,12 @@
 //   await acct.init();                      // resumes a saved session, else a local guest profile
 //   acct.signedIn, acct.profile = { name, coins, owned, equipped:{skin, emotes}, friends, incoming, outgoing, stats }
 //   await acct.register(name, pw) / acct.login(name, pw) / acct.loginWithGoogle(idToken)
-//   await acct.redeemAuthTicket(ticket) / acct.logout()
+//   await acct.logout() / acct.logoutAll()   (logoutAll: every device)
 //   await acct.rename(name)                 only while profile.mustRename (name breaks the username rules)
+//   profile.banned {reason, until, permanent, label} | null, profile.warning {reason, at} | null (moderation)
+//   await acct.ackWarning()                 the player saw the moderator warning; clears it
+//   await acct.report(name, reason, note) -> confirmation text   private player report for the devs
+//   await acct.mod(op, body) -> lines[]     DEV panel actions (modBan, modTitle, ...); the server checks dev rights
 //   await acct.buy(id) / acct.equip({ skin, pickaxe, backbling, emotes })
 //   await acct.reward({ kills, placement, players, won, ranked }) -> { earned, saved, ranked, guest?, error? }
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
@@ -179,21 +183,37 @@ export function createAccount() {
       return r.profile;
     },
 
-    /** One-time ticket from Clever OAuth callback (?br_auth=). */
-    async redeemAuthTicket(ticket) {
-      const r = await api('redeemAuthTicket', { ticket });
-      setToken(r.token);
-      setProfile(r.profile);
-      connect();
-      return r.profile;
-    },
-
     /** Forced rename of a name that breaks the username rules (server refuses otherwise). */
     async rename(name) {
       if (!acct.signedIn) throw new Error('Sign in first.');
       const r = await api('rename', { token, name });
       setProfile(r.profile);
       return r.profile;
+    },
+
+    /** The player saw the moderator warning: clear it on the server. */
+    async ackWarning() {
+      if (!acct.signedIn || !acct.profile.warning) return;
+      try {
+        const r = await api('ackWarning', { token });
+        setProfile(r.profile);
+      } catch {
+        /* shown again next time */
+      }
+    },
+
+    /** A DEV panel action. Only dev accounts succeed (checked on the server). Throws with its message. */
+    async mod(op, body = {}) {
+      if (!acct.signedIn) throw new Error('Sign in first.');
+      const r = await api(op, { ...body, token });
+      return Array.isArray(r.lines) ? r.lines.map((l) => String(l).slice(0, 300)) : ['Done.'];
+    },
+
+    /** Report a player (private: only devs read reports). Throws with the server's message. */
+    async report(name, reason, note = '') {
+      if (!acct.signedIn) throw new Error('Sign in to send reports.');
+      const r = await api('report', { token, name, reason, note });
+      return r.text || '';
     },
 
     async logout() {
@@ -204,6 +224,13 @@ export function createAccount() {
       emit('friends', friendsData);
       setProfile(guestProfile());
       if (t) api('logout', { token: t }).catch(() => {});
+    },
+
+    /** Sign this account out on every device (then locally). */
+    async logoutAll() {
+      const t = token;
+      if (t) await api('logoutAll', { token: t }).catch(() => {});
+      await acct.logout();
     },
 
     /** Rewarded ad watched to the end: +coins (the server caps it per day). */

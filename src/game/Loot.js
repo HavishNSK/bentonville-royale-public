@@ -50,6 +50,7 @@ export const LOOT = {
   verticalReach: 2.2,
   scale: { chest: 2.0, ammo: 1.0, w: 1.3, medkit: 1.7, potion: 1.3, grenade: 1.8, crateAmmo: 0.7, crateMat: 0.9 },
   grenadeShare: 0.2, // of consumable rolls; the rest split medkit / tonic as before
+  gasCanShare: 0.1, // of the non-grenade consumable rolls: a gas can (cars)
   ammoTint: { light: 0xbfe6ff, medium: 0x9ee08a, shells: 0xffa477, heavy: 0xa9b2ff, rockets: 0xff5a4d },
 };
 
@@ -166,6 +167,8 @@ export function rollConsumable(rng) {
     const id = rng() < 0.4 ? 'smoke' : 'grenade';
     return { type: 'consumable', id, count: CONSUMABLES[id].pickup };
   }
+  // gas cans for the drivable cars: an occasional drop
+  if (rng() < LOOT.gasCanShare) return { type: 'consumable', id: 'gascan', count: 1 };
   const id = rng() < 0.55 ? 'medkit' : 'tonic';
   return { type: 'consumable', id, count: id === 'medkit' ? 1 : 1 + (rng() < 0.3 ? 1 : 0) };
 }
@@ -310,6 +313,7 @@ export class Loot {
       ammoLid: ammo.lid ? new Batch(g, ammo.lid, CAP.ammo, { shadow: true, name: 'ammoLid' }) : null,
       medkit: new Batch(g, prepFlat(m.medkit, () => boxFlat(0.22, 0.29, 0.14, 0xd83a3a)), CAP.consumable, { name: 'medkit' }),
       potion: new Batch(g, prepFlat(m.potion, () => boxFlat(0.2, 0.4, 0.2, 0x3b9cff)), CAP.consumable, { name: 'potion' }),
+      gascan: new Batch(g, prepFlat(null, () => boxFlat(0.26, 0.32, 0.14, 0xd8342c)), CAP.consumable, { name: 'gascan' }),
       grenade: new Batch(g, grenadeModel(true), CAP.consumable, { name: 'grenade' }),
       smoke: new Batch(g, smokeGrenadeModel(true), CAP.consumable, { name: 'smoke' }),
       crate: new Batch(g, prepFlat(m.crate, () => boxFlat(0.5, 0.5, 0.5, 0xffffff)), CAP.crate, { colored: true, name: 'crate' }),
@@ -1185,8 +1189,8 @@ export class Loot {
             sc = S.w;
             break;
           case 'consumable':
-            batch = it.id === 'medkit' ? B.medkit : it.id === 'grenade' ? B.grenade : it.id === 'smoke' ? B.smoke : B.potion;
-            sc = it.id === 'medkit' ? S.medkit : it.id === 'grenade' || it.id === 'smoke' ? S.grenade : S.potion;
+            batch = it.id === 'medkit' ? B.medkit : it.id === 'grenade' ? B.grenade : it.id === 'smoke' ? B.smoke : it.id === 'gascan' ? B.gascan : B.potion;
+            sc = it.id === 'medkit' ? S.medkit : it.id === 'grenade' || it.id === 'smoke' ? S.grenade : it.id === 'gascan' ? S.medkit : S.potion;
             break;
           case 'ammo':
             batch = B.crate;

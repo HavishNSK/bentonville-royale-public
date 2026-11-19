@@ -52,9 +52,7 @@ Set `VITE_GOOGLE_MAPS_API_KEY` only if using the optional Google view, restart V
 | `VITE_GOOGLE_MAPS_API_KEY` | No | Public browser bundle | Optional Google Map Tiles API key, supplied through `.env.local` locally or the build environment on hosting. Restrict to intended referrers and the Map Tiles API. |
 | `VITE_GOOGLE_CLIENT_ID` | No | Public browser bundle | OAuth Web client ID for Continue with Google (GIS). Authorize JS origins for local and production. Must match Worker `GOOGLE_CLIENT_ID`. |
 | `GOOGLE_CLIENT_ID` | No | Cloudflare Worker (`wrangler` vars/secret) | Same OAuth Web client ID; used as JWT `aud` when verifying Google ID tokens. Empty disables Google login on the server. |
-| `VITE_CLEVER_AUTH` / `VITE_CLEVER_CLIENT_ID` | No | Public browser bundle | Set `VITE_CLEVER_AUTH=1` (or set the Clever client id) to show **Log in with Clever**. |
-| `CLEVER_CLIENT_ID` | No | Cloudflare Worker vars | Clever application client ID (public). |
-| `CLEVER_CLIENT_SECRET` | No | Cloudflare Worker **secret** | Clever application secret. Required for token exchange. Never put in `VITE_*` or git. |
+| `ALLOWED_ORIGINS` | No | Cloudflare Worker vars | Extra comma-separated browser origins allowed to call the account API and open sockets, beyond the built-in list in `party/authLimits.js` (the Vercel site and its previews, `*.crazygames.com`, localhost). |
 
 Every `VITE_*` value is visible to browser users. Use intentionally public restricted keys, never private credentials. Leave Maps unset to disable the Google tiles toggle. Leave the client ID unset to hide Continue with Google. The tiles layer is visual only; retain provider attribution.
 
@@ -66,21 +64,6 @@ Every `VITE_*` value is visible to browser users. Use intentionally public restr
 4. Redeploy the Worker (`npm run party:deploy`) and rebuild/redeploy the static site.
 
 The browser receives a Google ID token; the Accounts Durable Object verifies signature, `iss`, `aud`, and `exp` against Google's JWKS, then creates or resumes an account keyed by Google `sub` (not email). Username/password accounts remain available. This is still a prototype identity layer: room codes are not authentication, and there is no dedicated anti-cheat or trusted match authority.
-
-### Optional Clever Sign-In (school SSO)
-
-Bentonville Google Workspace blocks unverified apps with `Error 400: admin_policy_enforced`, so school Chromebooks should use Clever instead. Clever uses OAuth authorization-code on the Cloudflare Worker (client secret never reaches the browser).
-
-1. Create an app in the [Clever developer dashboard](https://apps.clever.com/).
-2. Set the redirect URI to exactly:
-   `https://bentonville-royale.bentonville-royale.workers.dev/auth/clever/callback`
-3. Ask Bentonville Schools IT / Clever district admins to **share/approve** the app for the district (required for student/staff login).
-4. Put `CLEVER_CLIENT_ID` in `wrangler.jsonc` vars and store the secret with:
-   `npx wrangler secret put CLEVER_CLIENT_SECRET`
-5. Set `VITE_CLEVER_AUTH=1` in `.env.local` and Vercel (gitignored locally; never commit `CLEVER_CLIENT_SECRET`).
-6. Redeploy the Worker and rebuild/redeploy the static site.
-
-Flow: **Log in with Clever** → Clever → Worker callback → one-time `?br_auth=` ticket → game redeems a session. Accounts are keyed by Clever user id (`clever:<id>`), not email. Username/password still works without Clever.
 
 ### Developer Chat Access
 
@@ -298,7 +281,7 @@ Asset and data credits are maintained in [credits/](credits/). Preserve the exis
 
 ## Design System and Accessibility
 
-The game uses a deliberate cartoon dusk/Ozark visual identity. Shared tokens and fonts live in `src/ui/hud.css`; menus extend them in `src/ui/menus.css`. The title, friend-lobby, and loading backdrop is the water-tower illustration at `public/ui/lobby-bg.jpg`.
+The game uses a deliberate cartoon dusk/Ozark visual identity. Shared tokens and fonts live in `src/ui/hud.css`; menus extend them in `src/ui/menus.css`. The title, friend-lobby, and loading backdrop is the flat dusk drawing at `public/ui/lobby-dusk.svg` (brand ink sky, sun-gold sun behind the 3D line-up, town silhouette). The title line-up (`src/ui/Showcase.js`, formation in `src/ui/lineup.js`) refits its camera to the party size so up to eight characters stay fully in frame, each on a plinth with a name and ready nameplate; the private-match roster lists players in two columns so full 16-character names fit. Windows narrower than 1024px or squarer than 7:5 use the stacked title layout.
 
 | Token | Value | Role |
 | --- | --- | --- |
@@ -322,6 +305,27 @@ For UI changes, verify focus, labels, contrast, non-color status cues, reduced m
 Read [AGENTS.md](AGENTS.md) before changes. It defines engineering requirements, not proof of implemented controls.
 
 - Optional accounts use the Cloudflare Accounts Durable Object (password PBKDF2 or Google ID-token verification). Application-level rate limiting is limited; do not store sensitive personal data beyond what the feature needs. Room codes remain joining conveniences, not verified competition identity.
+- **Moderation (not anti-cheat).** Match results are reported by the player's browser, so the server cannot prove a result is real. `party/moderation.js` flags results that look impossible or unlikely (more kills than opponents, over 20 kills, ranked results under 3 minutes apart, a very high ranked win rate, a win in a match with fewer than 2 players) so a developer can review them; it never bans on its own. Developer accounts (`src/net/devs.js`) can type these in global chat:
+  - `/ban <user> [1h|1d|1w|1mo|perm] <reason>` with no duration takes the next step on the ladder: 1 hour, 1 day, 1 week, 1 month, then permanent.
+  - `/warn <user> <reason>`, `/unban <user>` (offence history is kept, so later bans still escalate), `/history <user>`, `/resetstats <user>`, `/flags`.
+  - `/reports` lists player reports and `/dismiss <user>` clears them. Signed-in players file reports from the lobby ONLINE list or the pause menu (`src/ui/reportForm.js`). Reports are private (`reports:<user>` keys, 10 kept per player), limited to one per reporter per player per day and 10 per reporter per day, and a `/ban` clears them. Reports are matched by name, and in-match names can be typed nicknames, so a report can name someone with no account.
+  - `/title <user> <TITLE> [#titlecolour] [#namecolour]` gives a player a chat and online-list title, and `/untitle <user>` removes it. Titles are stored on the account and use letters, numbers and spaces only, up to 14 characters. They pass the swear filter, may be staff-style tags like DEV or MOD, and grant no powers (bans and dev tools come only from `DEV_NAMES`). A title in the code (`PLAYER_TITLES`) takes priority.
+  - The same tools are buttons in the lobby: a **DEV** button (dev accounts only) opens a panel with a player field, title text with separate title and username colour pickers, ban length (next step, 1 hour, 1 day, 1 week, 1 month or permanent, which needs a second click), reason, warn and unban, plus history, reports, flags and reset stats. Devs also get a MANAGE button on the ONLINE list. Panel actions call the account server directly, and it tells the presence server so bans and titles show at once.
+  - Only accounts in `DEV_NAMES` (the `[DEV]` tag) can use any of these commands. The account server checks this on every command.
+  - Permanent bans that live in the code go in `PERMA_BANNED` (`party/moderation.js`). They can't be lifted with `/unban`, and the client locks the account out behind a notice that can't be closed.
+- **Account hardening** (`party/authLimits.js`, `party/accounts.js`):
+  - Sign-in is throttled after 5 failures per account or per network in 15 minutes, with a growing wait. Sign-up is capped at 3 per network per hour.
+  - New passwords need 8-72 characters and can't be on a common-password list.
+  - Dev commands need a sign-in within the last 12 hours (no MFA yet).
+  - Sign-out can end every session ("sign out on all devices"), and an account keeps at most 10 sessions.
+  - The account API echoes only allowed origins for CORS (never `*`), and every Worker socket checks the Origin.
+  - The matchmaker and party match-plan endpoints refuse requests from the internet.
+  - A capped security log (`seclog:` keys, newest 500) records sign-ins, failures, throttling, sign-ups and bans with the IP address. It never records passwords or tokens.
+  - Passwords stay PBKDF2-SHA256 at 100k rounds, the Cloudflare Workers maximum, below OWASP's Argon2id advice.
+  - Session tokens are still kept in localStorage; moving to HttpOnly cookies needs the client and Worker on one site.
+  - `vercel.json` sets HSTS, nosniff, `X-Frame-Options`, Referrer-Policy and Permissions-Policy. It enforces a minimal CSP (`frame-ancestors`, `base-uri`, `object-src`) and sends the full CSP as report-only until it has been checked against the live site's ads and Google sign-in.
+- **Host trust.** The match host's browser runs the whole simulation and receives every player's position, so a modified host can still change health, ammo, damage or positions. Encryption doesn't help: the host has to read the data to run the match. The QA console hooks (`window.__game`) exist only in dev builds. Fixing host cheating needs server-run matches.
+  The presence server forwards commands with the dev's own session token, the account server re-checks dev rights, results go only to that dev, and every action is logged under `modlog:` keys. A banned account can sign in and see the reason and time left, but earns no coins or stats, is hidden from the ranks, and cannot chat, shop or use friends. Timed bans lift on their own. Limits: guests are not affected, and in-match cheats (aimbot, speed) are not detected; they need a report and a manual ban. Server-run ranked matches would be the real fix.
 - There is no upload service, model API, SQL database, or application telemetry integration established in the current source. Browser preferences persist locally; friend play and account presence contact the PartyServer worker. WebRTC paths (if used) can expose network information to peers.
 - Optional Google tiles and Google sign-in contact Google with the configured public client/key values. Keep them disabled when unneeded and review provider billing and privacy implications before enabling.
 - No repository CI workflow or production security-header configuration is present. CSP, framing protection, HTTPS, and other hosting controls require deployment-specific configuration and verification.

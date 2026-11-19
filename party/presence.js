@@ -24,11 +24,18 @@
 // are refused, not masked) and is rate limited per player. Breaking the content rules
 // CHAT_STRIKES times in CHAT_STRIKE_WINDOW_MS pauses that player's chat for CHAT_STRIKE_MUTE_MS.
 // History lives in memory only (it is gone when the room sleeps).
+//
+// Moderation (party/moderation.js): a banned account cannot chat. Dev commands (/ban, /warn,
+// /unban, /history, /resetstats, /flags, /reports, /dismiss) are forwarded to the account server with the dev's own
+// session token; the account server re-checks dev rights. Results go only to that dev:
+//   server -> client  {t:'modResult', ok, lines:[...]}
+// Commands are never broadcast or kept in chat history.
 
 import { Server } from 'partyserver';
 import { validMode } from './modes.js';
 import { cleanChat, nameIsClean } from '../src/net/chatFilter.js';
-import { parseDevChat, accountGrants } from '../src/net/devs.js';
+import { parseDevChat, parseModCommand, accountGrants } from '../src/net/devs.js';
+import { originAllowed } from './authLimits.js';
 
 export const ROOM = 'global';
 const MAX_CONNECTIONS = 2000; // well past what a prototype sees; refuses floods
@@ -45,6 +52,7 @@ const CHAT_MUTE_MS = 60000; // going over the burst limit mutes for this long
 const CHAT_STRIKES = 3; // blocked messages (not counting links / personal-info refusals)...
 const CHAT_STRIKE_WINDOW_MS = 10 * 60000; // ...within this window...
 const CHAT_STRIKE_MUTE_MS = 5 * 60000; // ...pause chat for this long
+const MOD_OPS = { ban: 'modBan', warn: 'modWarn', unban: 'modUnban', history: 'modHistory', resetstats: 'modResetStats', flags: 'modFlags', reports: 'modReports', dismiss: 'modDismiss', title: 'modTitle', untitle: 'modUntitle' };
 const STRIKE_CATEGORIES = new Set(['slur', 'selfharm', 'threat', 'sexual', 'drugs', 'profanity', 'bully']);
 
 function cleanName(name) {
@@ -89,7 +97,15 @@ export function snapshot(players) {
     .slice()
     .sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.since - b.since)
     .slice(0, MAX_LISTED)
-    .map((p) => (p.title ? { name: p.name, status: p.status, mode: p.mode, title: p.title, color: p.titleColor } : { name: p.name, status: p.status, mode: p.mode }));
+    .map((p) => {
+      const row = { name: p.name, status: p.status, mode: p.mode };
+      if (p.title) {
+        row.title = p.title;
+        row.color = p.titleColor;
+        if (p.nameColor) row.nameColor = p.nameColor; // dev-made titles can colour the username separately
+      }
+      return row;
+    });
   return { t: 'online', count: all.length, searching, inMatch, players: list };
 }
 
@@ -104,6 +120,15 @@ export class Presence extends Server {
   }
 
   onConnect(conn, ctx) {
+    // only the game's own pages may open sockets (party/authLimits.js originAllowed)
+    if (!originAllowed(ctx.request.headers.get('origin'), this.env && this.env.ALLOWED_ORIGINS)) {
+      try {
+        conn.close(4003, 'origin');
+      } catch {
+        /* gone */
+      }
+      return;
+    }
     if (this.name !== ROOM || this.players.size >= MAX_CONNECTIONS) {
       try {
         conn.close(4000, 'unavailable');
@@ -135,6 +160,8 @@ export class Presence extends Server {
       devName: '',
       title: '', // verified account title (devs.js PLAYER_TITLES) and its name colour
       titleColor: '',
+      acctName: '',
+      banned: false,
       devFor: '',
       devCheck: null,
       status: cleanStatus(url.searchParams.get('status')),
@@ -160,6 +187,8 @@ export class Presence extends Server {
       p.devName = '';
       p.title = '';
       p.titleColor = '';
+      p.acctName = '';
+      p.banned = false;
       p.devFor = '';
       p.devCheck = null;
       return Promise.resolve();
@@ -170,14 +199,21 @@ export class Presence extends Server {
     p.devName = '';
     p.title = '';
     p.titleColor = '';
-    p.devCheck = this._lookupAccountName(acct)
-      .then((name) => {
-        if (p.acct !== acct) return;
-        const g = accountGrants(name);
+    p.acctName = '';
+    p.banned = false;
+    p.devCheck = this._lookupAccount(acct)
+      .then((info) => {
+        if (p.acct !== acct || !info) return;
+        const name = info.name;
+        const g = accountGrants(name, info.title);
+        p.acctName = info.lower;
+        p.acctDisplay = info.name;
+        p.banned = info.banned;
         p.dev = g.dev;
         p.devName = g.shown;
         p.title = g.title;
         p.titleColor = g.titleColor;
+        p.nameColor = g.nameColor || '';
         if (p.devName) p.name = p.devName; // a verified name: the typed nickname cannot take it over
       })
       .catch(() => {
@@ -191,22 +227,82 @@ export class Presence extends Server {
     return p.devCheck;
   }
 
-  /** The signed-in account's username (verified by the Accounts object), or null. */
-  async _lookupAccountName(acct) {
-    if (!this.env || !this.env.Accounts) return null;
-    const id = this.env.Accounts.idFromName('global');
-    const stub = this.env.Accounts.get(id);
+  /** POST one op to the account server (same Worker). Returns {status, data}. */
+  async _accounts(body) {
+    if (!this.env || !this.env.Accounts) return { status: 503, data: { error: 'Accounts are unavailable.' } };
+    const stub = this.env.Accounts.get(this.env.Accounts.idFromName('global'));
     const res = await stub.fetch(
       new Request('https://accounts/global', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ op: 'me', token: acct }),
+        body: JSON.stringify(body),
       })
     );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const name = data && data.profile && data.profile.name;
-    return typeof name === 'string' && name ? name : null;
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    return { status: res.status, data: data || {} };
+  }
+
+  /** The signed-in account behind `acct`: {name, lower, dev, banned} or null. */
+  async _lookupAccount(acct) {
+    const { status, data } = await this._accounts({ op: 'me', token: acct });
+    const name = status === 200 && data.profile && data.profile.name;
+    if (!name) return null;
+    const short = String(name).slice(0, 16);
+    const t = data.profile.title;
+    const title = t && typeof t.title === 'string' ? { title: t.title, color: t.color || null, nameColor: t.nameColor || null } : null;
+    return { name: short, lower: short.toLowerCase(), banned: !!data.profile.banned, title };
+  }
+
+  /** A dev moderation command: forwarded with the dev's own token, answered to that dev only. */
+  async _modCommand(conn, p, cmd) {
+    const send = (ok, lines) => {
+      try {
+        conn.send(JSON.stringify({ t: 'modResult', ok, lines: [].concat(lines).map((l) => String(l).slice(0, 300)) }));
+      } catch {
+        /* gone */
+      }
+    };
+    if (cmd.error) return send(false, cmd.error);
+    const { status, data } = await this._accounts({
+      op: MOD_OPS[cmd.cmd],
+      token: p.acct,
+      name: cmd.name,
+      duration: cmd.duration || undefined,
+      reason: cmd.reason,
+      title: cmd.cmd === 'title' ? cmd.reason : undefined,
+      color: cmd.color || undefined,
+      nameColor: cmd.nameColor || undefined,
+    });
+    if (status !== 200) return send(false, data.error || 'That did not work.');
+    this._applyAccountUpdate(data);
+    return send(true, Array.isArray(data.lines) ? data.lines : 'Done.');
+  }
+
+  /** A ban / unban or title change on an account: show it on that player's open sockets right away. */
+  _applyAccountUpdate(data) {
+    if (!data || typeof data.target !== 'string') return;
+    if (typeof data.banned === 'boolean') {
+      for (const other of this.players.values()) if (other.acctName === data.target) other.banned = data.banned;
+    }
+    if ('title' in data) {
+      for (const other of this.players.values()) {
+        if (other.acctName !== data.target || !other.acctDisplay) continue;
+        const g = accountGrants(other.acctDisplay, data.title);
+        other.title = g.title;
+        other.titleColor = g.titleColor;
+        other.nameColor = g.nameColor || '';
+        if (g.shown) {
+          other.devName = g.shown;
+          other.name = g.shown;
+        }
+      }
+      this._schedule();
+    }
   }
 
   _chatLimits(p) {
@@ -258,6 +354,13 @@ export class Presence extends Server {
       return fail('Too many messages: chat paused for a minute.');
     }
     await this._markDev(p);
+    if (p.banned) return fail('Your account is banned, so chat is off.');
+    const mod = parseModCommand(raw);
+    if (mod) {
+      if (!p.dev) return fail('Only developers can use that.');
+      lim.last = now;
+      return this._modCommand(conn, p, mod);
+    }
     const parsed = parseDevChat(raw, p.dev);
     if (parsed.error) return fail(parsed.error);
     const r = cleanChat(parsed.text);
@@ -274,6 +377,7 @@ export class Presence extends Server {
     if (p.title) {
       m.title = p.title;
       m.color = p.titleColor;
+      if (p.nameColor) m.nameColor = p.nameColor;
     }
     this.chat.push(m);
     if (this.chat.length > CHAT_KEEP) this.chat.shift();
@@ -330,7 +434,20 @@ export class Presence extends Server {
     }, BROADCAST_MS);
   }
 
-  onRequest() {
+  async onRequest(req) {
+    // POST is internal: the account server reports ban / title changes made from the DEV panel.
+    // (party/server.js refuses POSTs to /parties/presence/ from the internet.)
+    if (req.method === 'POST') {
+      let data = null;
+      try {
+        data = await req.json();
+      } catch {
+        return new Response('bad json', { status: 400 });
+      }
+      if (!data || data.t !== 'account') return new Response('unknown', { status: 400 });
+      this._applyAccountUpdate(data);
+      return Response.json({ ok: true });
+    }
     // counts only (no names) for a quick status check
     const s = snapshot(this.players.values());
     return Response.json({ count: s.count, searching: s.searching, inMatch: s.inMatch });

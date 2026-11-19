@@ -30,8 +30,8 @@ Many players are under 13 (US COPPA rules apply), and every player sees the same
   regulations message (needed for EU / UK / Swiss visitors).
 - **Privacy policy:** lives at `/privacy.html` (`public/privacy.html`) and is linked from the
   title screen. Update its Contact section if you get a support e-mail.
-- **School logins:** students who sign in through Clever see ads too. Check Clever's partner
-  terms and your district's rules before turning ads on for them.
+- **Students:** many players are students under 13. Check your district's rules before turning
+  ads on.
 
 ## Before you turn anything on
 
@@ -77,7 +77,7 @@ Many players are under 13 (US COPPA rules apply), and every player sees the same
 
 **What changes in the CrazyGames build:**
 
-- **Guests only.** CrazyGames doesn't allow outside sign-in, so there's no Google / Clever /
+- **Guests only.** CrazyGames doesn't allow outside sign-in, so there's no Google /
   password sign-in, no coins, friends or shop. The locker keeps the free items.
 - **Their ads** (midgame + rewarded) replace AdSense.
 - **Invites:** COPY INVITE gives a CrazyGames invite link, and opening one joins the party.

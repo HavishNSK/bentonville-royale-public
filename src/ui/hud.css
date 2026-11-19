@@ -2764,3 +2764,142 @@
 .br-hud.is-spec-noinv .br-mats {
   display: none;
 }
+
+/* ---- cars: the panel while you ride (HP, fuel, speed, seats, boost); HP only for a target ---- */
+.br-car {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--u) * 132);
+  min-width: calc(var(--u) * 230);
+  padding: calc(var(--u) * 7) calc(var(--u) * 12) calc(var(--u) * 8);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 14);
+  background: var(--br-panel);
+  color: var(--br-cream);
+  font-weight: 900;
+  font-size: calc(var(--u) * 13);
+  transform: translateX(-50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease-out;
+}
+.br-car.is-on {
+  opacity: 1;
+}
+.br-car-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--u) * 10);
+  margin-bottom: calc(var(--u) * 4);
+}
+.br-car-head b {
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 17);
+  letter-spacing: 0.02em;
+}
+.br-car-spd span {
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 20);
+  font-variant-numeric: tabular-nums;
+}
+.br-car-spd em {
+  margin-left: calc(var(--u) * 3);
+  font-style: normal;
+  font-size: calc(var(--u) * 10);
+  opacity: 0.7;
+}
+.br-car-row {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 7);
+  margin-top: calc(var(--u) * 3);
+}
+.br-car-lbl {
+  width: calc(var(--u) * 32);
+  font-style: normal;
+  font-size: calc(var(--u) * 10);
+  opacity: 0.75;
+}
+.br-car-bar {
+  flex: 1;
+  height: calc(var(--u) * 9);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: calc(var(--u) * 5);
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.br-car-bar i {
+  display: block;
+  height: 100%;
+  background: var(--br-leaf);
+  transform-origin: left center;
+  transition: transform 0.12s linear;
+}
+.br-car.is-low .br-car-bar:not(.is-fuel) i {
+  background: var(--br-coral);
+}
+.br-car-bar.is-fuel i {
+  background: var(--br-sun);
+}
+.br-car-num {
+  min-width: calc(var(--u) * 34);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.br-car-row.is-empty .br-car-num {
+  color: var(--br-coral);
+}
+.br-car-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: calc(var(--u) * 6);
+}
+.br-car-seats {
+  display: flex;
+  gap: calc(var(--u) * 4);
+}
+.br-car-seats i {
+  width: calc(var(--u) * 11);
+  height: calc(var(--u) * 11);
+  border: calc(var(--u) * 2) solid var(--br-cream);
+  border-radius: 50%;
+  opacity: 0.55;
+}
+.br-car-seats i.is-taken {
+  background: var(--br-cream);
+}
+.br-car-seats i.is-you {
+  background: var(--br-sun);
+  border-color: var(--br-sun);
+  opacity: 1;
+}
+.br-car-boost {
+  font-size: calc(var(--u) * 11);
+  opacity: 0.6;
+}
+.br-car-boost.is-ready {
+  color: var(--br-sky-hi);
+  opacity: 1;
+}
+.br-car-boost.is-on {
+  color: var(--br-sun-hi);
+  opacity: 1;
+}
+/* aiming at someone else's car: just its name and HP, smaller, above the crosshair */
+.br-car.is-target {
+  bottom: auto;
+  top: calc(50% - var(--u) * 92);
+  min-width: calc(var(--u) * 150);
+  padding: calc(var(--u) * 4) calc(var(--u) * 9) calc(var(--u) * 5);
+  font-size: calc(var(--u) * 11);
+}
+.br-car.is-target .br-car-spd,
+.br-car.is-target [data-ref='carFuelRow'],
+.br-car.is-target .br-car-foot {
+  display: none;
+}
+.br-car.is-target .br-car-head b {
+  font-size: calc(var(--u) * 13);
+}

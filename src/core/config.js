@@ -274,6 +274,8 @@ export const CONSUMABLES = {
   tonic: { id: 'tonic', name: 'Shield Tonic', icon: 'potion', model: 'potion', rarity: 'rare', useTime: 2.4, heal: 0, shield: 50, stack: 3, sound: 'drink_shield' },
   // throwable: fire throws one instead of channelling a heal (see GRENADE and game/Grenades.js)
   grenade: { id: 'grenade', name: 'Grenade', icon: 'grenade', model: 'grenade', rarity: 'common', throwable: true, useTime: 0, heal: 0, shield: 0, stack: 6, pickup: 3, sound: null },
+  // gas can: refuels the car you sit in or stand beside (Vehicles); `fuel` instead of a heal
+  gascan: { id: 'gascan', name: 'Gas Can', icon: 'gascan', model: 'gascan', rarity: 'uncommon', useTime: 2.5, heal: 0, shield: 0, fuel: 50, stack: 2, sound: 'car_door' },
   smoke: { id: 'smoke', name: 'Smoke Grenade', icon: 'smoke', model: 'smoke', rarity: 'uncommon', throwable: true, useTime: 0, heal: 0, shield: 0, stack: 4, pickup: 2, sound: null },
 };
 
@@ -434,9 +436,13 @@ export const REBOOT = {
 // edited into the wall facing the enemy, shoot, reset the edit); peekOpen / peekClosed =
 // seconds the edit stays open / closed.
 // Only matches against HARD bots count toward the RANKS boards (wins + eliminations).
+// A humans-only private match (bots turned off) never counts, even on Hard.
 export const RANKED_DIFFICULTY = 'hard';
 export const isRankedDifficulty = (d) => d === RANKED_DIFFICULTY;
-export const RANKED_NOTE = 'Only matches on HARD bot difficulty count toward the ranks (wins and eliminations).';
+export function isRankedMatch(difficulty, bots) {
+  return isRankedDifficulty(difficulty) && (bots | 0) > 0;
+}
+export const RANKED_NOTE = 'Only HARD matches with bots count toward the ranks (wins and eliminations). A private match with bots off pays no coins and does not count.';
 
 // guessError (rad) / misguess (chance of the wrong side): how well a bot that is hit guesses the
 // shooter's direction for its wall (Bots._wallOnHit).

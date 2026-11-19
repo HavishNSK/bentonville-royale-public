@@ -48,7 +48,7 @@ test('a verified account grants CHULDE; a typed nickname or a guest does not', a
   const { accountGrants } = await import('../src/net/devs.js');
   // the presence server applies exactly these grants after its Accounts lookup
   const src = (await import('node:fs')).readFileSync(new URL('../party/presence.js', import.meta.url), 'utf8');
-  assert.match(src, /const g = accountGrants\(name\);/);
+  assert.match(src, /const g = accountGrants\(name(, info\.title)?\);/); // + a dev-made title from the account
   assert.match(src, /p\.title = g\.title;/);
   assert.match(src, /m\.title = p\.title;\n\s+m\.color = p\.titleColor;/, 'chat lines carry the title and colour');
   assert.deepEqual(accountGrants('TheChosenOne'), { dev: false, shown: 'TheChosenOne', title: 'CHULDE', titleColor: '#facece' });

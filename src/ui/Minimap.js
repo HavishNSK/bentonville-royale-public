@@ -111,7 +111,7 @@ const ROAD_STYLE = [
   { fill: '#fbf8ef', casing: '#4d573f', minPx: 3.2, minOv: 2.6, alphaOv: 1 },
   { fill: '#fff6d8', casing: '#4a4535', minPx: 3.8, minOv: 3.4, alphaOv: 1 },
 ];
-const BLIP_KINDS = ['chest', 'loot', 'enemy', 'drop', 'mate0', 'mate1', 'mate2', 'mate3', 'mateDown', 'pin0', 'pin1', 'pin2', 'pin3', 'ping0', 'ping1', 'ping2', 'ping3', 'pingEnemy', 'van', 'vanCd', 'vanHot', 'card'];
+const BLIP_KINDS = ['chest', 'loot', 'enemy', 'drop', 'mate0', 'mate1', 'mate2', 'mate3', 'mateDown', 'pin0', 'pin1', 'pin2', 'pin3', 'ping0', 'ping1', 'ping2', 'ping3', 'pingEnemy', 'van', 'vanCd', 'vanHot', 'card', 'car'];
 const MATE_COLORS = ['#ffc21f', '#5ec8ff', '#7dff6b', '#ff5d8f']; // = Teams.js TEAM_COLORS
 /** Blips that stay pinned to the minimap edge at any distance. */
 const isPinnedBlip = (kind, label) => kind === 'enemy' || kind === 'drop' || kind === 'card' || kind === 'vanHot' || (!!label && kind.startsWith('van')) || kind.startsWith('mate') || kind.startsWith('pin');
@@ -490,6 +490,20 @@ function makeBlipSprites(k) {
   for (const [key, col] of [['van', '#38e1ff'], ['vanCd', '#8a96a3'], ['vanHot', '#7dff6b']]) {
     out[key] = makeSprite(26 * k, 26 * k, 13 * k, 13 * k, (g) => drawCatfishMarker(g, k, col));
   }
+  // drivable car: a little white car seen from above
+  out.car = makeSprite(14 * k, 20 * k, 7 * k, 10 * k, (g) => {
+    g.fillStyle = '#f4f1e6';
+    g.strokeStyle = edge;
+    g.lineWidth = 1.8 * k;
+    g.beginPath();
+    if (g.roundRect) g.roundRect(2 * k, 2 * k, 10 * k, 16 * k, 3.5 * k);
+    else g.rect(2 * k, 2 * k, 10 * k, 16 * k);
+    g.fill();
+    g.stroke();
+    g.fillStyle = '#5ec8ff';
+    g.fillRect(3.6 * k, 5 * k, 6.8 * k, 3 * k);
+    g.fillRect(3.6 * k, 12.5 * k, 6.8 * k, 2.4 * k);
+  });
   // reboot card: a small cyan card
   out.card = makeSprite(12 * k, 16 * k, 6 * k, 8 * k, (g) => {
     g.fillStyle = '#38e1ff';

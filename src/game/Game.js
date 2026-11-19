@@ -12,7 +12,8 @@
 //   game.pause(on) / game.leave()    // back to the menu
 //   game.applySettings(settings)
 //
-// window.__game exposes { state, player, bots, storm, combat, loot, structures, debug } for QA.
+// window.__game exposes { state, player, bots, storm, combat, loot, structures, debug } for QA,
+// in dev builds only (never in the production bundle).
 //
 // Multiplayer (src/net, lazy-loaded by main.js; solo never touches it):
 //   game.net = hostSession;  game.startMatch(seed)       // host: full simulation + remote humans
@@ -21,7 +22,7 @@
 // storm, bots, storm damage and the win check are left to the host.
 
 import * as THREE from 'three';
-import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, CONSUMABLES, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
+import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, CONSUMABLES, isRankedMatch, makeRng, clamp, damp, TAU } from '../core/config.js';
 import { canSandboxLoadout, canCreativeMap, giveSandboxWeapon, sandboxBotStatus, spawnSandboxBot, clearSandboxBots, purgeSandboxBodies, setSandboxBotsHostile } from './sandboxLoadout.js';
 import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
 import { loadJSON, loadModels } from '../core/assets.js';
@@ -45,11 +46,15 @@ import { canFastTravel, poiTargets, nearestPoi, landAt } from './fastTravel.js';
 import { Pings } from './Pings.js';
 import { RebootMarkers, rebootMarkerTargets } from './RebootMarkers.js';
 import { Reboot } from './Reboot.js';
+import { Vehicles } from './Vehicles.js';
+import { buildCarMesh } from '../render/CarMesh.js';
+import { CAR } from './vehicles/cars.js';
 import { Grenades, launcherModel } from './Grenades.js';
 import { Player, placeOrbitCamera, itemLabel } from './Player.js';
 import * as StormMod from './Storm.js';
 import * as LootMod from './Loot.js';
 import * as InvMod from './Inventory.js';
+import { heldSlot } from './Inventory.js';
 import * as StructMod from './Structures.js';
 import * as BotsMod from './Bots.js';
 import { createFpsMeter } from '../ui/fpsMeter.js';
@@ -176,7 +181,9 @@ export class Game {
     requestAnimationFrame(this._loop);
     this._startBackgroundClock();
 
-    this._installDebug();
+    // QA console hooks (teleport, give, damage, raw game access) exist only in `vite` dev builds.
+    // Shipping them let anyone, especially a match host, teleport or give themselves items mid-game.
+    if (import.meta.env && import.meta.env.DEV) this._installDebug();
   }
 
   // ---------------------------------------------------------------- loading
@@ -343,6 +350,21 @@ export class Game {
     };
     this.bots.reboot = this.reboot;
     this.reboot.viewer = this.camera.position; // Catfish Ken waves to whoever walks up
+    // drivable cars (parking lots and main-road curbs, same spots on every machine)
+    this.vehicles = new Vehicles({ scene: this.scene, world: this.world, fx: this.fx, sfx, combat: this.combat, structures: this.structures, meshFactory: buildCarMesh });
+    try {
+      this.vehicles.setup();
+    } catch (err) {
+      this._error('vehicles.setup', err);
+    }
+    this.vehicles.viewer = this.camera.position;
+    this.vehicles.local = this.player;
+    this.vehicles.onEvent = (e) => {
+      if (this.net && this.net.isHost && this.net.started && this.net.events) this.net.events.push(e);
+    };
+    this.combat.vehicles = this.vehicles;
+    this.grenades.vehicles = this.vehicles;
+    this.bots.vehicles = this.vehicles;
     this.dropBus = new DropBusMesh();
     this.scene.add(this.dropBus.root);
     this.busRoute = null;
@@ -436,8 +458,9 @@ export class Game {
     this.freeBuild = freeBuild;
     // Museum Mode: a free-build session that starts in the Crystal Bridges lobby (no bots, no storm)
     this.museumMode = freeBuild && !!opts.museum && !!(this.cbGallery || (this.view && this.view.crystalBridges));
-    // bot difficulty this match was played on; only 'hard' matches count toward the ranks
+    // bot difficulty this match was played on; only hard matches that include bots count
     this.matchDifficulty = freeBuild ? null : this.settings.difficulty;
+    this.matchBots = 0;
     this.seed = seed;
     const rng = makeRng(seed);
     this.rng = rng;
@@ -524,6 +547,7 @@ export class Game {
       this._error('bots.spawn', err);
     }
     this.totalActors = 1 + (net ? net.remotes.size : 0) + this.bots.list.length;
+    this.matchBots = this.bots.list.length;
     this._setupTeam();
 
     if (freeBuild) {
@@ -706,6 +730,7 @@ export class Game {
     const net = this.net;
     // the host's bots set the difficulty (sent in the start message)
     this.matchDifficulty = typeof start.diff === 'string' ? start.diff : null;
+    this.matchBots = Number.isFinite(start.bots) ? start.bots | 0 : Array.isArray(start.roster) ? start.roster.filter((r) => r && !r.h).length : 0;
     this.seed = start.seed;
     this.rng = makeRng(start.seed);
     this.matchTime = 0;
@@ -794,6 +819,7 @@ export class Game {
     members.forEach((a, i) => (a.teamSlot = i));
     this.mates = members.filter((a) => a !== p);
     if (this.reboot) this.reboot.reset({ teamMode: this.teamMode, authoritative: !(this.net && this.net.isClient), myTeam: this.teamMode ? p.team : null });
+    if (this.vehicles) this.vehicles.reset({ authoritative: !(this.net && this.net.isClient) });
   }
 
   /**
@@ -1088,7 +1114,8 @@ export class Game {
       mode: this.mode,
       teams: this.totalTeams || this.totalActors,
       difficulty: this.matchDifficulty || null,
-      ranked: isRankedDifficulty(this.matchDifficulty),
+      bots: this.matchBots | 0,
+      ranked: isRankedMatch(this.matchDifficulty, this.matchBots),
     };
     if (this.net) {
       this.result.mp = true;
@@ -1169,9 +1196,11 @@ export class Game {
     } else if (info.fall) text = `${victim.name} fell too far`;
     else if (info.bleed) text = killer ? `${victim.name} bled out (${killer.name})` : `${victim.name} bled out`;
     else if (info.wipe) text = killer ? `${killer.name} wiped ${victim.name}` : `${victim.name} was eliminated`;
+    else if (info.weapon === 'car_explosion' && !killer) text = `${victim.name} went up with their car`;
+    else if (info.weapon === 'car_ram' && !killer) text = `${victim.name} was run over`;
     else if (info.explosive && !killer) text = `${victim.name} blew themselves up`;
     else if (killer) {
-      const how = info.weapon === 'pickaxe' ? 'bonked' : info.explosive ? 'blew up' : info.headshot ? 'headshot' : 'eliminated';
+      const how = info.weapon === 'pickaxe' ? 'bonked' : info.weapon === 'car_ram' ? 'ran over' : info.weapon === 'car_explosion' ? 'blew up the car with' : info.explosive ? 'blew up' : info.headshot ? 'headshot' : 'eliminated';
       text = `${killer.name} ${how} ${victim.name}`;
     } else text = `${victim.name} was eliminated`;
     if (killer === p) kind = 'kill';
@@ -1207,7 +1236,7 @@ export class Game {
     let text;
     if (info.storm && !by) text = `${victim.name} was knocked by the storm`;
     else if (info.fall) text = `${victim.name} fell and was knocked`;
-    else if (by) text = `${by.name} ${info.weapon === 'pickaxe' ? 'bonked' : 'knocked'} ${victim.name}`;
+    else if (by) text = `${by.name} ${info.weapon === 'pickaxe' ? 'bonked' : info.weapon === 'car_ram' ? 'ran over' : 'knocked'} ${victim.name}`;
     else text = `${victim.name} was knocked`;
     if (victim === p && !by && !info.storm && !info.fall) text = 'You were knocked';
     this.hud.killFeed(text, by === p ? 'kill' : victim === p ? 'self' : victim.team === p.team ? 'mate' : 'knock', [victim.name, by && by.name], p.name);
@@ -1465,6 +1494,13 @@ export class Game {
     if (this.structures) this.structures.update(dt);
     this.grenades.update(dt);
     if (this.reboot && (this.state === 'play' || this.state === 'over')) this.reboot.update(dt, this.combat.actors);
+    if (this.vehicles && (this.state === 'play' || this.state === 'over')) {
+      try {
+        this.vehicles.update(dt, this.combat.actors);
+      } catch (err) {
+        this._error('vehicles.update', err);
+      }
+    }
 
     // match end (team modes: a team is out once nobody on it is alive; dead members wait)
     if (this.state === 'play') {
@@ -1541,7 +1577,7 @@ export class Game {
         this._specDist = damp(this._specDist == null ? CAMERA.distance : this._specDist, CAMERA.distance, 10, dt);
         const crouchDrop = t.crouching ? 0.45 : 0;
         _v.set(t.pos.x, t.pos.y + CAMERA.pivotHeight - crouchDrop, t.pos.z);
-        placeOrbitCamera(cam, this.world, _v, this._specH, this._specP, this._specDist, CAMERA.shoulder);
+        placeOrbitCamera(cam, this.world, _v, this._specH, this._specP, this._specDist, CAMERA.shoulder, CAMERA.rise, null, 0, t.pos.y);
         const baseFov = this.settings.fov || CAMERA.fov;
         if (Math.abs(cam.fov - baseFov) > 0.01) {
           cam.fov = baseFov;
@@ -1550,7 +1586,7 @@ export class Game {
       } else if (!p.alive) {
         _v.set(p.pos.x, p.pos.y + 1.2, p.pos.z);
         this._specH = (this._specH == null ? p.heading : this._specH) + dt * 0.15;
-        placeOrbitCamera(cam, this.world, _v, this._specH, -0.35, 7, 0);
+        placeOrbitCamera(cam, this.world, _v, this._specH, -0.35, 7, 0, CAMERA.rise, null, 0, p.pos.y);
       } else if (!(this.cbGallery && this.cbGallery.cameraOverride(cam, dt))) p.updateCamera(cam, dt, this.world, this.settings.fov || CAMERA.fov);
     }
     // grenade aim arc, from the fresh aim ray
@@ -1758,6 +1794,33 @@ export class Game {
         else blips.push({ x: v.x, z: v.z, kind: ready ? 'van' : 'vanCd' });
       }
       if (this.teamMode) for (const c of this.reboot.cards.values()) if (c.holder == null && c.team === p.team) blips.push({ x: c.x, z: c.z, kind: 'card' });
+    }
+    // car panel: the car we ride in, else the car under the crosshair (when it is hurt)
+    if (this.vehicles && this.hud.setCar) {
+      let info = null;
+      const car = p.alive ? p.vehicle : null;
+      if (car && car.alive) {
+        info = {
+          name: car.spec.name,
+          hp: car.hp,
+          maxHp: car.maxHp,
+          fuel: car.fuel,
+          speed: car.speed,
+          seats: car.seats.map((a) => (a === p ? 2 : a ? 1 : 0)),
+          boost: car.boostT > 0 ? 'on' : car.boostCd > 0 ? car.boostCd : 'ready',
+        };
+      } else if (p.alive && this.state === 'play' && !p.airborneDrop) {
+        const h = this.vehicles.ray(this.camera.position, p.aimDir, 90, p);
+        if (h && h.car.alive && (h.car.hp < h.car.maxHp || h.car.seats.some(Boolean))) info = { name: h.car.spec.name, hp: h.car.hp, maxHp: h.car.maxHp, target: true };
+      }
+      this.hud.setCar(info);
+    }
+    // drivable cars nearby (not the one we ride in: our own arrow is on it)
+    if (this.vehicles && (this.state === 'play' || this.state === 'drop')) {
+      for (const c of this.vehicles.cars) {
+        if (!c.alive || c === p.vehicle) continue;
+        if ((c.x - f.pos.x) ** 2 + (c.z - f.pos.z) ** 2 < 260 * 260) blips.push({ x: c.x, z: c.z, kind: 'car' });
+      }
     }
     if (this.teamMode && this.mates && this.mates.length && this.state === 'play') {
       for (const m of this.mates) {
@@ -2618,14 +2681,8 @@ function rebootLoadout() {
 }
 
 /** Hotbar slot an actor is holding (-1 = pickaxe): bots select a slot, remote humans report what they hold. */
-export function heldSlot(a, inv) {
-  const eq = a.equipId || null;
-  if (!eq) return a.buildPiece ? -1 : inv.selected;
-  if (eq === 'pickaxe') return -1;
-  const cur = inv.slots[inv.selected];
-  if (cur && (cur.id === eq || (eq === 'none' && cur.type === 'consumable'))) return inv.selected;
-  return inv.slots.findIndex((s) => s && (s.id === eq || (eq === 'none' && s.type === 'consumable')));
-}
+// moved to Inventory.js (pure; netcode imports it without the UI layer); re-exported for old importers
+export { heldSlot };
 
 const NO_INPUT = {
   dx: 0,

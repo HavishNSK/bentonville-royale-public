@@ -3,7 +3,7 @@
 
 /* ---- title grid: logo + side | line-up | party ----------------------------- */
 .mn-title {
-  grid-template-columns: minmax(0, 1fr) minmax(0, calc(var(--u) * 560)) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, calc(var(--u) * 500)) minmax(0, 1fr);
   grid-template-areas: 'logo show party' 'side show party';
   column-gap: calc(var(--u) * 20);
   padding-top: calc(var(--u) * 70);
@@ -36,23 +36,42 @@
 .mn-showcase-canvas:active {
   cursor: grabbing;
 }
+/* name tags: Showcase.js projects each character's feet and moves its tag there */
 .mn-showcase-names {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(var(--u) * 64);
-  height: 0;
+  inset: 0;
   pointer-events: none;
+  overflow: hidden;
 }
 .mn-showcase-names span {
   position: absolute;
-  left: calc(50% + var(--x) * 17%);
-  transform: translateX(-50%);
-  padding: calc(var(--u) * 3) calc(var(--u) * 10);
-  border-radius: 999px;
-  background: var(--br-panel);
-  font-size: calc(var(--u) * 12);
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: calc(var(--u) * 150);
+  padding: calc(var(--u) * 4) calc(var(--u) * 12);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: calc(var(--u) * 10);
+  background: var(--br-ink-2);
+  color: var(--br-cream);
+  line-height: 1.1;
   white-space: nowrap;
+}
+.mn-showcase-names b {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: calc(var(--u) * 15);
+}
+.mn-showcase-names small {
+  font-size: calc(var(--u) * 11);
+  font-weight: 800;
+  color: var(--br-sky-hi);
+}
+.mn-showcase-names span.is-ready small {
+  color: var(--br-leaf);
 }
 .mn-showcase-names span.is-you {
   background: var(--br-sun);
@@ -324,8 +343,101 @@
   justify-content: center;
   min-height: calc(var(--u) * 44);
 }
-.mt-clever {
+/* meta.js renderDev (DEV panel) */
+.mn-chip.mt-chip-dev {
+  background: var(--br-coral);
+  color: var(--br-cream);
+}
+.mn-chip.mt-chip-dev.is-on {
+  background: var(--br-sun-hi);
+  color: var(--br-ink);
+}
+.mt-dev-label {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 4);
+  font-size: calc(var(--u) * 12);
+  letter-spacing: 0.06em;
+  color: var(--br-sun-hi);
+}
+.mt-dev-row {
+  display: flex;
+  gap: calc(var(--u) * 8);
+}
+.mt-dev-row .mn-field {
+  flex: 1 1 auto;
+}
+.mt-dev-color {
+  width: calc(var(--u) * 52);
+  height: calc(var(--u) * 46);
+  padding: calc(var(--u) * 3);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 12);
+  background: #fff;
+  cursor: pointer;
+}
+.mt-dev-preview {
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 16);
+  text-shadow: 0 calc(var(--u) * 2) 0 var(--br-ink);
+  overflow-wrap: anywhere;
+}
+.mt-dev-select {
   width: 100%;
+}
+.mt-dev-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 8);
+}
+.mt-dev-btns .mn-btn {
+  flex: 1 1 auto;
+}
+.mn-btn.mt-dev-danger {
+  background: var(--br-coral);
+  color: var(--br-cream);
+}
+.mt-dev-log {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 4);
+  max-height: calc(var(--u) * 180);
+  overflow: auto;
+  padding: calc(var(--u) * 8) calc(var(--u) * 10);
+  border-radius: calc(var(--u) * 10);
+  background: var(--br-panel-soft);
+  font-size: calc(var(--u) * 13);
+  user-select: text;
+  -webkit-user-select: text;
+}
+.mt-dev-log:empty::before {
+  content: 'Results show here.';
+  opacity: 0.6;
+}
+.mt-dev-log p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.mt-dev-log p.is-bad {
+  color: var(--br-coral);
+}
+/* meta.js renderBanned / renderWarning (moderation notices) */
+.mt-ban-reason {
+  margin: 0 0 calc(var(--u) * 8);
+  padding: calc(var(--u) * 10) calc(var(--u) * 12);
+  border-left: calc(var(--u) * 4) solid var(--br-coral);
+  border-radius: calc(var(--u) * 8);
+  background: var(--br-panel-soft);
+  font-size: calc(var(--u) * 15);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+.mt-ban-left {
+  margin: 0 0 calc(var(--u) * 10);
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 17);
+  color: var(--br-sun);
+  font-variant-numeric: tabular-nums;
 }
 .mt-signout-actions {
   display: flex;
@@ -824,7 +936,7 @@
 }
 
 /* ---- narrow / tall screens: stack, line-up after the logo ---------------------- */
-@media (max-aspect-ratio: 1/1), (max-width: 760px) {
+@media (max-aspect-ratio: 7/5), (max-width: 1023px) {
   .mn-title {
     padding-top: calc(var(--u) * 110);
   }
@@ -869,7 +981,7 @@
 
 /* a panel is open: the line-up takes the left side (logo and buttons step aside) so the
    outfit being tried on stays in view */
-@media (min-aspect-ratio: 1/1) and (min-width: 761px) {
+@media (min-aspect-ratio: 7/5) and (min-width: 1024px) {
   .mn-title.has-meta > .mn-logo,
   .mn-title.has-meta > .mn-title-side {
     visibility: hidden;

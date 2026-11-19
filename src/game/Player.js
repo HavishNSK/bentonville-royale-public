@@ -20,6 +20,7 @@ import { rampDragQuarter, validEdit, simpleEditMask, PRESETS, PRESET_ORDER } fro
 import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, KNOCK, REBOOT, SWIM, clamp, damp, TAU, weaponStats } from '../core/config.js';
 import { sameTeam } from './Teams.js';
 import { placeOnShoulder } from './Combat.js';
+import { CAR } from './vehicles/cars.js';
 
 const PIECE_ACTIONS = { buildWall: 'wall', buildFloor: 'floor', buildRamp: 'ramp', buildCone: 'cone' };
 export const FREEFALL_SPEED = 38;
@@ -66,7 +67,7 @@ export function editPath(kind, a, b) {
  * Positions `camera` behind `pivot` on an orbit (heading/pitch), pulled in
  * when world geometry is in the way. Shared by the player and spectating.
  */
-export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, shoulder, rise = CAMERA.rise, ease = null, dt = 0) {
+export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, shoulder, rise = CAMERA.rise, ease = null, dt = 0, feet = null) {
   const cp = Math.cos(pitch);
   _fwd.set(Math.sin(heading) * cp, Math.sin(pitch), -Math.cos(heading) * cp);
   _right.set(Math.cos(heading), 0, Math.sin(heading));
@@ -93,13 +94,23 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
       const oz = _right.z * k * 0.3;
       const hit = world.raycast(_cam.x + ox, _cam.y, _cam.z + oz, _v.x, _v.y, _v.z, dist + 0.45, null);
       if (hit) d = Math.min(d, Math.max(0.7, hit.t - 0.45));
+      // drivable cars are not in world.raycast (Vehicles traces them); keep the lens out of
+      // other cars, but not the one we ride in
+      const car = world.carRay ? world.carRay(_cam.x + ox, _cam.y, _cam.z + oz, _v.x, _v.y, _v.z, dist + 0.45, placeOrbitCamera.ignoreCar) : null;
+      if (car) d = Math.min(d, Math.max(0.7, car.t - 0.45));
     }
   }
   const startY = _cam.y;
+  // The slab over the player's feet caps every floor probe below: groundHeight is probed from the
+  // pivot (feet + pivotHeight), so at a jump apex it would otherwise reach the next storey's floor
+  // and plant the camera upstairs (same cap the movement code passes; World.builtAbove).
+  // feet: the followed body's feet (the pivot drops when crouching / for the death cam)
+  const feetY = feet != null ? feet : pivot.y - CAMERA.pivotHeight;
+  const capAt = (x, z) => (world && world.builtAbove ? world.builtAbove(x, z, feetY) : Infinity);
   // Keep the boom above walkable slabs (museum oak, roofs), not raw ravine terrain.
   // Shorten the orbit instead of sliding onto the floor — that used to plant the camera in the boards.
   // (only surfaces below the boom's start count: a ramp or floor overhead is not a floor)
-  const floorHint = world && world.groundHeight ? world.groundHeight(_cam.x, _cam.z, startY, 0) : 0;
+  const floorHint = world && world.groundHeight ? world.groundHeight(_cam.x, _cam.z, startY, 0, capAt(_cam.x, _cam.z)) : 0;
   const floorY = floorHint + 0.45;
   if (_v.y < -1e-4 && startY + d * _v.y < floorY) {
     d = Math.max(0.7, (floorY - startY) / _v.y);
@@ -135,6 +146,14 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
   // (eased too: the nudge itself changes in steps as the lens crosses a slab's edge)
   if (ease && dt > 0) lift = ease.lift = damp(ease.lift || 0, lift, 20, dt);
   _cam.y += lift;
+  // indoors the storey slab over the player caps the lens, so a jump apex or a boom that ends over
+  // a stairwell hole doesn't rise to the next storey (builtAbove is a slab's top; its underside
+  // sits FLOOR_UNDER lower)
+  const inShell = world && world.polyAt ? world.polyAt(pivot.x, pivot.z) : null;
+  if (inShell && inShell.shell) {
+    const overHead = capAt(pivot.x, pivot.z) - FLOOR_UNDER - 0.35;
+    if (_cam.y > overHead) _cam.y = Math.max(overHead, feetY + 0.3);
+  }
   if (world) keepOffWalls(world, _cam, _right);
   camera.position.copy(_cam);
   _v.copy(_cam).add(_fwd);
@@ -240,6 +259,11 @@ export class Player {
     this.reviveT = 0; // our revive progress (s)
     this.revivingTarget = null; // downed teammate we are reviving
     this.reviveLocalT = 0; // our own revive hold time (drives the HUD ring; clients predict it)
+    // drivable cars (Vehicles): the car we sit in, our seat (0 = driver), leaning out
+    this.vehicle = null;
+    this.seat = -1;
+    this.leaning = false;
+    this._leanT = 0;
   }
 
   reset() {
@@ -281,6 +305,11 @@ export class Player {
     this.carrying = null;
     this.carriedBy = null;
     this.dropZone = null;
+    this.vehicle = null;
+    this.seat = -1;
+    this.leaning = false;
+    this._leanT = 0;
+    this._inCar = false;
     if (this.inventory) this.inventory.reset();
     if (this.character) this.character.reset();
   }
@@ -345,6 +374,13 @@ export class Player {
     // ---- loadout keys (ignored while dropping or knocked)
     const inv = this.inventory;
     if (!this.airborneDrop && !down && !this.carrying) this._handleLoadoutKeys(input, g);
+
+    // ---- riding in a car (Vehicles pins us to the seat after this)
+    if (this.vehicle && !down) {
+      this._carUpdate(dt, input, g);
+      return;
+    }
+    if (this._inCar) this._leftCar(g);
 
     // ---- movement wish
     let mf = 0;
@@ -508,6 +544,122 @@ export class Player {
       }
     }
     void inv;
+  }
+
+  // ------------------------------------------------------------------ cars
+
+  /** One frame in a car: drive (seat 0) or ride, lean out to shoot, change seats, get out. */
+  _carUpdate(dt, input, g) {
+    const car = this.vehicle;
+    const veh = g.vehicles;
+    const net = clientNet(g);
+    if (!this._inCar) {
+      // just got in: hands off everything that needs feet
+      this._inCar = true;
+      this._carHintT = 6; // the controls hint shows for a few seconds after getting in / switching
+      this._carSeat = this.seat;
+      this._endEdit(g);
+      this.buildPiece = null;
+      this.mantle = null;
+      if (this.revivingTarget) this._stopRevive(g);
+      if (this.rebootVan) this._stopReboot(g);
+      if (this.emoting && this.character) this.character.emote(false);
+      this.emoting = false;
+      if (g.structures) g.structures.setGhost(null);
+    }
+    this.mode = 'ground';
+    this.grounded = true;
+    this.crouching = false;
+    this.sprinting = false;
+    this.swimming = false;
+    const driver = this.seat === 0;
+    // passengers lean out of their window to aim / shoot / throw, and duck back in a moment later
+    if (!driver) {
+      const cur = this.inventory.current();
+      const armed = !!this._gun() || !!(cur && cur.type === 'consumable' && CONSUMABLES[cur.id] && CONSUMABLES[cur.id].throwable);
+      const want = armed && (input.action('aim') || input.action('fire'));
+      this._leanT = want ? CAR.leanHold : Math.max(0, this._leanT - dt);
+      const lean = this._leanT > 0;
+      if (lean !== !!this.leaning) {
+        if (veh) veh.setLean(this, lean);
+        else this.leaning = lean;
+        if (net) net.action({ k: 'veh', op: 'lean', on: lean ? 1 : 0 });
+      }
+    } else if (this.leaning) {
+      if (veh) veh.setLean(this, false);
+      this.leaning = false;
+    }
+    const gun = this._gun();
+    this.ads = !driver && this.leaning && input.action('aim') && !!gun;
+    const scoping = this.ads && !!WEAPONS[gun.id].scope;
+    this.scopeT = scoping ? Math.min(1, this.scopeT + dt / 0.16) : 0;
+    this.scopeView = scoping && this.scopeT >= 1;
+
+    // the wheel
+    if (driver && car && car.alive) {
+      const ci = car.input;
+      ci.throttle = (input.action('moveForward') ? 1 : 0) - (input.action('moveBack') ? 1 : 0);
+      ci.steer = (input.action('moveRight') ? 1 : 0) - (input.action('moveLeft') ? 1 : 0);
+      ci.handbrake = input.action('jump');
+      ci.boost = input.action('sprint');
+      if (input.actionHit('carry')) {
+        if (net) net.action({ k: 'veh', op: 'horn' });
+        else if (veh) veh.horn(car);
+      }
+    }
+    // get out / change seats
+    if (input.actionHit('interact')) {
+      if (net) net.action({ k: 'veh', op: 'out' });
+      else if (veh && !veh.exit(this)) g.hud.toast('No room to get out here', 'warn');
+      if (!this.vehicle) {
+        // out: this frame's E is spent (it must not put us straight back in)
+        this._leftCar(g);
+        return;
+      }
+    } else if (input.actionHit('buildFloor')) {
+      if (net) net.action({ k: 'veh', op: 'seat' });
+      else if (veh && veh.switchSeat(this) < 0) g.hud.toast('No free seat', 'warn');
+    }
+
+    // hands: guns / grenades while leaning, heals and gas cans any time
+    this._actions(dt, input, g);
+
+    const L = (a, d) => '[' + (input.label ? input.label(a) : d) + ']';
+    if (this.seat !== this._carSeat) {
+      this._carSeat = this.seat;
+      this._carHintT = 6;
+    }
+    this._carHintT = Math.max(0, (this._carHintT || 0) - dt);
+    if (this.useT <= 0 && this._carHintT <= 0) g.hud.prompt(null);
+    else if (this.useT <= 0) {
+      g.hud.prompt(
+        driver
+          ? `${L('interact', 'E')} Get out   ${L('buildFloor', 'C')} Change seat   ${L('carry', 'H')} Horn   ${L('sprint', 'Shift')} Boost`
+          : `${L('aim', 'RMB')} Lean out & aim   ${L('interact', 'E')} Get out   ${L('buildFloor', 'C')} Change seat`,
+      );
+    }
+
+    if (this.character) {
+      const c = this.character;
+      c.setDowned(false);
+      c.setSwim(false);
+      c.setCrouch(false);
+      c.setSeated(true);
+      c.root.position.copy(this.pos);
+      c.root.visible = !this.scopeView;
+      const h = this.leaning || !car ? this.heading : car.heading;
+      c.update(dt, { fwd: 0, side: 0, speed: 0, grounded: true, gliding: false, heading: h, pitch: this.leaning ? this.pitch : 0 });
+    }
+  }
+
+  /** Out of the car (got out, ejected, or it blew up). */
+  _leftCar(g) {
+    this._inCar = false;
+    this.leaning = false;
+    this._leanT = 0;
+    this.seat = -1;
+    if (this.character) this.character.setSeated(false);
+    if (g && g.hud) g.hud.prompt(null);
   }
 
   /** Resolve the whole travelled path, not just the endpoint of a slow frame. */
@@ -868,8 +1020,8 @@ export class Player {
       }
     }
 
-    // ---- interact (revive a knocked teammate first)
-    const rv = this._reviveInput(input, g, dt);
+    // ---- interact (revive a knocked teammate first); in a car E gets you out instead
+    const rv = this.vehicle ? 0 : this._reviveInput(input, g, dt);
     if (rv === 2) {
       if (g.structures) g.structures.setGhost(null);
       this.placement = null;
@@ -877,25 +1029,45 @@ export class Player {
       return;
     }
     // ---- reboot cards / Catfish Ken's reboot vans (team modes)
-    const rb = rv === 1 ? 0 : this._rebootInput(input, g, dt);
+    const rb = rv === 1 || this.vehicle ? 0 : this._rebootInput(input, g, dt);
     if (rb === 2) {
       if (g.structures) g.structures.setGhost(null);
       this.placement = null;
       this.triggerHeld = lmb;
       return;
     }
-    if (rv !== 1 && rb !== 1) this._interact(input, g, dt);
+    if (rv !== 1 && rb !== 1 && !this.vehicle) this._interact(input, g, dt);
 
     // ---- edit (T): opens edit mode on your own piece and it stays open; T again confirms.
     // With "Confirm edit on release" on, letting go of the mouse after selecting confirms too.
-    if (input.actionHit('edit')) {
+    if (input.actionHit('edit') && !this.vehicle) {
       if (this.editing) this._confirmEdit(g);
       else this._startEdit(g);
     }
 
     // wading / swimming in a pond does not tie up the hands: shooting, swinging, building,
     // editing and healing all work in the water (only sprint / jump / crouch are off, above)
-    if (this.editing) {
+    if (this.vehicle) {
+      // in a car: no building or swinging; the driver's hands are on the wheel; passengers shoot
+      // or throw only while leaning out of their window, and anyone can heal or refuel
+      if (g.structures) g.structures.setGhost(null);
+      this.placement = null;
+      this.buildPiece = null;
+      if (this.editing) this._endEdit(g);
+      const out = this.seat > 0 && this.leaning;
+      if (cur && cur.type === 'weapon') {
+        const w = WEAPONS[cur.id];
+        const want = w.auto ? lmb : lmbClick || (lmb && !this.triggerHeld);
+        if (out && want) this.fire(g);
+      } else if (cur && cur.type === 'consumable' && CONSUMABLES[cur.id] && CONSUMABLES[cur.id].throwable) {
+        if (out) {
+          this.throwAim = true;
+          if (lmbClick) this.throwGrenade(g);
+        }
+      } else if (cur && cur.type === 'consumable') {
+        if (lmbClick && this.useT <= 0) this.startUse(g);
+      }
+    } else if (this.editing) {
       if (g.structures) g.structures.setGhost(null);
       this.placement = null;
       this._editMode(input, lmb, lmbClick, g);
@@ -1123,6 +1295,18 @@ export class Player {
       if (input.actionHit('interact')) this.interactWith(rec, g);
       return;
     }
+    // drivable cars: get in (the driver's seat when it is free)
+    const veh = g.vehicles;
+    const car = veh && !this.airborneDrop && !this.carrying ? veh.nearest(this) : null;
+    if (car) {
+      g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] ' + (car.seats[0] ? 'Get in ' : 'Drive ') + car.spec.name);
+      if (input.actionHit('interact')) {
+        const net = clientNet(g);
+        if (net) net.action({ k: 'veh', op: 'in', c: car.id });
+        else veh.enter(this, car);
+      }
+      return;
+    }
     // Crystal Bridges south / library sliding doors (the main colonnade stays open)
     const siteDoor = g.world && g.world.siteDoors && !this.airborneDrop ? g.world.siteDoors.near(this.pos) : null;
     if (siteDoor) {
@@ -1347,6 +1531,17 @@ export class Player {
       g.hud.toast('Shield is full', 'warn');
       return false;
     }
+    if (def.fuel > 0) {
+      const car = this.vehicle || (g.vehicles ? g.vehicles.near(this.pos) : null);
+      if (!car) {
+        g.hud.toast('Get in or next to a car to use a gas can', 'warn');
+        return false;
+      }
+      if (car.fuel >= CAR.fuelMax - 0.5) {
+        g.hud.toast('The tank is full', 'warn');
+        return false;
+      }
+    }
     this._cancelReload();
     this.useItem = it;
     this.useT = this.useTotal = def.useTime;
@@ -1364,6 +1559,13 @@ export class Player {
     if (!used) return;
     const def = CONSUMABLES[used.id];
     const net = clientNet(g);
+    if (def.fuel > 0) {
+      // gas can: the car we sit in, or the one beside us (the host refuels it for a client)
+      g.sfx.play(def.sound, { volume: 0.8 });
+      if (net) net.action({ k: 'use', s: slot }, true);
+      else if (g.vehicles) g.vehicles.refuel(this.vehicle || g.vehicles.near(this.pos), def.fuel);
+      return;
+    }
     if (net) {
       // the host applies the heal; play the feedback now
       net.action({ k: 'use', s: slot }, true);
@@ -1584,7 +1786,8 @@ export class Player {
     const scoped = this.scopeView && !!w;
     // a scoped gun only eases part-way in over the shoulder, then snaps to full zoom in the scope
     const zoom = !this.ads || !w ? 1 : w.scope && !scoped ? 0.8 : w.zoom;
-    const want = this.airborneDrop ? 8.5 : this.ads ? CAMERA.distance * 0.55 : CAMERA.distance;
+    const inCar = !!this.vehicle && !this.leaning; // riding: orbit the car, not the seat
+    const want = inCar ? 9.5 : this.airborneDrop ? 8.5 : this.ads ? CAMERA.distance * 0.55 : CAMERA.distance;
     this.camDist = scoped ? 1.2 : damp(this.camDist, want, 10, dt);
     this.fovMul = scoped ? zoom : damp(this.fovMul, zoom, 14, dt);
     this.fovKick = damp(this.fovKick, 0, 9, dt);
@@ -1597,12 +1800,13 @@ export class Player {
     }
     // pivot height: eased, so stairs, ramp seams, step-ups and mantles glide instead of stepping
     // (a big jump in height, like a teleport or leaving the bus, snaps)
-    const onFoot = this.mode === 'ground' && !this.airborneDrop;
+    const onFoot = this.mode === 'ground' && !this.airborneDrop && !this.vehicle;
     if (this._camY == null || !onFoot || Math.abs(this.pos.y - this._camY) > 3) this._camY = this.pos.y;
     else this._camY = damp(this._camY, this.pos.y, 18, dt);
     this._camCrouch = damp(this._camCrouch, this.crouching ? 0.45 : 0, 12, dt);
     this._camDip = damp(this._camDip, 0, 7, dt);
-    _pivot.set(this.pos.x, this._camY + CAMERA.pivotHeight - this._camCrouch - this._camDip, this.pos.z);
+    if (inCar) _pivot.set(this.vehicle.x, this.vehicle.y + 2.1, this.vehicle.z);
+    else _pivot.set(this.pos.x, this._camY + CAMERA.pivotHeight - this._camCrouch - this._camDip, this.pos.z);
     const viewPitch = clamp(this.pitch + this.recoil, CAMERA.minPitch, CAMERA.maxPitch);
     if (scoped) {
       // first person: the eye sits at the pivot and looks straight down the aim direction
@@ -1610,7 +1814,13 @@ export class Player {
       _fwd.set(Math.sin(this.heading) * cp, Math.sin(viewPitch), -Math.cos(this.heading) * cp);
       camera.position.copy(_pivot);
       camera.lookAt(_v.copy(_pivot).add(_fwd));
-    } else placeOrbitCamera(camera, world, _pivot, this.heading, viewPitch, this.camDist, this.airborneDrop ? 0 : CAMERA.shoulder, CAMERA.rise, this._camCol, dt);
+    } else {
+      placeOrbitCamera.ignoreCar = this.vehicle;
+      // feet: in a car the pivot follows the car, not the stored foot position
+      const feet = inCar ? null : this.pos.y;
+      placeOrbitCamera(camera, world, _pivot, this.heading, viewPitch, this.camDist, this.airborneDrop || inCar ? 0 : CAMERA.shoulder, CAMERA.rise, this._camCol, dt, feet);
+      placeOrbitCamera.ignoreCar = null;
+    }
 
     // aim ray: from the camera through the screen centre, starting level with the player
     camera.getWorldDirection(this.aimDir);

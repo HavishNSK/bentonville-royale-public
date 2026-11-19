@@ -17,8 +17,8 @@ const TOON_CHAR = { saturate: 1.2 };
 
 // three's GLTFLoader strips dots from node names: "upperarm.l" -> "upperarml"
 const UPPER = new Set(['spine', 'chest', 'head', 'upperarml', 'lowerarml', 'wristl', 'handl', 'handslotl', 'upperarmr', 'lowerarmr', 'wristr', 'handr', 'handslotr']);
-const LOCO = ['idle', 'walk', 'run', 'back', 'left', 'right', 'air'];
-const LOCO_CLIP = { idle: 'Idle', walk: 'Walking_A', run: 'Running_A', back: 'Walking_Backwards', left: 'Running_Strafe_Left', right: 'Running_Strafe_Right', air: 'Jump_Idle' };
+const LOCO = ['idle', 'walk', 'run', 'back', 'left', 'right', 'air', 'sit'];
+const LOCO_CLIP = { idle: 'Idle', walk: 'Walking_A', run: 'Running_A', back: 'Walking_Backwards', left: 'Running_Strafe_Left', right: 'Running_Strafe_Right', air: 'Jump_Idle', sit: 'Sit_Chair_Idle' }; // sit: riding in a car (legs; the upper body still aims)
 const UPPER_CLIP = {
   aim2: '2H_Ranged_Aiming', aim1: '1H_Ranged_Aiming', shoot2: '2H_Ranged_Shoot', shoot1: '1H_Ranged_Shoot', swing: '2H_Melee_Attack_Chop', use: 'Use_Item',
   reload: '2H_Ranged_Reload', reload1: '1H_Ranged_Reload', hit: 'Hit_A', throw: 'Throw', pickup: 'PickUp',
@@ -418,6 +418,11 @@ export class Character {
     this.crouching = !!on;
   }
 
+  /** Riding in a car: the legs sit (Sit_Chair_Idle); aiming and shooting still play on top. */
+  setSeated(on) {
+    this.seated = !!on;
+  }
+
   /** Eases the body toward `heading` (also on frames the skeleton is not animated). */
   turn(dt, heading) {
     if (this._yaw == null) this._yaw = heading;
@@ -607,6 +612,7 @@ export class Character {
     this.shotW = 0;
     this.aim = 0;
     this.downed = false;
+    this.seated = false;
     this._down = 0;
     this._landY = this._landV = 0;
     this._crouch = 0;
@@ -684,7 +690,9 @@ export class Character {
     let tl = 0;
     let tg = 0;
     let ta = 0;
-    if (!s.grounded) ta = 1;
+    let ts = 0;
+    if (this.seated && this.lo.sit) ts = 1;
+    else if (!s.grounded) ta = 1;
     else {
       // idle <-> moving fades with speed instead of flipping at a threshold
       const move = clamp((s.speed - 0.25) / 1.6, 0, 1);
@@ -715,6 +723,7 @@ export class Character {
     w.left = damp(w.left ?? 0, tl, k, dt);
     w.right = damp(w.right ?? 0, tg, k, dt);
     w.air = damp(w.air ?? 0, ta, k, dt);
+    w.sit = damp(w.sit ?? 0, ts, 14, dt);
 
     // upper-body override: aim pose while a gun is out, plus one-shots
     // (relaxed while sprinting: the gun is carried, and comes back up the moment you slow or shoot)
@@ -786,7 +795,7 @@ export class Character {
       const wk = w[key] || 0;
       lo.setEffectiveWeight(wk * fullW);
       this.up[key].setEffectiveWeight(wk * (1 - over) * fullW);
-      if (key === 'idle' || key === 'air') {
+      if (key === 'idle' || key === 'air' || key === 'sit') {
         lo.timeScale = 1;
         this.up[key].timeScale = 1;
       } else {
@@ -849,6 +858,10 @@ export class Character {
     this.mixer.stopAllAction();
     this.mixer.uncacheRoot(this.model);
     this.root.removeFromParent();
+    // each clone owns its skeletons (SkeletonUtils.clone); their bone textures are GPU textures
+    this.model.traverse((o) => {
+      if (o.isSkinnedMesh && o.skeleton) o.skeleton.dispose();
+    });
     this.canopy.geometry.dispose();
     this.canopy.material.dispose();
     this.downRing.geometry.dispose();

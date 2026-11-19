@@ -431,8 +431,10 @@ export class World {
   terrainMinUnder(p, n, minX, minZ, maxX, maxZ) {
     if (!this.terrain) return 0;
     let m = Infinity;
+    const hs = [];
     for (let i = 0; i < n; i++) {
       const y = this.terrainHeight(p[i * 2], p[i * 2 + 1]);
+      hs.push(y);
       if (y < m) m = y;
     }
     const s = this.terrain.cell;
@@ -440,10 +442,16 @@ export class World {
       for (let x = Math.ceil(minX / s) * s; x < maxX; x += s) {
         if (!pointInPoly(p, n, x, z)) continue;
         const y = this.terrainHeight(x, z);
+        hs.push(y);
         if (y < m) m = y;
       }
     }
-    return m === Infinity ? this.terrainHeight((minX + maxX) / 2, (minZ + maxZ) / 2) : m;
+    if (m === Infinity) return this.terrainHeight((minX + maxX) / 2, (minZ + maxZ) / 2);
+    // a ditch / creek spike under one corner must not sink a whole building into a pit (its
+    // foundation would undercut the neighbours): never more than 1 m below the 10th-percentile
+    // ground under the footprint. Footprints with <= 10 samples keep the exact minimum.
+    hs.sort((a, b) => a - b);
+    return Math.max(m, hs[Math.floor(0.1 * (hs.length - 1))] - 1);
   }
 
   /** Walkable / hittable top of prism c at (x, z) (pitched roofs follow their planes). */
@@ -1426,6 +1434,29 @@ export class World {
     this._each(c.minX, c.minZ, c.maxX, c.maxZ, true, (cell) => cell.boxes.push(c));
     this.counts.boxes = this._boxes.length;
     return c;
+  }
+
+  /**
+   * A moving box (drivable car body): solid for movement, standing and building like any box,
+   * but skipped by raycast() (`noRay`; Vehicles traces shots so glass can break). Not given an
+   * id (multiplayer destroy events never name it). Move it with moveDynBox.
+   */
+  addDynBox(o) {
+    const c = makeBox({ ...o, id: -1 });
+    c.noRay = true;
+    c.dynBox = true;
+    this._each(c.minX, c.minZ, c.maxX, c.maxZ, true, (cell) => cell.boxes.push(c));
+    return c;
+  }
+
+  /** Re-place a moving box (from addDynBox); `alive: false` boxes stay out until moved back in. */
+  moveDynBox(c, cx, cz, yaw, y0, y1) {
+    if (!c) return;
+    if (c.alive) this.remove(c);
+    const n = makeBox({ cx, cz, hx: c.hx, hz: c.hz, yaw, y0, y1, kind: c.kind, mat: c.mat, id: -1 });
+    for (const k of ['cx', 'cz', 'cos', 'sin', 'y0', 'y1', 'h', 'hgt', 'minX', 'maxX', 'minZ', 'maxZ']) c[k] = n[k];
+    c.alive = true;
+    this._each(c.minX, c.minZ, c.maxX, c.maxZ, true, (cell) => cell.boxes.push(c));
   }
 
   /**
@@ -2568,6 +2599,7 @@ export class World {
           const c = boxes[i];
           if (c.stamp === stamp || c === ignore) continue;
           c.stamp = stamp;
+          if (c.noRay) continue; // drivable cars: shots / sight lines are traced by Vehicles (windows)
           const h = boxRay(c, ox, oy, oz, dx, dy, dz, 1e-4, best);
           if (!h) continue;
           best = h.t;

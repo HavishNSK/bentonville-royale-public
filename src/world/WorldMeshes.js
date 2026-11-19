@@ -766,22 +766,47 @@ const BUS_HALF_W = SCHOOL_BUS.halfWidth + 0.05;
 const BUS_LANE = 6; // m between lane centres (3 m between parked buses side by side)
 const BUS_GAP = 2.5; // m between a bus's rear and the next one's front bumper
 const BUS_MAX = 10; // per bus loop
-const BUS_HP = 600; // a parked car has 300
+// A parked bus is ~14.4 m long, about three cars end to end; it takes twice a car's
+// 300 hp (12 pickaxe swings) rather than three times, so breaking one stays practical.
+export const BUS_HP = 600;
+
+/**
+ * Blank (hidden = true) or restore one breakable object's triangles inside merged meshes.
+ * `cut` = { parts: [[geometry, indexStart, indexCount], ...], saved: null, hidden: false }
+ * (collider.meshCut). Blanked triangles collapse onto one vertex (degenerate), so the merged
+ * draw calls stay as they are. Returns false when already in that state.
+ */
+export function setMeshCutHidden(cut, hidden) {
+  if (!cut || cut.hidden === hidden) return false;
+  if (!cut.saved) cut.saved = cut.parts.map(([g, s, n]) => g.index.array.slice(s, s + n));
+  cut.parts.forEach(([g, s, n], i) => {
+    const idx = g.index;
+    if (hidden) idx.array.fill(idx.array[s], s, s + n);
+    else idx.array.set(cut.saved[i], s);
+    idx.addUpdateRange(s, n);
+    idx.needsUpdate = true;
+  });
+  cut.hidden = hidden;
+  return true;
+}
 
 /**
  * Parks rows of school buses on every `busloop` area (scripts/compose-map.mjs re-tags a
  * school's bus loop), aligned with the area's long axis and all facing the same way. The
- * bodies are merged per material (4 draw calls in total). Each bus gets an indestructible
- * box collider (kind 'vehicle': stand on its roof, take cover behind it; blockedAt sees it,
- * so bots path around it and loot never lands in it). Returns the number of buses parked.
+ * bodies are merged per material (4 draw calls in total). Each bus gets a breakable box
+ * collider (kind 'vehicle', BUS_HP like a parked car's 300: stand on its roof, take cover
+ * behind it, shoot / mine / blow it up; blockedAt sees it, so bots path around it and loot
+ * never lands in it). collider.meshCut records the bus's index ranges in the merged meshes
+ * so view.hideCollider / showCollider blank and restore just that bus. Returns the number
+ * of buses parked.
  */
-function parkSchoolBuses(world, data, root) {
+export function parkSchoolBuses(world, data, root) {
   const loops = data.areas.filter((a) => a.k === 'busloop');
   if (!loops.length) return 0;
   const byMat = {};
-  const buses = []; // { col, pieces }
   const parts = schoolBusParts();
   const m = new THREE.Matrix4();
+  const cols = [];
   let n = 0;
   for (const a of loops) {
     const p = a.p;
@@ -857,12 +882,7 @@ function parkSchoolBuses(world, data, root) {
       const oz = cz - fz * -BUS_MID;
       const gy = world.surfaceHeight(cx, cz);
       m.makeRotationY(Math.atan2(-fx, -fz)).setPosition(ox, gy + SCHOOL_BUS.groundY, oz);
-      const pieces = []; // [material, index in byMat[material]]: its vertex ranges after the merge
-      for (const part of parts) {
-        const list = (byMat[part.mat] ||= []);
-        pieces.push([part.mat, list.length]);
-        list.push(part.geometry.clone().applyMatrix4(m));
-      }
+      for (const part of parts) (byMat[part.mat] ||= []).push(part.geometry.clone().applyMatrix4(m));
       const corners = [
         [cx + fx * BUS_HALF_LEN + vx * BUS_HALF_W, cz + fz * BUS_HALF_LEN + vz * BUS_HALF_W],
         [cx + fx * BUS_HALF_LEN - vx * BUS_HALF_W, cz + fz * BUS_HALF_LEN - vz * BUS_HALF_W],
@@ -870,11 +890,10 @@ function parkSchoolBuses(world, data, root) {
         [cx - fx * BUS_HALF_LEN + vx * BUS_HALF_W, cz - fz * BUS_HALF_LEN + vz * BUS_HALF_W],
       ];
       const col = world.addPoly(corners, SCHOOL_BUS.groundY + SCHOOL_BUS.top, 'vehicle', 'metal', [], { y0: gy });
+      col.hp = col.maxHp = BUS_HP;
       col.x = cx;
       col.z = cz;
-      // breakable and harvestable for metal like a parked car (twice as tough)
-      col.hp = col.maxHp = BUS_HP;
-      buses.push({ col, pieces });
+      cols.push(col);
       n++;
     }
   }
@@ -882,36 +901,18 @@ function parkSchoolBuses(world, data, root) {
   const mats = schoolBusMaterials();
   const group = new THREE.Group();
   group.name = 'school-buses';
-  const ranges = {}; // material -> [{ mesh, start, count }] per source geometry, in merge order
+  for (const c of cols) c.meshCut = { parts: [], saved: null, hidden: false };
   for (const k in byMat) {
-    const mesh = new THREE.Mesh(mergeGeometries(byMat[k], false), mats[k]);
+    // every bus adds the same parts, so bus i owns index range [i * per, (i + 1) * per)
+    const per = byMat[k].reduce((t, g) => t + g.index.count, 0) / n;
+    const geo = mergeGeometries(byMat[k], false);
+    geo.index.setUsage(THREE.DynamicDrawUsage);
+    cols.forEach((c, i) => c.meshCut.parts.push([geo, i * per, per]));
+    const mesh = new THREE.Mesh(geo, mats[k]);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     group.add(mesh);
-    let start = 0;
-    ranges[k] = byMat[k].map((g) => {
-      const r = { mesh, start, count: g.attributes.position.count };
-      start += r.count;
-      return r;
-    });
     for (const g of byMat[k]) g.dispose();
-  }
-  // a broken bus collapses its vertices onto one point (view.hideCollider -> col.setHidden)
-  const original = new Map(); // mesh -> positions as merged
-  for (const { col, pieces } of buses) {
-    const parts = pieces.map(([k, i]) => ranges[k] && ranges[k][i]).filter(Boolean);
-    col.setHidden = (hidden) => {
-      for (const { mesh, start, count } of parts) {
-        const attr = mesh.geometry.attributes.position;
-        if (!original.has(mesh)) original.set(mesh, attr.array.slice());
-        const orig = original.get(mesh);
-        for (let v = 0; v < count; v++) {
-          const src = hidden ? start : start + v;
-          attr.setXYZ(start + v, orig[src * 3], orig[src * 3 + 1], orig[src * 3 + 2]);
-        }
-        attr.needsUpdate = true;
-      }
-    };
   }
   for (const part of parts) part.geometry.dispose();
   root.add(group);
@@ -1354,7 +1355,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     if (!trees.has(name)) name = TREE_NAMES.find((t) => trees.has(t));
     if (!name) return false;
     const s = 0.8 + rng() * 0.55;
-    const rec = trees.add(name, x, z, rng() * 6.28, s, null, world.terrainHeight(x, z));
+    const rec = trees.add(name, x, z, rng() * 6.28, s, null, world.surfaceHeight(x, z)); // same ground as its collider (addCircle), not the raw DEM
     const h = TREE_H[name] * s;
     world.addCircle(x, z, 0.32 + h * 0.022, h * 0.8, 'tree', 'wood', 200, [rec]);
     harvestables.trees++;
@@ -1497,12 +1498,12 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     },
     /** Hide the instances behind a harvested collider. */
     hideCollider(col) {
-      if (col.setHidden) return col.setHidden(true); // merged meshes (school buses)
+      if (col.meshCut) setMeshCutHidden(col.meshCut, true); // a parked school bus
       if (!Array.isArray(col.ref)) return;
       for (const rec of col.ref) (TREE_H[rec.name] ? trees : props).hide(rec);
     },
     showCollider(col) {
-      if (col.setHidden) return col.setHidden(false);
+      if (col.meshCut) setMeshCutHidden(col.meshCut, false);
       if (!Array.isArray(col.ref)) return;
       for (const rec of col.ref) (TREE_H[rec.name] ? trees : props).show(rec);
     },

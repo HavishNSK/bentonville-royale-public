@@ -6,25 +6,34 @@
 //                               friends:[lower], incoming:[lower], outgoing:[lower],
 //                               stats:{matches, wins, kills}, created, lastReward }
 //   google:<sub>           -> lowercase username (Google GIS identity index; never reuse email as id)
-//   clever:<id>            -> lowercase username (Clever user id index)
-//   ticket:<id>            -> { token, exp } short-lived OAuth return ticket
 //   sess:<token>           -> { u: lower, exp }
 // Passwords are PBKDF2-SHA256 hashed (100k rounds, random 16-byte salt). OAuth accounts may omit salt/hash.
 //
 // HTTP:  POST /parties/accounts/global  {op, ...}  -> JSON
 //   register {name, password} / login {name, password}   -> {token, profile}
 //   googleLogin {idToken}                                 -> {token, profile}
-//   cleverLogin {cleverId, internal} / putAuthTicket {ticket, token, exp, internal}  (Worker-only)
-//   redeemAuthTicket {ticket}                             -> {token, profile}
 //   leaderboard {}                                        -> {online, wins:[{name,wins,kills}], kills:[...]}
 //   me {token}  logout {token}
 //   rename {token, name}  only while profile.mustRename (the current name has a swear word / slur)
 //   buy {token, item}   equip {token, skin?, emotes?}
 //   reward {token, kills, placement, players, won, ranked} -> {profile, earned, ranked}
 //   adReward {token}                                      -> {profile, earned}  (rewarded ad; AD_REWARD_DAILY a day)
-//     (wins/kills reach the boards only when ranked === true: a HARD bot-difficulty match)
+//     (wins/kills reach the boards only when ranked === true: a HARD match that includes bots)
 //   friendAdd {token, name}  friendAccept {token, name}  friendDecline {token, name}  friendRemove {token, name}
 //   invite {token, name, code}                            (delivered over the socket)
+//   ackWarning {token}                                    clears a moderator warning once it was shown
+// Moderation (party/moderation.js; moderation, not anti-cheat):
+//   `reward` flags suspicious results for review (flags on the account + index key flagged:<lower>).
+//   A banned account (profile.banned) gets 403 on everything but me / logout / ackWarning,
+//   earns nothing and is hidden from the boards. Timed bans lift on their own.
+//   Dev only (isDevName on the SESSION account, re-checked here):  -> {lines:[...]}
+//     modBan {token, name, duration?, reason}  modWarn {token, name, reason}  modUnban {token, name}
+//     modHistory {token, name}  modResetStats {token, name}  modFlags {token}
+//     modReports {token}  modDismiss {token, name}   (player reports; a ban also clears them)
+//     modTitle {token, name, title, color?, nameColor?}  modUntitle {token, name}   (dev-made titles; no powers)
+//   report {token, name, reason, note}  any signed-in, unbanned player -> {ok}. Private: only devs see
+//     reports (reports:<lower>). One per reporter per player per day, REPORTS_PER_DAY per reporter.
+//   Every dev action is logged as modlog:<time> -> {by, cmd, target, reason?, duration?, at}.
 // Suggestion / bug board (no account needed; signed-in posts carry the account name).
 // Posts stay on fb:<id> so existing suggestions keep showing. Replies are an array on that record.
 //   feedback {kind: 'idea'|'bug', text, token?, anon?}   -> {item}   (one post per IP per 30 s)
@@ -38,16 +47,40 @@
 //                     {t:'invite', from, code}  {t:'request', from}  {t:'profile', profile}
 // The shop catalog's prices are mirrored here (PRICES) so a client cannot buy for free.
 
-import { Server } from 'partyserver';
+import { Server, getServerByName } from 'partyserver';
 import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS } from '../src/game/Cosmetics.js';
 import { verifyGoogleIdToken } from './googleIdToken.js';
 import { applyMatchStats } from './matchStats.js';
 import { nameIsClean } from '../src/net/chatFilter.js';
 import { publicItem, sanitizeFeedbackText, addReply, removeReply, canModerateFeedback, feedbackKind } from '../src/net/feedbackBoard.js';
+import { isDevName, customTitleProblem } from '../src/net/devs.js';
+import { createLimiter, passwordProblem, modAuthFresh, originAllowed, secLogEntry } from './authLimits.js';
+import {
+  BAN_LABEL,
+  rewardFlags,
+  trackRanked,
+  addFlag,
+  applyBan,
+  liftBan,
+  applyWarn,
+  isBanned,
+  banInfo,
+  PERMA_BANNED,
+  REPORT_REASONS,
+  cleanReport,
+  addReport,
+  reporterAllowance,
+} from './moderation.js';
 
 const START_COINS = 1500;
 const SESSION_DAYS = 30;
+// SECURITY TODO: OWASP asks for Argon2id (or PBKDF2-SHA256 at 600k rounds). Cloudflare Workers' Web
+// Crypto caps PBKDF2 at 100,000 iterations, so this is the platform maximum. Moving to Argon2id needs
+// a vetted WASM library (a new dependency to review) plus rehash-on-login. Login rate limits
+// (authLimits.js) are the compensating control.
 const PBKDF2_ROUNDS = 100000;
+const MAX_SESSIONS = 10; // per account; the oldest is signed out when an 11th device signs in
+const SECLOG_KEEP = 500; // newest security-log rows kept (seclog:<time>)
 const MAX_FRIENDS = 100;
 const REWARD_GAP_MS = 60 * 1000; // at most one match reward per minute per account
 // Rewarded ads (src/net/Ads.js): coins for watching an ad to the end. The server can't see the
@@ -134,14 +167,43 @@ function profileOf(acc) {
     adRewardsLeft: adRewardsLeft(acc),
     // a name made before the username filter: the client blocks play until it is renamed
     mustRename: !nameIsClean(acc.name),
+    // moderation: {reason, until, permanent, label} while banned; a one-time warning {reason, at}
+    banned: banInfo(acc, Date.now()),
+    warning: acc.warning ? { reason: acc.warning.reason, at: acc.warning.at } : null,
+    // dev-made title (public; presence re-checks it before showing it)
+    title: acc.title ? { title: acc.title.title, color: acc.title.color || null, nameColor: acc.title.nameColor || null } : null,
   };
 }
+
+const MOD_OPS = new Set(['modBan', 'modWarn', 'modUnban', 'modHistory', 'modResetStats', 'modFlags', 'modReports', 'modDismiss', 'modTitle', 'modUntitle']);
+const MOD_FLAGS_LISTED = 10;
+
+/** "3 h", "2 d", "15 min" until `until`. */
+function timeLeft(until, now) {
+  const min = Math.max(1, Math.ceil((until - now) / 60e3));
+  if (min < 60) return `${min} min`;
+  const h = Math.ceil(min / 60);
+  return h < 48 ? `${h} h` : `${Math.ceil(h / 24)} d`;
+}
+
+const day = (ms) => new Date(ms).toISOString().slice(0, 10);
 
 export class Accounts extends Server {
   constructor(ctx, env) {
     super(ctx, env);
     this.online = new Map(); // lower name -> Set(connection id)
     this.status = new Map(); // lower name -> { s, party, skin }
+    this.limiter = createLimiter(); // login-failure + sign-up throttles (in memory)
+    this.secLogWrites = 0;
+  }
+
+  /** One security-log row (sanitized, no tokens/passwords); keeps the newest SECLOG_KEEP. */
+  async _secLog(type, fields) {
+    const now = Date.now();
+    await this.ctx.storage.put('seclog:' + String(now).padStart(14, '0') + randHex(2), secLogEntry(type, fields, now));
+    if (++this.secLogWrites % 50 !== 0) return;
+    const keys = [...(await this.ctx.storage.list({ prefix: 'seclog:' })).keys()];
+    if (keys.length > SECLOG_KEEP) await this.ctx.storage.delete(keys.slice(0, keys.length - SECLOG_KEEP));
   }
 
   // ---------------------------------------------------------------- storage
@@ -167,10 +229,26 @@ export class Accounts extends Server {
     return moved;
   }
 
+  /** A new session after a real sign-in (authAt: dev commands need a recent one). */
   async _newSession(acc) {
     const token = randHex(24);
-    await this.ctx.storage.put('sess:' + token, { u: acc.name.toLowerCase(), exp: Date.now() + SESSION_DAYS * 864e5 });
+    const lower = acc.name.toLowerCase();
+    const now = Date.now();
+    await this.ctx.storage.put('sess:' + token, { u: lower, exp: now + SESSION_DAYS * 864e5, authAt: now });
+    // per-account session index: lets "sign out everywhere" work and caps devices per account
+    const list = ((await this.ctx.storage.get('sessions:' + lower)) || []).concat(token);
+    const drop = list.length > MAX_SESSIONS ? list.splice(0, list.length - MAX_SESSIONS) : [];
+    if (drop.length) await this.ctx.storage.delete(drop.map((t) => 'sess:' + t));
+    await this.ctx.storage.put('sessions:' + lower, list);
     return token;
+  }
+
+  /** Sign this account out on every device. */
+  async _endAllSessions(lower) {
+    const list = (await this.ctx.storage.get('sessions:' + lower)) || [];
+    if (list.length) await this.ctx.storage.delete(list.map((t) => 'sess:' + t));
+    await this.ctx.storage.delete('sessions:' + lower);
+    return list.length;
   }
 
   /** Pick a free username from a Google display name / email local-part. */
@@ -246,81 +324,227 @@ export class Accounts extends Server {
     return json({ token: await this._newSession(acc), profile: profileOf(acc) });
   }
 
-  _workerOnly(m) {
-    const secret = this.env && this.env.CLEVER_CLIENT_SECRET;
-    return !!(secret && m && m.internal === secret);
-  }
-
-  async _cleverLogin(m) {
-    // Worker-only: Clever user id is trusted only after OAuth code exchange in party/cleverAuth.js.
-    if (!this._workerOnly(m)) return err('Forbidden.', 403);
-    const cleverId = String(m.cleverId || '').trim();
-    if (!/^[A-Za-z0-9_-]{6,64}$/.test(cleverId)) return err('Invalid Clever user.', 400);
-    const cKey = 'clever:' + cleverId;
-    const linked = await this.ctx.storage.get(cKey);
-    let acc = linked ? await this._acc(linked) : null;
-    if (linked && !acc) await this.ctx.storage.delete(cKey);
-    if (!acc) {
-      const name = await this._uniqueGoogleName({ given_name: m.nameHint || 'Clever', name: m.nameHint || 'Player' });
-      if (!validName(name)) return err('Could not create a username from your Clever account.', 500);
-      acc = {
-        name,
-        salt: null,
-        hash: null,
-        cleverId,
-        coins: START_COINS,
-        owned: DEFAULT_OWNED.slice(),
-        equipped: { ...DEFAULT_EQUIPPED, emotes: DEFAULT_EQUIPPED.emotes.slice() },
-        friends: [],
-        incoming: [],
-        outgoing: [],
-        stats: { matches: 0, wins: 0, kills: 0 },
-        created: Date.now(),
-        lastReward: 0,
-      };
-      await this._save(acc);
-      await this.ctx.storage.put(cKey, acc.name.toLowerCase());
-    } else if (acc.cleverId && acc.cleverId !== cleverId) {
-      return err('Clever sign-in failed.', 401);
-    } else if (!acc.cleverId) {
-      await this.ctx.storage.delete(cKey);
-      return err('Clever sign-in failed.', 401);
-    }
-    return json({ token: await this._newSession(acc), profile: profileOf(acc) });
-  }
-
-  async _putAuthTicket(m) {
-    if (!this._workerOnly(m)) return err('Forbidden.', 403);
-    const ticket = String(m.ticket || '');
-    const token = String(m.token || '');
-    const exp = Number(m.exp) || 0;
-    if (!/^[a-f0-9]{24,48}$/.test(ticket) || !/^[a-f0-9]{48}$/.test(token) || exp < Date.now()) {
-      return err('Bad ticket.', 400);
-    }
-    await this.ctx.storage.put('ticket:' + ticket, { token, exp });
-    return json({ ok: true });
-  }
-
-  async _redeemAuthTicket(m) {
-    const ticket = String(m.ticket || '');
-    if (!/^[a-f0-9]{24,48}$/.test(ticket)) return err('Signed out. Please sign in again.', 401);
-    const row = await this.ctx.storage.get('ticket:' + ticket);
-    await this.ctx.storage.delete('ticket:' + ticket);
-    if (!row || row.exp < Date.now() || !row.token) return err('Sign-in expired. Try Clever again.', 401);
-    const acc = await this._session(row.token);
-    if (!acc) return err('Signed out. Please sign in again.', 401);
-    return json({ token: row.token, profile: profileOf(acc) });
-  }
-
   /** Public boards for signed-in accounts only (guests never appear). */
+  // ---------------------------------------------------------------- moderation
+
+  /** Dev moderation ops. `dev` is the session account; dev rights are checked here, not trusted from presence. */
+  async _mod(dev, m, ip = 'local') {
+    if (!isDevName(dev.name)) {
+      await this._secLog('mod_denied', { user: dev.name, ip, detail: m.op });
+      return err('Only developers can use that.', 403);
+    }
+    const now = Date.now();
+    // SECURITY TODO: no MFA for dev accounts yet; a recent real sign-in is required instead.
+    if (!modAuthFresh(await this.ctx.storage.get('sess:' + m.token), now)) {
+      return err('For safety, sign out and sign in again to use dev commands (needed every 12 hours).', 403);
+    }
+    const reply = (lines, extra = {}) => json({ lines: [].concat(lines), ...extra });
+
+    if (m.op === 'modFlags') return reply(await this._flagLines());
+    if (m.op === 'modReports') return reply(await this._reportLines());
+    if (m.op === 'modDismiss') {
+      const key = 'reports:' + String(m.name || '').trim().toLowerCase();
+      const rec = await this.ctx.storage.get(key);
+      if (!rec) return reply(`No reports for ${String(m.name || '').slice(0, 16)}.`);
+      await this.ctx.storage.delete(key);
+      await this.ctx.storage.put('modlog:' + String(now).padStart(14, '0') + randHex(2), { by: dev.name, cmd: 'dismiss', target: rec.name, at: now });
+      return reply(`Dismissed ${rec.total | 0} report(s) for ${rec.name}.`);
+    }
+
+    const target = await this._acc(String(m.name || '').trim().toLowerCase());
+    if (!target) return err('No player with that username.', 404);
+    const lower = target.name.toLowerCase();
+    const reason = String(m.reason || '').trim().slice(0, 100);
+    const log = (cmd, extra = {}) =>
+      this.ctx.storage.put('modlog:' + String(now).padStart(14, '0') + randHex(2), { by: dev.name, cmd, target: target.name, at: now, ...extra });
+
+    switch (m.op) {
+      case 'modBan': {
+        if (!reason) return err('Add a reason.');
+        if (isDevName(target.name)) return err('Developer accounts cannot be banned here.');
+        let next;
+        try {
+          next = applyBan(target, { by: dev.name, reason, duration: m.duration || undefined, now });
+        } catch {
+          return err('Durations are 1h, 1d, 1w, 1mo or perm.');
+        }
+        await this._save(next);
+        await log('ban', { reason, duration: next.ban.duration });
+        await this._secLog('ban', { by: dev.name, target: target.name, reason, detail: next.ban.duration });
+        await this.ctx.storage.delete('reports:' + lower); // handled
+        this._push(lower, { t: 'profile', profile: profileOf(next) });
+        await this._notifyPresence({ target: lower, banned: true });
+        const span = next.ban.until == null ? 'permanently' : `for ${BAN_LABEL[next.ban.duration]}`;
+        return reply(`Banned ${target.name} ${span} (offence ${next.offences}): ${reason}`, { target: lower, banned: true });
+      }
+      case 'modWarn': {
+        if (!reason) return err('Add a reason.');
+        const next = applyWarn(target, { by: dev.name, reason, now });
+        await this._save(next);
+        await log('warn', { reason });
+        this._push(lower, { t: 'profile', profile: profileOf(next) });
+        return reply(`Warned ${target.name}: ${reason}`, { target: lower });
+      }
+      case 'modUnban': {
+        if (PERMA_BANNED[lower]) return err(`${target.name} is permanently banned in the code (party/moderation.js PERMA_BANNED) and cannot be unbanned from chat.`);
+        if (!isBanned(target, now)) return reply(`${target.name} is not banned.`, { target: lower, banned: false });
+        const next = liftBan(target, { by: dev.name, now });
+        await this._save(next);
+        await log('unban');
+        await this._secLog('unban', { by: dev.name, target: target.name });
+        this._push(lower, { t: 'profile', profile: profileOf(next) });
+        await this._notifyPresence({ target: lower, banned: false });
+        return reply(`Unbanned ${target.name}. Their next ban still escalates (offences: ${next.offences | 0}).`, { target: lower, banned: false });
+      }
+      case 'modResetStats': {
+        const next = { ...target, stats: { ...target.stats, wins: 0, kills: 0 }, modTrack: undefined };
+        await this._save(next);
+        await log('resetstats');
+        return reply(`Reset ${target.name}'s ranked wins and kills to 0.`, { target: lower });
+      }
+      case 'modHistory':
+        return reply(await this._historyWithReports(target, now), { target: lower });
+      case 'modTitle': {
+        const title = String(m.title || '').trim().toUpperCase();
+        const bad = customTitleProblem(title);
+        if (bad) return err(bad);
+        if (!nameIsClean(title)) return err('That title is not allowed.');
+        const hex = (c) => (typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : null);
+        const color = hex(m.color);
+        const nameColor = hex(m.nameColor); // optional separate username colour
+        const next = { ...target, title: { title, color, nameColor, by: dev.name, at: now } };
+        await this._save(next);
+        await log('title', { reason: title });
+        this._push(lower, { t: 'profile', profile: profileOf(next) });
+        await this._notifyPresence({ target: lower, title: { title, color, nameColor } });
+        const tints = [color && `title ${color}`, nameColor && `name ${nameColor}`].filter(Boolean).join(', ');
+        return reply(`${target.name} now has the title [${title}]${tints ? ` (${tints})` : ''}.`, { target: lower, title: { title, color, nameColor } });
+      }
+      case 'modUntitle': {
+        if (!target.title) return reply(`${target.name} has no custom title.`);
+        const next = { ...target, title: null };
+        await this._save(next);
+        await log('untitle');
+        this._push(lower, { t: 'profile', profile: profileOf(next) });
+        await this._notifyPresence({ target: lower, title: null });
+        return reply(`Removed ${target.name}'s title.`, { target: lower, title: null });
+      }
+    }
+    return err('Unknown request.');
+  }
+
+  /** Tell the presence server (chat + online list) about a ban or title change, so it shows at once. */
+  async _notifyPresence(update) {
+    try {
+      if (!this.env || !this.env.Presence) return;
+      const stub = await getServerByName(this.env.Presence, 'global');
+      await stub.fetch(
+        new Request('https://presence/global', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ t: 'account', ...update }),
+        })
+      );
+    } catch (e) {
+      console.warn('[accounts] presence update failed', e && e.message); // it catches up on reconnect
+    }
+  }
+
+  _historyLines(acc, now) {
+    const b = banInfo(acc, now);
+    const s = acc.stats || {};
+    const lines = [
+      `${acc.name}: ${b ? `BANNED (${b.permanent ? 'permanent' : `${timeLeft(b.until, now)} left`})` : 'not banned'}, ` +
+        `offences ${acc.offences | 0}, flags ${acc.flagCount | 0}, ranked ${s.wins | 0} wins / ${s.kills | 0} kills`,
+    ];
+    for (const h of (acc.banHistory || []).slice(-5)) {
+      const what = h.type === 'ban' ? `ban ${BAN_LABEL[h.duration] || ''}` : h.type;
+      lines.push(`${day(h.at)} ${what} by ${h.by}${h.reason ? `: ${h.reason}` : ''}`);
+    }
+    for (const f of (acc.flags || []).slice(-5)) lines.push(`${day(f.at)} flag: ${f.why}`);
+    return lines;
+  }
+
+  /** History lines plus the player's open reports. */
+  async _historyWithReports(acc, now) {
+    const lines = this._historyLines(acc, now);
+    const rec = await this.ctx.storage.get('reports:' + acc.name.toLowerCase());
+    if (rec) {
+      lines.push(`${rec.total | 0} open report(s):`);
+      for (const r of rec.list.slice(-5)) lines.push(`${day(r.at)} ${REPORT_REASONS[r.reason] || r.reason} (by ${r.by})${r.note ? `: ${r.note}` : ''}`);
+    }
+    return lines;
+  }
+
+  async _reportLines() {
+    const listed = await this.ctx.storage.list({ prefix: 'reports:' });
+    const rows = [...listed.values()].filter((r) => r && Array.isArray(r.list) && r.list.length);
+    if (!rows.length) return ['No open reports.'];
+    rows.sort((a, b) => b.list.at(-1).at - a.list.at(-1).at);
+    return rows.slice(0, MOD_FLAGS_LISTED).map((r) => {
+      const counts = {};
+      for (const x of r.list) counts[x.reason] = (counts[x.reason] | 0) + 1;
+      const why = Object.entries(counts)
+        .map(([k, n]) => `${REPORT_REASONS[k] || k}${n > 1 ? ` x${n}` : ''}`)
+        .join(', ');
+      const last = r.list.at(-1);
+      return `${r.name}${r.known ? '' : ' [no account with this name]'}: ${r.total | 0} report(s) (${why})${last.note ? `, latest: "${last.note}"` : ''}`;
+    });
+  }
+
+  /** A player report (private: only devs read it). */
+  async _report(acc, m) {
+    const r = cleanReport(m);
+    if (r.error) return err(r.error);
+    const lower = acc.name.toLowerCase();
+    const targetLower = r.name.toLowerCase();
+    if (targetLower === lower) return err('You can’t report yourself.');
+    const now = Date.now();
+    const allow = reporterAllowance(acc, now);
+    if (!allow.ok) return err('You’ve sent a lot of reports today. Try again tomorrow.', 429);
+    const target = await this._acc(targetLower);
+    const key = 'reports:' + targetLower;
+    const rec = addReport(await this.ctx.storage.get(key), {
+      target: target ? target.name : r.name,
+      known: !!target,
+      by: lower,
+      reason: r.reason,
+      note: r.note,
+      now,
+    });
+    if (rec.error) return err(rec.error, 429);
+    await this.ctx.storage.put(key, rec);
+    await this._save(allow.acc);
+    return json({ ok: true, text: `Thanks. Your report on ${rec.name} was sent to the developers.` });
+  }
+
+  async _flagLines() {
+    const keys = await this.ctx.storage.list({ prefix: 'flagged:' });
+    const rows = [];
+    for (const key of keys.keys()) {
+      const acc = await this._acc(key.slice('flagged:'.length));
+      if (!acc || !Array.isArray(acc.flags) || !acc.flags.length) continue;
+      rows.push(acc);
+    }
+    rows.sort((a, b) => b.flags.at(-1).at - a.flags.at(-1).at);
+    if (!rows.length) return ['No flagged accounts.'];
+    const now = Date.now();
+    return rows.slice(0, MOD_FLAGS_LISTED).map((a) => {
+      const f = a.flags.at(-1);
+      return `${a.name}${isBanned(a, now) ? ' [banned]' : ''}: ${a.flagCount | 0} flags, latest ${day(f.at)} ${f.why}`;
+    });
+  }
+
   async _leaderboard() {
     const listed = await this.ctx.storage.list({ prefix: 'user:' });
     const rows = [];
+    const now = Date.now();
     for (const acc of listed.values()) {
       if (!acc || typeof acc !== 'object' || !acc.name || !acc.stats) continue;
       const wins = Math.max(0, acc.stats.wins | 0);
       const kills = Math.max(0, acc.stats.kills | 0);
       if (!nameIsClean(acc.name)) continue; // hidden from the boards until renamed
+      if (isBanned(acc, now)) continue; // banned accounts are hidden while the ban lasts
       rows.push({ name: String(acc.name).slice(0, 16), wins, kills });
     }
     const byWins = rows
@@ -341,17 +565,35 @@ export class Accounts extends Server {
   // ---------------------------------------------------------------- HTTP API
 
   async onRequest(req) {
+    const origin = req.headers.get('origin');
+    const allowed = originAllowed(origin, this.env && this.env.ALLOWED_ORIGINS);
+    const res = await this._handle(req, allowed);
+    // CORS: echo only an allowed Origin (never *)
+    res.headers.delete('access-control-allow-origin');
+    if (origin && allowed) {
+      res.headers.set('access-control-allow-origin', origin);
+      res.headers.set('vary', 'Origin');
+    }
+    return res;
+  }
+
+  async _handle(req, allowed) {
+    if (!allowed) return err('Forbidden.', 403);
     if (req.method === 'OPTIONS') return json({});
     if (req.method !== 'POST') return json({ ok: true, online: this.online.size });
+    const len = Number(req.headers.get('content-length') || 0);
+    if (len > 8192) return err('Request too large.', 413);
     let m;
     try {
       m = await req.json();
     } catch {
       return err('Bad request.');
     }
+    if (!m || typeof m !== 'object' || Array.isArray(m)) return err('Bad request.');
+    const ip = (req.headers.get('cf-connecting-ip') || 'local').slice(0, 64);
     try {
-      if (m && typeof m.op === 'string' && m.op.startsWith('feedback')) return await this._feedback(m, req);
-      return await this._op(m || {});
+      if (typeof m.op === 'string' && m.op.startsWith('feedback')) return await this._feedback(m, req);
+      return await this._op(m, { ip });
     } catch (e) {
       console.error(e);
       return err('Server error.', 500);
@@ -436,16 +678,22 @@ export class Accounts extends Server {
     return err('Unknown request.');
   }
 
-  async _op(m) {
+  async _op(m, { ip = 'local' } = {}) {
     switch (m.op) {
       case 'register': {
         const name = String(m.name || '').trim();
         const password = String(m.password || '');
         if (!validName(name)) return err('Usernames are 3-16 letters, numbers, _ or -.');
         if (!nameIsClean(name)) return err('That username is not allowed. Pick one without swear words.');
-        if (password.length < 6 || password.length > 72) return err('Passwords need 6-72 characters.');
+        const weak = passwordProblem(password);
+        if (weak) return err(weak);
         const lower = name.toLowerCase();
+        // (usernames are public, so "taken" is not a secret; the sign-up cap limits probing and alt farms)
         if (await this._acc(lower)) return err('That username is taken.', 409);
+        if (!this.limiter.signupOk(ip, Date.now())) {
+          await this._secLog('signup_limited', { ip });
+          return err('Too many new accounts from this network. Try again later.', 429);
+        }
         const salt = randHex(16);
         const acc = {
           name,
@@ -462,22 +710,34 @@ export class Accounts extends Server {
           lastReward: 0,
         };
         await this._save(acc);
+        await this._secLog('signup', { user: name, ip });
         return json({ token: await this._newSession(acc), profile: profileOf(acc) });
       }
       case 'login': {
-        const acc = await this._acc(String(m.name || '').trim().toLowerCase());
-        const ok = acc && acc.salt && acc.hash && same(await hashPassword(String(m.password || ''), acc.salt), acc.hash);
-        if (!ok) return err('Wrong username or password.', 401);
+        const lower = String(m.name || '').trim().toLowerCase().slice(0, 32);
+        const password = String(m.password || '').slice(0, 128); // cap: long inputs can't slow the hash
+        const now = Date.now();
+        const wait = Math.max(this.limiter.loginWait('ip:' + ip, now), this.limiter.loginWait('acct:' + lower, now));
+        if (wait > 0) {
+          await this._secLog('login_limited', { user: lower, ip });
+          return err(`Too many sign-in attempts. Try again in ${Math.ceil(wait / 60e3)} min.`, 429);
+        }
+        const acc = await this._acc(lower);
+        // hash even when the account doesn't exist, so timing doesn't reveal which usernames exist
+        const digest = await hashPassword(password, acc && acc.salt ? acc.salt : '00'.repeat(16));
+        const ok = !!(acc && acc.salt && acc.hash && same(digest, acc.hash));
+        if (!ok) {
+          this.limiter.loginFail('ip:' + ip, now);
+          this.limiter.loginFail('acct:' + lower, now);
+          await this._secLog('login_fail', { user: lower, ip });
+          return err('Wrong username or password.', 401);
+        }
+        this.limiter.loginOk('acct:' + lower);
+        await this._secLog('login', { user: acc.name, ip });
         return json({ token: await this._newSession(acc), profile: profileOf(acc) });
       }
       case 'googleLogin':
         return this._googleLogin(m);
-      case 'cleverLogin':
-        return this._cleverLogin(m);
-      case 'putAuthTicket':
-        return this._putAuthTicket(m);
-      case 'redeemAuthTicket':
-        return this._redeemAuthTicket(m);
       case 'leaderboard':
         return this._leaderboard();
     }
@@ -490,9 +750,37 @@ export class Accounts extends Server {
     switch (m.op) {
       case 'me':
         return json({ profile: profileOf(acc) });
-      case 'logout':
+      case 'logout': {
         await this.ctx.storage.delete('sess:' + m.token);
+        const list = (await this.ctx.storage.get('sessions:' + lower)) || [];
+        await this.ctx.storage.put('sessions:' + lower, list.filter((t) => t !== m.token));
         return json({ ok: true });
+      }
+      case 'logoutAll': {
+        const n = await this._endAllSessions(lower);
+        await this.ctx.storage.delete('sess:' + m.token); // sessions from before the index existed
+        await this._secLog('logout_all', { user: acc.name, ip, detail: `${n} sessions` });
+        return json({ ok: true, ended: n });
+      }
+      case 'ackWarning': {
+        if (!acc.warning) return json({ profile: profileOf(acc) });
+        const next = { ...acc, warning: null };
+        await this._save(next);
+        return json({ profile: profileOf(next) });
+      }
+    }
+
+    // a banned account can sign in and see why, but nothing else
+    const ban = banInfo(acc, Date.now());
+    if (ban) {
+      const left = ban.permanent ? 'This ban is permanent.' : `It lifts in ${timeLeft(ban.until, Date.now())}.`;
+      return json({ error: `Your account is banned: ${ban.reason}. ${left}`, banned: ban }, 403);
+    }
+
+    if (MOD_OPS.has(m.op)) return this._mod(acc, m, ip);
+    if (m.op === 'report') return this._report(acc, m);
+
+    switch (m.op) {
       case 'rename': {
         // Only for names that fail the username filter; normal renames are not a feature.
         if (nameIsClean(acc.name)) return err('Your username is fine. Renaming is only needed for names that break the rules.');
@@ -556,8 +844,13 @@ export class Accounts extends Server {
         // Leaderboard stats only for HARD bot-difficulty matches (client-reported, like kills).
         const ranked = m.ranked === true;
         acc.stats = applyMatchStats(acc.stats, { kills, won, ranked });
-        await this._save(acc);
-        return json({ profile: profileOf(acc), earned, rateLimited, ranked });
+        // Flag results that look impossible or unlikely so a dev can review them (never an auto-ban).
+        const flags = rewardFlags({ kills, players, placement, won, ranked }, acc, now);
+        let next = trackRanked(acc, { ranked, won, now });
+        for (const f of flags) next = addFlag(next, f, now);
+        if (next.flagCount !== acc.flagCount) await this.ctx.storage.put('flagged:' + lower, { at: now });
+        await this._save(next);
+        return json({ profile: profileOf(next), earned, rateLimited, ranked });
       }
       case 'adReward': {
         // watched a rewarded ad to the end (client-reported; capped per day, see AD_REWARD_*)
@@ -647,7 +940,11 @@ export class Accounts extends Server {
       await st.put('renamed:' + old, next); // other devices' sessions follow it (see _session)
       await st.delete('user:' + old);
       if (acc.googleSub) await st.put('google:' + acc.googleSub, next);
-      if (acc.cleverId) await st.put('clever:' + acc.cleverId, next);
+      const sessions = await st.get('sessions:' + old);
+      if (sessions) {
+        await st.put('sessions:' + next, sessions);
+        await st.delete('sessions:' + old);
+      }
       const sess = await st.get('sess:' + token);
       if (sess) await st.put('sess:' + token, { ...sess, u: next });
       const swap = (arr) => arr.map((n) => (n === old ? next : n));
@@ -700,6 +997,10 @@ export class Accounts extends Server {
   // ---------------------------------------------------------------- presence
 
   async onConnect(conn, ctx) {
+    if (!originAllowed(ctx.request.headers.get('origin'), this.env && this.env.ALLOWED_ORIGINS)) {
+      conn.close(4003, 'origin');
+      return;
+    }
     const url = new URL(ctx.request.url);
     const acc = await this._session(url.searchParams.get('token'));
     if (!acc) {

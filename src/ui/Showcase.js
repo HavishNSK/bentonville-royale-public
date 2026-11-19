@@ -8,15 +8,20 @@
 //   sc.preview(id|null)         // shop / locker: try an outfit, pickaxe or back bling on (null = back)
 //   await sc.thumb(id)          // PNG data URL of any cosmetic (shop / locker cards), cached
 //
-// Drag to turn the line-up. Characters load lazily (the GLBs are shared with the match load).
+// Up to MAX_SHOWN members stand in a shallow V; the camera refits so nobody is ever cropped,
+// and name tags follow each character's feet. Drag to turn them. Characters load lazily (the GLBs are shared with the match load).
 
 import * as THREE from 'three';
 import { loadGLB, loadJSON } from '../core/assets.js';
 import { CharacterKit, Character, registerKits, cosmeticMesh } from '../game/Character.js';
 import { skinDef, SKINS, PICKAXES, BACKBLINGS, cosmeticDef } from '../game/Cosmetics.js';
-import { nameplate } from '../net/devs.js';
 
-const SPOTS = [0, -1.25, 1.25, -2.4]; // x of member i (you in the middle)
+import { LINEUP_MAX as MAX_SHOWN, lineUpSpots as spots, lineUpHalfWidth } from './lineup.js';
+
+const FOV = 22; // a longer lens from further back: less big-head distortion than a close wide shot
+const TOP = 2.1; // frame from just under the feet to just over the head (metres)
+const BOTTOM = -0.62; // below the plinth's foot (0.34 tall under y = 0) + its nameplate
+const HEADROOM = 1.25;
 
 export function createShowcase(parent) {
   const wrap = document.createElement('div');
@@ -41,9 +46,8 @@ export function createShowcase(parent) {
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
   }
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(26, 1, 0.1, 50);
-  camera.position.set(0, 1.22, 6.15);
-  camera.lookAt(0, 0.92, 0);
+  const camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 80);
+  let shownCount = 1; // how many members the camera is framed for
   scene.add(new THREE.HemisphereLight(0xfff1d6, 0x4b2f9a, 1.6));
   const sun = new THREE.DirectionalLight(0xffffff, 2.2);
   sun.position.set(2.5, 5, 4);
@@ -51,9 +55,17 @@ export function createShowcase(parent) {
   const rim = new THREE.DirectionalLight(0xff9a5a, 1.4);
   rim.position.set(-3, 2, -3);
   scene.add(rim);
-  // a soft pedestal disc under each character
-  const discGeo = new THREE.CircleGeometry(0.62, 40);
-  const discMat = new THREE.MeshBasicMaterial({ color: 0x15103a, transparent: true, opacity: 0.35, depthWrite: false });
+  // a pedestal under each character: ink disc, sun-gold rim for you, cream rim for the party
+  // a solid plinth under each character so nobody floats: ink-violet drum, a gold (you) or
+  // cream (party) band round the top edge, and a dark contact shadow on its top face
+  const PED_H = 0.34;
+  const pedGeo = new THREE.CylinderGeometry(0.43, 0.49, PED_H, 40) // < LINEUP_GAP across: neighbours never touch;
+  const pedMat = new THREE.MeshStandardMaterial({ color: 0x3a2c8f, roughness: 0.85, metalness: 0 });
+  const bandGeo = new THREE.CylinderGeometry(0.442, 0.442, 0.07, 40, 1, true);
+  const bandYou = new THREE.MeshStandardMaterial({ color: 0xffc21f, roughness: 0.6, emissive: 0x3a2a00 });
+  const bandMate = new THREE.MeshStandardMaterial({ color: 0xfff6dc, roughness: 0.7 });
+  const shadowGeo = new THREE.CircleGeometry(0.32, 32);
+  const shadowMat = new THREE.MeshBasicMaterial({ color: 0x0d0927, transparent: true, opacity: 0.5, depthWrite: false });
 
   const turn = new THREE.Group();
   scene.add(turn);
@@ -107,7 +119,7 @@ export function createShowcase(parent) {
 
   async function build() {
     const my = ++gen;
-    const want = members.slice(0, SPOTS.length).map((m, i) =>
+    const want = members.slice(0, MAX_SHOWN).map((m, i) =>
       i === 0 ? { ...m, skin: previewSkin || m.skin, pickaxe: previewPick || m.pickaxe, backbling: previewBB || m.backbling } : m
     );
     let weapons = {};
@@ -117,13 +129,17 @@ export function createShowcase(parent) {
       /* accessories are optional */
     }
     if (my !== gen) return;
+    const at = spots(want.length);
+    shownCount = Math.max(1, want.length);
+    lastFit = '';
     // keep characters that did not change
-    for (let i = 0; i < SPOTS.length; i++) {
+    for (let i = 0; i < MAX_SHOWN; i++) {
       const w = want[i];
       const s = slots[i];
       const key = w ? skinDef(w.skin).model + '|' + skinDef(w.skin).tint : null;
       if (s && s.key === key) {
         s.ch.setLoadout({ pickaxe: w.pickaxe || 'pick_default', backbling: w.backbling || 'bb_outfit' });
+        s.holder.position.set(at[i].x, 0, at[i].z);
         continue;
       }
       if (s) {
@@ -143,33 +159,72 @@ export function createShowcase(parent) {
       if (my !== gen) return;
       const ch = new Character(kit, { weapons, tint: def.tint ?? undefined, pickaxe: w.pickaxe || 'pick_default', backbling: w.backbling || 'bb_outfit' });
       const holder = new THREE.Group();
-      holder.position.set(SPOTS[i], 0, i === 0 ? 0.4 : -0.3);
-      const disc = new THREE.Mesh(discGeo, discMat);
-      disc.rotation.x = -Math.PI / 2;
-      disc.position.y = 0.01;
-      holder.add(disc, ch.root);
+      holder.position.set(at[i].x, 0, at[i].z);
+      const ped = new THREE.Mesh(pedGeo, pedMat);
+      ped.position.y = -PED_H / 2; // top face at y = 0, where the feet are
+      const band = new THREE.Mesh(bandGeo, i === 0 ? bandYou : bandMate);
+      band.position.y = -0.035;
+      const shadow = new THREE.Mesh(shadowGeo, shadowMat);
+      shadow.rotation.x = -Math.PI / 2;
+      shadow.position.y = 0.005;
+      holder.add(ped, band, shadow, ch.root);
       ch.root.position.set(0, 0, 0);
       turn.add(holder);
       slots[i] = { key, ch, holder };
       if (i === 0 && emoteId) ch.emote(true, emoteId);
     }
+    // name tags, placed under each character's feet every frame (see placeTags)
     plate.replaceChildren();
-    want.forEach((m, i) => {
-      if (!m || !m.name) return;
+    tags = want.map((m, i) => {
+      if (!m) return null;
       const tag = document.createElement('span');
-      tag.className = i === 0 ? 'is-you' : '';
-      tag.style.setProperty('--x', String(SPOTS[i]));
-      const plateName = m.you ? nameplate(m.name) : { name: m.name, title: '', color: '' };
-      if (plateName.title) {
-        const badge = document.createElement('em');
-        badge.className = 'br-title-tag';
-        badge.textContent = plateName.title;
-        badge.style.color = plateName.color;
-        tag.style.color = plateName.color;
-        tag.append(badge, document.createTextNode(' ' + plateName.name));
-      } else tag.textContent = m.name;
+      tag.className = (i === 0 ? 'is-you' : '') + (m.ready ? ' is-ready' : '');
+      const name = document.createElement('b');
+      name.textContent = m.name || (i === 0 ? 'You' : '');
+      tag.appendChild(name);
+      if (i > 0 && m.ready != null) {
+        const st = document.createElement('small');
+        st.textContent = m.ready ? 'Ready' : 'Not ready';
+        tag.appendChild(st);
+      }
+      if (!name.textContent) return null;
       plate.appendChild(tag);
+      return { el: tag, x: at[i].x, z: at[i].z, last: '' };
     });
+    placeTags();
+  }
+
+  // ---- framing: fit the whole line-up into the canvas, whatever its size and the party size
+  let tags = [];
+  let lastFit = '';
+  const _p = new THREE.Vector3();
+  function frameCamera() {
+    const aspect = camera.aspect || 1;
+    const tanV = Math.tan((FOV * Math.PI) / 360);
+    const halfW = lineUpHalfWidth(shownCount);
+    // headroom: a character fills ~80% of the height, never a wall-to-wall close-up
+    const halfH = ((TOP - BOTTOM) / 2) * HEADROOM;
+    const dist = Math.max(halfH / tanV, halfW / (tanV * aspect)) + 0.6;
+    // feet stay near the bottom edge; the spare room goes above the heads (the sun shows there)
+    const lookY = BOTTOM + (dist - 0.6) * tanV;
+    // just above the plinths, so their top faces show and they read as solid
+    camera.position.set(0, lookY + 0.35, dist);
+    camera.lookAt(0, lookY, 0);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld();
+  }
+  function placeTags() {
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (!w || !h) return;
+    for (const t of tags) {
+      if (!t) continue;
+      _p.set(t.x, -0.12, t.z + 0.48).project(camera); // a nameplate on the plinth's front face
+      const css = `translate(${Math.round(((_p.x + 1) / 2) * w)}px, ${Math.round(((1 - _p.y) / 2) * h)}px) translateX(-50%)`;
+      if (css === t.last) continue;
+      t.last = css;
+      t.el.style.transform = css;
+    }
   }
 
   function resize() {
@@ -180,9 +235,13 @@ export function createShowcase(parent) {
     if (canvas.width !== Math.round(w * renderer.getPixelRatio()) || canvas.height !== Math.round(h * renderer.getPixelRatio())) {
       renderer.setSize(w, h, false);
       camera.aspect = w / h;
-      // keep the line-up framed on narrow canvases
-      camera.position.z = Math.max(5.35, 6.15 / Math.min(1, camera.aspect / 0.75));
-      camera.updateProjectionMatrix();
+      lastFit = '';
+    }
+    const fit = `${w}x${h}x${shownCount}`;
+    if (fit !== lastFit) {
+      lastFit = fit;
+      frameCamera();
+      for (const t of tags) if (t) t.last = '';
     }
     return true;
   }
@@ -222,7 +281,10 @@ export function createShowcase(parent) {
       spin += spinV;
       if (!reduced) spin += Math.sin(now / 2600) * 0.0009; // a slow sway when idle
     }
-    turn.rotation.y = spin;
+    // each character turns on its own pedestal (the row never swings out of frame), angled a
+    // touch toward the middle like a squad photo
+    for (const s of slots) if (s) s.holder.rotation.y = spin - s.holder.position.x * 0.12;
+    placeTags();
     for (const s of slots) if (s) s.ch.update(dt, { fwd: 0, side: 0, speed: 0, grounded: true, gliding: false, heading: Math.PI, pitch: 0 });
     renderer.render(scene, camera);
   }
@@ -331,10 +393,17 @@ export function createShowcase(parent) {
       return thumbs.get(id);
     },
     setMembers(list) {
-      const next = (list || []).slice(0, SPOTS.length);
+      const next = (list || []).slice(0, MAX_SHOWN);
       const same =
         next.length === members.length &&
-        next.every((m, i) => m.skin === members[i].skin && m.name === members[i].name && m.pickaxe === members[i].pickaxe && m.backbling === members[i].backbling);
+        next.every(
+          (m, i) =>
+            m.skin === members[i].skin &&
+            m.name === members[i].name &&
+            m.ready === members[i].ready &&
+            m.pickaxe === members[i].pickaxe &&
+            m.backbling === members[i].backbling
+        );
       members = next;
       if (!same) build();
     },

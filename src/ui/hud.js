@@ -190,6 +190,12 @@ function hudHTML() {
   <div class="br-downed-rev" data-ref="downedRev"><i data-ref="downedRevFill"></i><span>BEING REVIVED</span></div>
 </div>
 <div class="br-toasts" data-ref="toasts"></div>
+<div class="br-car" data-ref="car">
+  <div class="br-car-head"><b data-ref="carName">CAR</b><span class="br-car-spd"><span data-ref="carSpeed">0</span><em>km/h</em></span></div>
+  <div class="br-car-row"><i class="br-car-lbl">HP</i><div class="br-car-bar"><i data-ref="carHp"></i></div><span class="br-car-num" data-ref="carHpNum"></span></div>
+  <div class="br-car-row" data-ref="carFuelRow"><i class="br-car-lbl">FUEL</i><div class="br-car-bar is-fuel"><i data-ref="carFuel"></i></div><span class="br-car-num" data-ref="carFuelNum"></span></div>
+  <div class="br-car-foot"><span class="br-car-seats" data-ref="carSeats"></span><span class="br-car-boost" data-ref="carBoost">BOOST</span></div>
+</div>
 
 <div class="br-bl">
 <div class="br-spec" data-ref="spec">
@@ -1327,6 +1333,38 @@ export function buildHud(root) {
     }
   }
 
+  // setCar({ name, hp, maxHp, fuel, speed, seats: [0 free | 1 taken | 2 you], boost: 'ready' | 'on' | s,
+  //   target? } | null): the car we ride in (target: the car under the crosshair, HP only)
+  const car = { on: null, key: '' };
+  function setCar(v) {
+    const on = !!v;
+    if (on !== car.on) {
+      r.car.classList.toggle('is-on', on);
+      car.on = on;
+      car.key = '';
+    }
+    if (!on) return;
+    const hp01 = clamp01(v.hp / (v.maxHp || 1));
+    const key = [v.name, Math.round(v.hp), Math.round(v.fuel || 0), Math.round(v.speed || 0), (v.seats || []).join(''), v.boost, v.target ? 1 : 0].join('|');
+    if (key === car.key) return;
+    car.key = key;
+    r.car.classList.toggle('is-target', !!v.target);
+    r.car.classList.toggle('is-low', hp01 <= 0.3);
+    r.carName.textContent = String(v.name || 'CAR').toUpperCase();
+    r.carSpeed.textContent = String(Math.round(Math.abs(v.speed || 0) * 3.6));
+    r.carHp.style.transform = 'scaleX(' + hp01 + ')';
+    r.carHpNum.textContent = String(Math.ceil(v.hp));
+    const fuel01 = clamp01((v.fuel || 0) / 100);
+    r.carFuel.style.transform = 'scaleX(' + fuel01 + ')';
+    r.carFuelNum.textContent = v.fuel > 0 ? String(Math.ceil(v.fuel)) : 'EMPTY';
+    r.carFuelRow.classList.toggle('is-empty', !(v.fuel > 0));
+    r.carSeats.innerHTML = (v.seats || []).map((s) => `<i class="${s === 2 ? 'is-you' : s ? 'is-taken' : ''}"></i>`).join('');
+    const b = v.boost;
+    r.carBoost.textContent = b === 'on' ? 'BOOST!' : b === 'ready' ? 'BOOST' : 'BOOST ' + Math.ceil(+b || 0) + 's';
+    r.carBoost.classList.toggle('is-ready', b === 'ready');
+    r.carBoost.classList.toggle('is-on', b === 'on');
+  }
+
   // setRevive({ pct, name, verb? } | null): progress ring while we hold interact over a teammate
   // (verb defaults to 'REVIVING'; reboot vans pass 'REBOOTING')
   const rv = { on: null, pct: -1, name: null };
@@ -1411,6 +1449,7 @@ export function buildHud(root) {
     setDowned,
     setSpectate,
     setRevive,
+    setCar,
     /** Clears transient HUD bits (feed, toasts, prompt, announce) — used when leaving a match. */
     clearTransient() {
       r.feed.textContent = '';
@@ -1423,6 +1462,7 @@ export function buildHud(root) {
       showSandboxLoadout(false);
       showSandboxBotsMenu(false);
       setRevive(null);
+      setCar(null);
       setDowned(null);
       setSpectate(null);
       setTags(null);

@@ -84,6 +84,7 @@ export class Puppet {
     this.inBus = !!(r.flags & FLAG.bus);
     this.crouching = !!(r.flags & FLAG.crouch);
     this.downed = this.alive && !!(r.xf & XFLAG.downed);
+    this.leaning = !!(r.xf & XFLAG.lean);
     this.beingRevived = this.downed && !!(r.xf & XFLAG.revived);
     if (this.downed) {
       this.downHp = r.health;
@@ -436,7 +437,19 @@ export class ClientSession {
       I.selected = msg.sel;
       this._specInvOf = msg.id;
     }
-    else if (msg.t === 'cor') {
+    else if (msg.t === 'cars') {
+      if (this.game.vehicles) this.game.vehicles.applyPoses(msg.l);
+    } else if (msg.t === 'ccor') {
+      // the host refused our car's move (too far, too fast): back to where it has it
+      const car = this.game.vehicles && this.game.vehicles.byId.get(msg.c);
+      if (car && [msg.x, msg.y, msg.z, msg.h].every(Number.isFinite)) {
+        car.x = msg.x;
+        car.y = msg.y;
+        car.z = msg.z;
+        car.heading = msg.h;
+        car.vx = car.vz = 0;
+      }
+    } else if (msg.t === 'cor') {
       if (performance.now() < this._tpUntil) return;
       const p = this.game.player;
       p.pos.set(msg.x, msg.y, msg.z);
@@ -467,6 +480,14 @@ export class ClientSession {
       case 'rcx':
       case 'rbu':
         if (g.reboot) g.reboot.applyEvent(e);
+        return;
+      case 've':
+      case 'vw':
+      case 'vd':
+      case 'vx':
+      case 'vh':
+      case 'vf':
+        if (g.vehicles) g.vehicles.applyEvent(e, (id) => this.actorById(id));
         return;
       case 'rcp':
         if (g.reboot) g.reboot.applyEvent(e);
@@ -897,6 +918,14 @@ export class ClientSession {
     if (st !== this._specAsk) {
       this._specAsk = st;
       this.conn.send({ t: 'spec', id: st });
+    }
+
+    // driving: our car's pose to the host (we simulate it; Vehicles.acceptDriverPose checks it)
+    const car = p.alive && p.vehicle && p.seat === 0 ? p.vehicle : null;
+    this._drvAcc = (this._drvAcc || 0) + dt;
+    if (car && car.alive && this._drvAcc >= 1 / 20) {
+      this._drvAcc = 0;
+      this.action({ k: 'drv', c: car.id, x: rnd(car.x, 2), y: rnd(car.y, 2), z: rnd(car.z, 2), h: rnd(car.heading, 3), p: rnd(car.pitch, 3), r: rnd(car.roll, 3), sp: rnd(car.speed, 2), st: rnd(car.steer, 2), f: rnd(car.fuel, 1) });
     }
 
     this._stateAcc += dt;

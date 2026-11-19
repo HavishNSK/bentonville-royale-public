@@ -354,3 +354,13 @@ export function slotView(s) {
   }
   return null;
 }
+
+/** The inventory slot actor `a` is holding (its equipId from the network, else the selection); -1 = pickaxe / building. */
+export function heldSlot(a, inv) {
+  const eq = a.equipId || null;
+  if (!eq) return a.buildPiece ? -1 : inv.selected;
+  if (eq === 'pickaxe') return -1;
+  const cur = inv.slots[inv.selected];
+  if (cur && (cur.id === eq || (eq === 'none' && cur.type === 'consumable'))) return inv.selected;
+  return inv.slots.findIndex((s) => s && (s.id === eq || (eq === 'none' && s.type === 'consumable')));
+}
