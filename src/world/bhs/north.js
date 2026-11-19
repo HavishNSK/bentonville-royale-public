@@ -394,6 +394,9 @@ function commonsHero(K) {
     K.railing([ATRIUM.x1, ATRIUM.z0], [ATRIUM.x1, 211], L * H, { style: 'glass' });
     K.railing([ATRIUM.x1, L === 1 ? 215.6 : 211], [ATRIUM.x1, ATRIUM.z1], L * H, { style: 'glass' });
     K.railing([ATRIUM.x0 + 0.3, ATRIUM.z0], [ATRIUM.x1, ATRIUM.z0], L * H, { style: 'glass' });
+    // the south walkway (corSW, lockers along it) over the atrium; west of LOBBY.x1 the lobby is
+    // double-height on floor 2 (railed below) and a walled office on floor 3
+    K.railing([LOBBY.x1, ATRIUM.z1], [ATRIUM.x1, ATRIUM.z1], L * H, { style: 'glass' });
     if (L === 1) {
       K.railing([LOBBY.x1, LOBBY.z0], [LOBBY.x1, SOUTH_ENTRY.z0], H, { style: 'glass' });
       K.railing([SOUTH_ENTRY.x0, SOUTH_ENTRY.z0], [SOUTH_ENTRY.x1, SOUTH_ENTRY.z0], H, { style: 'glass' });
