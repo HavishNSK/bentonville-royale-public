@@ -24,7 +24,9 @@ import { icon, hasIcon } from './icons.js';
 import { AMMO, MATERIALS, RARITIES } from '../core/config.js';
 
 const SLOTS = 5;
-const DRAG_PX = 6; // pointer travel before a press becomes a drag
+const DRAG_PX = 12; // pointer travel before a press becomes a drag
+const CLICK_PX = 36; // shorter than this: treat as a click, even if we drifted onto a neighbor
+const CARD_PAD = 16; // drop as soon as the pointer is on/near any part of a card
 const AMMO_KINDS = Object.keys(AMMO);
 const MAT_NAME = { wood: 'Wood', brick: 'Brick', metal: 'Metal' };
 
@@ -124,23 +126,36 @@ export function createInventoryPanel(hudEl, opts = {}) {
   let shown = new Array(SLOTS).fill(null); // raw slot objects the cards show (identity checks)
 
   // ---- drag & drop -------------------------------------------------------------
-  // forgiving drop target: the nearest card while the pointer is anywhere in the card row's
-  // band (no need to land exactly on a card)
+  // Drop as soon as the pointer is on any part of a card (plus a small pad so the
+  // gap between cards still counts). The whole dragged card does not have to sit
+  // on the destination. Fall back to the nearest card in a wide band around the row.
   const cardAt = (x, y) => {
-    const rr = row.getBoundingClientRect();
-    const band = rr.height * 0.6;
-    if (y < rr.top - band || y > rr.bottom + band || x < rr.left - 40 || x > rr.right + 40) return -1;
     let best = -1;
     let bd = Infinity;
     for (let i = 0; i < SLOTS; i++) {
       const r = cards[i].el.getBoundingClientRect();
-      const d = Math.abs(x - (r.left + r.width / 2));
+      if (x < r.left - CARD_PAD || x > r.right + CARD_PAD || y < r.top - CARD_PAD || y > r.bottom + CARD_PAD) continue;
+      const d = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2));
       if (d < bd) {
         bd = d;
         best = i;
       }
     }
-    return best;
+    if (best >= 0) return best;
+    const rr = row.getBoundingClientRect();
+    const band = Math.max(rr.height * 0.8, 80);
+    if (y < rr.top - band || y > rr.bottom + band || x < rr.left - 80 || x > rr.right + 80) return -1;
+    let nearest = -1;
+    let nd = Infinity;
+    for (let i = 0; i < SLOTS; i++) {
+      const r = cards[i].el.getBoundingClientRect();
+      const d = Math.abs(x - (r.left + r.width / 2));
+      if (d < nd) {
+        nd = d;
+        nearest = i;
+      }
+    }
+    return nearest;
   };
   // live preview: the dragged item shows in the target slot, the target's item in ours
   function clearPreview() {
@@ -250,11 +265,29 @@ export function createInventoryPanel(hudEl, opts = {}) {
   // a drag keeps working when pointer capture is refused or lost (the browser releasing it, an
   // element under the pointer changing) and a release anywhere always ends it.
   const win = typeof window !== 'undefined' ? window : null;
+  function notePointer(e) {
+    if (!drag) return;
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+  }
+  function finishDrag(e) {
+    if (!drag || (e && e.pointerId !== drag.id && e.pointerId != null)) return;
+    if (e) {
+      notePointer(e);
+      if (drag.moved) {
+        if (!drag.res) setTarget(cardAt(e.clientX, e.clientY));
+        setOut(outside(e.clientX, e.clientY));
+      }
+    }
+    endDrag(true);
+  }
   function dragMove(e) {
     if (!drag || e.pointerId !== drag.id) return;
-    // the button came up without a pointerup reaching us (alt-tab, released outside the page)
+    notePointer(e);
+    // Button came up without pointerup (alt-tab, lost capture). Commit, don't
+    // eat the press — a cancelled first try is why swaps took several clicks.
     if (e.pointerType === 'mouse' && e.buttons === 0) {
-      endDrag(false);
+      finishDrag(e);
       return;
     }
     if (!drag.moved) {
@@ -266,15 +299,10 @@ export function createInventoryPanel(hudEl, opts = {}) {
     setOut(outside(e.clientX, e.clientY));
   }
   function dragUp(e) {
-    if (!drag || e.pointerId !== drag.id) return;
-    if (drag.moved) {
-      if (!drag.res) setTarget(cardAt(e.clientX, e.clientY));
-      setOut(outside(e.clientX, e.clientY));
-    }
-    endDrag(true);
+    finishDrag(e);
   }
   function dragCancel(e) {
-    if (drag && (!e || e.pointerId == null || e.pointerId === drag.id)) endDrag(false); // blur has no pointerId
+    if (drag && (!e || e.pointerId == null || e.pointerId === drag.id)) finishDrag(e);
   }
   function listen(on) {
     if (!win) return;
@@ -287,13 +315,10 @@ export function createInventoryPanel(hudEl, opts = {}) {
   /** Starts tracking a press (card index `from`, or a resource row `res`). */
   function beginDrag(el, e, from, res) {
     if (drag) endDrag(false); // a press we never saw end must not block this one
-    drag = { from, res, id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, ghost: null, target: -1, out: false, items: shown.slice() };
+    drag = { from, res, id: e.pointerId, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, moved: false, ghost: null, target: -1, out: false, items: shown.slice() };
     listen(true);
-    try {
-      el.setPointerCapture(e.pointerId);
-    } catch (err) {
-      /* synthetic events have no active pointer; window listeners still track it */
-    }
+    // Window listeners track the press. Capturing on the card is skipped: lifting
+    // the card (transform/opacity) made some browsers fire pointercancel and eat the click.
   }
   /** The press turned into a drag: lift the card / row and show the ghost. False = nothing to carry. */
   function liftDrag() {
@@ -309,7 +334,6 @@ export function createInventoryPanel(hudEl, opts = {}) {
       const c = cards[d.from];
       if (!shown[d.from] || locked) return false; // nothing to carry / swaps blocked
       d.moved = true;
-      setPicked(-1);
       const g = h('div', 'br-inv-ghost');
       if (c.el.dataset.rarity) g.dataset.rarity = c.el.dataset.rarity;
       g.innerHTML = c.ico.innerHTML; // our own SVG markup
@@ -336,15 +360,28 @@ export function createInventoryPanel(hudEl, opts = {}) {
       if (d.moved && d.out && opts.onDrop) opts.onDrop(d.res.what, null);
       return;
     }
-    if (d.moved && d.out) {
+    const travel = Math.hypot((d.x ?? d.x0) - d.x0, (d.y ?? d.y0) - d.y0);
+    // Short travel is a click on the pressed card. Drifting onto a neighbor
+    // must not swap — that felt like "it takes several tries."
+    if (!d.moved || travel < CLICK_PX) {
+      clickCard(d.from);
+      return;
+    }
+    // A slot under the pointer wins over "outside the panel" so dragging onto
+    // the last card does not drop on the ground if the pointer slips off the frame.
+    if (d.target >= 0 && d.target !== d.from && opts.onSwap) {
+      setPicked(-1);
+      flip = { a: d.from, b: d.target };
+      opts.onSwap(d.from, d.target, [d.items[d.from], d.items[d.target]]);
+      playFlip();
+      return;
+    }
+    if (d.out) {
+      setPicked(-1);
       if (opts.onDrop) opts.onDrop({ s: d.from }, d.items[d.from]);
-    } else if (d.moved) {
-      if (d.target >= 0 && d.target !== d.from && opts.onSwap) {
-        flip = { a: d.from, b: d.target };
-        opts.onSwap(d.from, d.target, [d.items[d.from], d.items[d.target]]);
-        playFlip();
-      }
-    } else clickCard(d.from);
+      return;
+    }
+    clickCard(d.from);
   }
 
   cards.forEach((c, i) => {

@@ -239,6 +239,44 @@ test('a mouse move with no button held ends a stranded press', () => {
   assert.equal(h.panel.isDragging(), false, 'the client inventory sync is no longer held');
 });
 
+test('a buttons-up pointermove between down and up still click-to-swaps', () => {
+  const h = harness(fullInventory());
+  const x0 = 155;
+  h.down(0);
+  h.move(x0, 180, { buttons: 0 });
+  h.up(x0);
+  h.update();
+  assert.equal(h.panel.picked(), 0, 'the first click must still pick, not be cancelled');
+  const x4 = 155 + 4 * 120;
+  h.down(4);
+  h.move(x4, 180, { buttons: 0 });
+  h.up(x4);
+  h.update();
+  assert.deepEqual(ids(h.inv), ['pistol', 'smg', 'shotgun', 'sniper', 'rifle']);
+});
+
+test('a drag that ends on a buttons-up move still swaps', () => {
+  const h = harness(fullInventory());
+  h.down(0);
+  h.move(175);
+  h.move(225);
+  h.move(225, 180, { buttons: 0 });
+  h.update();
+  assert.deepEqual(ids(h.inv), ['smg', 'rifle', 'shotgun', 'sniper', 'pistol']);
+  assert.equal(h.panel.isDragging(), false);
+});
+
+test('a short press that drifts onto a neighbor still picks, it does not swap', () => {
+  const h = harness(fullInventory());
+  // Press near the right edge of card 0 and drift a little onto card 1.
+  h.down(0, { clientX: 205, clientY: 180 });
+  h.move(228);
+  h.up(228);
+  h.update();
+  assert.equal(h.panel.picked(), 0);
+  assert.deepEqual(ids(h.inv), ['rifle', 'smg', 'shotgun', 'sniper', 'pistol']);
+});
+
 test('a stale drag (inventory changed under it) is refused', () => {
   const h = harness();
   h.down(0);
@@ -283,6 +321,71 @@ test('closing the panel or a stale pick does not swap', () => {
   h.inv.swap(0, 2); // the picked item moved (e.g. slot key while hovering)
   h.update();
   assert.equal(h.panel.picked(), -1, 'the pick is dropped when its item leaves the slot');
+});
+
+function fullInventory() {
+  return new Inventory({
+    items: [
+      { type: 'weapon', id: 'rifle', rarity: 'rare' },
+      { type: 'weapon', id: 'smg', rarity: 'common' },
+      { type: 'weapon', id: 'shotgun', rarity: 'rare' },
+      { type: 'weapon', id: 'sniper', rarity: 'epic' },
+      { type: 'weapon', id: 'pistol', rarity: 'common' },
+    ],
+  });
+}
+
+// A real mouse click jitters a few pixels; that is enough to lift a filled card.
+function sloppyClick(h, i) {
+  const x = 155 + i * 120;
+  h.down(i);
+  h.move(x + 10);
+  h.up(x + 10);
+  h.update();
+}
+
+test('click-to-swap still works when every slot is filled', () => {
+  const h = harness(fullInventory());
+  assert.deepEqual(ids(h.inv), ['rifle', 'smg', 'shotgun', 'sniper', 'pistol']);
+  h.click(0);
+  h.click(4);
+  assert.deepEqual(ids(h.inv), ['pistol', 'smg', 'shotgun', 'sniper', 'rifle']);
+  assert.equal(h.panel.picked(), -1);
+});
+
+test('a sloppy click on a filled card still click-to-swaps a full hotbar', () => {
+  const h = harness(fullInventory());
+  sloppyClick(h, 0);
+  assert.equal(h.panel.picked(), 0, 'jitter on the first filled card still picks it');
+  sloppyClick(h, 3);
+  assert.deepEqual(ids(h.inv), ['sniper', 'smg', 'shotgun', 'rifle', 'pistol']);
+  assert.equal(h.panel.picked(), -1);
+});
+
+test('dropping counts as soon as the pointer is over any part of the destination card', () => {
+  const h = harness(fullInventory());
+  // Card 1 starts at x 220. Releasing on its left edge (not the center) is enough.
+  h.down(0);
+  h.move(175);
+  h.update();
+  h.move(225);
+  h.update();
+  h.up(225);
+  h.update();
+  assert.deepEqual(ids(h.inv), ['smg', 'rifle', 'shotgun', 'sniper', 'pistol']);
+});
+
+test('dragging onto the last slot still swaps if the pointer slips outside the panel', () => {
+  const h = harness(fullInventory());
+  h.down(0);
+  h.move(175);
+  h.update();
+  h.move(760); // frame ends at 750; card 4 is the nearest slot
+  h.update();
+  h.up(760);
+  h.update();
+  assert.deepEqual(ids(h.inv), ['pistol', 'smg', 'shotgun', 'sniper', 'rifle']);
+  assert.equal(h.log.some((e) => Array.isArray(e) && e[0] === 'drop'), false, 'must not drop the item on the ground');
 });
 
 // ---- multiplayer ---------------------------------------------------------------------------
