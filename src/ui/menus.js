@@ -296,6 +296,7 @@ export function createMenus(root, opts = {}) {
          ${toggle('invertY', 'Invert mouse Y')}
          ${range('fov', 'Field of view', 55, 100, 1)}
          <div class="mn-row"><span>Graphics quality</span>${seg('quality', QUALITY_OPTIONS)}</div>
+         ${toggle('fullscreen', 'Fullscreen when playing', 'Turn off to play in the browser window. If your FPS drops to 20-30 in fullscreen but is fine after Escape, turn this off (or turn off Radeon Chill / Frame Rate Target Control in AMD Software).')}
          ${range('fpsCap', 'FPS limit', 30, 250, 10)}
          ${toggle('rawMouse', 'Raw mouse input', 'Reads the mouse directly while it is locked to the game. If your FPS drops in a match but goes back up when you press Escape, try switching this.')}
          ${toggle('dynamicResolution', 'Dynamic resolution', 'Lowers the resolution a little when the game can\'t keep up, so it stays smooth instead of dropping to 20-30 FPS.')}

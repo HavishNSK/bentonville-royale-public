@@ -7,6 +7,20 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.19.4',
+    date: '2026-11-19',
+    title: 'Fullscreen setting',
+    sections: [
+      {
+        heading: 'Settings',
+        items: [
+          'New setting: Fullscreen when playing (Settings > Game, on by default). Turn it off to play in the browser window.',
+          'Stuck at 20-30 FPS in fullscreen but fine after pressing Escape? Some graphics drivers slow down a fullscreen browser. Turn this setting off, or turn off Radeon Chill and Frame Rate Target Control in AMD Software.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.19.3',
     date: '2026-11-19',
     title: 'FPS details',

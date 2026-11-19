@@ -60,6 +60,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   editOnRelease: false, // releasing the mouse after selecting edit tiles confirms the edit
   editWheelReset: false, // the mouse wheel resets the piece being edited
   difficulty: 'normal', // 'easy' | 'normal' | 'hard'
+  fullscreen: true, // go fullscreen when a match starts / resumes
   fpsCap: 250, // FPS limit, 30 .. 250; FPS_UNLIMITED (250) = no limit
   rawMouse: false, // pointer lock with unadjustedMovement (raw input, no OS acceleration)
   dynamicResolution: true, // drop the render resolution under load instead of the frame rate
@@ -128,6 +129,7 @@ export function sanitizeSettings(raw) {
     editOnRelease: bool(s.editOnRelease, d.editOnRelease),
     editWheelReset: bool(s.editWheelReset, d.editWheelReset),
     difficulty: DIFFICULTY_OPTIONS.includes(s.difficulty) ? s.difficulty : d.difficulty,
+    fullscreen: bool(s.fullscreen, d.fullscreen),
     fpsCap: Math.round(num(s.fpsCap, 30, FPS_UNLIMITED, d.fpsCap)),
     rawMouse: bool(s.rawMouse, d.rawMouse),
     dynamicResolution: bool(s.dynamicResolution, d.dynamicResolution),

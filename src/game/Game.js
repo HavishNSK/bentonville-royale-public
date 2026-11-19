@@ -162,7 +162,9 @@ export class Game {
     this.input.rawMouse = !!this.settings.rawMouse;
     this._lockAndFullscreen = () => {
       this.input.lock();
-      if (!document.fullscreenElement) {
+      // settings.fullscreen off: stay in the window (some GPU drivers, e.g. AMD Radeon Chill /
+      // Frame Rate Target Control, throttle a fullscreen browser to 20-30 FPS)
+      if (this.settings.fullscreen !== false && !document.fullscreenElement) {
         document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
       }
     };
@@ -1835,6 +1837,10 @@ export class Game {
     if (sfx.setUiVolume) sfx.setUiVolume(this.settings.uiVolume ?? 1);
     if (this.settings.musicVolume != null) sfx.setMusicVolume(this.settings.musicVolume);
     if (typeof document !== 'undefined') createFpsMeter(document.body).setVisible(!!this.settings.showFps); // shared with the settings screen
+    // turned fullscreen off mid-match: leave it now
+    if (this.settings.fullscreen === false && typeof document !== 'undefined' && document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    }
     if (this.input) {
       this.input.setBindings(this.settings.bindings);
       this.input.rawMouse = !!this.settings.rawMouse;
