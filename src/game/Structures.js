@@ -58,6 +58,7 @@
 import * as THREE from 'three';
 import { toToon } from '../render/Toon.js';
 import { BUILD, MATERIALS, MATERIAL_COLOR, clamp } from '../core/config.js';
+import { boxContains } from '../world/boxColliders.js';
 
 const CELL = BUILD.cell;
 const LEVEL = BUILD.level;
@@ -96,6 +97,9 @@ const GROUND_SNAP = 0.1;
 const GROUND_TOL = 0.75;
 // Feet this close to the terrain count as "standing on the ground" for planning.
 const ON_GROUND = 0.6;
+// Ground the world grid would sink a piece under by more than LOW_SINK (below the lowest
+// terrain of its cell) gets a grid through that lowest point instead (Structures.plan).
+const LOW_SINK = 0.35;
 /** The level grid's offset (0..LEVEL) for a surface at height y, to the cm. */
 function levelPhase(y) {
   if (!Number.isFinite(y)) return 0;
@@ -272,6 +276,51 @@ export function validEdit(kind, mask) {
   if (kind === 'wall') return mask < 0x1ff; // any selection, just not every tile
   if (kind === 'floor' || kind === 'cone') return mask < 15;
   return false;
+}
+
+// ---------------------------------------------------------------- simple build / simple edit
+
+/**
+ * Preset structures (Simple Build): ordinary pieces on the normal grid, around the player's own
+ * cell, placed in this order (walls first, so a roof always has something to rest on).
+ * Each entry: [kind, quarter turns from the facing (walls: which side of the cell), pitch].
+ */
+export const PRESETS = Object.freeze({
+  box: { label: 'Box', parts: [['wall', 0], ['wall', 1], ['wall', 2], ['wall', 3], ['cone', 0, 0.8]] },
+  rampwall: { label: 'Ramp + Wall', parts: [['wall', 0], ['ramp', 0, -1]] },
+  tower: { label: 'Tower', parts: [['wall', 0], ['wall', 1], ['wall', 2], ['wall', 3], ['ramp', 0, -1]] },
+  cover: { label: 'Cover', parts: [['wall', 0], ['wall', 1], ['wall', 3]] },
+});
+export const PRESET_ORDER = Object.freeze(['box', 'rampwall', 'tower', 'cover']);
+
+// Wall tiles are row * 3 + column, row 0 at the bottom, column 0 on the wall's local -x side.
+const W_DOOR = [(1 << 0) | (1 << 3), (1 << 1) | (1 << 4), (1 << 2) | (1 << 5)]; // by column
+const W_WINDOW = [1 << 3, 1 << 4, 1 << 5];
+const W_HALF = (1 << 6) | (1 << 7) | (1 << 8); // top row out: a half wall
+const W_ARCH = (1 << 1) | (1 << 3) | (1 << 4) | (1 << 5); // the middle row and the bottom centre
+
+/**
+ * Simple Edit: the edit one click on `tile` makes (Fortnite's simple edit). Walls: bottom row ->
+ * a door in that column, middle row -> a window, top centre -> a half wall, top corner -> an
+ * arch. Floors / cones: that quarter. Ramps: a quarter turn. Clicking the shape the piece already
+ * has puts it back as placed (`current` = its edit value, `reset` = its value as placed).
+ */
+export function simpleEditMask(kind, tile, current = 0, reset = 0) {
+  if (!Number.isInteger(tile) || tile < 0) return -1;
+  let m = -1;
+  if (kind === 'wall') {
+    if (tile > 8) return -1;
+    const r = Math.floor(tile / 3);
+    const c = tile % 3;
+    m = r === 0 ? W_DOOR[c] : r === 1 ? W_WINDOW[c] : c === 1 ? W_HALF : W_ARCH;
+  } else if (kind === 'floor' || kind === 'cone') {
+    if (tile > 3) return -1;
+    m = 1 << tile;
+  } else if (kind === 'ramp') {
+    return ((current | 0) + 1) % 4;
+  }
+  if (m === current) return reset;
+  return validEdit(kind, m) ? m : -1;
 }
 
 /** Cone face under local offset (dx, dz): 0 = -z, 1 = +x, 2 = +z, 3 = -x. */
@@ -761,7 +810,11 @@ export class Structures {
    * { kind, x, y, z, rot, valid, level, key } — x/z are the piece's base
    * centre (cell centre, or edge midpoint for walls), y its base height.
    */
-  plan(kind, pos, heading, pitch = 0, out = {}) {
+  /**
+   * strictAhead (players): "ahead" is always a neighbouring cell. Bots' chains and towers keep
+   * the short lookahead, which can resolve to their own cell (a tower's ramps up its box).
+   */
+  plan(kind, pos, heading, pitch = 0, out = {}, strictAhead = false) {
     const fx = Math.sin(heading);
     const fz = -Math.cos(heading);
     // the level the feet are on; a player standing on the terrain builds at the ground
@@ -771,8 +824,12 @@ export class Structures {
     // a landmark slab (the museum's floors sit 0.45 m above the clamped terrain under them) is
     // not the terrain: build on its own grid, flush with it
     const surf = w && w.groundHeight ? w.groundHeight(pos.x, pos.z, pos.y + 0.3) : -Infinity;
-    const onSlab = !!(w && w.terrainHeight) && surf > w.terrainHeight(pos.x, pos.z) + 0.15;
-    const onGround = !!(w && w.terrainHeight) && pos.y - w.terrainHeight(pos.x, pos.z) < ON_GROUND && !standOn && !onSlab;
+    // inside an enterable building the storey floor is the surface: the ground storey's floor is
+    // the lowest terrain under the footprint, not on the 3 m lattice, so start the grid there
+    const shellC = w && w.polyAt ? w.polyAt(pos.x, pos.z) : null;
+    const indoors = !!(shellC && shellC.shell && pos.y >= shellC.shell.floor - 0.5 && pos.y < shellC.shell.ceil);
+    const onSlab = !!(w && w.terrainHeight) && (indoors || surf > this._ground(pos.x, pos.z) + 0.15);
+    const onGround = !!(w && w.terrainHeight) && pos.y - this._ground(pos.x, pos.z) < ON_GROUND && !standOn && !onSlab;
     // off the terrain the level grid follows what the feet stand on: a built piece keeps its own
     // grid, and a landmark slab (the museum's floors at -7 / -11, its roofs) starts a grid at
     // its surface, so the first piece sits flush instead of 1 m above or below the floor
@@ -780,7 +837,7 @@ export class Structures {
     // at some odd height: its own base keeps the grid instead (the slope height shifted every
     // piece off the levels for the length of the jump)
     const under = !onGround && !standOn && Number.isFinite(surf) ? this._pieceAtSurface(pos.x, pos.z, surf) : null;
-    const phase = onGround ? 0 : standOn ? levelPhase(standOn.y) : under ? levelPhase(under.y) : levelPhase(Number.isFinite(surf) ? surf : 0);
+    let phase = onGround ? 0 : standOn ? levelPhase(standOn.y) : under ? levelPhase(under.y) : levelPhase(Number.isFinite(surf) ? surf : 0);
     const kFeet = Math.floor((pos.y - phase) / LEVEL + 0.34);
     let dk = 0;
     let x;
@@ -819,7 +876,7 @@ export class Structures {
         // feet in the back of the cell: the lookahead fell short of the next cell. "Ahead" is
         // always a neighbour (a ramp here went under our own feet, lifted us onto it, and the
         // held click then stacked a second ramp right over our head)
-        if (ti === ci && tj === cj) {
+        if (strictAhead && ti === ci && tj === cj) {
           if (Math.abs(fx) >= Math.abs(fz)) ti = ci + (fx > 0 ? 1 : -1);
           else tj = cj + (fz > 0 ? 1 : -1);
         }
@@ -848,6 +905,21 @@ export class Structures {
       }
     }
     let k = (onGround ? this._groundLevel(x, z) : kFeet) + dk;
+    // never under the ground you see: a piece the grid would put below the lowest ground of
+    // its cell (the Crystal Bridges ravine floor, pond beds and banks at -12 .. -14 m, its grass
+    // berms, a raised gallery floor or step next to the one you stand on, a slope) goes on a
+    // grid through that lowest point instead (like a landmark slab): flush on flat ground, dug
+    // into the high side of a slope, never floating. Ground is looked up from just under the next
+    // level, so a floor or roof a level up is not "the ground". Building off your own pieces
+    // keeps their grid; ground near the grid (the flat map at y = 0) keeps the shared grid.
+    // (twice: the first lift can bring a block standing on that ground within reach)
+    for (let pass = 0; pass < 2 && !standOn && !under; pass++) {
+      const yb = phase + k * LEVEL;
+      const low = this._lowGround(x, z, yb + LEVEL - 0.05);
+      if (low === null || low - yb <= LOW_SINK) break;
+      phase = levelPhase(low);
+      k = Math.round((low - phase) / LEVEL);
+    }
     rot = ((rot % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
     // standing on a ramp in a box and ramping again: that spot is taken by the ramp we are on,
     // so the new one goes up a level (keeps climbing, like a ramp rush in a box). Only boxed in
@@ -865,6 +937,27 @@ export class Structures {
     out.level = k;
     out.key = slotKey(kind, x, out.y, z, rot);
     out.valid = this._valid(out);
+    return out;
+  }
+
+  /**
+   * Simple Build: plan a preset (PRESETS) around the actor's own cell. Returns placements in
+   * build order; each is `valid` when it can go there once the pieces before it are up.
+   */
+  planPreset(name, pos, heading, out = []) {
+    out.length = 0;
+    const preset = PRESETS[name];
+    if (!preset) return out;
+    const h0 = Math.round(heading / (Math.PI / 2)) * (Math.PI / 2);
+    const keys = new Set();
+    for (const [kind, q, pitch] of preset.parts) {
+      const pl = this.plan(kind, pos, h0 + q * (Math.PI / 2), pitch || 0, {});
+      if (keys.has(pl.key)) continue;
+      keys.add(pl.key);
+      // a roof or ramp held up by this preset's own walls counts as supported
+      if (!pl.valid && out.length && this.pieces.length + out.length < BUILD.maxPieces && !this.slots.has(pl.key) && this.fits(pl)) pl.valid = true;
+      out.push(pl);
+    }
     return out;
   }
 
@@ -989,10 +1082,59 @@ export class Structures {
   }
 
   /** Ground level (grid level index) of the terrain at (x, z). */
-  _groundLevel(x, z) {
+  /**
+   * The lowest solid ground around (x, z) (a cell, or both sides of a wall's edge), to the cm,
+   * counting only ground up to topY (just under the next build level). See _solidAt.
+   */
+  _lowGround(x, z, topY = Infinity) {
     const w = this.world;
-    const h = w && w.terrainHeight ? w.terrainHeight(x, z) : 0;
-    return Math.floor(h / LEVEL + GROUND_SNAP);
+    if (!w || !w.terrainHeight) return null;
+    let lo = Infinity;
+    for (let a = -1; a <= 1; a++) {
+      for (let b = -1; b <= 1; b++) {
+        const h = this._solidAt(x + a * (HALF - 0.1), z + b * (HALF - 0.1), topY);
+        if (!Number.isFinite(h)) return null;
+        lo = Math.min(lo, h);
+      }
+    }
+    return Math.round(lo * 100) / 100;
+  }
+
+  /**
+   * Solid ground at (x, z): the terrain (and building foundations), raised by landmark blocks
+   * that stand on it (the museum's gallery floors, grass berms, steps, plinths; stacked ones
+   * too) up to topY. Bridge decks with room under them and built pieces are not ground.
+   */
+  _solidAt(x, z, topY) {
+    const w = this.world;
+    let y = w.surfaceHeight ? w.surfaceHeight(x, z) : w.terrainHeight(x, z);
+    const cell = Number.isFinite(topY) && w.cellAt ? w.cellAt(x, z) : null;
+    const boxes = cell && cell.boxes;
+    if (!boxes) return y;
+    for (let pass = 0; pass < 3; pass++) {
+      let up = false;
+      for (const c of boxes) {
+        if (c.passable || c.alive === false || c.y1 <= y + 0.01 || c.y1 > topY || c.y0 > y + 0.6) continue;
+        if (boxContains(c, x, z)) {
+          y = c.y1;
+          up = true;
+        }
+      }
+      if (!up) break;
+    }
+    return y;
+  }
+
+  _groundLevel(x, z) {
+    return Math.floor(this._ground(x, z) / LEVEL + GROUND_SNAP);
+  }
+
+  /** The ground players stand on: graded terrain (World.surfaceHeight: foundations cut in), else raw terrain. */
+  _ground(x, z) {
+    const w = this.world;
+    if (!w) return 0;
+    if (w.surfaceHeight) return w.surfaceHeight(x, z);
+    return w.terrainHeight ? w.terrainHeight(x, z) : 0;
   }
 
   /**
@@ -1022,7 +1164,7 @@ export class Structures {
     const pts = pl.kind === 'wall'
       ? (Math.abs(Math.sin(pl.rot)) < 0.5 ? [[-e, 0], [0, 0], [e, 0]] : [[0, -e], [0, 0], [0, e]])
       : [[-e, -e], [e, -e], [e, e], [-e, e], [0, 0]];
-    for (const [ox, oz] of pts) if (w.terrainHeight(pl.x + ox, pl.z + oz) < top - 0.1) return false;
+    for (const [ox, oz] of pts) if (this._ground(pl.x + ox, pl.z + oz) < top - 0.1) return false;
     return true;
   }
 
@@ -1112,7 +1254,40 @@ export class Structures {
   }
 
   /** Show / hide the translucent ghost (blue = valid, red = blocked). `mat` is remembered in this.ghostMaterial. */
+  /** Simple Build preview: one ghost per preset piece (null / [] hides them). */
+  setPresetGhosts(list, mat) {
+    const pool = this._presetGhosts || (this._presetGhosts = []);
+    const n = list ? list.length : 0;
+    let anyOk = false;
+    for (let i = 0; i < Math.max(n, pool.length); i++) {
+      const pl = i < n ? list[i] : null;
+      let g = pool[i];
+      if (pl && (!g || g.userData.kind !== pl.kind)) {
+        if (g) this.group.remove(g);
+        const src = this.ghosts[pl.kind];
+        if (!src) continue;
+        g = pool[i] = src.clone(); // shares the ghost geometry and materials
+        g.userData.kind = pl.kind;
+        this.group.add(g);
+      }
+      if (!g) continue;
+      g.visible = !!pl;
+      if (!pl) continue;
+      g.position.set(pl.x, pl.y, pl.z);
+      g.rotation.set(0, -pl.rot, 0);
+      if (pl.valid) anyOk = true;
+    }
+    if (n) {
+      for (const k in this.ghosts) this.ghosts[k].visible = false;
+      const col = anyOk ? GHOST_OK : GHOST_BAD;
+      this.ghostMat.color.setHex(col);
+      this.ghostLineMat.color.setHex(col);
+    }
+    this.ghostMaterial = mat || null;
+  }
+
   setGhost(placement, mat) {
+    if (this._presetGhosts && this._presetGhosts.length) for (const g of this._presetGhosts) g.visible = false;
     for (const k in this.ghosts) {
       if (!placement || k !== placement.kind) this.ghosts[k].visible = false;
     }
@@ -1631,8 +1806,79 @@ export class Structures {
 
   // ----------------------------------------------------------------- per frame
 
+  /**
+   * Compile every build shader now (each kind x material batch, the tile batches, the ghosts
+   * and the edit grid, shadow passes included) instead of on the first piece of the match: that
+   * first wall used to stall a frame for ~400 ms. Empty batches show one instance far under the
+   * map for the next few rendered frames, then hide again (update()).
+   */
+  warm() {
+    if (!this.batches) return;
+    const hidden = new THREE.Matrix4().makeTranslation(0, -5000, 0);
+    this._warmed = [];
+    for (const k in this.batches) {
+      const b = this.batches[k];
+      if (b.list.length) continue;
+      b.mesh.setMatrixAt(0, hidden);
+      b.mesh.count = 1;
+      b.mesh.visible = true;
+      b.mesh.instanceMatrix.needsUpdate = true;
+      this._warmed.push(b);
+    }
+    for (const k in this.ghosts || {}) {
+      const g = this.ghosts[k];
+      if (g.visible) continue;
+      g.position.set(0, -5000, 0);
+      g.visible = true;
+      this._warmed.push({ ghost: g });
+    }
+    for (const k in this.editGhosts || {}) {
+      const g = this.editGhosts[k];
+      if (g.visible) continue;
+      g.position.set(0, -5000, 0);
+      g.visible = true;
+      this._warmed.push({ ghost: g });
+    }
+    // keep them up until they have really been drawn twice (main + shadow passes): a match can
+    // start under the loading screen, where the game updates without rendering
+    this._warmRenders = 0;
+    this._warmT = 0;
+    const probe = this._warmed.find((w) => w.mesh);
+    if (probe) {
+      const prev = probe.mesh.onAfterRender;
+      probe.mesh.onAfterRender = (...args) => {
+        this._warmRenders++;
+        if (prev) prev.apply(probe.mesh, args);
+      };
+      this._warmProbe = { mesh: probe.mesh, prev };
+    }
+  }
+
+  _endWarm() {
+    if (this._warmProbe) {
+      this._warmProbe.mesh.onAfterRender = this._warmProbe.prev || (() => {});
+      this._warmProbe = null;
+    }
+    for (const w of this._warmed || []) {
+      if (w.ghost) {
+        // a ghost the player started using meanwhile keeps its own visibility
+        if (w.ghost.position.y === -5000) w.ghost.visible = false;
+        continue;
+      }
+      if (w.list.length) continue; // a real piece took instance 0 meanwhile
+      w.mesh.count = 0;
+      w.mesh.visible = false;
+    }
+    this._warmed = null;
+  }
+
   update(dt) {
     this._time += dt;
+    if (this._warmed) {
+      this._warmT += dt;
+      // drawn twice, or (headless / never rendered) a 20 s backstop
+      if (this._warmRenders >= 2 || this._warmT > 20 || typeof window === 'undefined') this._endWarm();
+    }
     for (const p of this._doorsMoving) {
       let moving = false;
       for (let c = 0; c < 3; c++) {

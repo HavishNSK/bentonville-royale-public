@@ -29,7 +29,7 @@
 //                around a->b, solid for y0 <= y <= y1). Solid partition runs (one per panel)
 //                and door lintels (y0 = door top) are both entries.
 //     wallMeta   [{ kind: 'wall' | 'lintel', panel, door, ra, rb, nx, nz }] parallel to walls:
-//                panel = index in plan.panels (-1 for lintels), door = index in doors (-1 none),
+//                panel = index in plan.panels (a lintel is its own kind 'lintel' panel), door = index in doors (-1 none),
 //                ra / rb = room on the -n / +n side (-1 none), (nx, nz) = unit normal toward rb
 //     doors      [{ x, z, nx, nz, w, roomA, roomB, open? }]  interior doorways (centre on the wall
 //                line, normal toward roomB, clear width w, open from y to y + doorH; open: true =
@@ -54,7 +54,11 @@
 //   hash       uint32 FNV-1a over the quantised plan
 // }
 // panel = {
-//   id, kind: 'outer' | 'inner' | 'floor', level   ('floor': a slab tile, see interiors/floorTiles.js)
+//   id, kind: 'outer' | 'inner' | 'lintel' | 'floor' | 'roof', level   ('floor': a slab tile, see
+//                     interiors/floorTiles.js; 'roof' and the outer door lintels: interiors/shellPanels.js)
+//   lintel            the wall over a doorway. Interior: like 'inner' (ax..bz, wall; wood, innerHp).
+//                     Exterior (has e, f0, f1 like 'outer'; ax..bz = its wall centre line): the
+//                     building's material and hp, doorTop -> ground ceiling.
 //   e, f0, f1         outer only: footprint edge e (vertex e -> e + 1) between fractions f0 < f1
 //   ax, az, bx, bz    inner only: the wall centre line (world); the matching walls entry is wall
 //   wall              inner only: index of its entry in levels[level].walls (stride 7 index / 7)
@@ -76,8 +80,10 @@ import { LANDMARK_RECIPES, classify } from './interiors/landmarks.js';
 import { storeyCount, addStoreys, FLOOR_THICKNESS } from './interiors/storeys.js';
 import { furnishInterior } from './interiors/furnishings.js';
 import { addFloorTiles } from './interiors/floorTiles.js';
+import { addShellPanels } from './interiors/shellPanels.js';
 
-export const INTERIOR_VERSION = 8;
+export const INTERIOR_VERSION = 10;
+const ROOF_SLAB = 0.35; // roof slab over a one-storey building's full-height room (World ROOF_T)
 
 const HUB = { corridor: 1, hall: 1, lobby: 1, sales: 1, living: 1, open: 1 };
 
@@ -246,7 +252,7 @@ export function planInterior(bd, shell, ctx = {}) {
   }
   const recipe = classify(bd, pois, shell.area);
   const fn = recipe === 'landmark' ? LANDMARK_RECIPES[id] : RECIPES[recipe] || RECIPES.hall;
-  const count = ctx._single ? 1 : storeyCount(bd, shell);
+  const count = ctx._single || ctx._flat ? 1 : storeyCount(bd, shell);
   const f = {
     levels: count,
     L: F.L,
@@ -270,7 +276,10 @@ export function planInterior(bd, shell, ctx = {}) {
   placeDoors(lay.rooms, lay.pieces, (k) => q(1.6 + 0.2 * hash01(id, 31 + k)), (r) => !!HUB[r.kind]);
 
   const y = shell.floor;
-  const ceil = count > 1 ? q(Math.min(shell.ceil, shell.floor + (bd.h - 0.2) / count - FLOOR_THICKNESS)) : shell.ceil;
+  // one storey (not an upper level): the room is the building's full height under the roof slab,
+  // so no solid block is left above the ceiling (every wall above it is a breakable panel)
+  const fullH = Number.isFinite(bd.h) && !ctx._single ? q(shell.floor + bd.h - ROOF_SLAB) : -Infinity;
+  const ceil = count > 1 ? q(Math.min(shell.ceil, shell.floor + (bd.h - 0.2) / count - FLOOR_THICKNESS)) : Math.max(shell.ceil, fullH);
   const doorH = shell.doorH;
   const rooms = lay.rooms.map((r, i) => {
     const [ca, cb] = roomPoint(r, Ploc);
@@ -354,8 +363,15 @@ export function planInterior(bd, shell, ctx = {}) {
       solid(p.s0, q(d0 - R), di);
       const [lax, laz] = W0(d0);
       const [lbx, lbz] = W0(d1);
+      // the wall over the doorway: a breakable panel too (kind 'lintel', wood like the partition)
+      const lid = panels.length;
+      const lwi = walls.length / 7;
       walls.push(lax, laz, lbx, lbz, R, y + doorH, ceil);
-      wallMeta.push({ kind: 'lintel', panel: -1, door: di, ra: p.ra, rb: p.rb, nx: nrm[0], nz: nrm[1] });
+      wallMeta.push({ kind: 'lintel', panel: lid, door: di, ra: p.ra, rb: p.rb, nx: nrm[0], nz: nrm[1] });
+      panels.push({
+        id: lid, kind: 'lintel', level: 0, ax: lax, az: laz, bx: lbx, bz: lbz, wall: lwi, y0: y + doorH, y1: ceil, mat: 'wood',
+        hp: W.innerHp, maxHp: W.innerHp, alive: true, x: (lax + lbx) / 2, z: (laz + lbz) / 2,
+      });
       solid(q(d1 + R), p.s1, di);
     } else solid(p.s0, p.s1, -1);
   }
@@ -387,7 +403,7 @@ export function planInterior(bd, shell, ctx = {}) {
   for (let i = 0; i < wf.length; i++) h = fnv(h, Q(wf[i]));
   for (const d of ldoors) for (const v of [d.x, d.z, d.w]) h = fnv(h, Q(v));
   for (const pn of panels) {
-    h = fnv(h, pn.kind === 'outer' ? 1 : 2);
+    h = fnv(h, pn.kind === 'outer' ? 1 : pn.kind === 'lintel' ? 3 : 2);
     if (pn.kind === 'outer') {
       h = fnv(h, pn.e);
       h = fnv(h, Math.round(pn.f0 * 65536));
@@ -415,7 +431,11 @@ export function planInterior(bd, shell, ctx = {}) {
   if (ctx._single) return plan;
   const complete = addStoreys(plan, bd, { ...shell, ceil }, count, trees, authored?.stairs, (upperShell, upperTree) =>
     planInterior(bd, upperShell, { ...ctx, _single: true, _tree: upperTree }));
-  return addFloorTiles(furnishInterior(complete, shell), shell); // breakable slabs between storeys
+  // no stair shaft fits: plan it again as one full-height storey
+  if (count > 1 && complete.levels.length < 2) return planInterior(bd, shell, { ...ctx, _flat: true });
+  const top = Number.isFinite(bd.h) ? shell.floor + bd.h : NaN;
+  // breakable slabs between storeys, then the exterior wall above the ground storey and the roof
+  return addShellPanels(addFloorTiles(furnishInterior(complete, shell), shell), bd, shell, top);
 }
 
 /**

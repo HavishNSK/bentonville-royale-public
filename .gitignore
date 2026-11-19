@@ -5,6 +5,7 @@ _dl
 data-raw
 tools/qa/node_modules
 tools/qa/out
+tools/flyer/out
 .DS_Store
 .env
 .env.*
@@ -22,3 +23,6 @@ local-music/
 # CrazyGames portal build (npm run build:crazygames)
 dist-crazygames
 bentonville-royale-crazygames.zip
+
+# skin lab renders (tools/skins/render.mjs)
+tools/skins/out

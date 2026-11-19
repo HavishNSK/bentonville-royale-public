@@ -24,7 +24,7 @@ test('a ramp from the back of a cell goes in the next cell, never under your own
   for (const o of [3.2, 3.3, 3.45, 3.6, 3.9]) {
     const { st } = setup();
     const pos = { x: 2, y: 0, z: 4 + o };
-    const pl = st.plan('ramp', pos, 0, 0, {});
+    const pl = st.plan('ramp', pos, 0, 0, {}, true); // as a player plans
     assert.equal(pl.valid, true, `offset ${o}: valid`);
     assert.notEqual(cellOf(pl.z), cellOf(pos.z), `offset ${o}: ramp planned in the player's own cell`);
     assert.equal(cellOf(pl.z), cellOf(pos.z) - 1, `offset ${o}: the cell ahead`);
@@ -44,7 +44,7 @@ test('holding the click after placing one ramp never stacks a second one over th
         pos.z -= walk * dt;
         pos.y = Math.max(0, world.groundHeight(pos.x, pos.z, pos.y + 0.6));
         cooldown -= dt;
-        const pl = st.plan('ramp', pos, 0, 0, {});
+        const pl = st.plan('ramp', pos, 0, 0, {}, true);
         if ((f === 0 || (held > 0 && cooldown <= 0)) && pl.valid) {
           st.place(pl, 'wood', null);
           cooldown = 0.07; // Player.tryPlace: hold-to-build repeat

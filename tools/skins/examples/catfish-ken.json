@@ -1,0 +1,80 @@
+{
+  "name": "Catfish Ken Superfan",
+  "model": "player",
+  "rarity": "epic",
+  "parts": {
+    "head": "bot_c",
+    "hat": null,
+    "legs": "bot_b",
+    "cape": null
+  },
+  "colors": {
+    "shirt": "#8a5cf0",
+    "cloak": "#6a3fd0",
+    "leather": "#2a2540",
+    "metal": "#ffc21f",
+    "pouch": "#ffc21f",
+    "gloves": "#ffc21f",
+    "pants": "#fff1d6",
+    "boots": "#ffc21f",
+    "hair": "#3a2a20"
+  },
+  "addons": [
+    {
+      "shape": "dome",
+      "bone": "head",
+      "pos": [
+        0,
+        0.42,
+        -0.02
+      ],
+      "scale": [
+        1.0,
+        0.86,
+        1.0
+      ],
+      "color": "#8a5cf0"
+    },
+    {
+      "shape": "cone",
+      "bone": "head",
+      "pos": [
+        0,
+        0.9,
+        -0.08
+      ],
+      "rot": [
+        -20,
+        0,
+        0
+      ],
+      "scale": [
+        0.05,
+        0.3,
+        0.36
+      ],
+      "color": "#ffc21f"
+    },
+    {
+      "shape": "cylinder",
+      "bone": "head",
+      "pos": [
+        0.27,
+        0.12,
+        0.36
+      ],
+      "rot": [
+        0,
+        0,
+        64
+      ],
+      "scale": [
+        0.028,
+        0.3,
+        0.028
+      ],
+      "color": "#1b1d24",
+      "mirror": true
+    }
+  ]
+}

@@ -487,6 +487,32 @@ def('building_collapse', { vol: 0.95, ref: 14, max: 190, roll: 1.6, vary: 0.06, 
   }
 });
 
+// --- Cars ------------------------------------------------------------------
+
+def('horn', { vol: 0.7, ref: 14, max: 160, roll: 1.4, vary: 0.02, pri: 1.2 }, (v) => {
+  // two-tone car horn, a little brassy
+  v.tone({ type: 'square', f: 392, dur: 0.55, g: 0.28, a: 0.01, env: [[0.02, 1], [0.48, 0.9], [0.55, 0]], flt: { type: 'lowpass', f: 2200 } });
+  v.tone({ type: 'square', f: 494, dur: 0.55, g: 0.24, a: 0.01, env: [[0.02, 1], [0.48, 0.9], [0.55, 0]], flt: { type: 'lowpass', f: 2200 } });
+  v.tone({ type: 'sawtooth', f: 196, dur: 0.55, g: 0.1, a: 0.01, env: [[0.02, 1], [0.48, 0.8], [0.55, 0]], flt: { type: 'lowpass', f: 900 } });
+});
+
+def('glass_break', { vol: 0.75, ref: 6, max: 70, vary: 0.08, pri: 1.1 }, (v) => {
+  v.noise({ dur: 0.06, g: 0.9, a: 0.001, flt: { type: 'highpass', f: 2500 } });
+  for (let i = 0; i < 9; i++) tick(v, rnd(0.0, 0.35), rnd(2500, 7000), rnd(0.02, 0.06), rnd(0.15, 0.4), 'bandpass', 6);
+  v.noise({ type: 'pink', at: 0.02, dur: 0.4, g: 0.35, env: [[0.03, 1], [0.4, 0]], flt: { type: 'highpass', f: 3500 } });
+});
+
+def('car_door', { vol: 0.55, ref: 4, max: 30, vary: 0.1 }, (v) => {
+  thump(v, 0, 140, 70, 0.12, 0.7);
+  tick(v, 0.01, 1300, 0.04, 0.3, 'bandpass', 2);
+});
+
+def('car_crash', { vol: 0.85, ref: 10, max: 120, roll: 1.6, vary: 0.08, pri: 1.4 }, (v) => {
+  thump(v, 0, 110, 40, 0.25, 0.9);
+  v.noise({ dur: 0.35, g: 0.7, a: 0.001, env: [[0.02, 1], [0.35, 0]], flt: { type: 'bandpass', f: 1200, q: 0.6 } });
+  for (let i = 0; i < 6; i++) tick(v, rnd(0.0, 0.3), rnd(900, 3200), rnd(0.03, 0.08), rnd(0.15, 0.35));
+});
+
 // --- Grenades --------------------------------------------------------------
 
 def('explosion', { vol: 1, ref: 16, max: 240, roll: 1.5, vary: 0.05, pri: 2 }, (v) => {
@@ -815,6 +841,20 @@ const LOOPS = {
       k.osc('sine', 0.23, 380, whistle.frequency);
       k.osc('sine', 0.17, 0.14, whistleGain.gain);
       k.noise('brown', 'lowpass', 180, 0.7, k.gain(0.8, out));
+      return src;
+    },
+  },
+  // Car engine (the car you ride in): a low idle hum; setLoopGain with the revs.
+  engine: {
+    vol: 0.32,
+    build(ctx, out, noise, t) {
+      const src = [];
+      const k = loopKit(ctx, noise, t, src);
+      const body = k.gain(0.6, out);
+      k.osc('sawtooth', 46, 0.5, body);
+      k.osc('square', 92, 0.12, body);
+      k.osc('sine', 9, 0.18, body.gain);
+      k.noise('brown', 'lowpass', 240, 0.7, k.gain(0.7, out));
       return src;
     },
   },

@@ -11,10 +11,12 @@ Play a solo match against 31 bots or host a friend lobby with up to eight human 
 Implemented systems include:
 
 - Third-person movement, freefall, gliding, combat, reloads, health, shields, and consumables.
-- Five weapon types, inventory/hotbar, floor loot, chests, and ammo boxes.
+- Five weapon types, inventory/hotbar (Tab opens the inventory: drag a slot onto another, or click two slots, to swap them; click a picked slot again to equip it), floor loot, chests, and ammo boxes.
+- Swimming in ponds is slower and blocks sprint, jump and crouch, but you can still aim, shoot, build, edit and heal in the water.
 - Walls, floors, ramps, and cones using wood, brick, or metal; damage and structural collapse.
 - Scripted bots, difficulty settings, storm phases, victory/defeat screens, minimap, and full map.
 - Team modes: an eliminated player drops a reboot card (it lands on the ground under them); a teammate carries it to one of Catfish Ken's reboot vans and holds interact for 5 seconds (`src/game/Reboot.js`, `REBOOT` in `src/core/config.js`).
+- Gas stations: six forecourts (canopy, pumps, kiosk, a gas can on each) beside the streets, at least one per map quadrant, placed deterministically from the map data (`src/game/vehicles/gasStations.js`). Each flies one of three invented parody brands, two stations each: Clam Oil, Floor Mart and Circle O (names, colours and original marks in one table, `src/game/vehicles/gasBrands.js`; see the owner-approved exception in `AGENTS.md`). On foot within 2 m of a pump, interact grabs its nozzle (weapon put away, no building); the hose reaches 6 m before it snaps back, and holding fire within 2.5 m of a car pumps 10 fuel/s up to a full tank (interact or a slot switch hangs it up). Pumps have 150 HP: bullets, the pickaxe, grenades, rockets and cars hurt them; under 35% one catches fire and burns down, then explodes (blast damage to people and cars nearby) and sets the station's other pumps on fire one after another (`src/game/GasPumps.js`). The host or solo game decides all of it and clients get events. They are not the real stations: none of the real fuel stations in the raw OSM extract fall inside the composed tile map.
 - In-game patch notes (`src/data/patchNotes.js`) and an update flyer (`src/data/updateFlyer.js`, `src/ui/updateFlyer.js`) that opens by itself the first time the title screen shows after an update, once per version (`localStorage` key `bentonville-royale.seenFlyer`).
 - Cartoon rendering, quality settings, synthesized audio with recorded sample fallbacks, and saved player preferences.
 - Friend lobbies via PartyServer/WebSocket rooms; optional Google Photorealistic 3D Tiles as a visual layer.
@@ -51,9 +53,7 @@ Set `VITE_GOOGLE_MAPS_API_KEY` only if using the optional Google view, restart V
 | `VITE_GOOGLE_MAPS_API_KEY` | No | Public browser bundle | Optional Google Map Tiles API key, supplied through `.env.local` locally or the build environment on hosting. Restrict to intended referrers and the Map Tiles API. |
 | `VITE_GOOGLE_CLIENT_ID` | No | Public browser bundle | OAuth Web client ID for Continue with Google (GIS). Authorize JS origins for local and production. Must match Worker `GOOGLE_CLIENT_ID`. |
 | `GOOGLE_CLIENT_ID` | No | Cloudflare Worker (`wrangler` vars/secret) | Same OAuth Web client ID; used as JWT `aud` when verifying Google ID tokens. Empty disables Google login on the server. |
-| `VITE_CLEVER_AUTH` / `VITE_CLEVER_CLIENT_ID` | No | Public browser bundle | Set `VITE_CLEVER_AUTH=1` (or set the Clever client id) to show **Log in with Clever**. |
-| `CLEVER_CLIENT_ID` | No | Cloudflare Worker vars | Clever application client ID (public). |
-| `CLEVER_CLIENT_SECRET` | No | Cloudflare Worker **secret** | Clever application secret. Required for token exchange. Never put in `VITE_*` or git. |
+| `ALLOWED_ORIGINS` | No | Cloudflare Worker vars | Extra comma-separated browser origins allowed to call the account API and open sockets, beyond the built-in list in `party/authLimits.js` (the Vercel site and its previews, `*.crazygames.com`, localhost). |
 
 Every `VITE_*` value is visible to browser users. Use intentionally public restricted keys, never private credentials. Leave Maps unset to disable the Google tiles toggle. Leave the client ID unset to hide Continue with Google. The tiles layer is visual only; retain provider attribution.
 
@@ -65,21 +65,6 @@ Every `VITE_*` value is visible to browser users. Use intentionally public restr
 4. Redeploy the Worker (`npm run party:deploy`) and rebuild/redeploy the static site.
 
 The browser receives a Google ID token; the Accounts Durable Object verifies signature, `iss`, `aud`, and `exp` against Google's JWKS, then creates or resumes an account keyed by Google `sub` (not email). Username/password accounts remain available. This is still a prototype identity layer: room codes are not authentication, and there is no dedicated anti-cheat or trusted match authority.
-
-### Optional Clever Sign-In (school SSO)
-
-Bentonville Google Workspace blocks unverified apps with `Error 400: admin_policy_enforced`, so school Chromebooks should use Clever instead. Clever uses OAuth authorization-code on the Cloudflare Worker (client secret never reaches the browser).
-
-1. Create an app in the [Clever developer dashboard](https://apps.clever.com/).
-2. Set the redirect URI to exactly:
-   `https://bentonville-royale.bentonville-royale.workers.dev/auth/clever/callback`
-3. Ask Bentonville Schools IT / Clever district admins to **share/approve** the app for the district (required for student/staff login).
-4. Put `CLEVER_CLIENT_ID` in `wrangler.jsonc` vars and store the secret with:
-   `npx wrangler secret put CLEVER_CLIENT_SECRET`
-5. Set `VITE_CLEVER_AUTH=1` in `.env.local` and Vercel (gitignored locally; never commit `CLEVER_CLIENT_SECRET`).
-6. Redeploy the Worker and rebuild/redeploy the static site.
-
-Flow: **Log in with Clever** → Clever → Worker callback → one-time `?br_auth=` ticket → game redeems a session. Accounts are keyed by Clever user id (`clever:<id>`), not email. Username/password still works without Clever.
 
 ### Developer Chat Access
 
@@ -93,7 +78,7 @@ Place a personal track at `local-music/menu.mp3`. The dev/preview middleware ser
 
 ## User Flow and Controls
 
-1. Select **PLAY** for solo, or **WITH FRIENDS** to host/join using a room code and display name. **SANDBOX** has no bots or storm; **N** opens the sandbox map (also remappable). Click **WEAPONS** on that map to pick a gun or grenades from pictures, or click a named POI to travel there. Frag grenades and the rocket launcher shatter museum windows and their frames, break benches, and blow chests apart so the loot spills and the chest is gone. Smoke grenades pop a thick opaque cloud, about three times the original area, that hides whatever is behind it.
+1. Select **PLAY** for solo, or **WITH FRIENDS** to host/join using a room code and display name. **SANDBOX** has no bots or storm; **N** opens the sandbox map (also remappable). Click **WEAPONS** on that map to pick a gun or grenades from pictures, or click a named POI (in the list or on the map) or a gas station pump icon (map only, not listed) to travel there. The green **BOTS** button under it opens a separate menu that spawns Easy, Normal or Hard bots 25 m in front of you (`SANDBOX_BOT_DIST`) (each keeps its own difficulty), up to 12 live sandbox bots at once (`SANDBOX_BOT_CAP` in `src/game/sandboxLoadout.js`); **CLEAR** removes them. Sandbox bots have infinite materials, like you there (in a match bots farm theirs over time). **BOTS FIGHT EACH OTHER** (off by default) puts every sandbox bot on its own team so they fight each other as well as you; off, they are one team that only hunts you (switching applies to bots already out). Sandbox is solo only, spawning is refused with a network session, and you can't be eliminated in Sandbox. Frag grenades and the rocket launcher shatter museum windows and their frames, break benches, and blow chests apart so the loot spills and the chest is gone. Smoke grenades pop a thick opaque cloud, about three times the original area, that hides whatever is behind it.
    **BOX FIGHTS:** pick **BOX FIGHTS** in the party panel's BATTLE ROYALE | BOX FIGHTS switch, which replaced the old MUSEUM button. The team buttons then read **1V1 / 2V2 / 3V3 / 4V4**, and **PLAY** starts it: against bots offline, or through matchmaking online. Each team spawns on its own half of a small, solid indoor arena that floats in the void, so the city, minimap and storm are hidden. Building is capped at **two storeys**: the walls, floor and ceiling can't be broken or built past. Rooms are 24 m across for 1v1, 32 m for 2v2 and 40 m for 3v3/4v4.
 
    **Kit.** Everyone, bots included, gets the same kit every round: pump shotgun, assault rifle, SMG, 2 shield tonics, 2 medkits and 500 of each material.
@@ -124,7 +109,7 @@ Place a personal track at `local-music/menu.mp3`. The dev/preview middleware ser
 | M / Escape | Full map / pause |
 | N | Sandbox map (sandbox only; remappable in Settings). Click **WEAPONS** for pictured guns, or a named POI to travel. Fast travel and the weapon menu are not available in matches. **M** still opens the same map in sandbox. |
 
-Click into gameplay to capture the pointer. Settings include sensitivity, invert Y, volume, graphics quality, bot difficulty, and optional Google view. Only matches on **Hard** bot difficulty count toward the RANKS leaderboards (wins and eliminations); Easy and Normal matches still pay coins. In multiplayer the host's difficulty is sent in the start message and decides for everyone. The client reports `ranked` with the match result and the account server (`party/accounts.js`) adds wins/kills only when `ranked === true`. Like kills, this is client-reported, not anti-cheat. Touch gameplay is not implemented.
+Click into gameplay to capture the pointer. Settings include sensitivity, invert Y, volume, graphics quality, bot difficulty, and optional Google view. Bots react to being shot at once: they turn on the shooter, put a wall up on the same frame and keep hunting that shooter (a grudge) until one of them dies, they lose range or the storm forces a rotation. Hard bots shot from 20–120 m build a ramp-and-wall tower toward the shooter, climb it and shoot from the top ramp, rebuilding it if it breaks; up close they box-fight and try to box the enemy in. Bots land with some wood (Normal 60, Hard 120), break out of their own boxes when stuck, and old bot-built pieces far from any human are recycled once the world passes 60% of the build-piece cap (`Bots._reclaimPieces`; player pieces are never removed). Only matches on **Hard** bot difficulty count toward the RANKS leaderboards (wins and eliminations); Easy and Normal matches still pay coins. In multiplayer the host's difficulty is sent in the start message and decides for everyone. The client reports `ranked` with the match result and the account server (`party/accounts.js`) adds wins/kills only when `ranked === true`. Like kills, this is client-reported, not anti-cheat. Touch gameplay is not implemented.
 
 ## Commands and Verification
 
@@ -158,8 +143,8 @@ For future gameplay changes, add targeted unit/integration coverage and critical
 ### Releasing an update
 
 1. Add an entry at the top of `src/data/patchNotes.js` and bump `version` in `package.json` and `package-lock.json` to match.
-2. For a flyer, set `FLYER.version` in `src/data/updateFlyer.js` to that version and update its copy. Put its images in `public/ui/news/`: in-game captures with the HUD hidden, JPEG screenshots and transparent PNG item renders, about 600 KB total. Every player sees the flyer once, the first time the title screen shows after the update.
-3. Run `npm test` (`tests/update-flyer.test.mjs` checks the versions match and every image exists) and `npm run build`.
+2. For a flyer, set `FLYER.version` in `src/data/updateFlyer.js` to that version and update its copy. Its images in `public/ui/news/` (JPEG scene captures with the HUD hidden, transparent PNG item renders) are produced headlessly from a shot list: write `tools/flyer/shots/<version>.mjs`, run `node tools/flyer/capture.mjs`, then check the result with `node tools/flyer/preview.mjs`. The full workflow is in [tools/flyer/README.md](tools/flyer/README.md). Every player sees the flyer once, the first time the title screen shows after the update.
+3. Run `npm test` (`tests/update-flyer.test.mjs` and `tests/flyer-assets.test.mjs` check the versions, that every image exists within its size budget with alt text, and that the shot list covers every image) and `npm run build`.
 
 ## Repository Structure
 
@@ -178,6 +163,8 @@ bentonville-royale/
 ├── public/data/            # Processed map and supplemental data
 ├── scripts/                # Optional map-data generation tools
 ├── tools/qa/               # Standalone Playwright smoke harness
+├── tools/flyer/            # Update-flyer image capture (shot lists) and flyer preview
+├── tools/skins/            # Outfit recipe tools: skin lab renderer, atlas swatch lister
 ├── credits/                # Asset and data provenance
 ├── agents/                 # Historical contracts and handoff reports
 ├── AGENTS.md               # Engineering and security policy
@@ -227,7 +214,7 @@ Every room kind gets a deterministic furniture kit scaled to its size (`src/worl
 
 Larger furniture is solid. Beds, sofas, tables, counters, shelves, crates and similar items block movement through per-level capsule colliders (`levels[i].props`). Players can step onto low pieces and land on taller ones. Pieces marked as cover (counters, shelves, fridges, lockers, crates and similar) also stop bullets and bot sight lines (`levels[i].propBlock`). Chairs, rugs, benches and wall decor never block, and furniture is not destructible. Lighting is baked into vertex colours (skirting, ceiling bands, floor-edge shading, light pools); there are no runtime lights. Props, lights and the 32 room plaques share building chunk geometry and culling, within a render budget of 12,000 quads per ordinary building and 60,000 per landmark. Over budget, decor is trimmed before core furniture.
 
-Pickaxes and bullets damage wall panels; broken panels open matching visual, movement and raycast gaps. Upper partitions are breakable. Floors between storeys (the ceiling of the storey below) are breakable too: each is split into tiles of up to 4 m (2 m in rooms under 80 m²; `src/world/interiors/floorTiles.js`) that you can pickaxe or shoot from above or below, then fall, see, shoot or climb through. A 0.5 m rim along every room edge, and the floor under furniture, ceiling lights and loot, stays solid. Ground floors, stairs, roofs and the exterior wall band above the ground storey remain intact. Host wall events replicate damage and breaks (walls and floor tiles alike), and match reset restores panels. Joining an already-started match is rejected; no late-join snapshot or dedicated authoritative game server is implemented.
+Pickaxes and bullets damage wall panels; broken panels open matching visual, movement and raycast gaps. Upper partitions are breakable. Floors between storeys (the ceiling of the storey below) are breakable too: each is split into tiles of up to 4 m (2 m in rooms under 80 m²; `src/world/interiors/floorTiles.js`) that you can pickaxe or shoot from above or below, then fall, see, shoot or climb through. A 0.5 m rim along every room edge, and the floor under furniture, ceiling lights and loot, stays solid. Every wall and roof surface of an enterable building is a breakable panel: outer walls on every storey, interior partitions, the walls over outer and interior doors (lintels; a room sign over a door goes with its lintel) and the whole roof including its rim (`src/world/interiors/shellPanels.js`). A pickaxe swing on any of them gives `BUILDING_WALL.yield` (10) mats of that panel's material (outer walls, outer lintels and roof: the building's material; partitions and interior lintels: wood); floor tiles and solid (non-enterable) buildings keep `PICKAXE.yield` (20), and bullets / explosions grant no mats. Ground floors and stairs remain intact. Host wall events replicate damage and breaks (walls and floor tiles alike), and match reset restores panels. Joining an already-started match is rejected; no late-join snapshot or dedicated authoritative game server is implemented.
 
 The strict browser interiors script starts free build and exercises Player movement through a door and stairs, Combat pickaxe destruction, upper-floor loot interaction and bot stair movement through the development inspection API. It avoids headless pointer-lock limitations; audible output and real multi-browser relay play still need manual checks.
 
@@ -257,17 +244,19 @@ These sit in a ravine of three ponds that step down northward over two weirs. Th
 
 **Collision.**
 - **Terrain:** the ravine is a site heightfield (`site.js` `bakeTerrain`) laid over the map's USGS terrain with `World.setTerrainOverlay`: inside the tile it is the terrain, and the surrounding hills ease down to street level (y = 0) over 60 m, so the museum's colliders keep their heights. Without map terrain it is the whole heightfield. Entrance paths and terraces (`PADS`) have 6 m sloped shoulders instead of cliff edges, and grass berms fill the clamped trench along walls that face higher ground.
-- **Architecture:** walls, slabs, roofs and stairs are oriented box colliders (`World.addBox`, `src/world/boxColliders.js`). You can walk under the bridges and stand on the roofs.
+- **Architecture:** walls, slabs, roofs and stairs are oriented box colliders (`World.addBox`, `src/world/boxColliders.js`). You can walk under the bridges and stand on the roofs. A collision push can never carry a player or bot through a box wall (`World.crossesSolid`; a stair 0.2 m from the North Tower wall used to push bodies out the far side). The orbit camera casts its shoulder offset and keeps 0.42 m clear of walls, so turning beside a wall never shows its inside.
 - **Hits and materials:**
-  - The walls are indestructible but harvestable for brick (concrete) and wood.
+  - The walls are breakable panels (`build.js` `archPanel`): outer walls, sill walls under raised doors, lintels, transfer walls, the free-standing partitions, the Infinity Room (walls and ceiling) and the bridge abutments. Straight walls are split into panels of at most 3 m (`WALL_PANEL`); bowed walls and walls under a varying roof keep their 1.2 m pieces. A panel has 450 hp (`WALL_HP`, a map building's brick panel; abutments 900). The pickaxe still harvests brick from them until they break, bullets do half damage (`BUILDING_WALL.bulletMult`) and grenades / rockets break every panel in reach. The drawn wall collapses that panel's vertices in the merged per-material mesh (no extra draw calls); the hole is open for walking, shots and bot steering (`World.blockedAt`), while bots still route through the entrances. Box count: 4,687 before the split, 4,979 after.
+  - Floors and plinths, stairs and landings, door thresholds, berms, bridge piers, the outdoor slabs (weirs, balcony), Walker Landing and statue plinths stay solid (harvestable, never break), so you can't fall into the ravine through a floor. Thin upper floors (bridge slabs, the library deck) stay solid too.
+  - Known gaps: a painting or entrance sign on a broken wall panel stays hanging in the air, and a roof keeps standing over broken walls (no structural collapse).
   - The roof is breakable tiles on a shared grid (`build.js` `roofTileLines`, about 4 m, 2 m along curved axes) that overlap so no slit opens between two heights. Bullets, the pickaxe and explosives break them; grenades and rockets do 3x damage to roof tiles over 1.6x / 1.8x their radius (`GRENADE` / `ROCKET` `roofDamageMult`, `roofRadiusMult`). The drawn roof hides a broken tile's patch. The tile under the North Tower high-tier chest stays solid.
-  - Where a taller pavilion opens onto a lower one, a transfer wall closes the gap above the lower roof.
+  - Where a taller pavilion opens onto a lower one, a transfer wall closes the gap above the lower roof. A roof has no eave on a side that butts against another pavilion (`build.js` `roofNeighborSides`), so a lower roof's overhang never pokes into the taller room.
   - Building works on the museum's floors and roofs: off the terrain the build grid follows the surface you stand on, so pieces sit flush (`Structures.plan`).
   - Glass panes break when shot or swung at, and give no materials.
   - Benches, tables, chairs, counters and shelves break and give wood. Every gallery and the Great Hall Corridor has benches, kept clear of the bot lanes and the loot.
-- **Multiplayer:** breakable boxes sync to clients by box id, and clients ignore destroy events for unbreakable boxes.
+- **Multiplayer:** breakable boxes (glass, furniture, roof tiles, wall panels) sync to clients by box id (`cx` event); clients never damage them themselves and ignore destroy events for unbreakable boxes (floors, stairs). A match reset rebuilds every broken box and shows its mesh again.
 
-**Bots.** The museum isn't an OSM shell building, so `nav.js` gives it a waypoint graph that `World.siteNav` exposes. When a bot's goal is inside (or it needs to get out, or change level), `Bots._siteRoute` walks it through the nearest entrance and the stairs. Bots target museum loot up to 16 m below them, since the galleries are in the ravine. Floor slabs are `walkable`, so the A* fallback (`World.blockedAt`) treats pavilion floors as open ground.
+**Bots.** A share of every lobby lands on the museum site (`Bots.crystalBridgesQuota`: 7% of the bots, at most 8). The museum isn't an OSM shell building, so `nav.js` gives it a waypoint graph that `World.siteNav` exposes. When a bot's goal is inside (or it needs to get out, or change level), `Bots._siteRoute` walks it through the nearest entrance and the stairs. Bots target museum loot up to 16 m below them, since the galleries are in the ravine. Floor slabs are `walkable`, so the A* fallback (`World.blockedAt`) treats pavilion floors as open ground.
 
 **Loot.** The museum places its own chests, ammo boxes and floor items (`world.fixedLoot`). Most chests sit on furniture: gallery benches, a library reading table, a café table, a Great Hall table, the lobby desk and the store's display case. Others are tucked away: behind the Contemporary idol, out on the Contemporary balcony, at the foot of the Reflection Room dragon, behind the coffee bar and in Eleven's kitchen. Two high-tier chests sit on the North Elevator Tower roof (reach it by building) and on the weir under Eleven. Generic scatter and loot stay off the site (`world.reserve`). Known gap: breaking a bench or table that holds a chest leaves the chest floating at seat height.
 
@@ -280,7 +269,7 @@ These sit in a ravine of three ponds that step down northward over two weirs. Th
 - **Portals:** walking into Kindred Spirits, The Backwoods of America or Indian Encampment plays musewalk's brush-stroke dissolve and white veil, then moves you to a paired spot. Each player has a 10 s cooldown; bots can't use portals, and they don't work from inside the storm. In multiplayer the host validates range, cooldown, storm and the exact destination.
 - **Ambience:** a synthesized ambience, ported from musewalk, plays on the music bus and ducks under nearby gunfire or the storm.
 
-**Art.** `node scripts/fetch-cb-art.mjs` (Commons) or `node scripts/fetch-cb-art.mjs --source museum` (crystalbridges.org collection records) fetches public-domain paintings in the museum's collection into `public/art/crystal-bridges/`, with provenance in `public/art/sources.json`. Both sources are paced, and only Public Domain / CC0 / CC BY works are accepted. Copyrighted works are never reproduced: they appear as empty frames or plinths with their real labels. See [ASSET_CREDITS.md](ASSET_CREDITS.md).
+**Art.** `node scripts/fetch-cb-art.mjs` (Commons) or `node scripts/fetch-cb-art.mjs --source museum` (crystalbridges.org collection records) fetches public-domain paintings in the museum's collection into `public/art/crystal-bridges/`, with provenance in `public/art/sources.json`. Both sources are paced, and only Public Domain / CC0 / CC BY works are accepted. Copyrighted works are never reproduced: their frames show an original procedural stand-in canvas, with the real label and a "Stand-in" note. Works whose public-domain image has not been downloaded get the same stand-in (labelled "image not downloaded"). Paintings keep a clear view 3.4 m into the room (`hang.js` `VIEW_CLEAR`): no statue, plinth, stair or small room stands in front of one. See [ASSET_CREDITS.md](ASSET_CREDITS.md).
 
 **Verification.**
 - `npm test` covers the box colliders, the site's walkable routes, glass, loot placement and gallery hanging. `tests/crystal-bridges-nav.test.mjs` walks every bot-graph edge both ways and checks the entrances, café, benches, chests and a full bot route from the crest to the Contemporary gallery.
@@ -294,6 +283,18 @@ node tools/qa/smoke.mjs --url http://localhost:5173 --script tools/qa/crystal-br
 - The galleries are rectangular rooms with bowed long walls; the real fan-shaped curved plans are simplified.
 - Bots navigate the museum with the generic open-world steering and can look clumsy on stairs.
 - Measured frame rate held at the 60 fps vsync cap inside and outside the museum in headless Chromium on an Apple M4; a typical laptop has not been measured.
+
+## Outfits (Skins)
+
+Outfits live in `SKINS` in `src/game/Cosmetics.js` (pure data, also read by the account server for prices and ownership). An outfit is one of the four KayKit character kits (`player` rogue, `bot_a` knight, `bot_b` barbarian, `bot_c` mage) with an optional `tint`, or a recipe on top of one:
+
+- `parts`: head, hat, body, arms, legs and cape borrowed from any kit (all four share one skeleton); `hat` / `cape` can be `null`.
+- `colors`: named atlas regions (`shirt`, `pants`, `hair`, `fur`, `armor`...) recoloured with their shading kept.
+- `addons`: a few low-poly primitives or presets (`horns`, `visor`, `crown`, `mask`, `ears`, `antenna`) on a bone, vertex-coloured in the toon style.
+
+`src/game/skinRecipe.js` holds the schema, region tables and per-skin caps (8 addons, 2,400 addon triangles, 4 addon bones); `Character.js` builds recipes and shares recoloured textures and addon geometry between characters in the same outfit. Old tint-only outfits build exactly as before. `skin_catfish_ken` (Catfish Ken Superfan) is the first recipe outfit.
+
+Outfits can be checked without the game: `skinlab.html` is a dev-only page (not in the production build), and `node tools/skins/render.mjs --skin <id> | --recipe <file> | --swatches <kit> | --probe <kit> | --all` renders it to PNGs in `tools/skins/out/` with the QA harness's headless Chromium. `tests/skin-recipes.test.mjs` validates every outfit. See [tools/skins/README.md](tools/skins/README.md) for the recipe format, region names per kit, addon shapes and the workflow from a description or reference image to a new outfit.
 
 ## Map and Asset Maintenance
 
@@ -336,6 +337,27 @@ For UI changes, verify focus, labels, contrast, non-color status cues, reduced m
 Read [AGENTS.md](AGENTS.md) before changes. It defines engineering requirements, not proof of implemented controls.
 
 - Optional accounts use the Cloudflare Accounts Durable Object (password PBKDF2 or Google ID-token verification). Application-level rate limiting is limited; do not store sensitive personal data beyond what the feature needs. Room codes remain joining conveniences, not verified competition identity.
+- **Moderation (not anti-cheat).** Match results are reported by the player's browser, so the server cannot prove a result is real. `party/moderation.js` flags results that look impossible or unlikely (more kills than opponents, over 20 kills, ranked results under 3 minutes apart, a very high ranked win rate, a win in a match with fewer than 2 players) so a developer can review them; it never bans on its own. Developer accounts (`src/net/devs.js`) can type these in global chat:
+  - `/ban <user> [1h|1d|1w|1mo|perm] <reason>` with no duration takes the next step on the ladder: 1 hour, 1 day, 1 week, 1 month, then permanent.
+  - `/warn <user> <reason>`, `/unban <user>` (offence history is kept, so later bans still escalate), `/history <user>`, `/resetstats <user>`, `/flags`.
+  - `/reports` lists player reports and `/dismiss <user>` clears them. Signed-in players file reports from the lobby ONLINE list or the pause menu (`src/ui/reportForm.js`). Reports are private (`reports:<user>` keys, 10 kept per player), limited to one per reporter per player per day and 10 per reporter per day, and a `/ban` clears them. Reports are matched by name, and in-match names can be typed nicknames, so a report can name someone with no account.
+  - `/title <user> <TITLE> [#titlecolour] [#namecolour]` gives a player a chat and online-list title, and `/untitle <user>` removes it. Titles are stored on the account and use letters, numbers and spaces only, up to 14 characters. They pass the swear filter, may be staff-style tags like DEV or MOD, and grant no powers (bans and dev tools come only from `DEV_NAMES`). A title in the code (`PLAYER_TITLES`) takes priority.
+  - The same tools are buttons in the lobby: a **DEV** button (dev accounts only) opens a panel with a player field, title text with separate title and username colour pickers, ban length (next step, 1 hour, 1 day, 1 week, 1 month or permanent, which needs a second click), reason, warn and unban, plus history, reports, flags and reset stats. Devs also get a MANAGE button on the ONLINE list. Panel actions call the account server directly, and it tells the presence server so bans and titles show at once.
+  - Only accounts in `DEV_NAMES` (the `[DEV]` tag) can use any of these commands. The account server checks this on every command.
+  - Permanent bans that live in the code go in `PERMA_BANNED` (`party/moderation.js`). They can't be lifted with `/unban`, and the client locks the account out behind a notice that can't be closed.
+- **Account hardening** (`party/authLimits.js`, `party/accounts.js`):
+  - Sign-in is throttled after 5 failures per account or per network in 15 minutes, with a growing wait. Sign-up is capped at 3 per network per hour.
+  - New passwords need 8-72 characters and can't be on a common-password list.
+  - Dev commands need a sign-in within the last 12 hours (no MFA yet).
+  - Sign-out can end every session ("sign out on all devices"), and an account keeps at most 10 sessions.
+  - The account API echoes only allowed origins for CORS (never `*`), and every Worker socket checks the Origin.
+  - The matchmaker and party match-plan endpoints refuse requests from the internet.
+  - A capped security log (`seclog:` keys, newest 500) records sign-ins, failures, throttling, sign-ups and bans with the IP address. It never records passwords or tokens.
+  - Passwords stay PBKDF2-SHA256 at 100k rounds, the Cloudflare Workers maximum, below OWASP's Argon2id advice.
+  - Session tokens are still kept in localStorage; moving to HttpOnly cookies needs the client and Worker on one site.
+  - `vercel.json` sets HSTS, nosniff, `X-Frame-Options`, Referrer-Policy and Permissions-Policy. It enforces a minimal CSP (`frame-ancestors`, `base-uri`, `object-src`) and sends the full CSP as report-only until it has been checked against the live site's ads and Google sign-in.
+- **Host trust.** The match host's browser runs the whole simulation and receives every player's position, so a modified host can still change health, ammo, damage or positions. Encryption doesn't help: the host has to read the data to run the match. The QA console hooks (`window.__game`) exist only in dev builds. Fixing host cheating needs server-run matches.
+  The presence server forwards commands with the dev's own session token, the account server re-checks dev rights, results go only to that dev, and every action is logged under `modlog:` keys. A banned account can sign in and see the reason and time left, but earns no coins or stats, is hidden from the ranks, and cannot chat, shop or use friends. Timed bans lift on their own. Limits: guests are not affected, and in-match cheats (aimbot, speed) are not detected; they need a report and a manual ban. Server-run ranked matches would be the real fix.
 - There is no upload service, model API, SQL database, or application telemetry integration established in the current source. Browser preferences persist locally; friend play and account presence contact the PartyServer worker. WebRTC paths (if used) can expose network information to peers.
 - Optional Google tiles and Google sign-in contact Google with the configured public client/key values. Keep them disabled when unneeded and review provider billing and privacy implications before enabling.
 - No repository CI workflow or production security-header configuration is present. CSP, framing protection, HTTPS, and other hosting controls require deployment-specific configuration and verification.

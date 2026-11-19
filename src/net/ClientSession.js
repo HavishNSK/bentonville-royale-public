@@ -84,6 +84,7 @@ export class Puppet {
     this.inBus = !!(r.flags & FLAG.bus);
     this.crouching = !!(r.flags & FLAG.crouch);
     this.downed = this.alive && !!(r.xf & XFLAG.downed);
+    this.leaning = !!(r.xf & XFLAG.lean);
     this.beingRevived = this.downed && !!(r.xf & XFLAG.revived);
     if (this.downed) {
       this.downHp = r.health;
@@ -172,6 +173,7 @@ export class ClientSession {
     this.offset = null;
     this.lastSeq = -1;
     this._predicted = new Map(); // piece -> performance.now() it was placed locally
+    this._predictedEdits = new Map(); // piece key -> { piece, prev, at }: edits shown before the host's 'se'
     this.aliveCount = 0;
     this.started = false;
     this.ended = false;
@@ -223,6 +225,7 @@ export class ClientSession {
       game.combat.register(pup);
     }
     this.aliveCount = start.roster.length;
+    if (game.pumps && start.pumps) game.pumps.applySnapshot(start.pumps); // gas pumps already hurt / gone
     // tell the host (and through it everyone) which outfit we wear
     if (game.skin && SKINS[game.skin]) this.action({ k: 'sk', id: game.skin, px: game.pickaxe, bb: game.backbling });
     // Follow-up rounds of a burst gun are scheduled by Combat; forward each one like a trigger pull.
@@ -248,7 +251,31 @@ export class ClientSession {
   }
 
   /** Predicted pieces the host never confirmed (refused): taken back quietly. */
+  /**
+   * An edit this client applied ahead of the host (Player._confirmEdit): the host's 'se' echo
+   * confirms it; with no echo within PREDICT_MS the host refused it, and the piece goes back.
+   */
+  predictEdit(piece, prev) {
+    if (!piece || !piece.key) return;
+    const had = this._predictedEdits.get(piece.key);
+    this._predictedEdits.set(piece.key, { piece, prev: had ? had.prev : prev, at: performance.now() });
+  }
+
+  _expirePredictedEdits() {
+    if (!this._predictedEdits.size) return;
+    const now = performance.now();
+    const st = this.game.structures;
+    for (const [key, pe] of this._predictedEdits) {
+      if (!pe.piece.alive) this._predictedEdits.delete(key);
+      else if (now - pe.at > PREDICT_MS) {
+        this._predictedEdits.delete(key);
+        if (st && st.edit && st.editValue(pe.piece) !== pe.prev) st.edit(pe.piece, pe.prev);
+      }
+    }
+  }
+
   _expirePredicted() {
+    this._expirePredictedEdits();
     if (!this._predicted.size) return;
     const now = performance.now();
     const st = this.game.structures;
@@ -413,7 +440,19 @@ export class ClientSession {
       I.selected = msg.sel;
       this._specInvOf = msg.id;
     }
-    else if (msg.t === 'cor') {
+    else if (msg.t === 'cars') {
+      if (this.game.vehicles) this.game.vehicles.applyPoses(msg.l);
+    } else if (msg.t === 'ccor') {
+      // the host refused our car's move (too far, too fast): back to where it has it
+      const car = this.game.vehicles && this.game.vehicles.byId.get(msg.c);
+      if (car && [msg.x, msg.y, msg.z, msg.h].every(Number.isFinite)) {
+        car.x = msg.x;
+        car.y = msg.y;
+        car.z = msg.z;
+        car.heading = msg.h;
+        car.vx = car.vz = 0;
+      }
+    } else if (msg.t === 'cor') {
       if (performance.now() < this._tpUntil) return;
       const p = this.game.player;
       p.pos.set(msg.x, msg.y, msg.z);
@@ -444,6 +483,20 @@ export class ClientSession {
       case 'rcx':
       case 'rbu':
         if (g.reboot) g.reboot.applyEvent(e);
+        return;
+      case 've':
+      case 'vw':
+      case 'vd':
+      case 'vx':
+      case 'vh':
+      case 'vf':
+        if (g.vehicles) g.vehicles.applyEvent(e, (id) => this.actorById(id));
+        return;
+      case 'pmd':
+      case 'pmf':
+      case 'pmx':
+      case 'pmn':
+        if (g.pumps) g.pumps.applyEvent(e, (id) => this.actorById(id));
         return;
       case 'rcp':
         if (g.reboot) g.reboot.applyEvent(e);
@@ -614,7 +667,8 @@ export class ClientSession {
       case 'se': {
         const st = g.structures;
         const piece = st && st.slots.get(e.key);
-        if (piece && st.edit) st.edit(piece, e.ed | 0);
+        this._predictedEdits.delete(e.key); // the host's word on it (ours confirmed, or replaced)
+        if (piece && st.edit && st.editValue(piece) !== (e.ed | 0)) st.edit(piece, e.ed | 0);
         return;
       }
       case 'sdr': {
@@ -943,6 +997,14 @@ export class ClientSession {
     if (st !== this._specAsk) {
       this._specAsk = st;
       this.conn.send({ t: 'spec', id: st });
+    }
+
+    // driving: our car's pose to the host (we simulate it; Vehicles.acceptDriverPose checks it)
+    const car = p.alive && p.vehicle && p.seat === 0 ? p.vehicle : null;
+    this._drvAcc = (this._drvAcc || 0) + dt;
+    if (car && car.alive && this._drvAcc >= 1 / 20) {
+      this._drvAcc = 0;
+      this.action({ k: 'drv', c: car.id, x: rnd(car.x, 2), y: rnd(car.y, 2), z: rnd(car.z, 2), h: rnd(car.heading, 3), p: rnd(car.pitch, 3), r: rnd(car.roll, 3), sp: rnd(car.speed, 2), st: rnd(car.steer, 2), f: rnd(car.fuel, 1) });
     }
 
     this._stateAcc += dt;

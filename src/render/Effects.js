@@ -27,6 +27,7 @@
  *   fx.shieldPop(position)
  *   fx.elimination(position, color)               // position = feet of the eliminated character
  *   fx.explosion(position, { radius = 5 })        // grenade blast; the ground ring spreads to `radius`
+ *   fx.flames(position, scale = 1)                // one tick of flames on something burning (gas pumps)
  *   fx.grenadeBlink(position)                     // one blink of a live grenade's fuse light
  *   fx.rocketTrail(position)                      // exhaust of a flying rocket, once per trail step
  *   fx.ring(position, { color = 0xffffff, radius = 3, duration = 0.5 })
@@ -137,6 +138,7 @@ const MATERIALS = {
   brick: { chips: [lin(0xc9583c), lin(0xa8472f), lin(0xd9c2a8)], dust: lin(0xdba088), tint: lin(0xffb08a), rest: 0.26 },
   metal: { chips: [lin(0xaab6c2), lin(0x7d8a98), lin(0xdfe6ec)], dust: lin(0xcdd3da), tint: lin(0xbfe6ff), rest: 0.45 },
   dirt: { chips: [lin(0x8a6a45), lin(0x6f5436), lin(0xa98a5e)], dust: lin(0xbba27a), tint: lin(0xe0c9a0), rest: 0.15 },
+  glass: { chips: [lin(0xbfe6ff), lin(0x9ad4ff), lin(0xe8f6ff)], dust: lin(0xe8f2f8), tint: lin(0xd8f1ff), rest: 0.2 },
 };
 
 // building wall panels break into chunks of the build-material colour
@@ -1848,6 +1850,34 @@ export class Effects {
     const duration = opts && opts.duration > 0 ? opts.duration : 0.5;
     colAny(opts ? opts.color : undefined, P.white);
     this._decal(position.x, position.y, position.z, duration, radius * 0.18, radius, D_RING, 0, 1);
+  }
+
+  /** A damaged car's engine: grey smoke, or flames under black smoke when it is about to blow. */
+  carSmoke(position, fire = false) {
+    const x = position.x, y = position.y, z = position.z;
+    if (fire) {
+      col(P.flash);
+      this._sp(x, y, z, 0, 1.4, 0, 0.3, 0.45, 0.9, GLOW, 0.85, 0.9, 0, 0.2, 0);
+    }
+    if (fire) colJ(P.soot, 0.06);
+    else colJ(P.dust, 0.06);
+    this._puff(x, y, z, (rnd() - 0.5) * 0.5, 1.2 + rnd() * 0.6, (rnd() - 0.5) * 0.5, 0.3, 1.1 + rnd() * 0.4, 1.2 + rnd() * 0.4, fire ? 0.6 : 0.45);
+  }
+
+  /** Flames licking up from something burning (a gas pump): hot glows rising, now and then soot. */
+  flames(position, scale = 1) {
+    const x = position.x, y = position.y, z = position.z;
+    const n = this._n(4);
+    for (let i = 0; i < n; i++) {
+      colMix(P.flash, P.flashDeep, rnd());
+      this._sp(x + (rnd() - 0.5) * 0.5 * scale, y + rnd() * 0.25, z + (rnd() - 0.5) * 0.4 * scale, (rnd() - 0.5) * 0.4, 1.8 + rnd() * 1.4, (rnd() - 0.5) * 0.4, 0.3 + rnd() * 0.25, 0.6 * scale, 0.12 * scale, GLOW, 0.9, 0.95, 0, 0.4, 0);
+    }
+    col(P.hot);
+    this._sp(x, y + 0.1, z, 0, 0.8, 0, 0.2, 0.5 * scale, 0.3 * scale, GLOW, 0.9, 0.9, 0, 0.2, 0);
+    if (this._smoke && rnd() < 0.4) {
+      colJ(P.soot, 0.06);
+      this._puff(x, y + 0.7, z, (rnd() - 0.5) * 0.4, 1.4 + rnd() * 0.6, (rnd() - 0.5) * 0.4, 0.35, 1.1 + rnd() * 0.4, 1.3 + rnd() * 0.4, 0.55);
+    }
   }
 
   dustPuff(position, opts) {

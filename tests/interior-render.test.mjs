@@ -162,9 +162,11 @@ test('partition panels keep contiguous, non-overlapping index ranges that includ
   const R = chunk.panelRanges;
   assert.ok(R.length >= 3, 'building has breakable panels');
   const spans = [];
+  assert.ok(R.some((p, i) => i % 3 === 0 && p.kind === 'roof'), 'top storey ceiling carries breakable roof tile ranges');
   for (let i = 0; i < R.length; i += 3) {
     const start = R[i + 1], count = R[i + 2];
     assert.ok(count > 0 && count % 6 === 0 && start % 3 === 0, 'whole quads');
+    if (R[i].kind !== 'inner') continue; // roof tiles (shellPanels.js) carry their own ceiling quads
     const quads = count / 6;
     assert.ok(quads >= 7 && quads <= 8, `faces + caps + skirting (+ top bands): ${quads}`);
     // every quad in the range is a recorded quad and lies along one wall (all vertical)

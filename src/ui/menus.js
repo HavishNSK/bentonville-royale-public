@@ -41,6 +41,7 @@ import { applyCrosshairStyle } from './hud.js';
 import { createFpsMeter } from './fpsMeter.js';
 import { MATCH, RANKED_NOTE } from '../core/config.js';
 import { nameIsClean } from '../net/chatFilter.js';
+import { nameplate } from '../net/devs.js';
 import { TEAM_MODES, MODE_LABELS, teamSize } from '../game/Teams.js';
 import { partyCap } from '../game/GameModes.js';
 
@@ -61,7 +62,7 @@ const TIPS = [
   'The storm hurts more every phase. Watch the timer in the top left.',
   'Chests glow and hum. Listen for them inside buildings.',
   (k) => `Hold ${k('aim')} to aim down sights for tighter shots.`,
-  (k) => `Press ${k('inventory')} to open your inventory, then drag guns and heals to reorder your hotbar.`,
+  (k) => `Press ${k('inventory')} to open your inventory, then drag a gun or heal onto another slot (or click one slot, then another) to reorder your hotbar.`,
   'Headshots deal bonus damage with every weapon.',
   'Rocket Launchers hold one rocket. A clean hit deals 100, and the blast hurts you too if you are close.',
   (k) => `Grenades blow up about 2 seconds after you throw them with ${k('fire')}. They bounce, break builds, and hurt you too.`,
@@ -307,8 +308,11 @@ export function createMenus(root, opts = {}) {
          ${toggle('invertY', 'Invert mouse Y')}
          ${range('fov', 'Field of view', 55, 100, 1)}
          <div class="mn-row"><span>Graphics quality</span>${seg('quality', QUALITY_OPTIONS)}</div>
+         ${range('fpsCap', 'FPS limit', 30, 250, 10)}
+         ${toggle('rawMouse', 'Raw mouse input', 'Reads the mouse directly while it is locked to the game. If your FPS drops in a match but goes back up when you press Escape, try switching this.')}
+         ${toggle('dynamicResolution', 'Dynamic resolution', 'Lowers the resolution a little when the game can\'t keep up, so it stays smooth instead of dropping to 20-30 FPS.')}
          ${toggle('performanceMode', 'Performance mode (Chromebook)', 'Half resolution, no bloom/outlines/shadows, shorter draw distance. Best for Chromebooks and weak laptops.')}
-         <div class="mn-row"><span>Bot difficulty<small class="mn-hint">${RANKED_NOTE} In a private match the host's setting counts.</small></span>${seg('difficulty', DIFFICULTY_OPTIONS)}</div>
+         <div class="mn-row"><span>Bot difficulty<small class="mn-hint">${RANKED_NOTE}</small></span>${seg('difficulty', DIFFICULTY_OPTIONS)}</div>
          ${toggle('autoPickupAmmo', 'Auto-pickup ammo & mats', 'Walk over ammo and materials to take them without pressing interact.')}
          ${toggle('showFps', 'Show FPS')}
          <label class="mn-row mn-row-gtiles"><span>Real-world 3D view (Google)<small class="mn-hint" data-ref="gtilesHint"></small></span><input type="checkbox" class="mn-toggle" data-name="googleTiles"></label>
@@ -338,6 +342,8 @@ export function createMenus(root, opts = {}) {
        <div class="mn-pane" data-pane="controls">
          ${toggle('editOnRelease', 'Confirm edit on release', 'Releasing the mouse after selecting tiles confirms the edit.')}
          ${toggle('editWheelReset', 'Reset edit with mouse wheel', 'Scroll while editing to reset the piece (instead of switching slots).')}
+         ${toggle('simpleEdit', 'Simple Edit', 'One click on a tile makes the common edit: door, window, half wall, arch, a floor or cone corner. Click it again to undo.')}
+         ${toggle('simpleBuild', 'Simple Build', 'The Preset build key places a whole structure at once: Box, Ramp + Wall, Tower or Cover. Press it again to switch preset.')}
          <p class="mn-bind-status" data-ref="bindStatus" role="status">Click a key to change it. Esc cancels. Right mouse resets an edit.</p>
          <div class="mn-binds">${bindRows}</div>
          <button type="button" class="mn-btn mn-btn-small" data-ref="bindReset"><span>RESET TO DEFAULTS</span></button>
@@ -372,6 +378,7 @@ export function createMenus(root, opts = {}) {
        <h2 class="mn-h br-ol">PAUSED</h2>
        <button class="mn-btn mn-btn-hero" data-act="resume">${icon('play')}<span>RESUME</span></button>
        <button class="mn-btn" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
+       <button class="mn-btn" data-act="report" data-ref="reportBtn"><span>REPORT A PLAYER</span></button>
        <button class="mn-btn mn-btn-danger" data-act="leave">${icon('home')}<span data-ref="leaveLabel">LEAVE MATCH</span></button>
      </div>`
   );
@@ -444,6 +451,7 @@ export function createMenus(root, opts = {}) {
     sensitivity: (v) => v.toFixed(2) + 'x',
     adsSensitivity: (v) => v.toFixed(2) + 'x',
     fov: (v) => Math.round(v) + '°',
+    fpsCap: (v) => (v >= 250 ? 'Unlimited' : Math.round(v) + ' FPS'),
     volume: pct,
     sfxVolume: pct,
     musicVolume: pct,
@@ -696,6 +704,7 @@ export function createMenus(root, opts = {}) {
         else if (act === 'settings') api.showSettings(current === pause ? 'pause' : 'title');
         else if (act === 'back') settingsFrom === 'pause' ? api.showPause() : api.showTitle();
         else if (act === 'resume') opts.onResume && opts.onResume();
+        else if (act === 'report') opts.onReport && opts.onReport();
         else if (act === 'leave') opts.onLeave && opts.onLeave();
         else if (act === 'again') opts.onPlayAgain && opts.onPlayAgain();
         else if (act === 'menu') opts.onLeave && opts.onLeave();
@@ -765,7 +774,10 @@ export function createMenus(root, opts = {}) {
         btn.classList.toggle('is-ready', !!m.ready);
         btn.classList.toggle('is-you', !!m.you);
         btn.classList.toggle('is-leader', !!m.leader);
-        btn.innerHTML = `${m.leader ? `<span class="mn-slot-crown" title="Party leader">${icon('crown')}</span>` : ''}<b class="mn-slot-name">${esc(m.name)}</b><span class="mn-slot-state">${m.away ? 'RECONNECTING…' : m.ready ? '<i aria-hidden="true">&#10003;</i>READY' : 'NOT READY'}</span>${m.you ? '<em>YOU</em>' : ''}`;
+        const plate = m.you ? nameplate(m.name) : { name: m.name, title: '', color: '' };
+        const titleHtml = plate.title ? `<em class="br-title-tag">${esc(plate.title)}</em>` : '';
+        const nameStyle = plate.color ? ` style="color:${plate.color}"` : '';
+        btn.innerHTML = `${m.leader ? `<span class="mn-slot-crown" title="Party leader">${icon('crown')}</span>` : ''}${titleHtml}<b class="mn-slot-name"${nameStyle}>${esc(m.name)}</b><span class="mn-slot-state">${m.away ? 'RECONNECTING…' : m.ready ? '<i aria-hidden="true">&#10003;</i>READY' : 'NOT READY'}</span>${m.you ? '<em>YOU</em>' : ''}`;
         const canManage = v.online && v.isLeader && !m.you;
         btn.disabled = !canManage;
         btn.setAttribute('aria-label', `${m.name}${m.leader ? ', leader' : ''}, ${m.ready ? 'ready' : 'not ready'}${canManage ? '. Kick or make leader' : ''}`);
@@ -957,7 +969,15 @@ export function createMenus(root, opts = {}) {
         li.classList.toggle('is-ready', !!p.ready);
         li.classList.toggle('is-host', !!p.host);
         const nm = document.createElement('span');
-        nm.textContent = p.name;
+        const plate = p.you ? nameplate(p.name) : { name: p.name, title: '', color: '' };
+        if (plate.title) {
+          const tag = document.createElement('em');
+          tag.className = 'br-title-tag';
+          tag.textContent = plate.title;
+          tag.style.color = plate.color;
+          nm.style.color = plate.color;
+          nm.append(tag, document.createTextNode(' ' + plate.name));
+        } else nm.textContent = p.name;
         li.appendChild(nm);
         const tags = [p.host ? 'HOST' : p.ready ? '\u2713 READY' : 'NOT READY', p.you ? 'YOU' : ''].filter(Boolean);
         const tag = document.createElement('em');
@@ -985,6 +1005,9 @@ export function createMenus(root, opts = {}) {
       });
       const readyBtn = lobby.querySelector('[data-act=lobby-ready]');
       readyBtn.hidden = !!info.isHost;
+      // still connecting: a READY click would have nowhere to go (main.js has no connection yet)
+      readyBtn.disabled = !!info.joining;
+      readyBtn.classList.toggle('is-disabled', !!info.joining);
       LB.readyLabel.textContent = info.ready ? 'UNREADY' : 'READY';
       readyBtn.dataset.kind = info.ready ? 'unready' : 'ready';
       LB.fill.checked = !!info.fill;
@@ -1035,6 +1058,7 @@ export function createMenus(root, opts = {}) {
       pauseSandbox = !!(info && info.sandbox);
       P.pauseCard.classList.toggle('mn-card-sandbox', pauseSandbox);
       P.leaveLabel.textContent = pauseSandbox ? 'LEAVE SANDBOX' : 'LEAVE MATCH';
+      P.reportBtn.hidden = pauseSandbox; // nobody else is in the sandbox
       show(pause, false);
     },
     showResult(r) {
@@ -1090,7 +1114,10 @@ export function createMenus(root, opts = {}) {
       }
       // multiplayer: no instant rematch; the host makes a new room
       result.querySelector('[data-act=again]').hidden = !!r.mp;
-      if (r.difficulty && !r.ranked) R.sub.textContent += ` Unranked match (${String(r.difficulty).toUpperCase()} bots). ${RANKED_NOTE}`;
+      if (r.difficulty && !r.ranked) {
+        const why = (r.bots | 0) > 0 ? `Unranked match (${String(r.difficulty).toUpperCase()} bots). ${RANKED_NOTE}` : 'No rewards. Bots were off, so you get no coins and this match does not count on the ranks.';
+        R.sub.textContent += ` ${why}`;
+      }
       if (r.hostNote) R.sub.textContent += ' ' + r.hostNote;
       show(result, false);
     },

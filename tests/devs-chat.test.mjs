@@ -26,6 +26,17 @@ test('TheChosenOne has the CHULDE title in #facece; nobody else does', () => {
   for (const t of Object.values(PLAYER_TITLES)) assert.ok(cleanTitle(t.title, t.color), 'table entries pass the wire check');
 });
 
+test('nameplate paints [CHULDE] TheChosenOne in #facece', async () => {
+  const { nameplate } = await import('../src/net/devs.js');
+  assert.deepEqual(nameplate('TheChosenOne'), {
+    name: 'TheChosenOne',
+    title: 'CHULDE',
+    color: '#facece',
+    label: '[CHULDE] TheChosenOne',
+  });
+  assert.deepEqual(nameplate('Player'), { name: 'Player', title: '', color: '', label: 'Player' });
+});
+
 test('titles off the wire are shape-checked (no markup, only #rrggbb colours)', () => {
   assert.deepEqual(cleanTitle('CHULDE', '#FACECE'), { title: 'CHULDE', color: '#facece' });
   assert.equal(cleanTitle('<b>X</b>', '#facece'), null);
@@ -37,7 +48,7 @@ test('a verified account grants CHULDE; a typed nickname or a guest does not', a
   const { accountGrants } = await import('../src/net/devs.js');
   // the presence server applies exactly these grants after its Accounts lookup
   const src = (await import('node:fs')).readFileSync(new URL('../party/presence.js', import.meta.url), 'utf8');
-  assert.match(src, /const g = accountGrants\(name\);/);
+  assert.match(src, /const g = accountGrants\(name(, info\.title)?\);/); // + a dev-made title from the account
   assert.match(src, /p\.title = g\.title;/);
   assert.match(src, /m\.title = p\.title;\n\s+m\.color = p\.titleColor;/, 'chat lines carry the title and colour');
   assert.deepEqual(accountGrants('TheChosenOne'), { dev: false, shown: 'TheChosenOne', title: 'CHULDE', titleColor: '#facece' });

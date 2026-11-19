@@ -9,7 +9,7 @@ import { Grenades } from '../src/game/Grenades.js';
 import { Inventory } from '../src/game/Inventory.js';
 import { sandboxWeapons, giveSandboxWeapon } from '../src/game/sandboxLoadout.js';
 import { hasIcon } from '../src/ui/icons.js';
-import { rollConsumable } from '../src/game/Loot.js';
+import { Loot, rollConsumable } from '../src/game/Loot.js';
 
 function popSmoke(at = { x: 0, y: 1, z: 0 }) {
   const world = new World({ meta: { bounds: { minX: -80, maxX: 80, minZ: -80, maxZ: 80 } }, buildings: [], roads: [], areas: [], pois: [] });
@@ -114,4 +114,25 @@ test('consumable loot can roll a smoke grenade', () => {
   }
   assert.ok(seen.has('grenade'), 'frag grenades still drop');
   assert.ok(seen.has('smoke'), 'smoke grenades should drop too');
+});
+
+test('opening a chest can spill smoke grenades', () => {
+  const world = new World({
+    meta: { bounds: { minX: -80, maxX: 80, minZ: -80, maxZ: 80 } },
+    buildings: [], roads: [], areas: [], pois: [],
+  });
+  let seen = false;
+  for (let n = 0; n < 250 && !seen; n++) {
+    let s = (n * 1103515245 + 12345) >>> 0;
+    const rng = () => {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+    const loot = new Loot({ scene: null, world });
+    loot._rng = rng;
+    const chest = loot._add('chest', 0, 0, 0, 0, null);
+    loot.open(chest.id);
+    seen = loot.records.some((r) => r.kind === 'item' && r.item && r.item.id === 'smoke' && r.item.type === 'consumable');
+  }
+  assert.ok(seen, 'chests should be able to drop smoke grenades');
 });

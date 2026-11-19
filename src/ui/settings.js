@@ -35,6 +35,7 @@ export const ACTIONS = Object.freeze([
   { id: 'buildCone', label: 'Build cone', group: 'Building', def: 'KeyX' },
   { id: 'cycleMaterial', label: 'Switch material', group: 'Building', def: 'KeyG' },
   { id: 'edit', label: 'Edit piece', group: 'Building', def: 'KeyT' },
+  { id: 'buildPreset', label: 'Preset build (Simple Build)', group: 'Building', def: 'KeyY' },
   { id: 'map', label: 'Full map', group: 'Other', def: 'KeyM' },
   { id: 'creativeMap', label: 'Sandbox map', group: 'Other', def: 'KeyN' },
   { id: 'emote', label: 'Emote', group: 'Other', def: 'KeyB' },
@@ -59,7 +60,12 @@ export const DEFAULT_SETTINGS = Object.freeze({
   autoPickupAmmo: true,
   editOnRelease: false, // releasing the mouse after selecting edit tiles confirms the edit
   editWheelReset: false, // the mouse wheel resets the piece being edited
+  simpleEdit: false, // one click on a tile makes the common edit for it (door, window, ...) at once
+  simpleBuild: false, // the preset key places whole structures (box, ramp + wall, tower, cover)
   difficulty: 'normal', // 'easy' | 'normal' | 'hard'
+  fpsCap: 250, // FPS limit, 30 .. 250; FPS_UNLIMITED (250) = no limit
+  rawMouse: false, // pointer lock with unadjustedMovement (raw input, no OS acceleration)
+  dynamicResolution: true, // drop the render resolution under load instead of the frame rate
   performanceMode: false, // Chromebook / weak laptop: half-res, no post, short draw distances
   googleTiles: false, // optional Google Photorealistic 3D Tiles view (needs VITE_GOOGLE_MAPS_API_KEY)
   // Gun crosshair look (hud.setCrosshairStyle). Cosmetic only: fixed palette, capped size,
@@ -84,6 +90,7 @@ export const CROSSHAIR_COLORS = Object.freeze({
 export const CROSSHAIR_LIMITS = Object.freeze({ size: [0.75, 1.4], thickness: [0.75, 1.5] });
 
 export const QUALITY_OPTIONS = ['low', 'medium', 'high'];
+export const FPS_UNLIMITED = 250;
 export const DIFFICULTY_OPTIONS = ['easy', 'normal', 'hard'];
 
 const num = (v, lo, hi, fallback) => {
@@ -123,7 +130,12 @@ export function sanitizeSettings(raw) {
     autoPickupAmmo: bool(s.autoPickupAmmo, d.autoPickupAmmo),
     editOnRelease: bool(s.editOnRelease, d.editOnRelease),
     editWheelReset: bool(s.editWheelReset, d.editWheelReset),
+    simpleEdit: bool(s.simpleEdit, d.simpleEdit),
+    simpleBuild: bool(s.simpleBuild, d.simpleBuild),
     difficulty: DIFFICULTY_OPTIONS.includes(s.difficulty) ? s.difficulty : d.difficulty,
+    fpsCap: Math.round(num(s.fpsCap, 30, FPS_UNLIMITED, d.fpsCap)),
+    rawMouse: bool(s.rawMouse, d.rawMouse),
+    dynamicResolution: bool(s.dynamicResolution, d.dynamicResolution),
     performanceMode: bool(s.performanceMode, d.performanceMode),
     // Performance mode forces Google tiles off (too heavy for Chromebooks).
     googleTiles: s.performanceMode === true ? false : s.googleTiles === true,

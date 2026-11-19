@@ -274,6 +274,8 @@ export const CONSUMABLES = {
   tonic: { id: 'tonic', name: 'Shield Tonic', icon: 'potion', model: 'potion', rarity: 'rare', useTime: 2.4, heal: 0, shield: 50, stack: 3, sound: 'drink_shield' },
   // throwable: fire throws one instead of channelling a heal (see GRENADE and game/Grenades.js)
   grenade: { id: 'grenade', name: 'Grenade', icon: 'grenade', model: 'grenade', rarity: 'common', throwable: true, useTime: 0, heal: 0, shield: 0, stack: 6, pickup: 3, sound: null },
+  // gas can: refuels the car you sit in or stand beside (Vehicles); `fuel` instead of a heal
+  gascan: { id: 'gascan', name: 'Gas Can', icon: 'gascan', model: 'gascan', rarity: 'uncommon', useTime: 2.5, heal: 0, shield: 0, fuel: 50, stack: 2, sound: 'car_door' },
   smoke: { id: 'smoke', name: 'Smoke Grenade', icon: 'smoke', model: 'smoke', rarity: 'uncommon', throwable: true, useTime: 0, heal: 0, shield: 0, stack: 4, pickup: 2, sound: null },
 };
 
@@ -331,7 +333,13 @@ export const PICKAXE = {
 // building's material, interior partitions are wood. Panels are at most panelW m wide and one
 // storey tall; bullets do bulletMult of their damage to a panel (and grant no mats).
 // floorHp: each breakable floor / ceiling tile between storeys (interiors/floorTiles.js).
-export const BUILDING_WALL = { hp: { wood: 300, brick: 450, metal: 600 }, innerHp: 150, floorHp: 200, panelW: 4, bulletMult: 0.5 };
+// roofHp: each breakable roof tile (interiors/shellPanels.js). A solid (non-enterable)
+// building breaks as one block with hp[mat] x a size factor (World.finishBuildings).
+// lintels: the wall over a door (outer: building material + hp[mat]; interior: wood + innerHp).
+// yield: mats per pickaxe swing on any wall or roof panel of an enterable building (outer,
+// inner, lintel, roof incl. its rim), of the panel's material; floor tiles and solid blocks keep
+// PICKAXE.yield. Bullets and explosions break panels but grant no mats.
+export const BUILDING_WALL = { hp: { wood: 300, brick: 450, metal: 600 }, innerHp: 150, floorHp: 200, roofHp: 300, panelW: 4, bulletMult: 0.5, yield: 10 };
 
 export const MATERIALS = ['wood', 'brick', 'metal'];
 export const MATERIAL_COLOR = { wood: 0xb9803f, brick: 0xb5533c, metal: 0x8d99a6 };
@@ -399,8 +407,8 @@ export const KNOCK = {
 };
 
 // Swimming: on the terrain inside a map water area (World.inWater) you swim: slower, no
-// sprint / jump / aim, and no shooting, building or healing until you are out. The body sinks
-// to the chest (Character.setSwim).
+// sprint / jump / crouch. Aiming, shooting, building, editing and healing still work in the
+// water. The body sinks to the chest (Character.setSwim); the held item stays visible.
 export const SWIM = { speed: 0.6, sink: 0.75, strokeT: 0.55 };
 
 // Reboot vans (team modes): an eliminated player drops a reboot card; a teammate picks it up
@@ -432,9 +440,13 @@ export const REBOOT = {
 // edited into the wall facing the enemy, shoot, reset the edit); peekOpen / peekClosed =
 // seconds the edit stays open / closed.
 // Only matches against HARD bots count toward the RANKS boards (wins + eliminations).
+// A humans-only private match (bots turned off) never counts, even on Hard.
 export const RANKED_DIFFICULTY = 'hard';
 export const isRankedDifficulty = (d) => d === RANKED_DIFFICULTY;
-export const RANKED_NOTE = 'Only matches on HARD bot difficulty count toward the ranks (wins and eliminations).';
+export function isRankedMatch(difficulty, bots) {
+  return isRankedDifficulty(difficulty) && (bots | 0) > 0;
+}
+export const RANKED_NOTE = 'Only HARD matches with bots count toward the ranks (wins and eliminations). A private match with bots off pays no coins and does not count.';
 
 // guessError (rad) / misguess (chance of the wrong side): how well a bot that is hit guesses the
 // shooter's direction for its wall (Bots._wallOnHit).
@@ -443,15 +455,15 @@ export const RANKED_NOTE = 'Only matches on HARD bot difficulty count toward the
 export const DIFFICULTY = {
   easy: { lead: 0.5, aimError: 0.085, closeMiss: 0.7, guessError: 0.6, misguess: 0.35, reaction: 0.9, burst: 0.55, buildChance: 0.35, buildPieces: 2, buildCooldown: 6, buildRate: 0.45, sight: 80, damageScale: 0.6, wallOnHit: 0.25, boxHeal: 0, pushWeak: 0.2, thirdParty: 0, rotateEarly: 0.3 },
   normal: {
-    lead: 0.8, aimError: 0.05, closeMiss: 0.5, guessError: 0.45, misguess: 0.22, reaction: 0.55, burst: 0.7, buildChance: 0.75, buildPieces: 6, buildCooldown: 2.5, buildRate: 0.18, sight: 100, damageScale: 0.8,
-    wallOnHit: 0.7, boxHeal: 0.6, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.6, boxFight: 0.35, peekOpen: 1.1, peekClosed: 0.8,
+    lead: 0.8, aimError: 0.05, closeMiss: 0.5, guessError: 0.45, misguess: 0.22, reaction: 0.55, burst: 0.7, buildChance: 0.75, buildPieces: 6, buildCooldown: 2.5, buildRate: 0.3, sight: 100, damageScale: 0.8,
+    wallOnHit: 0.9, boxHeal: 0.6, pushWeak: 0.5, thirdParty: 0.25, rotateEarly: 0.6, boxFight: 0.6, peekOpen: 0.8, peekClosed: 0.5,
   },
   hard: {
     // aimError 0.017 -> 0.02 and closeMiss: hard bots used to never miss up close
-    lead: 1, aimError: 0.02, closeMiss: 0.36, guessError: 0.15, misguess: 0.05, reaction: 0.18, burst: 0.92, buildChance: 1, buildPieces: 16, buildCooldown: 0.5, buildRate: 0.06, sight: 150, damageScale: 1,
-    wallOnHit: 0.8, boxHeal: 1, pushWeak: 0.95, thirdParty: 0.7, rotateEarly: 1, boxFight: 0.9, peekOpen: 0.6, peekClosed: 0.32, // quick edits (was 0.9 / 0.55)
+    lead: 1, aimError: 0.02, closeMiss: 0.36, guessError: 0.15, misguess: 0.05, reaction: 0.18, burst: 0.92, buildChance: 1, buildPieces: 16, buildCooldown: 0.5, buildRate: 0.2, sight: 150, damageScale: 1,
+    wallOnHit: 1, boxHeal: 1, pushWeak: 0.95, thirdParty: 0.7, rotateEarly: 1, boxFight: 0.9, peekOpen: 0.6, peekClosed: 0.32, // quick edits (was 0.9 / 0.55)
     peekWindow: true, // edit a window first, even up close (a door only when the window does not line up)
-    trap: 0.55, // chance to full-box a close, grounded target and window-peek it (Bots._maybeTrap)
+    trap: 0.85, // chance to full-box a close, grounded target and window-peek it (Bots._maybeTrap)
     rushFloors: true, // ramp rushes are ramp + wall + floor (cover ahead and overhead)
     highGround: 0.6, // chance to take height on a level target 8-45 m away instead of a lone wall
   },

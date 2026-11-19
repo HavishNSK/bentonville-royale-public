@@ -12,7 +12,8 @@
 //   game.pause(on) / game.leave()    // back to the menu
 //   game.applySettings(settings)
 //
-// window.__game exposes { state, player, bots, storm, combat, loot, structures, debug } for QA.
+// window.__game exposes { state, player, bots, storm, combat, loot, structures, debug } for QA,
+// in dev builds only (never in the production bundle).
 //
 // Multiplayer (src/net, lazy-loaded by main.js; solo never touches it):
 //   game.net = hostSession;  game.startMatch(seed)       // host: full simulation + remote humans
@@ -21,8 +22,8 @@
 // storm, bots, storm damage and the win check are left to the host.
 
 import * as THREE from 'three';
-import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, CONSUMABLES, isRankedDifficulty, makeRng, clamp, damp, TAU } from '../core/config.js';
-import { canSandboxLoadout, canCreativeMap, giveSandboxWeapon } from './sandboxLoadout.js';
+import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, CONSUMABLES, isRankedMatch, makeRng, clamp, damp, TAU } from '../core/config.js';
+import { canSandboxLoadout, canCreativeMap, giveSandboxWeapon, sandboxBotStatus, spawnSandboxBot, clearSandboxBots, purgeSandboxBodies, setSandboxBotsHostile } from './sandboxLoadout.js';
 import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
 import { loadJSON, loadModels } from '../core/assets.js';
 import { Input } from '../core/input.js';
@@ -41,18 +42,28 @@ import { Minimap } from '../ui/Minimap.js';
 import { CharacterKit, Character, registerKits } from './Character.js';
 import { skinDef, emoteDef, pickaxeDef, DEFAULT_EQUIPPED, PICKAXES, BACKBLINGS } from './Cosmetics.js';
 import { Combat, rayActor } from './Combat.js';
-import { canFastTravel, poiTargets, nearestPoi, landAt } from './fastTravel.js';
+import { canFastTravel, travelTargets, nearestPoi, landAt } from './fastTravel.js';
 import { Pings } from './Pings.js';
+import { RebootMarkers, rebootMarkerTargets } from './RebootMarkers.js';
 import { Reboot } from './Reboot.js';
+import { Vehicles } from './Vehicles.js';
+import { buildCarMesh } from '../render/CarMesh.js';
+import { planGasStations, buildGasStations, STATION } from './vehicles/gasStations.js';
+import { buildGasStationMesh } from '../render/GasStationMesh.js';
+import { GasPumps } from './GasPumps.js';
+import { NozzleHose } from '../render/NozzleHose.js';
+import { CAR } from './vehicles/cars.js';
 import { Grenades, launcherModel } from './Grenades.js';
 import { Player, placeOrbitCamera, itemLabel } from './Player.js';
 import * as StormMod from './Storm.js';
 import * as LootMod from './Loot.js';
 import * as InvMod from './Inventory.js';
+import { heldSlot } from './Inventory.js';
 import * as StructMod from './Structures.js';
 import * as BotsMod from './Bots.js';
 import { createFpsMeter } from '../ui/fpsMeter.js';
-import { graphicsQuality } from '../ui/settings.js';
+import { DynamicResolution } from '../render/DynamicResolution.js';
+import { graphicsQuality, FPS_UNLIMITED } from '../ui/settings.js';
 import { planBusRoute, makeRoute, routeWire, busPosAt, planBotTargets, DropBusMesh } from './DropBus.js';
 import { BOX_FIGHT, arenaLayout, spawnLayout, boxLoadout, boxMode, boxSizeForMode, normalizeBoxSize, createBoxFightState, stepBoxFight, roundBanner, boxResultCopy, sideOfTeam } from './BoxFights.js';
 import { buildArenaMeshes } from '../render/BoxArena.js';
@@ -135,6 +146,7 @@ export class Game {
     this.net = null; // HostSession | ClientSession while in a multiplayer match
     this.inventoryOpen = false; // inventory screen (pointer unlocked, no pause)
     this.sandboxLoadoutOpen = false; // sandbox weapons overlay on the map
+    this.sandboxBotsOpen = false; // sandbox bot spawn menu on the map
 
     // MSAA only where it is the anti-aliasing: presets with post-processing end in FXAA (MSAA on
     // the backbuffer would be paid for and thrown away), and performance mode runs without.
@@ -149,11 +161,13 @@ export class Game {
     // post chain (ink outlines + bloom + tone mapping); plain render when the preset disables both
     const q0 = QUALITY[graphicsQuality(this.settings)] || QUALITY.medium;
     this.post = new Post(this.renderer, this.scene, this.camera, { outline: q0.outline, bloom: q0.bloom, msaa: q0.msaa });
+    this.dynRes = new DynamicResolution(); // lowers the render resolution while the GPU can't keep up
     this._applyPixelRatio();
 
     this.input = new Input(canvas);
     this.input.onLockChange = (locked) => this._onLockChange(locked);
     this.input.setBindings(this.settings.bindings); // remappable actions (src/ui/settings.js)
+    this.input.rawMouse = !!this.settings.rawMouse;
     this._lockAndFullscreen = () => {
       this.input.lock();
       if (!document.fullscreenElement) {
@@ -176,7 +190,9 @@ export class Game {
     requestAnimationFrame(this._loop);
     this._startBackgroundClock();
 
-    this._installDebug();
+    // QA console hooks (teleport, give, damage, raw game access) exist only in `vite` dev builds.
+    // Shipping them let anyone, especially a match host, teleport or give themselves items mid-game.
+    if (import.meta.env && import.meta.env.DEV) this._installDebug();
   }
 
   // ---------------------------------------------------------------- loading
@@ -206,6 +222,8 @@ export class Game {
 
     P(0.5, 'Building Bentonville');
     this.world = new World(mapData);
+    // gas stations: planned from the map data before the scatter so trees / rocks keep off the lots
+    this.gasStations = planGasStations(this.world);
     this.atmosphere = new Atmosphere({ scene: this.scene, renderer: this.renderer, camera: this.camera, quality: graphicsQuality(this.settings) });
     this.view = await buildWorldMeshes({
       world: this.world,
@@ -223,12 +241,22 @@ export class Game {
     this.hud.setVisible(false);
     if (this.hud.setMapTravelHandler) this.hud.setMapTravelHandler((key) => this.fastTravelTo(key));
     if (this.hud.setMapWeaponsHandler) this.hud.setMapWeaponsHandler(() => this.toggleSandboxLoadout(true));
+    if (this.hud.setMapBotsHandler) this.hud.setMapBotsHandler(() => this.toggleSandboxBots(true));
+    if (this.hud.setSandboxBotsClose) this.hud.setSandboxBotsClose(() => this.toggleSandboxBots(false));
     if (this.hud.setSandboxLoadoutHandler) this.hud.setSandboxLoadoutHandler((id) => this.giveSandboxGun(id));
     if (this.hud.setSandboxLoadoutClose) this.hud.setSandboxLoadoutClose(() => this.toggleSandboxLoadout(false));
+    if (this.hud.setSandboxBotHandlers) {
+      this.hud.setSandboxBotHandlers((d) => this.spawnSandboxBot(d), () => this.clearSandboxBots(), (on) => {
+        setSandboxBotsHostile(this, on);
+        this._syncSandboxBots();
+        sfx.play('ui_click');
+      });
+    }
     const mb = mapData && mapData.meta && mapData.meta.bounds;
     if (mb && this.hud.setFullMapAspect) this.hud.setFullMapAspect((mb.maxX - mb.minX) / (mb.maxZ - mb.minZ));
     this.minimap = new Minimap({ mapData, miniCanvas: this.hud.getMinimapCanvas(), fullCanvas: this.hud.getFullMapCanvas() });
     this.pings = new Pings(this.hud.el);
+    this.rebootMarkers = new RebootMarkers(this.pings.layer); // teammates' reboot cards on screen
     // Crystal Bridges galleries (musewalk-style art, focus mode, portals, ambience): optional
     if (this.view && this.view.crystalBridges) {
       try {
@@ -251,7 +279,7 @@ export class Game {
       const w = this.minimap.fullClientToWorld(e.clientX, e.clientY);
       if (!w || !w.inBounds) return;
       if (canFastTravel(this)) {
-        const hit = nearestPoi(poiTargets(this.world.landmarks), w.x, w.z);
+        const hit = nearestPoi(travelTargets(this), w.x, w.z); // a POI or a gas station
         if (hit) return this.fastTravelTo(hit.key);
       }
       const mk = this.pings.markerOf(this.player.id);
@@ -320,6 +348,17 @@ export class Game {
       ? new BotsCls({ scene: this.scene, world: this.world, kits: botKits, weaponModels: weaponScenes, loot: this.loot, structures: this.structures, combat: this.combat, fx: this.fx, sfx })
       : new NullBots();
     this.bots.dropLootOnDeath = false; // Game drops every actor's inventory in _onEliminate
+    // a bot's taunt emote reaches the clients like a player's ('em' event)
+    this.bots.onEmote = (a, id) => {
+      const net = this.net;
+      if (net && net.isHost && net.started && net.events) net.events.push({ e: 'em', a: a.id, id });
+    };
+    // gas stations: colliders, meshes and a gas can each (before the reboot vans pick their spots)
+    try {
+      buildGasStations(this.world, this.gasStations, { scene: this.scene, meshFactory: buildGasStationMesh });
+    } catch (err) {
+      this._error('gasStations.build', err);
+    }
     // Catfish Ken's reboot vans (one per POI) and reboot cards (team modes)
     this.reboot = new Reboot({ scene: this.scene, world: this.world, fx: this.fx, sfx });
     try {
@@ -333,6 +372,35 @@ export class Game {
     };
     this.bots.reboot = this.reboot;
     this.reboot.viewer = this.camera.position; // Catfish Ken waves to whoever walks up
+    // drivable cars (parking lots and main-road curbs, same spots on every machine)
+    this.vehicles = new Vehicles({ scene: this.scene, world: this.world, fx: this.fx, sfx, combat: this.combat, structures: this.structures, meshFactory: buildCarMesh });
+    try {
+      this.vehicles.setup();
+    } catch (err) {
+      this._error('vehicles.setup', err);
+    }
+    this.vehicles.viewer = this.camera.position;
+    this.vehicles.local = this.player;
+    this.vehicles.stations = this.gasStations; // station meshes are distance-culled with the cars
+    this.vehicles.onEvent = (e) => {
+      if (this.net && this.net.isHost && this.net.started && this.net.events) this.net.events.push(e);
+    };
+    this.combat.vehicles = this.vehicles;
+    this.grenades.vehicles = this.vehicles;
+    this.bots.vehicles = this.vehicles;
+    // gas pumps: the nozzle that refuels cars; pumps burn and blow up (GasPumps.js)
+    this.pumps = new GasPumps({ world: this.world, fx: this.fx, sfx, combat: this.combat, vehicles: this.vehicles, hoseView: new NozzleHose(this.scene) });
+    try {
+      this.pumps.setup(this.gasStations);
+    } catch (err) {
+      this._error('pumps.setup', err);
+    }
+    this.pumps.viewer = this.camera.position;
+    this.pumps.onEvent = (e) => {
+      if (this.net && this.net.isHost && this.net.started && this.net.events) this.net.events.push(e);
+    };
+    this.combat.pumps = this.pumps;
+    this.grenades.pumps = this.pumps;
     this.dropBus = new DropBusMesh();
     this.scene.add(this.dropBus.root);
     this.busRoute = null;
@@ -362,7 +430,7 @@ export class Game {
   makeSkinCharacter(skinId, canopyColor, pickaxe, backbling) {
     const def = skinDef(skinId);
     const kit = this.kits && (this.kits[def.model] || this.kits.player);
-    return kit ? new Character(kit, { weapons: this.weaponScenes, canopyColor, tint: def.tint ?? undefined, pickaxe, backbling }) : null;
+    return kit ? new Character(kit, { weapons: this.weaponScenes, canopyColor, tint: def.tint ?? undefined, skin: def, pickaxe, backbling }) : null;
   }
 
   /** Swaps a remote human's / puppet's character for outfit `skinId` (keeps visibility, pose state resets). */
@@ -399,13 +467,13 @@ export class Game {
     const kit = this.kits && (this.kits[def.model] || this.kits.player);
     const p = this.player;
     if (!kit || !p) return;
-    const key = def.model + '|' + def.tint;
+    const key = def.model + '|' + def.tint + '|' + (def.parts || def.colors || def.addons ? this.skin : ''); // recipe skins rebuild per id
     if (p.character && p._skinKey === key) {
       p.character.setLoadout({ pickaxe: this.pickaxe, backbling: this.backbling });
       return;
     }
     const old = p.character;
-    const ch = new Character(kit, { weapons: this.weaponScenes, canopyColor: 0xffc21f, tint: def.tint ?? undefined, pickaxe: this.pickaxe, backbling: this.backbling });
+    const ch = new Character(kit, { weapons: this.weaponScenes, canopyColor: 0xffc21f, tint: def.tint ?? undefined, skin: def, pickaxe: this.pickaxe, backbling: this.backbling });
     if (old) {
       ch.root.visible = old.root.visible;
       ch.root.position.copy(old.root.position);
@@ -425,8 +493,9 @@ export class Game {
     // free build is a solo sandbox; a multiplayer host never gets it
     const freeBuild = !!opts.freeBuild && !(this.net && this.net.isHost);
     this.freeBuild = freeBuild;
-    // bot difficulty this match was played on; only 'hard' matches count toward the ranks
+    // bot difficulty this match was played on; only hard matches that include bots count
     this.matchDifficulty = freeBuild ? null : this.settings.difficulty;
+    this.matchBots = 0;
     this.seed = seed;
     const rng = makeRng(seed);
     this.rng = rng;
@@ -435,6 +504,7 @@ export class Game {
     this._matchEndPosted = false;
     this.paused = false;
     this.sandboxLoadoutOpen = false;
+    this.sandboxBotsOpen = false;
     this._endTimer = 0;
     this._stormTick = 0;
     this.spectating = null;
@@ -461,10 +531,14 @@ export class Game {
     this.combat.clear();
     this.combat.authoritative = true;
     this.grenades.clear();
-    if (this.structures) this.structures.clear();
+    if (this.structures) {
+      this.structures.clear();
+      this.structures.warm(); // compile build shaders now, not on the first piece
+    }
     this.fx.clear();
     this.hud.clearTransient();
     if (this.pings) this.pings.reset();
+    if (this.rebootMarkers) this.rebootMarkers.reset();
 
     if (boxSize) {
       this._startBoxFight(rng, boxSize, net0);
@@ -523,6 +597,7 @@ export class Game {
       this._error('bots.spawn', err);
     }
     this.totalActors = 1 + (net ? net.remotes.size : 0) + this.bots.list.length;
+    this.matchBots = this.bots.list.length;
     this._setupTeam();
 
     if (freeBuild) {
@@ -559,6 +634,7 @@ export class Game {
     this.state = 'drop';
     this.fullMapOpen = false;
     this.sandboxLoadoutOpen = false;
+    this.sandboxBotsOpen = false;
     if (!this.inventoryOpen && this.input) this.input.trap = false;
     this.hud.setVisible(true);
     this.hud.showFullMap(false);
@@ -757,12 +833,33 @@ export class Game {
     if (gallery) gallery.visible = !on;
     if (this.reboot && this.reboot.vans) for (const v of this.reboot.vans) if (v.mesh) v.mesh.visible = !on;
     if (this.loot && this.loot.group) this.loot.group.visible = !on;
+    if (on) this._voidHideExtras();
+    else if (this._voidHidden) {
+      for (const o of this._voidHidden) o.visible = true;
+      this._voidHidden = null;
+    }
     if (this.atmosphere && this.atmosphere.setVoid) this.atmosphere.setVoid(on);
+  }
+
+  /**
+   * Cars and gas stations live straight in the scene: hide them in the void and remember what was
+   * showing, so leaving puts back exactly that (a wrecked car stays hidden). Safe to call again
+   * after match setup (vehicles.reset shows the cars again).
+   */
+  _voidHideExtras() {
+    if (!this._voidHidden) this._voidHidden = [];
+    for (const o of this.scene.children) {
+      if (o.visible && (o.name === 'gas-station' || (o.name && o.name.startsWith('car_')))) {
+        o.visible = false;
+        this._voidHidden.push(o);
+      }
+    }
   }
 
   /** Into the arena: HUD up, menus away, pointer locked. */
   _boxGoLive() {
     const p = this.player;
+    this._voidHideExtras(); // after _setupTeam: vehicles.reset turned the cars back on
     if (p.character) p.character.root.visible = true;
     p.grounded = true;
     this.state = 'play';
@@ -1058,6 +1155,44 @@ export class Game {
   }
 
   /**
+   * Sandbox BOTS: one bot of difficulty `d` (easy | normal | hard) on open ground 9-15 m in
+   * front of the player, armed (sandboxBotLoadout), on the shared sandbox bot team (they all
+   * hunt you, not each other). Refused outside the open-world sandbox, with a net session, or
+   * at SANDBOX_BOT_CAP live bots. You stay invulnerable (free build: only Leave ends the session),
+   * so their hits flash / sound but never knock you; your hits on them count as normal.
+   * Returns the new bot or null.
+   */
+  spawnSandboxBot(d) {
+    let bot = null;
+    let reason = null;
+    try {
+      ({ bot, reason } = spawnSandboxBot(this, d));
+    } catch (err) {
+      this._error('sandbox.spawnBot', err);
+    }
+    if (this.hud && this.hud.toast) this.hud.toast(bot ? `${bot.name} spawned` : reason || 'Could not spawn a bot');
+    this._syncSandboxBots();
+    return bot;
+  }
+
+  /** Sandbox BOTS: remove every sandbox bot (alive or dead). Returns how many went. */
+  clearSandboxBots() {
+    const n = clearSandboxBots(this);
+    this._syncSandboxBots();
+    return n;
+  }
+
+  /** Dead sandbox bots leave after SANDBOX_CORPSE_TIME s. */
+  _purgeSandboxBodies() {
+    return purgeSandboxBodies(this);
+  }
+
+  /** Push the BOTS section's count / cap / disabled state to the overlay. */
+  _syncSandboxBots() {
+    if (this.hud && this.hud.setSandboxBots) this.hud.setSandboxBots(sandboxBotStatus(this));
+  }
+
+  /**
    * Multiplayer client: set up the match the host described (see HostSession.matchStarted).
    * The static world is identical everywhere (seeded generation); loot and the storm are
    * copied from the host, and everyone else is a Puppet driven by snapshots.
@@ -1069,6 +1204,7 @@ export class Game {
     const net = this.net;
     // the host's bots set the difficulty (sent in the start message)
     this.matchDifficulty = typeof start.diff === 'string' ? start.diff : null;
+    this.matchBots = Number.isFinite(start.bots) ? start.bots | 0 : Array.isArray(start.roster) ? start.roster.filter((r) => r && !r.h).length : 0;
     this.seed = start.seed;
     this.rng = makeRng(start.seed);
     this.matchTime = 0;
@@ -1076,6 +1212,7 @@ export class Game {
     this._matchEndPosted = false;
     this.paused = false;
     this.sandboxLoadoutOpen = false;
+    this.sandboxBotsOpen = false;
     this._endTimer = 0;
     this._stormTick = 0;
     this.spectating = null;
@@ -1093,10 +1230,14 @@ export class Game {
     this.grenades.clear();
     this.freeBuild = false;
     this.hud.setStormVisible(true);
-    if (this.structures) this.structures.clear();
+    if (this.structures) {
+      this.structures.clear();
+      this.structures.warm();
+    }
     this.fx.clear();
     this.hud.clearTransient();
     if (this.pings) this.pings.reset();
+    if (this.rebootMarkers) this.rebootMarkers.reset();
     this.bots.clear();
 
     const zone = DROP_ZONES.find((z) => z.key === start.zone) || DROP_ZONES[0];
@@ -1169,6 +1310,8 @@ export class Game {
     members.forEach((a, i) => (a.teamSlot = i));
     this.mates = members.filter((a) => a !== p);
     if (this.reboot) this.reboot.reset({ teamMode: this.teamMode && !this.boxFight, authoritative: !(this.net && this.net.isClient), myTeam: this.teamMode ? p.team : null });
+    if (this.vehicles) this.vehicles.reset({ authoritative: !(this.net && this.net.isClient) });
+    if (this.pumps) this.pumps.reset({ authoritative: !(this.net && this.net.isClient) });
   }
 
   /**
@@ -1386,6 +1529,7 @@ export class Game {
     this.state = 'play';
     this.fullMapOpen = false;
     this.sandboxLoadoutOpen = false;
+    this.sandboxBotsOpen = false;
     if (!this.inventoryOpen && this.input) this.input.trap = false;
     this.hud.showFullMap(false);
     this._setFullMapInteractive(false);
@@ -1405,6 +1549,7 @@ export class Game {
     if (on) {
       this.closeInventory(false);
       this.toggleSandboxLoadout(false);
+      this.toggleSandboxBots(false);
       if (this.fullMapOpen) this.toggleFullMap(false);
       this.input.unlock();
       this.input.releaseAll();
@@ -1441,6 +1586,7 @@ export class Game {
       this.hud.setVisible(false);
       this.hud.clearTransient();
       if (this.pings) this.pings.reset();
+      if (this.rebootMarkers) this.rebootMarkers.reset();
     if (this.pings) this.pings.reset();
       this._setFullMapInteractive(false);
     }
@@ -1462,7 +1608,8 @@ export class Game {
       mode: this.mode,
       teams: this.totalTeams || this.totalActors,
       difficulty: this.matchDifficulty || null,
-      ranked: isRankedDifficulty(this.matchDifficulty),
+      bots: this.matchBots | 0,
+      ranked: isRankedMatch(this.matchDifficulty, this.matchBots),
     };
     if (this.boxFight) {
       // Box Fights: unranked, scored in rounds (placement 1 = won, 2 = lost)
@@ -1541,6 +1688,8 @@ export class Game {
         this.loot.drop(it, _v2.set(victim.pos.x + Math.cos(a) * 1.2, victim.pos.y, victim.pos.z + Math.sin(a) * 1.2).clone());
       });
     }
+    // a bot that got the elimination may walk over and emote on the body (Bots.notifyKill)
+    if (killer && killer._bot && this.bots && this.bots.notifyKill && !(this.net && this.net.isClient)) this.bots.notifyKill(killer, victim);
     // feed
     let text;
     let kind = 'elim';
@@ -1551,9 +1700,12 @@ export class Game {
     } else if (info.fall) text = `${victim.name} fell too far`;
     else if (info.bleed) text = killer ? `${victim.name} bled out (${killer.name})` : `${victim.name} bled out`;
     else if (info.wipe) text = killer ? `${killer.name} wiped ${victim.name}` : `${victim.name} was eliminated`;
+    else if (info.weapon === 'car_explosion' && !killer) text = `${victim.name} went up with their car`;
+    else if (info.weapon === 'car_ram' && !killer) text = `${victim.name} was run over`;
+    else if (info.weapon === 'pump_explosion' && !killer) text = `${victim.name} was caught in a gas pump blast`;
     else if (info.explosive && !killer) text = `${victim.name} blew themselves up`;
     else if (killer) {
-      const how = info.weapon === 'pickaxe' ? 'bonked' : info.explosive ? 'blew up' : info.headshot ? 'headshot' : 'eliminated';
+      const how = info.weapon === 'pickaxe' ? 'bonked' : info.weapon === 'car_ram' ? 'ran over' : info.weapon === 'car_explosion' ? 'blew up the car with' : info.weapon === 'pump_explosion' ? 'blew up a gas pump on' : info.explosive ? 'blew up' : info.headshot ? 'headshot' : 'eliminated';
       text = `${killer.name} ${how} ${victim.name}`;
     } else text = `${victim.name} was eliminated`;
     if (killer === p) kind = 'kill';
@@ -1591,7 +1743,7 @@ export class Game {
     let text;
     if (info.storm && !by) text = `${victim.name} was knocked by the storm`;
     else if (info.fall) text = `${victim.name} fell and was knocked`;
-    else if (by) text = `${by.name} ${info.weapon === 'pickaxe' ? 'bonked' : 'knocked'} ${victim.name}`;
+    else if (by) text = `${by.name} ${info.weapon === 'pickaxe' ? 'bonked' : info.weapon === 'car_ram' ? 'ran over' : 'knocked'} ${victim.name}`;
     else text = `${victim.name} was knocked`;
     if (victim === p && !by && !info.storm && !info.fall) text = 'You were knocked';
     this.hud.killFeed(text, by === p ? 'kill' : victim === p ? 'self' : victim.team === p.team ? 'mate' : 'knock', [victim.name, by && by.name], p.name);
@@ -1656,6 +1808,16 @@ export class Game {
 
   _loop(now) {
     requestAnimationFrame(this._loop);
+    // FPS limit (settings.fpsCap): skip display refreshes until the next frame is due
+    const cap = this.settings.fpsCap;
+    if (cap && cap < FPS_UNLIMITED) {
+      const interval = 1000 / cap;
+      const due = this._nextFrameAt || 0;
+      if (now < due - 1) return; // 1 ms slack for refresh jitter
+      let next = due + interval; // from the due time, so the average stays on the cap
+      if (next < now) next = now + interval; // fell behind: start again from now
+      this._nextFrameAt = next;
+    }
     let dt = (now - this._last) / 1000;
     this._last = now;
     if (!(dt > 0)) dt = 0;
@@ -1681,6 +1843,10 @@ export class Game {
 
     input.inMatch = this.state === 'play' && !this.paused;
     this._inventoryInput(input);
+    if (this.sandboxBotsOpen && input.hit('Escape')) {
+      input.consume('Escape');
+      this.toggleSandboxBots(false);
+    }
     if (this.sandboxLoadoutOpen && input.hit('Escape')) {
       input.consume('Escape');
       this.toggleSandboxLoadout(false);
@@ -1705,6 +1871,7 @@ export class Game {
     input.endFrame();
     // rolling averages (window.__game.perf): sim / present CPU ms, frame interval, draw calls
     const t2 = performance.now();
+    this._updateDynRes(dt, t2 - t0, live && !this.paused);
     const k = 0.05;
     pf.sim += (t1 - t0 - pf.sim) * k;
     pf.present += (t2 - t1 - pf.present) * k;
@@ -1801,7 +1968,14 @@ export class Game {
     } else {
       this.matchTime += dt;
       if (!client && !this.freeBuild && !this.boxFight) this.storm.update(dt); // free build / Box Fights: storm stays dormant
-      if (this.freeBuild) this._refillMats();
+      if (this.freeBuild) {
+        this._refillMats();
+        this._sandboxTick = (this._sandboxTick || 0) + dt;
+        if (this._sandboxTick >= 1) {
+          this._sandboxTick = 0;
+          if (this._purgeSandboxBodies() || this.sandboxLoadoutOpen || this.sandboxBotsOpen) this._syncSandboxBots();
+        }
+      }
     }
 
     if (this.state === 'play' || this.state === 'over') {
@@ -1841,6 +2015,18 @@ export class Game {
     if (this.structures) this.structures.update(dt);
     this.grenades.update(dt);
     if (this.reboot && !this.boxFight && (this.state === 'play' || this.state === 'over')) this.reboot.update(dt, this.combat.actors);
+    if (this.vehicles && !this.boxFight && (this.state === 'play' || this.state === 'over')) {
+      try {
+        this.vehicles.update(dt, this.combat.actors);
+      } catch (err) {
+        this._error('vehicles.update', err);
+      }
+      try {
+        if (this.pumps) this.pumps.update(dt, this.combat.actors);
+      } catch (err) {
+        this._error('pumps.update', err);
+      }
+    }
     if (this.boxArena) this.boxArena.update(dt);
 
     if (this.boxFight) {
@@ -1918,7 +2104,7 @@ export class Game {
         this._specDist = damp(this._specDist == null ? CAMERA.distance : this._specDist, CAMERA.distance, 10, dt);
         const crouchDrop = t.crouching ? 0.45 : 0;
         _v.set(t.pos.x, t.pos.y + CAMERA.pivotHeight - crouchDrop, t.pos.z);
-        placeOrbitCamera(cam, this.world, _v, this._specH, this._specP, this._specDist, CAMERA.shoulder);
+        placeOrbitCamera(cam, this.world, _v, this._specH, this._specP, this._specDist, CAMERA.shoulder, CAMERA.rise, null, 0, t.pos.y);
         const baseFov = this.settings.fov || CAMERA.fov;
         if (Math.abs(cam.fov - baseFov) > 0.01) {
           cam.fov = baseFov;
@@ -1927,7 +2113,7 @@ export class Game {
       } else if (!p.alive) {
         _v.set(p.pos.x, p.pos.y + 1.2, p.pos.z);
         this._specH = (this._specH == null ? p.heading : this._specH) + dt * 0.15;
-        placeOrbitCamera(cam, this.world, _v, this._specH, -0.35, 7, 0);
+        placeOrbitCamera(cam, this.world, _v, this._specH, -0.35, 7, 0, CAMERA.rise, null, 0, p.pos.y);
       } else if (!(this.cbGallery && this.cbGallery.cameraOverride(cam, dt))) p.updateCamera(cam, dt, this.world, this.settings.fov || CAMERA.fov);
     }
     // grenade aim arc, from the fresh aim ray
@@ -2079,20 +2265,29 @@ export class Game {
       const cam = this.camera;
       const W = window.innerWidth;
       const H = window.innerHeight;
-      this.pings.update(
-        dt,
-        (v) => {
-          _v2.set(v.x, v.y, v.z).project(cam);
-          if (_v2.z > 1) return null;
-          return { x: (_v2.x * 0.5 + 0.5) * W, y: (-_v2.y * 0.5 + 0.5) * H };
-        },
-        { x: p.pos.x, z: p.pos.z, heading: p.heading },
-        W,
-        H
-      );
+      const project = (v) => {
+        _v2.set(v.x, v.y, v.z).project(cam);
+        if (_v2.z > 1) return null;
+        return { x: (_v2.x * 0.5 + 0.5) * W, y: (-_v2.y * 0.5 + 0.5) * H };
+      };
+      const viewer = { x: p.pos.x, z: p.pos.z, heading: p.heading };
+      this.pings.update(dt, project, viewer, W, H);
+      // teammates' reboot cards (and, carrying one, the nearest van): no need to open the map
+      if (this.rebootMarkers) {
+        const rb = this.reboot;
+        const on = !!rb && this.teamMode && this.state === 'play';
+        const targets = rebootMarkerTargets(
+          on
+            ? { cards: rb.cards.values(), vans: rb.vans, teamMode: true, team: p.team, selfId: p.id, alive: p.alive, carrying: rb.cardsOf(p).length, time: rb.time, self: p.pos }
+            : { teamMode: false },
+          this._rbTargets || (this._rbTargets = [])
+        );
+        this.rebootMarkers.update(targets, project, viewer, W, H);
+      }
     }
     if (fullOpen && this.freeBuild && hud.setMapTravel) {
-      const travel = poiTargets(this.world.landmarks);
+      // the side list names POIs only; gas stations are reached by clicking their pump icon
+      const travel = travelTargets(this).filter((t) => !t.gas);
       const here = nearestPoi(travel, p.pos.x, p.pos.z, 160);
       hud.setMapTravel(travel, here && here.key);
     } else if (fullOpen && hud.setMapStats) {
@@ -2129,6 +2324,37 @@ export class Game {
         else blips.push({ x: v.x, z: v.z, kind: ready ? 'van' : 'vanCd' });
       }
       if (this.teamMode) for (const c of this.reboot.cards.values()) if (c.holder == null && c.team === p.team) blips.push({ x: c.x, z: c.z, kind: 'card' });
+    }
+    // car panel: the car we ride in, else the car under the crosshair (when it is hurt)
+    if (this.vehicles && this.hud.setCar) {
+      let info = null;
+      const car = p.alive ? p.vehicle : null;
+      if (car && car.alive) {
+        info = {
+          name: car.spec.name,
+          hp: car.hp,
+          maxHp: car.maxHp,
+          fuel: car.fuel,
+          speed: car.speed,
+          seats: car.seats.map((a) => (a === p ? 2 : a ? 1 : 0)),
+          boost: car.boostT > 0 ? 'on' : car.boostCd > 0 ? car.boostCd : 'ready',
+        };
+      } else if (p.alive && this.state === 'play' && !p.airborneDrop) {
+        const h = this.vehicles.ray(this.camera.position, p.aimDir, 90, p);
+        if (h && h.car.alive && (h.car.hp < h.car.maxHp || h.car.seats.some(Boolean))) info = { name: h.car.spec.name, hp: h.car.hp, maxHp: h.car.maxHp, target: true };
+      }
+      this.hud.setCar(info);
+    }
+    // gas stations: always on the map, labelled on the full map (and the mini view when in sight)
+    if (this.gasStations && (this.state === 'play' || this.state === 'drop')) {
+      for (const st of this.gasStations) blips.push({ x: st.x, z: st.z, kind: 'fuel', label: (st.label || STATION.label).toUpperCase() });
+    }
+    // drivable cars nearby (not the one we ride in: our own arrow is on it)
+    if (this.vehicles && (this.state === 'play' || this.state === 'drop')) {
+      for (const c of this.vehicles.cars) {
+        if (!c.alive || c === p.vehicle) continue;
+        if ((c.x - f.pos.x) ** 2 + (c.z - f.pos.z) ** 2 < 260 * 260) blips.push({ x: c.x, z: c.z, kind: 'car' });
+      }
     }
     if (this.teamMode && this.mates && this.mates.length && this.state === 'play') {
       for (const m of this.mates) {
@@ -2211,7 +2437,10 @@ export class Game {
     if (sfx.setUiVolume) sfx.setUiVolume(this.settings.uiVolume ?? 1);
     if (this.settings.musicVolume != null) sfx.setMusicVolume(this.settings.musicVolume);
     if (typeof document !== 'undefined') createFpsMeter(document.body).setVisible(!!this.settings.showFps); // shared with the settings screen
-    if (this.input) this.input.setBindings(this.settings.bindings);
+    if (this.input) {
+      this.input.setBindings(this.settings.bindings);
+      this.input.rawMouse = !!this.settings.rawMouse;
+    }
     if (this.hud && this.hud.setKeyLabels && this.input) this.hud.setKeyLabels((a) => this.input.label(a));
     if (this.hud && this.hud.setCrosshairStyle) this.hud.setCrosshairStyle(this.settings);
     if (this.invPanel && this.input) this.invPanel.setKeyLabels((a) => this.input.label(a));
@@ -2224,12 +2453,40 @@ export class Game {
     this._cullT = 0;
   }
 
+  /**
+   * Dynamic resolution (settings.dynamicResolution): fed every frame of a match in a visible,
+   * focused window; re-applies the pixel ratio when the controller changes its scale.
+   */
+  _updateDynRes(dt, cpuMs, active) {
+    const dyn = this.dynRes;
+    if (!dyn) return;
+    // an FPS limit under 50 would read as a struggling GPU: leave the resolution alone then
+    const capped = this.settings.fpsCap && this.settings.fpsCap < 50;
+    const on = this.settings.dynamicResolution !== false && !this.settings.performanceMode && !capped;
+    if (!on) {
+      if (dyn.scale !== 1) {
+        dyn.reset();
+        this._setPixelRatio();
+      }
+      return;
+    }
+    if (!active || document.hidden || (document.hasFocus && !document.hasFocus())) return;
+    if (dyn.update(dt * 1000, cpuMs)) this._setPixelRatio();
+  }
+
   _applyPixelRatio() {
     const q = QUALITY[graphicsQuality(this.settings)] || QUALITY.medium;
-    const pr = Math.min(window.devicePixelRatio || 1, q.pixelRatio) * (q.renderScale || 1);
+    if (this.post) this.post.configure({ outline: q.outline, bloom: q.bloom, msaa: q.msaa });
+    if (this.dynRes) this.dynRes.reset(); // new preset: start again from full resolution
+    this._setPixelRatio();
+  }
+
+  _setPixelRatio() {
+    const q = QUALITY[graphicsQuality(this.settings)] || QUALITY.medium;
+    const dyn = this.dynRes ? this.dynRes.scale : 1;
+    const pr = Math.min(window.devicePixelRatio || 1, q.pixelRatio) * (q.renderScale || 1) * dyn;
     this.renderer.setPixelRatio(pr);
     if (this.post) {
-      this.post.configure({ outline: q.outline, bloom: q.bloom, msaa: q.msaa });
       this.post.setPixelRatio(pr);
       this.post.setSize(window.innerWidth, window.innerHeight);
     }
@@ -2240,6 +2497,7 @@ export class Game {
     const h = window.innerHeight;
     this.renderer.setSize(w, h, false);
     if (this.post) this.post.setSize(w, h);
+    this._setPixelRatio(); // dragged to a monitor with other display scaling
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
@@ -2283,6 +2541,8 @@ export class Game {
     this.inventoryOpen = true; // set before unlock(): _onLockChange must not pause
     this.sandboxLoadoutOpen = false;
     if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(false);
+    this.sandboxBotsOpen = false;
+    if (this.hud.showSandboxBotsMenu) this.hud.showSandboxBotsMenu(false);
     this.fullMapOpen = false;
     this._setFullMapInteractive(false);
     this.input.trap = true;
@@ -2435,6 +2695,8 @@ export class Game {
     } else {
       this.sandboxLoadoutOpen = false;
       if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(false);
+      this.sandboxBotsOpen = false;
+      if (this.hud.showSandboxBotsMenu) this.hud.showSandboxBotsMenu(false);
       this.input.trap = false;
       this._setFullMapInteractive(false);
       if ((this.state === 'play' || this.state === 'drop') && !this.paused) this.input.lock();
@@ -2449,13 +2711,34 @@ export class Game {
       if (!canSandboxLoadout(this) || this.paused) return;
       if (!this.fullMapOpen) this.toggleFullMap(true);
       if (!this.fullMapOpen) return;
+      this.toggleSandboxBots(false); // one panel at a time
       this.sandboxLoadoutOpen = true;
       if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(true);
+      this._syncSandboxBots();
       sfx.play('ui_click');
       return;
     }
     this.sandboxLoadoutOpen = false;
     if (this.hud.showSandboxLoadout) this.hud.showSandboxLoadout(false);
+  }
+
+  /** Sandbox map overlay: spawn / clear bots (its own menu, under WEAPONS). No-op in a match. */
+  toggleSandboxBots(on) {
+    on = on === undefined ? !this.sandboxBotsOpen : !!on;
+    if (on === !!this.sandboxBotsOpen) return;
+    if (on) {
+      if (!canSandboxLoadout(this) || this.paused) return;
+      if (!this.fullMapOpen) this.toggleFullMap(true);
+      if (!this.fullMapOpen) return;
+      this.toggleSandboxLoadout(false); // one panel at a time
+      this.sandboxBotsOpen = true;
+      if (this.hud.showSandboxBotsMenu) this.hud.showSandboxBotsMenu(true);
+      this._syncSandboxBots();
+      sfx.play('ui_click');
+      return;
+    }
+    this.sandboxBotsOpen = false;
+    if (this.hud.showSandboxBotsMenu) this.hud.showSandboxBotsMenu(false);
   }
 
   /** Your team colour slot (0..3). */
@@ -2565,9 +2848,10 @@ export class Game {
   /** Free build only: stand on the named POI and close the map. */
   fastTravelTo(key) {
     if (!canFastTravel(this)) return false;
-    const t = poiTargets(this.world.landmarks).find((p) => p.key === key);
+    const t = travelTargets(this).find((p) => p.key === key);
     if (!t) return false;
-    const land = landAt(this.world, t.x, t.z, this.rng);
+    // a gas station: land on its forecourt, not somewhere up to 40 m off
+    const land = landAt(this.world, t.x, t.z, this.rng, t.gas ? 12 : 40);
     const p = this.player;
     p.pos.set(land.x, land.y, land.z);
     p.vel.set(0, 0, 0);
@@ -2964,14 +3248,8 @@ function rebootLoadout() {
 }
 
 /** Hotbar slot an actor is holding (-1 = pickaxe): bots select a slot, remote humans report what they hold. */
-export function heldSlot(a, inv) {
-  const eq = a.equipId || null;
-  if (!eq) return a.buildPiece ? -1 : inv.selected;
-  if (eq === 'pickaxe') return -1;
-  const cur = inv.slots[inv.selected];
-  if (cur && (cur.id === eq || (eq === 'none' && cur.type === 'consumable'))) return inv.selected;
-  return inv.slots.findIndex((s) => s && (s.id === eq || (eq === 'none' && s.type === 'consumable')));
-}
+// moved to Inventory.js (pure; netcode imports it without the UI layer); re-exported for old importers
+export { heldSlot };
 
 const NO_INPUT = {
   dx: 0,

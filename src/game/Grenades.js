@@ -26,6 +26,7 @@
 // spawn(id, owner, pos, vel) and waits for explodeAt(id, pos); it never applies damage.
 
 import * as THREE from 'three';
+import { CAR } from './vehicles/cars.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { toToon } from '../render/Toon.js';
 import { GRENADE, ROCKET, SMOKE, PLAYER } from '../core/config.js';
@@ -242,6 +243,8 @@ export class Grenades {
     let t = 300;
     const hit = w.raycast(origin.x, origin.y, origin.z, _d.x, _d.y, _d.z, t, null);
     if (hit) t = hit.t;
+    const ch = this.vehicles ? this.vehicles.ray(origin, _d, t, owner) : null;
+    if (ch) t = ch.t;
     const ah = this.combat ? this.combat.rayActors(origin.x, origin.y, origin.z, _d.x, _d.y, _d.z, t, owner) : null;
     if (ah) t = ah.t;
     _p.copy(origin).addScaledVector(_d, t); // what the crosshair is on
@@ -307,6 +310,9 @@ export class Grenades {
       _d.copy(g.vel).multiplyScalar(1 / speed);
       const hit = w.raycast(p.x, p.y, p.z, _d.x, _d.y, _d.z, dist + ROCKET.size, null);
       let t = hit ? hit.t : Infinity;
+      // drivable cars are not in world.raycast (their glass is traced by Vehicles)
+      const ch = this.vehicles ? this.vehicles.ray(p, _d, Math.min(t, dist + ROCKET.size), g.owner) : null;
+      if (ch) t = ch.t;
       const ah = this.combat ? this.combat.rayActors(p.x, p.y, p.z, _d.x, _d.y, _d.z, Math.min(t, dist + ROCKET.size), g.owner) : null;
       if (ah) {
         t = ah.t;
@@ -382,6 +388,15 @@ export class Grenades {
         ny = hit.ny;
         nz = hit.nz;
         bounced = hit.kind || 'ground';
+      }
+      // cars: grenades bounce off the body (and fly in through broken glass)
+      const ch = this.vehicles ? this.vehicles.ray(pos, _d, Math.min(t, dist + r), g && g.age < 0.3 ? g.owner : null) : null;
+      if (ch) {
+        t = ch.t;
+        nx = ch.nx;
+        ny = ch.ny;
+        nz = ch.nz;
+        bounced = 'vehicle';
       }
       if (g && this.combat) {
         const ah = this.combat.rayActors(pos.x, pos.y, pos.z, _d.x, _d.y, _d.z, Math.min(t, dist + r), g.age < 0.3 ? g.owner : null);
@@ -694,6 +709,13 @@ export class Grenades {
     return false;
   }
 
+  /** A car with most of its glass gone no longer shields the people inside from a blast. */
+  _glassOpen(car) {
+    let open = 0;
+    for (const hp of car.windows) if (!(hp > 0)) open++;
+    return open >= 3;
+  }
+
   /** `direct`: the character a rocket struck (always a clean hit). */
   _explode(g, direct = null) {
     const rk = !!g.rocket;
@@ -709,6 +731,11 @@ export class Grenades {
     // ---- characters: flat damage inside the radius, unless something solid is in the way
     for (const a of combat.actors.slice()) {
       if (!a.alive || a.inBus) continue;
+      // inside a car with the glass up: the car takes it (below); leaning out, you do too
+      if (a.vehicle && !a.leaning && a !== direct) {
+        const car = a.vehicle;
+        if (!(this._glassOpen && this._glassOpen(car))) continue;
+      }
       const h = (a.height || PLAYER.height) * (a.crouching ? 0.7 : 1);
       const dx = a.pos.x - c.x;
       const dz = a.pos.z - c.z;
@@ -725,6 +752,11 @@ export class Grenades {
       }
       combat.applyDamage(a, dmg, { source: g.owner, weapon: rk ? 'rocket_launcher' : 'grenade', explosive: true, point: new THREE.Vector3(a.pos.x, a.pos.y + h * 0.75, a.pos.z) });
     }
+
+    // ---- drivable cars
+    if (this.vehicles) this.vehicles.blast(c, R + 1, rk ? CAR.rocketDamage : CAR.grenadeDamage, { source: g.owner, weapon: rk ? 'rocket_launcher' : 'grenade' });
+    // ---- gas pumps (GasPumps.js): a blast in range can set one on fire or blow it up
+    if (this.pumps) this.pumps.blast(c, R + 1, rk ? CAR.rocketDamage : CAR.grenadeDamage, { source: g.owner, weapon: rk ? 'rocket_launcher' : 'grenade' });
 
     // ---- built pieces
     const st = this.structures;
@@ -748,9 +780,15 @@ export class Grenades {
         }
       });
       const reach2 = (R + 0.6) * (R + 0.6);
+      // an intact slab shields what is on its far side: the floor / roof the blast sits on (a
+      // grenade on a roof used to break walls one and two storeys down) and the ceiling over it.
+      // The slab's own tiles (kind 'floor') still take the blast, so a hole can still be blown.
+      const slabUnder = this.world.groundHeight ? this.world.groundHeight(c.x, c.z, c.y) : -Infinity;
+      const slabOver = this.world.ceilingAbove ? this.world.ceilingAbove(c.x, c.z, c.y) : Infinity;
       for (const bld of buildings) {
         for (const pn of bld.shell.panels) {
           if (!pn.alive) continue;
+          if (pn.kind !== 'floor' && (pn.y1 < slabUnder - 0.05 || pn.y0 > slabOver + 0.05)) continue;
           const yGap = c.y < pn.y0 ? pn.y0 - c.y : c.y > pn.y1 ? c.y - pn.y1 : 0;
           const dx = pn.x - c.x;
           const dz = pn.z - c.z;
@@ -781,7 +819,8 @@ export class Grenades {
       for (const k of cell.boxes) {
         if (hits.has(k) || !k.alive) continue;
         if (k.passable && !k.frame) continue;
-        const smash = combat._isBreakable(k) || (k.kind === 'prop' && k.hp > 0);
+        // museum wall panels (archPanel: harvestable, finite hp) break like map wall panels
+        const smash = combat._isBreakable(k) || (k.kind === 'prop' && k.hp > 0) || (k.archPanel && k.hp > 0);
         if (!smash) continue;
         const px = Math.max(k.minX, Math.min(c.x, k.maxX));
         const pz = Math.max(k.minZ, Math.min(c.z, k.maxZ));

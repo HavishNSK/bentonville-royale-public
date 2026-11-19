@@ -77,6 +77,10 @@
 .br-chat-msg.is-me .br-chat-name {
   color: #8fd4ff;
 }
+.br-chat-msg.has-title .br-chat-name,
+.br-chat-msg.has-title.is-me .br-chat-name {
+  color: var(--br-title-color, #facece);
+}
 .br-chat-msg.is-dev .br-chat-name,
 .br-chat-msg.is-dev.is-me .br-chat-name {
   color: #ff3b3b;
@@ -97,6 +101,17 @@
 .br-chat-sys {
   color: rgba(255, 246, 220, 0.6);
   font-style: italic;
+}
+/* private answer to a dev moderation command */
+.br-chat-mod {
+  border-left: 3px solid var(--br-sun, #ffc21f);
+  padding-left: 7px;
+  color: var(--br-sun-hi, #ffe36b);
+  font-size: 13px;
+}
+.br-chat-mod.is-bad {
+  border-left-color: var(--br-coral, #ff5d4a);
+  color: #ffc2c2;
 }
 .br-chat-form {
   display: flex;
@@ -140,6 +155,11 @@
 .br-chat.is-collapsed .br-chat-list,
 .br-chat.is-collapsed .br-chat-form,
 .br-chat.is-collapsed .br-chat-err {
+  display: none;
+}
+/* the title screen's PRIVATE MATCH panel (room code + JOIN) sits where the docked chat is on
+   screens shorter than ~1080 px; while that panel is open the lobby chat steps aside */
+body:has(.mn-title.is-on .mn-private:not([hidden])) .br-chat:not(.is-match) {
   display: none;
 }
 .br-chat-unread {

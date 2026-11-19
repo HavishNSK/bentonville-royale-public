@@ -1,5 +1,33 @@
 # Patch Notes
 
+## [2026-11-18] — Unreleased: moderation, player reports and security fixes
+- **Security:** the QA console hooks (`window.__game.debug`: teleport, give items, damage anyone) shipped in the production build, so a player, and especially a match host, could teleport or give themselves items mid-game. They now exist only in `vite` dev builds.
+- **Security:** the account `Rank_1_Kills`, used to exploit that, is permanently banned in the code (`PERMA_BANNED` in `party/moderation.js`). It can't be lifted with `/unban`. Signing in shows a permanent-ban notice that can't be closed, and the account can't start or join matches, chat, shop or use friends.
+- **Accounts:** too many wrong passwords now makes you wait before trying again. New passwords need at least 8 characters and can't be a very common one. You can sign out on all devices. Developers must have signed in within 12 hours to use dev commands.
+- **Removed:** Log in with Clever. Use a username and password (or Google, where it works).
+- **Security:** a security log of sign-ins, origin checks on the account API and sockets, and browser security headers (`vercel.json`). The internal matchmaker endpoints are closed to the internet.
+- **DEV panel:** developers get a DEV button in the lobby to give or remove titles and to ban (pick the length: 1 hour, 1 day, 1 week, 1 month or permanent), warn, unban, and see reports and history, without typing commands.
+- **Titles:** developers can give a player a custom title with `/title name TITLE #titlecolour #namecolour` and remove it with `/untitle name`. Staff-style titles like MOD are allowed, but titles never grant powers.
+- **Report a player:** signed-in players can report someone from the lobby ONLINE list or the pause menu, with a reason and a note. Reports are private. Developers read them with `/reports` or `/history <user>`, then `/ban` (which clears them) or `/dismiss <user>`. Limits: one report per player per day, and 10 a day per reporter.
+- Developers can `/warn`, `/ban`, `/unban`, `/history`, `/resetstats` and `/flags` from global chat. The account server re-checks developer rights, and only the developer sees the result.
+- Bans escalate per offence: 1 hour, 1 day, 1 week, 1 month, then permanent. A developer can also set the length (`/ban name perm reason`). Timed bans lift on their own; unbanning keeps the offence count.
+- Match results that look impossible or unlikely are flagged for a developer to review. Nothing is banned automatically.
+- A banned account sees the reason and a countdown, earns no coins or stats, is hidden from the ranks, and can't chat, shop or use friends.
+- This is moderation, not anti-cheat: results are still reported by the browser.
+
+## [2026-11-17] — v0.16.1: humans-only private matches are unranked
+- A private match with bots turned off pays no coins and does not add a win or eliminations, even when the host is on Hard.
+- Hard matches that include bots still pay coins and count.
+
+## [2026-11-18] — Bug fixes from the deep test
+- Fixed a GPU memory leak between matches: every character's animation skeleton (one per bot and player, about 100 a match) kept a texture on the graphics card after the match ended. Playing many matches in a row without reloading no longer slowly fills video memory, which mattered most on Chromebooks.
+- Fixed the PRIVATE MATCH room-code box and JOIN button being covered by the global chat panel on screens shorter than 1080 px (including 1366x768 Chromebooks), which made it impossible to join a friend's room by code. The lobby chat now steps aside while the private-match panel is open and comes back when it closes.
+- Fixed built walls, floors, ramps and cones inside buildings sinking up to 2.7 m through the floor or floating above it (so walls looked like different sizes). Pieces built indoors now start flush with the floor you stand on, and pieces near buildings follow the levelled ground instead of the raw hillside.
+- Fixed seeing the whole upstairs when jumping inside multi-storey buildings (Bentonville High, Compton Gardens houses, the courthouse annex and others): the camera no longer rises through the ceiling at the top of a jump or up through a stairwell behind you. It stays inside the room you are in, also when crouching, spectating or on the elimination camera.
+- Fixed grenades and rockets breaking walls through intact floors and roofs: one grenade on a roof used to knock out walls one and two storeys below. An intact floor or roof now shields the storey on the other side; blowing a hole in the floor tile under the blast still works.
+- Fixed READY doing nothing in a private-match lobby when clicked while it still said "Joining…" (the host kept showing you as not ready). The button now stays greyed out until you are connected.
+- Parked school buses can now be destroyed like parked cars: bullets, the pickaxe (metal) and explosives break them (twice a car's health). They come back at the start of the next match.
+
 ## [2026-11-17] — v0.15.1: much stricter, kid-friendly global chat
 - `src/net/chatFilter.js` rewritten: a message that breaks a rule is refused (not masked with ****) and the sender sees which rule. Categories: profanity (including acronyms like stfu, gtfo, kys, fml), slurs and hate phrases, bullying ("ur so gay"), sexual talk, real-world threats, self-harm, drugs, and personal-info / off-app requests ("whats ur snap", "how old r u", "where do u live").
 - Sees through leetspeak, look-alike letters from other alphabets, fancy/fullwidth/circled letters, accents, stretched letters, symbols inside words, spaced-out letters, words split in two and some reversed spellings. Normal game talk ("i will kill you", "clap them", "45s left", "sus") still goes through.

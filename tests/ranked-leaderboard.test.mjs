@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyMatchStats } from '../party/matchStats.js';
-import { isRankedDifficulty, RANKED_DIFFICULTY, RANKED_NOTE } from '../src/core/config.js';
+import { isRankedDifficulty, isRankedMatch, RANKED_DIFFICULTY, RANKED_NOTE } from '../src/core/config.js';
 
 const base = { matches: 4, wins: 1, kills: 9 };
 
@@ -28,4 +28,13 @@ test('only hard difficulty is ranked, and the notice says so', () => {
   for (const d of ['easy', 'normal', null, undefined, 'HARD']) assert.equal(isRankedDifficulty(d), false, String(d));
   assert.match(RANKED_NOTE, /HARD/);
   assert.match(RANKED_NOTE, /eliminations/);
+  assert.match(RANKED_NOTE, /bots off/i);
+});
+
+test('a humans-only private match is unranked even on hard', () => {
+  assert.equal(isRankedMatch('hard', 0), false);
+  assert.equal(isRankedMatch('hard', 74), true);
+  assert.equal(isRankedMatch('easy', 74), false);
+  assert.equal(isRankedMatch('normal', 10), false);
+  assert.equal(isRankedMatch('hard', null), false);
 });

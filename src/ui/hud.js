@@ -195,6 +195,12 @@ function hudHTML() {
   <div class="br-downed-rev" data-ref="downedRev"><i data-ref="downedRevFill"></i><span>BEING REVIVED</span></div>
 </div>
 <div class="br-toasts" data-ref="toasts"></div>
+<div class="br-car" data-ref="car">
+  <div class="br-car-head"><b data-ref="carName">CAR</b><span class="br-car-spd"><span data-ref="carSpeed">0</span><em>km/h</em></span></div>
+  <div class="br-car-row"><i class="br-car-lbl">HP</i><div class="br-car-bar"><i data-ref="carHp"></i></div><span class="br-car-num" data-ref="carHpNum"></span></div>
+  <div class="br-car-row" data-ref="carFuelRow"><i class="br-car-lbl">FUEL</i><div class="br-car-bar is-fuel"><i data-ref="carFuel"></i></div><span class="br-car-num" data-ref="carFuelNum"></span></div>
+  <div class="br-car-foot"><span class="br-car-seats" data-ref="carSeats"></span><span class="br-car-boost" data-ref="carBoost">BOOST</span></div>
+</div>
 
 <div class="br-bl">
 <div class="br-spec" data-ref="spec">
@@ -254,7 +260,7 @@ function hudHTML() {
       <div class="br-mapstats" data-ref="mapStats"></div>
       <ul class="br-fullmap-keys">
         <li class="br-map-hint-marker"><kbd class="br-key">LMB</kbd>Place marker</li>
-        <li class="br-map-hint-travel"><kbd class="br-key">LMB</kbd>Travel to a POI</li>
+        <li class="br-map-hint-travel"><kbd class="br-key">LMB</kbd>Travel to a POI or gas station</li>
         <li class="br-map-hint-marker"><kbd class="br-key">RMB</kbd>Remove marker</li>
         <li><kbd class="br-key" data-ref="pingKey">MMB</kbd>Ping in the world</li>
         <li class="br-map-hint-sandbox"><kbd class="br-key" data-ref="creativeMapKey">N</kbd>Sandbox map</li>
@@ -270,6 +276,27 @@ function hudHTML() {
     <p class="br-sandbox-loadout-sub">Click a gun or grenade — it lands on your hotbar</p>
     <div class="br-sandbox-loadout-guns" data-ref="sandboxLoadoutGuns"></div>
     <button type="button" class="br-sandbox-loadout-close" data-ref="sandboxLoadoutClose">Close</button>
+  </div>
+</div>
+<div class="br-sandbox-loadout br-sandbox-botsmenu" data-ref="sandboxBotsMenu" hidden>
+  <div class="br-sandbox-loadout-card">
+    <div class="br-sandbox-loadout-h">${icon('people')}BOTS</div>
+    <section class="br-sandbox-bots" aria-labelledby="br-sandbox-bots-h">
+      <div class="br-sandbox-bots-top">
+        <h3 class="br-sandbox-bots-h" id="br-sandbox-bots-h">SPAWN</h3>
+        <span class="br-sandbox-bots-count" data-ref="sandboxBotsCount" aria-live="polite">0 / 0</span>
+      </div>
+      <p class="br-sandbox-bots-sub">Spawns 25 m in front of you and hunts you. You can't be eliminated in Sandbox.</p>
+      <div class="br-sandbox-bots-row" role="group" aria-label="Spawn a bot">
+        <button type="button" class="br-sandbox-bot" data-diff="easy" data-ref="sandboxBotEasy" aria-label="Spawn an easy bot">EASY</button>
+        <button type="button" class="br-sandbox-bot" data-diff="normal" data-ref="sandboxBotNormal" aria-label="Spawn a normal bot">NORMAL</button>
+        <button type="button" class="br-sandbox-bot is-hard" data-diff="hard" data-ref="sandboxBotHard" aria-label="Spawn a hard bot">HARD</button>
+        <button type="button" class="br-sandbox-bot is-clear" data-ref="sandboxBotClear" aria-label="Remove all sandbox bots">CLEAR</button>
+      </div>
+      <button type="button" class="br-sandbox-bot br-sandbox-bots-ffa" data-ref="sandboxBotFfa" aria-pressed="false">BOTS FIGHT EACH OTHER: OFF</button>
+      <p class="br-sandbox-bots-note" data-ref="sandboxBotsNote" role="status" hidden></p>
+    </section>
+    <button type="button" class="br-sandbox-loadout-close" data-ref="sandboxBotsClose">Close</button>
   </div>
 </div>`;
 }
@@ -524,7 +551,8 @@ export function buildHud(root) {
 
   // ---- build mode ----------------------------------------------------------------
   function setBuildMode(mode) {
-    const m = mode && pieceEls[mode] ? mode : null;
+    // 'preset' (Simple Build): building, with no single piece highlighted
+    const m = mode && (pieceEls[mode] || mode === 'preset') ? mode : null;
     if (m === lastBuild) return;
     for (const id in pieceEls) pieceEls[id].classList.toggle('is-active', id === m);
     r.build.classList.toggle('is-on', !!m);
@@ -884,7 +912,10 @@ export function buildHud(root) {
     fullMapOn = v;
     r.fullmap.classList.toggle('is-on', v);
     hud.classList.toggle('has-fullmap', v);
-    if (!v) showSandboxLoadout(false);
+    if (!v) {
+      showSandboxLoadout(false);
+      showSandboxBotsMenu(false);
+    }
   }
   /**
    * Sizes the full-map canvas to the map's width/height ratio (meta.bounds). The short side
@@ -959,6 +990,8 @@ export function buildHud(root) {
   let lastTravelKey = '';
   let onTravel = null;
   let onWeapons = null;
+  let onBots = null;
+  let onSandboxBotsClose = null;
   let onSandboxGun = null;
   let onSandboxLoadoutClose = null;
   function setMapTravelHandler(fn) {
@@ -966,6 +999,13 @@ export function buildHud(root) {
   }
   function setMapWeaponsHandler(fn) {
     onWeapons = typeof fn === 'function' ? fn : null;
+  }
+  /** Sandbox map: the BOTS button (under WEAPONS) opens the bot spawn menu. */
+  function setMapBotsHandler(fn) {
+    onBots = typeof fn === 'function' ? fn : null;
+  }
+  function setSandboxBotsClose(fn) {
+    onSandboxBotsClose = typeof fn === 'function' ? fn : null;
   }
   function setSandboxLoadoutHandler(fn) {
     onSandboxGun = typeof fn === 'function' ? fn : null;
@@ -1002,6 +1042,22 @@ export function buildHud(root) {
       if (onWeapons) onWeapons();
     });
     box.appendChild(wep);
+    const bots = document.createElement('button');
+    bots.type = 'button';
+    bots.className = 'br-map-weapons br-map-bots';
+    bots.setAttribute('aria-label', 'Bots');
+    const botsIco = document.createElement('span');
+    botsIco.className = 'br-map-weapons-ico';
+    botsIco.innerHTML = icon('people');
+    const botsLab = document.createElement('span');
+    botsLab.textContent = 'BOTS';
+    bots.append(botsIco, botsLab);
+    bots.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (onBots) onBots();
+    });
+    box.appendChild(bots);
     const head = document.createElement('div');
     head.className = 'br-mapstats-row br-mapstats-head';
     const label = document.createElement('span');
@@ -1047,6 +1103,50 @@ export function buildHud(root) {
     }
   }
 
+  // ---- sandbox BOTS section (Game.spawnSandboxBot / clearSandboxBots / _syncSandboxBots)
+  let onSandboxBot = null;
+  let onSandboxBotClear = null;
+  let onSandboxBotFfa = null;
+  function setSandboxBotHandlers(spawn, clear, ffa) {
+    onSandboxBot = typeof spawn === 'function' ? spawn : null;
+    onSandboxBotClear = typeof clear === 'function' ? clear : null;
+    onSandboxBotFfa = typeof ffa === 'function' ? ffa : null;
+  }
+  r.sandboxBotFfa.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onSandboxBotFfa) onSandboxBotFfa(r.sandboxBotFfa.getAttribute('aria-pressed') !== 'true');
+  });
+  const botButtons = [r.sandboxBotEasy, r.sandboxBotNormal, r.sandboxBotHard];
+  for (const btn of botButtons) {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!btn.disabled && onSandboxBot) onSandboxBot(btn.dataset.diff);
+    });
+  }
+  r.sandboxBotClear.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!r.sandboxBotClear.disabled && onSandboxBotClear) onSandboxBotClear();
+  });
+  /** { count, cap, canSpawn, reason } from sandboxBotStatus. */
+  function setSandboxBots(st) {
+    if (!st) return;
+    r.sandboxBotsCount.textContent = `${st.count} / ${st.cap}`;
+    for (const btn of botButtons) {
+      btn.disabled = !st.canSpawn;
+      btn.setAttribute('aria-disabled', st.canSpawn ? 'false' : 'true');
+    }
+    r.sandboxBotClear.disabled = !(st.count > 0) && !st.bodies;
+    const ffa = !!st.hostile;
+    r.sandboxBotFfa.setAttribute('aria-pressed', ffa ? 'true' : 'false');
+    r.sandboxBotFfa.classList.toggle('is-on', ffa);
+    r.sandboxBotFfa.textContent = ffa ? 'BOTS FIGHT EACH OTHER: ON' : 'BOTS FIGHT EACH OTHER: OFF';
+    r.sandboxBotsNote.hidden = !st.reason;
+    r.sandboxBotsNote.textContent = st.reason || '';
+  }
+
   let sandboxLoadoutOn = false;
   function showSandboxLoadout(on) {
     const v = !!on;
@@ -1055,13 +1155,29 @@ export function buildHud(root) {
     sandboxLoadoutOn = v;
     r.sandboxLoadout.hidden = !v;
     r.sandboxLoadout.classList.toggle('is-on', v);
-    hud.classList.toggle('has-sandbox-loadout', v);
+    hud.classList.toggle('has-sandbox-loadout', v || sandboxBotsOn);
   }
   r.sandboxLoadoutClose.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
     if (onSandboxLoadoutClose) onSandboxLoadoutClose();
     else showSandboxLoadout(false);
+  });
+
+  let sandboxBotsOn = false;
+  function showSandboxBotsMenu(on) {
+    const v = !!on;
+    if (v === sandboxBotsOn) return;
+    sandboxBotsOn = v;
+    r.sandboxBotsMenu.hidden = !v;
+    r.sandboxBotsMenu.classList.toggle('is-on', v);
+    hud.classList.toggle('has-sandbox-loadout', v || sandboxLoadoutOn);
+  }
+  r.sandboxBotsClose.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (onSandboxBotsClose) onSandboxBotsClose();
+    else showSandboxBotsMenu(false);
   });
 
   let emoteOn = false;
@@ -1244,6 +1360,38 @@ export function buildHud(root) {
     }
   }
 
+  // setCar({ name, hp, maxHp, fuel, speed, seats: [0 free | 1 taken | 2 you], boost: 'ready' | 'on' | s,
+  //   target? } | null): the car we ride in (target: the car under the crosshair, HP only)
+  const car = { on: null, key: '' };
+  function setCar(v) {
+    const on = !!v;
+    if (on !== car.on) {
+      r.car.classList.toggle('is-on', on);
+      car.on = on;
+      car.key = '';
+    }
+    if (!on) return;
+    const hp01 = clamp01(v.hp / (v.maxHp || 1));
+    const key = [v.name, Math.round(v.hp), Math.round(v.fuel || 0), Math.round(v.speed || 0), (v.seats || []).join(''), v.boost, v.target ? 1 : 0].join('|');
+    if (key === car.key) return;
+    car.key = key;
+    r.car.classList.toggle('is-target', !!v.target);
+    r.car.classList.toggle('is-low', hp01 <= 0.3);
+    r.carName.textContent = String(v.name || 'CAR').toUpperCase();
+    r.carSpeed.textContent = String(Math.round(Math.abs(v.speed || 0) * 3.6));
+    r.carHp.style.transform = 'scaleX(' + hp01 + ')';
+    r.carHpNum.textContent = String(Math.ceil(v.hp));
+    const fuel01 = clamp01((v.fuel || 0) / 100);
+    r.carFuel.style.transform = 'scaleX(' + fuel01 + ')';
+    r.carFuelNum.textContent = v.fuel > 0 ? String(Math.ceil(v.fuel)) : 'EMPTY';
+    r.carFuelRow.classList.toggle('is-empty', !(v.fuel > 0));
+    r.carSeats.innerHTML = (v.seats || []).map((s) => `<i class="${s === 2 ? 'is-you' : s ? 'is-taken' : ''}"></i>`).join('');
+    const b = v.boost;
+    r.carBoost.textContent = b === 'on' ? 'BOOST!' : b === 'ready' ? 'BOOST' : 'BOOST ' + Math.ceil(+b || 0) + 's';
+    r.carBoost.classList.toggle('is-ready', b === 'ready');
+    r.carBoost.classList.toggle('is-on', b === 'on');
+  }
+
   // setRevive({ pct, name, verb? } | null): progress ring while we hold interact over a teammate
   // (verb defaults to 'REVIVING'; reboot vans pass 'REBOOTING')
   const rv = { on: null, pct: -1, name: null };
@@ -1312,8 +1460,13 @@ export function buildHud(root) {
     setMapTravel,
     setMapTravelHandler,
     setMapWeaponsHandler,
+    setMapBotsHandler,
+    setSandboxBotsClose,
+    showSandboxBotsMenu,
     setSandboxLoadoutHandler,
     setSandboxLoadoutClose,
+    setSandboxBotHandlers,
+    setSandboxBots,
     showSandboxLoadout,
     showFullMap,
     setEmoteHint,
@@ -1324,6 +1477,7 @@ export function buildHud(root) {
     setDowned,
     setSpectate,
     setRevive,
+    setCar,
     /** Clears transient HUD bits (feed, toasts, prompt, announce) — used when leaving a match. */
     clearTransient() {
       r.feed.textContent = '';
@@ -1334,7 +1488,9 @@ export function buildHud(root) {
       setObjectBar(null);
       showFullMap(false);
       showSandboxLoadout(false);
+      showSandboxBotsMenu(false);
       setRevive(null);
+      setCar(null);
       setDowned(null);
       setSpectate(null);
       setTags(null);

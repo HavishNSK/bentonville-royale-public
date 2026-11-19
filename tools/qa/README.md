@@ -71,3 +71,45 @@ node tools/qa/smoke.mjs --url http://localhost:5190 --eval "1+1" --script tools/
 
 Expect a rotating RGB triangle in the screenshots, `blankCanvas:false`, and one captured
 `[console.error] selftest-error`.
+
+## Playtest bot (`playtest.mjs`) — full matches with per-tick invariants
+
+```
+node tools/qa/playtest.mjs --url http://localhost:5173 [--scenario solo,death,rematch,chromebook|all]
+     [--out tools/qa/out/playtest] [--headed] [--matches 3] [--cpu 4]
+```
+
+Run `npm run dev` (and `npm run party:dev` so the menus behave like production) first.
+Scenarios click the real menu buttons and drive the match through `window.__game.debug`:
+
+- `solo`: PLAY -> bus -> real glide and landing -> 20 s of play -> storm skipped to the end -> win -> MAIN MENU.
+- `death`: PLAY -> land -> lethal damage -> defeat screen -> MAIN MENU.
+- `rematch`: `--matches` games via PLAY AGAIN; flags a `leak` when scene objects, GPU geometries /
+  textures / programs, actors, loot records or DOM nodes grow > 25 % + 50 from the first match.
+- `chromebook`: 1366x768, performance mode + low quality, CPU throttled `--cpu`x; FPS and a mid-match resize.
+
+`lib/monitor.js` is injected into every page and checks every 250 ms: finite positions and health,
+health/shield in 0..100, alive-at-zero, out of bounds, player below terrain, ammo/mats/mag ranges,
+`combat.aliveCount` vs the actors, storm never growing, result placement range, new `game.errors`,
+frame stalls > 3 s (visible tab only). Warnings (not failures): bots stuck > 45 s, bots below terrain.
+Each new violation gets a screenshot. `report.json` holds steps, violations, FPS and page diagnostics;
+the exit code is 1 if any scenario failed, had a violation, a page error or a game error.
+
+## Multiplayer smoke (`mp.mjs`) — host + clients in separate contexts
+
+```
+node tools/qa/mp.mjs --url http://localhost:5173 [--clients 2] [--out tools/qa/out/mp] [--headed]
+```
+
+Needs `npm run party:dev` (the relay on ws://localhost:1999) and a dev build (client debug hooks).
+Private lobby -> join -> ready -> start, then: wall + edit placed by a client identical on every
+page, host wall reaches clients, chest opened by a client opened everywhere, a 400 m one-tick
+client move (no debug hook) rejected by the host, client disconnect, host leaving.
+
+## Sources
+
+The playtest / multiplayer harness adapts ideas (no code copied) from:
+- jbcom/game-harness (MIT): silent sessions, fail on runtime errors — https://github.com/jbcom/game-harness
+- Math-Quest-Web/Math-Quest PR #19: headless playtest bot, per-frame invariants, JSON + screenshots — https://github.com/Math-Quest-Web/Math-Quest/pull/19
+- techilounge/resolveops-ai PR #19: invariant fuzzing over many games — https://github.com/techilounge/resolveops-ai/pull/19
+- je55pr/zombonz PR #214: multi-context smoke over the real room server — https://github.com/je55pr/zombonz/pull/214

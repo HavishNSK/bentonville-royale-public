@@ -2,6 +2,9 @@
 // Every icon is hand-drawn inline SVG (no image files, no third-party art).
 // Square icons use a 48x48 viewBox, weapon silhouettes a 96x48 viewBox.
 
+import { catfishSvg } from './catfishIcon.js';
+import { fuelSvg } from './fuelIcon.js';
+
 const INK = '#0a0a14';
 const S = `stroke="${INK}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"`;
 
@@ -20,6 +23,10 @@ const WOOD = '#c98a45';
 const GOLD = '#ffc21f';
 
 const SQUARE = {
+  // ---- map markers -----------------------------------------------------
+  catfish: catfishSvg(), // Catfish Ken's reboot van
+  fuel: fuelSvg(), // gas station (generic pump pictogram)
+
   // ---- materials -------------------------------------------------------
   wood:
     `<path d="M12 14h24v20H12a6 10 0 0 1 0-20z" fill="#b5722f" ${S}/>` +
@@ -92,6 +99,11 @@ const SQUARE = {
     `<path d="M10.800 29C13 26.500 17 27 20 29C24 31.500 29 31.500 37.200 28C39 36 32 42.200 24 42.200C16 42.200 9.500 36.500 10.800 29Z" fill="#2f9bff"/>` +
     `<circle cx="19" cy="35.500" r="2" fill="#bfe6ff"/><circle cx="27" cy="37" r="1.400" fill="#bfe6ff"/>` +
     `<rect x="16" y="3" width="16" height="7" rx="2.500" fill="${WOOD}" ${S}/>`,
+  gascan:
+    `<path d="M14 12L20 6H30" fill="none" ${S}/>` +
+    `<rect x="8" y="12" width="30" height="32" rx="5" fill="#e8402f" ${S}/>` +
+    `<path d="M30 8.500h7l3 4.500v6" fill="none" ${S}/>` +
+    `<path d="M15 20L31 36M31 20L15 36" fill="none" stroke="#ffd6cc" stroke-width="3.500" stroke-linecap="round"/>`,
   medkit:
     `<path d="M17 14V10C17 7.500 18.500 6 21 6H27C29.500 6 31 7.500 31 10V14" fill="none" ${S}/>` +
     `<rect x="4.500" y="13" width="39" height="29" rx="6" fill="#fff" ${S}/>` +

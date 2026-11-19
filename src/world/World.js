@@ -31,6 +31,7 @@
 import { planInterior } from './Interiors.js';
 import { inHole, stairHeight, FLOOR_THICKNESS } from './interiors/storeys.js';
 import { tileIdAt } from './interiors/floorTiles.js';
+import { BUILDING_WALL } from '../core/config.js';
 import { toLocal as planLocal } from './interiors/layout.js';
 import { makeBox, boxContains, boxPushCircle, boxRay } from './boxColliders.js';
 import { foundationBand, footprintDistance, foundationHeight } from './foundations.js';
@@ -57,6 +58,12 @@ const GROUND_STEP = 2;
 // Outer wall thickness (m). Collision walls are capsules of radius SHELL_T / 2
 // running along the footprint offset inward by SHELL_T / 2.
 const SHELL_T = 0.4;
+// A ray meeting the roof rim (outer face above the top ceiling) looks this far (m, horizontally)
+// past the face for the roof tile it belongs to.
+const RIM_NUDGE = 0.05;
+
+/** Panels laid along a footprint edge (e, f0, f1): outer walls and the walls over outer doors. */
+const isEdgePanel = (pn) => pn.kind === 'outer' || (pn.kind === 'lintel' && pn.e !== undefined);
 // Door opening: clear width (m) along the wall and height (m) above the floor.
 // PLAYER.radius is 0.42, so 1.8 m leaves ~0.5 m of slack on each side.
 const DOOR_W = 1.8;
@@ -430,8 +437,10 @@ export class World {
   terrainMinUnder(p, n, minX, minZ, maxX, maxZ) {
     if (!this.terrain) return 0;
     let m = Infinity;
+    const hs = [];
     for (let i = 0; i < n; i++) {
       const y = this.terrainHeight(p[i * 2], p[i * 2 + 1]);
+      hs.push(y);
       if (y < m) m = y;
     }
     const s = this.terrain.cell;
@@ -439,10 +448,16 @@ export class World {
       for (let x = Math.ceil(minX / s) * s; x < maxX; x += s) {
         if (!pointInPoly(p, n, x, z)) continue;
         const y = this.terrainHeight(x, z);
+        hs.push(y);
         if (y < m) m = y;
       }
     }
-    return m === Infinity ? this.terrainHeight((minX + maxX) / 2, (minZ + maxZ) / 2) : m;
+    if (m === Infinity) return this.terrainHeight((minX + maxX) / 2, (minZ + maxZ) / 2);
+    // a ditch / creek spike under one corner must not sink a whole building into a pit (its
+    // foundation would undercut the neighbours): never more than 1 m below the 10th-percentile
+    // ground under the footprint. Footprints with <= 10 samples keep the exact minimum.
+    hs.sort((a, b) => a - b);
+    return Math.max(m, hs[Math.floor(0.1 * (hs.length - 1))] - 1);
   }
 
   /** Walkable / hittable top of prism c at (x, z) (pitched roofs follow their planes). */
@@ -553,14 +568,19 @@ export class World {
     this._interiors = null;
     if (!this._shells) this._shells = [];
     const ctx = { pois: (this.data && this.data.pois) || [] };
+    if (!this._solids) this._solids = [];
     for (const c of q) {
       const s = this._planShell(c);
-      if (!s) continue;
+      if (!s) {
+        this._installBlock(c);
+        continue;
+      }
       c.shell = s;
       this._installInterior(c, ctx);
       this._shells.push(c);
     }
     this.counts.hollow = this._shells.length;
+    this.counts.solidBlocks = this._solids.length;
     // FNV-1a over every plan's hash (building order): equal on every client with the same map
     let h = 0x811c9dc5;
     for (const c of this._shells) h = Math.imul(h ^ (c.shell.plan ? c.shell.plan.hash : 0), 0x01000193) >>> 0;
@@ -583,10 +603,12 @@ export class World {
     s.groundCeil = plan ? plan.levels[0].ceil : s.ceil;
     if (plan) s.ceil = plan.levels[plan.levels.length - 1].ceil;
     s.panels = plan ? plan.panels : [];
+    s.roof = plan ? plan.roof || null : null; // roof tile grid (interiors/shellPanels.js)
+    s.deadRoofs = 0;
     s.dead = 0; // number of broken panels
     s.edgePanels = [];
     for (const pn of s.panels) {
-      if (pn.kind !== 'outer') continue;
+      if (!isEdgePanel(pn)) continue; // outer panels and the walls over the outer doors
       (s.edgePanels[pn.e] || (s.edgePanels[pn.e] = [])).push(pn);
     }
     // per level: 1 = wall entry solid (lintels always 1, a wall entry follows its panel)
@@ -597,8 +619,39 @@ export class World {
   }
 
   /**
+   * A building that can't be hollow (too small, narrow or irregular for a shell) is one
+   * breakable block: a single panel (kind 'block') whose break removes the whole prism from
+   * collision (World.remove) and hides its mesh (onPanelChange), and whose restore puts it back.
+   * hp = the material's wall-panel hp x a size factor (1 per 16 m of perimeter, 1..6).
+   */
+  _installBlock(c) {
+    const bd = c.ref || {};
+    const mat = c.mat === 'wood' || c.mat === 'metal' || c.mat === 'brick' ? c.mat : 'brick';
+    let per = 0;
+    let x = 0;
+    let z = 0;
+    for (let i = 0; i < c.n; i++) {
+      const k = (i + 1) % c.n;
+      per += Math.hypot(c.p[k * 2] - c.p[i * 2], c.p[k * 2 + 1] - c.p[i * 2 + 1]);
+      x += c.p[i * 2];
+      z += c.p[i * 2 + 1];
+    }
+    const hp = BUILDING_WALL.hp[mat] * Math.max(1, Math.min(6, Math.ceil(per / 16)));
+    const pn = { id: 0, kind: 'block', level: 0, y0: c.y0, y1: c.h, mat, hp, maxHp: hp, alive: true, x: x / c.n, z: z / c.n };
+    c.solid = { panels: [pn], dead: 0 };
+    this._solids.push(c);
+    if (!this._shellById) this._shellById = new Map();
+    if (bd.id != null) this._shellById.set(bd.id, c);
+  }
+
+  /**
    * Outer-wall collision capsules from the alive outer panels (the same capsules _planShell
    * builds, split at panel boundaries; a broken panel leaves an opening like a door).
+   *   segs      ground-storey panels (block a body whose feet are below the ground ceiling)
+   *   upSegs    upper-storey panels, stride 6: ax, az, bx, bz, y0, y1 (block within y0..y1)
+   *   lintels   the alive walls over the outer doors (kind 'lintel' panels with an edge)
+   *   overHoles broken top-storey panels: the roof rim above still blocks a head above the ceiling
+   *             (unless that rim's roof tile is broken too, see _shellPush)
    */
   _rebuildShellSegs(c) {
     const s = c.shell;
@@ -606,17 +659,17 @@ export class World {
     const n = c.n;
     const R = s.t / 2;
     const segs = [];
-    const over = []; // broken panels: the wall band above them still blocks a head above the ceiling
+    const up = [];
+    const over = [];
+    const lintels = [];
+    let hasLintels = false;
+    const topLevel = s.plan ? s.plan.levels.length - 1 : 0;
     for (const pn of s.panels) {
-      if (pn.kind !== 'outer') continue;
-      if (!pn.alive) {
-        const i = pn.e;
-        const k = (i + 1) % n;
-        const ax = mid[i * 2];
-        const az = mid[i * 2 + 1];
-        const ex = mid[k * 2] - ax;
-        const ez = mid[k * 2 + 1] - az;
-        over.push(ax + ex * pn.f0, az + ez * pn.f0, ax + ex * pn.f1, az + ez * pn.f1);
+      if (!isEdgePanel(pn)) continue;
+      if (pn.kind === 'lintel') {
+        hasLintels = true;
+        if (pn.alive) lintels.push(pn.ax, pn.az, pn.bx, pn.bz);
+        else if (topLevel === 0) over.push(pn.ax, pn.az, pn.bx, pn.bz);
         continue;
       }
       const i = pn.e;
@@ -625,8 +678,20 @@ export class World {
       const az = mid[i * 2 + 1];
       const bx = mid[k * 2];
       const bz = mid[k * 2 + 1];
+      if (!pn.alive) {
+        if ((pn.level || 0) === topLevel) {
+          const ex = bx - ax;
+          const ez = bz - az;
+          over.push(ax + ex * pn.f0, az + ez * pn.f0, ax + ex * pn.f1, az + ez * pn.f1);
+        }
+        continue;
+      }
       const lm = Math.hypot(bx - ax, bz - az);
       if (lm < 1e-4) continue;
+      if (pn.level > 0) {
+        up.push(ax + (bx - ax) * pn.f0, az + (bz - az) * pn.f0, ax + (bx - ax) * pn.f1, az + (bz - az) * pn.f1, pn.y0, pn.y1);
+        continue;
+      }
       const cap = R / lm; // capsule end caps reach R past a segment end: stop short of a door
       let f0 = pn.f0;
       let f1 = pn.f1;
@@ -639,19 +704,21 @@ export class World {
       segs.push(ax + (bx - ax) * f0, az + (bz - az) * f0, ax + (bx - ax) * f1, az + (bz - az) * f1);
     }
     s.segs = new Float32Array(segs);
+    s.upSegs = new Float32Array(up);
     s.overHoles = new Float32Array(over);
+    if (hasLintels) s.lintels = new Float32Array(lintels);
   }
 
   /** The hollow-building collider with map id `id` (or c itself when given a collider). */
   buildingById(id) {
-    if (id && typeof id === 'object') return id.shell ? id : null;
+    if (id && typeof id === 'object') return id.shell || id.solid ? id : null;
     return (this._shellById && this._shellById.get(id)) || null;
   }
 
   /** The outer panel of building c covering fraction u of edge `edge` at height y, or null. */
   panelAt(c, edge, u, y) {
     c = this.buildingById(c);
-    const list = c && c.shell.edgePanels[edge];
+    const list = c && c.shell && c.shell.edgePanels[edge];
     if (!list) return null;
     for (let i = 0; i < list.length; i++) {
       const pn = list[i];
@@ -662,7 +729,9 @@ export class World {
 
   /** The panel a raycast() result hit (hit.panel, else resolved from hit.edge / hit.u), or null. */
   panelHit(hit) {
-    if (!hit || !hit.collider || !hit.collider.shell) return null;
+    if (!hit || !hit.collider) return null;
+    if (hit.collider.solid) return hit.collider.solid.panels[0]; // a solid building: one block
+    if (!hit.collider.shell) return null;
     if (hit.panel) return hit.panel;
     if (hit.edge >= 0) return this.panelAt(hit.collider, hit.edge, hit.u, hit.y);
     return null;
@@ -671,7 +740,7 @@ export class World {
   /** Break panel `id` of building c (collider or building id). Never removes the collider. */
   breakPanel(c, id) {
     c = this.buildingById(c);
-    const pn = c && c.shell.panels[id];
+    const pn = c && (c.shell || c.solid).panels[id];
     if (!pn || !pn.alive) return false;
     pn.alive = false;
     pn.hp = 0;
@@ -682,7 +751,7 @@ export class World {
   /** Put panel `id` of building c back at full health. */
   restorePanel(c, id) {
     c = this.buildingById(c);
-    const pn = c && c.shell.panels[id];
+    const pn = c && (c.shell || c.solid).panels[id];
     if (!pn) return false;
     pn.hp = pn.maxHp;
     if (pn.alive) return false;
@@ -694,8 +763,8 @@ export class World {
   /** Every panel of every building back at full health (match restart). Returns the number rebuilt. */
   restoreAllPanels() {
     let k = 0;
-    for (const c of this._shells || []) {
-      for (const pn of c.shell.panels) {
+    for (const c of [...(this._shells || []), ...(this._solids || [])]) {
+      for (const pn of (c.shell || c.solid).panels) {
         if (!pn.alive) {
           this.restorePanel(c, pn.id);
           k++;
@@ -706,10 +775,15 @@ export class World {
   }
 
   _panelState(c, pn) {
-    const s = c.shell;
+    const s = c.shell || c.solid;
     s.dead += pn.alive ? -1 : 1;
-    if (pn.kind === 'outer') this._rebuildShellSegs(c);
+    if (pn.kind === 'block') {
+      // the whole solid building goes (or comes back): out of every collision query
+      if (pn.alive) this.restore(c);
+      else this.remove(c);
+    } else if (isEdgePanel(pn)) this._rebuildShellSegs(c); // outer wall / outer door lintel
     else if (pn.kind === 'floor') s.deadFloors = (s.deadFloors || 0) + (pn.alive ? -1 : 1);
+    else if (pn.kind === 'roof') s.deadRoofs += pn.alive ? -1 : 1;
     else s.wallOn[pn.level][pn.wall] = pn.alive ? 1 : 0;
     if (this.onPanelChange) this.onPanelChange(c, pn, pn.alive);
   }
@@ -735,8 +809,35 @@ export class World {
     return pn && pn.alive ? pn : null;
   }
 
-  /** Is fraction u of outer edge e at height y inside a broken panel? */
-  _deadAt(s, e, u, y) {
+  /** The roof tile panel of shell s at (x, z) (alive or not), or null. */
+  _roofTileAt(s, x, z) {
+    const g = s.roof;
+    if (!g) return null;
+    const [a, b] = planLocal(s.plan.frame, x, z);
+    if (a < g.a0 || a >= g.a1 || b < g.b0 || b >= g.b1) return null;
+    const i = Math.min(g.na - 1, Math.floor(((a - g.a0) / (g.a1 - g.a0)) * g.na));
+    const j = Math.min(g.nb - 1, Math.floor(((b - g.b0) / (g.b1 - g.b0)) * g.nb));
+    const id = g.ids[i * g.nb + j];
+    return id >= 0 ? s.panels[id] : null;
+  }
+
+  /** Is building c's roof slab open (a broken roof tile) at (x, z)? */
+  _roofOpen(c, x, z) {
+    const s = c.shell;
+    if (!s || !s.deadRoofs) return false;
+    const pn = this._roofTileAt(s, x, z);
+    return !!pn && !pn.alive;
+  }
+
+  /**
+   * Is fraction u of outer edge e at height y inside a broken panel? Above the top ceiling (the
+   * roof rim) it is the roof tile at (x, z) (a point just inside the wall) when given.
+   */
+  _deadAt(s, e, u, y, x, z) {
+    if (y > s.ceil && s.deadRoofs && x !== undefined) {
+      const tile = this._roofTileAt(s, x, z);
+      if (tile && !tile.alive) return true;
+    }
     const list = s.edgePanels[e];
     if (!list) return false;
     for (let i = 0; i < list.length; i++) {
@@ -1147,17 +1248,27 @@ export class World {
     return best;
   }
 
-  /** Push a circle out of shell walls (and lintels when the head is above the door top). */
-  _shellPush(c, pos, r, head) {
+  /**
+   * Push a circle out of shell walls: the ground-storey panels while the feet are below the
+   * ground ceiling, the lintels when the head is above the door top, upper-storey panels within
+   * their height range, and the roof rim over broken top-storey panels when the head is above
+   * the top ceiling.
+   */
+  _shellPush(c, pos, r, head, feet = -Infinity) {
     const s = c.shell;
     const lim = r + s.t * 0.5;
     const lim2 = lim * lim;
     let moved = false;
-    for (let pass = 0; pass < 3; pass++) {
+    const up = s.upSegs;
+    for (let pass = 0; pass < 4; pass++) {
+      if (pass === 0 && feet >= (s.groundCeil ?? s.ceil) - 0.02) continue;
       if (pass === 1 && head <= s.doorTop + 0.02) continue;
-      if (pass === 2 && (!s.overHoles || head <= (s.groundCeil ?? s.ceil) + 0.02)) continue;
-      const A = pass === 0 ? s.segs : pass === 1 ? s.lintels : s.overHoles;
-      for (let k = 0; k < A.length; k += 4) {
+      if (pass === 2 && (!s.overHoles || !s.overHoles.length || head <= s.ceil + 0.02)) continue;
+      if (pass === 3 && (!up || !up.length)) continue;
+      const A = pass === 0 ? s.segs : pass === 1 ? s.lintels : pass === 2 ? s.overHoles : up;
+      const stride = pass === 3 ? 6 : 4;
+      for (let k = 0; k < A.length; k += stride) {
+        if (pass === 3 && (feet >= A[k + 5] - 0.02 || head <= A[k + 4] + 0.05)) continue;
         const ax = A[k];
         const az = A[k + 1];
         const ex = A[k + 2] - ax;
@@ -1169,6 +1280,8 @@ export class World {
         const dz = pos.z - (az + ez * t);
         const d2 = dx * dx + dz * dz;
         if (d2 >= lim2) continue;
+        // a broken top-storey panel under a broken rim (roof tile): nothing above it either
+        if (pass === 2 && s.deadRoofs && this._roofOpen(c, ax + ex * t, az + ez * t)) continue;
         const d = Math.sqrt(d2);
         let nx;
         let nz;
@@ -1347,6 +1460,29 @@ export class World {
     this._each(c.minX, c.minZ, c.maxX, c.maxZ, true, (cell) => cell.boxes.push(c));
     this.counts.boxes = this._boxes.length;
     return c;
+  }
+
+  /**
+   * A moving box (drivable car body): solid for movement, standing and building like any box,
+   * but skipped by raycast() (`noRay`; Vehicles traces shots so glass can break). Not given an
+   * id (multiplayer destroy events never name it). Move it with moveDynBox.
+   */
+  addDynBox(o) {
+    const c = makeBox({ ...o, id: -1 });
+    c.noRay = true;
+    c.dynBox = true;
+    this._each(c.minX, c.minZ, c.maxX, c.maxZ, true, (cell) => cell.boxes.push(c));
+    return c;
+  }
+
+  /** Re-place a moving box (from addDynBox); `alive: false` boxes stay out until moved back in. */
+  moveDynBox(c, cx, cz, yaw, y0, y1) {
+    if (!c) return;
+    if (c.alive) this.remove(c);
+    const n = makeBox({ cx, cz, hx: c.hx, hz: c.hz, yaw, y0, y1, kind: c.kind, mat: c.mat, id: -1 });
+    for (const k of ['cx', 'cz', 'cos', 'sin', 'y0', 'y1', 'h', 'hgt', 'minX', 'maxX', 'minZ', 'maxZ']) c[k] = n[k];
+    c.alive = true;
+    this._each(c.minX, c.minZ, c.maxX, c.maxZ, true, (cell) => cell.boxes.push(c));
   }
 
   /**
@@ -1579,6 +1715,27 @@ export class World {
     return hit;
   }
 
+  /**
+   * A raised floor in the way at (x, z) for a body whose feet are at feetY: a `walkable` box (a
+   * museum floor, which blockedAt treats as open ground) whose top is more than a step above
+   * both the feet and the ground there, and whose underside is below head height over that
+   * ground (a plinth face, or a bridge deck too low to pass under). From the ravine floor the
+   * plinth beside a bridge is a wall, not ground (Bots' height-blind A* planned straight into it).
+   */
+  ledgeAt(x, z, r, feetY, height = 1.8) {
+    const base = Math.max(feetY, this.surfaceHeight(x, z));
+    const top = base + STEP;
+    let hit = false;
+    this._each(x - r, z - r, x + r, z + r, false, (cell) => {
+      const boxes = cell.boxes;
+      for (let i = 0; i < boxes.length && !hit; i++) {
+        const c = boxes[i];
+        if (c.walkable && !c.passable && c.y1 > top && c.y0 < base + height && boxContains(c, x, z, r)) hit = true;
+      }
+    });
+    return hit;
+  }
+
   /** Does a circle (x, z, r) overlap piece `c` in plan, for a piece whose base is below `belowY`? */
   _pieceOverlaps(c, x, z, r, belowY) {
     if (!c.alive || c.y0 >= belowY) return false;
@@ -1646,7 +1803,8 @@ export class World {
       if (c.h <= y || (!c.planes && !c.shell && c.h > lim)) continue;
       if (x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
       if (pointInPoly(c.p, c.n, x, z)) {
-        const top = c.planes ? c.eave + roofRise(c.planes, x, z) : c.h;
+        // a broken roof tile: no roof here, the storeys below show through
+        const top = c.planes ? c.eave + roofRise(c.planes, x, z) : this._roofOpen(c, x, z) ? -Infinity : c.h;
         if (top > y && top <= lim && top < cap) {
           y = top;
           this.surface = c.kind === 'vehicle' ? 'vehicle' : 'roof';
@@ -1735,7 +1893,7 @@ export class World {
       const s = c.shell;
       if (!s || feetY >= s.ceil || x < c.minX - 1 || x > c.maxX + 1 || z < c.minZ - 1 || z > c.maxZ + 1) continue;
       let cy = Infinity;
-      if (pointInPoly(c.p, c.n, x, z)) cy = s.ceil;
+      if (pointInPoly(c.p, c.n, x, z) && !this._roofOpen(c, x, z)) cy = s.ceil;
       if (feetY < s.doorTop && s.lintels.length) {
         const ll = s.t * 0.5 + 0.3;
         if (this._segsDist2(s.lintels, x, z) < ll * ll) cy = Math.min(cy, s.doorTop);
@@ -1805,7 +1963,7 @@ export class World {
       const s = c.shell;
       if (!s || feetY >= s.ceil - 0.05 || x < c.minX || x > c.maxX || z < c.minZ || z > c.maxZ) continue;
       if (!pointInPoly(c.p, c.n, x, z)) continue;
-      let top = s.ceil + FLOOR_THICK;
+      let top = this._roofOpen(c, x, z) ? Infinity : s.ceil + FLOOR_THICK;
       if (s.plan) {
         for (const L of s.plan.levels) {
           if (L.i > 0 && L.y - FLOOR_THICKNESS > feetY + 0.05 && L.y < top && !this._slabOpen(s, L, x, z)) top = L.y;
@@ -1869,6 +2027,8 @@ export class World {
                 continue;
             }
             if (x < c.minX - r || x > c.maxX + r || z < c.minZ - r || z > c.maxZ + r) continue;
+            // feet in the roof slab under a broken roof tile (climbing out / dropping in): no roof there
+            if (c.shell && feet >= c.shell.ceil && this._roofOpen(c, x, z)) continue;
             if (c.shell && feet < c.shell.ceil) {
               // enterable building, feet below its interior ceiling: only the walls (and
               // the lintels above the doors) are solid. The walls trace the whole outline,
@@ -1876,7 +2036,7 @@ export class World {
               // (mid-jump, or standing on a built floor / ramp) is never pushed out through
               // a wall. The solid prism only applies above the ceiling: a tall building's
               // solid upper floors, and the roof (stepped onto via the check above).
-              if (head > c.y0 && this._shellPush(c, pos, r, head)) moved = touched = true;
+              if (head > c.y0 && this._shellPush(c, pos, r, head, feet)) moved = touched = true;
               if (c.shell.plan && this._wallsPush(c, pos, r, feet, head, step)) moved = touched = true;
               continue;
             }
@@ -2051,6 +2211,30 @@ export class World {
     return touched;
   }
 
+  /**
+   * Did a body's horizontal move from (ox, oz) to (nx, nz), feet at y, pass THROUGH a solid
+   * architecture box (museum / interior walls, glass, props)? resolveCircle pushes a body out of
+   * a box along the shortest way, and beside a thin wall that way can be through the wall (a
+   * stair 0.2 m from the North Tower's wall, a berm against a gallery wall). Movers undo such a
+   * step. Sampled above step height, so stepping onto stairs or a slab never counts. A body that
+   * starts inside a box gets no hit from it (boxRay ignores origins inside), so being pushed out
+   * of something is never blocked.
+   */
+  crossesSolid(ox, oz, nx, nz, y, height = 1.8) {
+    const dx = nx - ox;
+    const dz = nz - oz;
+    const L = Math.hypot(dx, dz);
+    if (L < 1e-4) return false;
+    const ux = dx / L;
+    const uz = dz / L;
+    for (const h of [STEP + 0.12, height * 0.72]) {
+      const hit = this.raycast(ox, y + h, oz, ux, 0, uz, L);
+      const c = hit && hit.collider;
+      if (c && c.hx !== undefined && !c.passable && hit.t > 1e-3) return true;
+    }
+    return false;
+  }
+
   // ---------------------------------------------------------------- raycast
 
   /**
@@ -2072,6 +2256,9 @@ export class World {
     let wallPanel = null;
     let slabT = -1; // upper-floor slab hit (top or underside) and its floor tile, if breakable
     let slabPanel = null;
+    let roofT = -1; // roof hit (top or underside) and its roof tile, if breakable
+    let roofPanel = null;
+    const hInv = 1 / (Math.hypot(dx, dz) || 1); // per metre of horizontal travel (rim tile lookup)
     const T = this.terrain;
     // Terrain: marched cell by cell below. Exactly level rays (dy === 0: bot steering
     // feelers) skip it, because every slope is walkable. A ray that starts under the
@@ -2203,7 +2390,7 @@ export class World {
             const y = oy + dy * t;
             if (y < c.y0 || y > (planes ? c.eave + roofRise(planes, ox + dx * t, oz + dz * t) : c.h)) continue;
             if (c.shell && y < c.shell.doorTop && this._inDoor(c.shell, b, u)) continue; // through a door
-            if (c.shell && c.shell.dead && this._deadAt(c.shell, b, u, y)) continue; // through a broken panel
+            if (c.shell && c.shell.dead && this._deadAt(c.shell, b, u, y, ox + dx * (t + RIM_NUDGE * hInv), oz + dz * (t + RIM_NUDGE * hInv))) continue; // through a broken panel / rim tile
             best = t;
             found = true;
             if (c.shell) {
@@ -2389,6 +2576,8 @@ export class World {
               const x = ox + dx * t;
               const z = oz + dz * t;
               if (x >= c.minX && x <= c.maxX && z >= c.minZ && z <= c.maxZ && pointInPoly(p, n, x, z)) {
+                const tile = c.shell && c.shell.roof ? this._roofTileAt(c.shell, x, z) : null;
+                if (tile && !tile.alive) continue; // through a broken roof tile
                 best = t;
                 found = true;
                 out.nx = 0;
@@ -2396,6 +2585,8 @@ export class World {
                 out.nz = 0;
                 out.collider = c;
                 out.kind = c.kind;
+                roofT = t;
+                roofPanel = tile;
               }
             }
           }
@@ -2435,6 +2626,7 @@ export class World {
           const c = boxes[i];
           if (c.stamp === stamp || c === ignore) continue;
           c.stamp = stamp;
+          if (c.noRay) continue; // drivable cars: shots / sight lines are traced by Vehicles (windows)
           const h = boxRay(c, ox, oy, oz, dx, dy, dz, 1e-4, best);
           if (!h) continue;
           best = h.t;
@@ -2558,8 +2750,14 @@ export class World {
       out.edge = edgeE;
       out.u = edgeU;
       out.panel = this.panelAt(out.collider, edgeE, edgeU, out.y);
+      // the roof rim (outer wall band above the top ceiling) belongs to the roof tile behind it
+      const s = out.collider && out.collider.shell;
+      if (!out.panel && s && s.roof && out.y > s.ceil) {
+        out.panel = this._roofTileAt(s, out.x + dx * RIM_NUDGE * hInv, out.z + dz * RIM_NUDGE * hInv);
+      }
     } else if (best === wallT) out.panel = wallPanel;
     else if (best === slabT) out.panel = slabPanel;
+    else if (best === roofT) out.panel = roofPanel;
     return out;
   }
 

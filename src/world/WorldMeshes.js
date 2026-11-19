@@ -11,7 +11,8 @@ import { TILE as CB_TILE } from './crystal-bridges/site.js';
 import { makeRng } from '../core/config.js';
 import { flattenModel } from '../core/assets.js';
 import { pointInPoly } from './World.js';
-import { addInteriorGeometry } from './InteriorMeshes.js';
+import { addInteriorGeometry, addRoofGeometry } from './InteriorMeshes.js';
+import { toLocal } from './interiors/layout.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { schoolBusParts, schoolBusMaterials, SCHOOL_BUS } from '../render/SchoolBus.js';
 
@@ -462,8 +463,10 @@ export function appendBuildingGeometry(chunk, b, tint, collider, roomChunk = chu
     tris = [];
   }
 
+  const i0 = chunk.buf.idx.length;
+  let roofDrawn = false;
   if (shell) {
-    addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roomChunk);
+    roofDrawn = addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roofHex, roomChunk);
   } else {
     for (let i = 0; i < n; i++) {
       const a = pts[i];
@@ -485,22 +488,26 @@ export function appendBuildingGeometry(chunk, b, tint, collider, roomChunk = chu
     }
   }
 
-  _c.setHex(roofHex);
-  const base = buf.n;
-  for (const p of pts) {
-    buf.v(p[0], h, p[1], 0, 1, 0, _c.r, _c.g, _c.b);
-    wall.push(0, h, -1, 0);
-    bh.push(h);
+  if (!roofDrawn) {
+    _c.setHex(roofHex);
+    const base = buf.n;
+    for (const p of pts) {
+      buf.v(p[0], h, p[1], 0, 1, 0, _c.r, _c.g, _c.b);
+      wall.push(0, h, -1, 0);
+      bh.push(h);
+    }
+    for (const t of tris) {
+      const a = pts[t[0]];
+      const c = pts[t[1]];
+      const d = pts[t[2]];
+      // make the triangle face up (+y): (c-a) x (d-a) must have positive y
+      const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
+      if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
+      else buf.idx.push(base + t[0], base + t[2], base + t[1]);
+    }
   }
-  for (const t of tris) {
-    const a = pts[t[0]];
-    const c = pts[t[1]];
-    const d = pts[t[2]];
-    // make the triangle face up (+y): (c-a) x (d-a) must have positive y
-    const up = (c[1] - a[1]) * (d[0] - a[0]) - (c[0] - a[0]) * (d[1] - a[1]);
-    if (up > 0) buf.idx.push(base + t[0], base + t[1], base + t[2]);
-    else buf.idx.push(base + t[0], base + t[2], base + t[1]);
-  }
+  // a solid (non-enterable) building breaks as one block: its whole mesh is the block's range
+  if (collider && collider.solid) chunk.panelRanges.push(collider.solid.panels[0], i0, buf.idx.length - i0);
   // Interior generators deliberately emit heights relative to shell.floor. Lift the
   // entire building together, including panels, stairs and furniture, to the very
   // same foundation used by World collision. Shader facade heights remain local.
@@ -511,18 +518,26 @@ export function appendBuildingGeometry(chunk, b, tint, collider, roomChunk = chu
 
 /**
  * Walls with door openings + inner faces, jambs, lintels, floor and ceiling of a hollow building.
- * The outer wall is drawn per breakable panel (shell.panels, see Interiors.js): each panel's
- * outer face (floor -> ceiling), inner face and end caps / door jambs are consecutive quads
- * whose index range is recorded (chunk.panelRanges) so view.hidePanel can blank them. The
- * wall above the ceiling and a panel's underside stay (the hole is closed at the top).
+ * The outer wall is drawn per breakable panel (shell.panels, see Interiors.js and
+ * interiors/shellPanels.js): ground-storey panels (floor -> ground ceiling, split at the doors)
+ * and one band of panels per upper storey (that storey's ceiling band). Each panel's outer face,
+ * inner face, end caps / door jambs and its top / bottom faces toward the neighbouring band are
+ * consecutive quads whose index range is recorded (chunk.panelRanges) so view.hidePanel can blank
+ * them. The roof rim above the top ceiling stays (its underside closes a hole at the top). With a
+ * roof tile grid (shell.roof) the roof and the top ceiling are drawn by InteriorMeshes; returns
+ * true then (the caller skips its whole-footprint roof cap).
  */
-function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roomChunk = chunk) {
+function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roofHex, roomChunk = chunk) {
   const pts = b.p;
   const n = pts.length;
   const h = b.h;
   const inner = shell.inner;
-  const top = shell.groundCeil !== undefined ? shell.groundCeil - shell.floor : shell.ceilRel; // interior ceiling above the floor
+  const top = shell.groundCeil !== undefined ? shell.groundCeil - shell.floor : shell.ceilRel; // ground ceiling above the floor
+  const ceilTop = shell.ceil - shell.floor; // the top storey's ceiling (the roof slab's underside)
+  const multi = ceilTop > top + 0.01; // upper-storey panel bands above the ground storey
   const dh = shell.doorH;
+  const roofGrid = !!(shell.plan && shell.plan.roof);
+  // the breakable roof (and its rim) sits right on the top storey's walls: they get a top face
   _c.setHex(INTERIOR_WALL[b.mat] || INTERIOR_WALL.brick);
   const ishade = 0.95 + hash01(b.id, 6) * 0.08;
   const ir = _c.r * ishade;
@@ -553,18 +568,19 @@ function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roomChunk = ch
     const I = (f, y) => [qa[0] + (qc[0] - qa[0]) * f, y, qa[1] + (qc[1] - qa[1]) * f];
     const doors = shell.doors.filter((d) => d.e === i);
     const doorAt = (f, end) => doors.some((d) => (end ? d.f0 : d.f1) === f);
-    // one solid stretch [f0, f1]: the breakable part (floor -> ceiling) then the permanent part above
-    const solid = (f0, f1, pn) => {
+    // one solid stretch [f0, f1] from y0 to y1 (relative): faces, end caps / jambs and the faces
+    // toward the band below (bottom) / above (cap) when those can break too
+    const solid = (f0, f1, pn, y0, y1, ground, bottom, cap) => {
       const i0 = chunk.buf.idx.length;
-      quad(chunk, O(f0, 0), O(f1, 0), O(f1, top), O(f0, top), nx, 0, nz, wr, wg, wb, wa(len, f0, f1, 0, top), h);
-      quad(chunk, I(f0, 0), I(f1, 0), I(f1, top), I(f0, top), -nx, 0, -nz, ir, ig, ib, null, h);
+      quad(chunk, O(f0, y0), O(f1, y0), O(f1, y1), O(f0, y1), nx, 0, nz, wr, wg, wb, wa(len, f0, f1, y0, y1), h);
+      quad(chunk, I(f0, y0), I(f1, y0), I(f1, y1), I(f0, y1), -nx, 0, -nz, ir, ig, ib, null, h);
       // ends: a door jamb (faces into the opening) or an end cap facing the neighbouring panel
       // (inside the wall while that neighbour stands; it closes the hole when it breaks)
       // end caps are inset 3 cm from both faces so their edges never peek through the seams
       // between neighbouring panels' faces; door jambs are flush (they are always visible)
-      const j0 = doorAt(f0, false);
-      const j1 = doorAt(f1, true);
-      const cap = (f, y, jamb) => {
+      const j0 = ground && doorAt(f0, false);
+      const j1 = ground && doorAt(f1, true);
+      const endCap = (f, y, jamb) => {
         const o = O(f, y);
         const ii = I(f, y);
         if (jamb) return [o, ii];
@@ -574,50 +590,132 @@ function addShell(chunk, b, shell, sign, style, wr, wg, wb, tris, roomChunk = ch
         const e = Math.min(0.03, dl * 0.2) / dl;
         return [[o[0] + dx * e, y, o[2] + dz * e], [ii[0] - dx * e, y, ii[2] - dz * e]];
       };
-      const y0 = j0 ? dh : top;
-      const y1 = j1 ? dh : top;
-      const [c0o, c0i] = cap(f0, 0, j0);
-      const [c0O, c0I] = cap(f0, y0, j0);
-      const [c1o, c1i] = cap(f1, 0, j1);
-      const [c1O, c1I] = cap(f1, y1, j1);
+      const ya = j0 ? dh : y1;
+      const yb = j1 ? dh : y1;
+      const [c0o, c0i] = endCap(f0, y0, j0);
+      const [c0O, c0I] = endCap(f0, ya, j0);
+      const [c1o, c1i] = endCap(f1, y0, j1);
+      const [c1O, c1I] = endCap(f1, yb, j1);
       quad(chunk, c0o, c0i, c0I, c0O, -tx, 0, -tz, j0 ? wr : ir, j0 ? wg : ig, j0 ? wb : ib, null, h);
       quad(chunk, c1o, c1i, c1I, c1O, tx, 0, tz, j1 ? wr : ir, j1 ? wg : ig, j1 ? wb : ib, null, h);
-      if (pn) chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
-      if (h > top + 0.01) {
-        quad(chunk, O(f0, top), O(f1, top), O(f1, h), O(f0, h), nx, 0, nz, wr, wg, wb, wa(len, f0, f1, top, h), h);
-        quad(chunk, I(f0, top), I(f1, top), I(f1, shell.ceil-shell.floor), I(f0, shell.ceil-shell.floor), -nx, 0, -nz, ir, ig, ib, null, h);
+      // above a jamb: an end cap facing the (breakable) lintel over the door
+      if (j0 && y1 > dh + 0.01) {
+        const [a0o, a0i] = endCap(f0, dh, false);
+        const [a1o, a1i] = endCap(f0, y1, false);
+        quad(chunk, a0o, a0i, a1i, a1o, -tx, 0, -tz, ir, ig, ib, null, h);
       }
-      // underside of the wall band above a broken panel
-      quad(chunk, O(f0, top), O(f1, top), I(f1, top), I(f0, top), 0, -1, 0, ir, ig, ib, null, h);
+      if (j1 && y1 > dh + 0.01) {
+        const [b0o, b0i] = endCap(f1, dh, false);
+        const [b1o, b1i] = endCap(f1, y1, false);
+        quad(chunk, b0o, b0i, b1i, b1o, tx, 0, tz, ir, ig, ib, null, h);
+      }
+      if (bottom) quad(chunk, O(f0, y0), O(f1, y0), I(f1, y0), I(f0, y0), 0, -1, 0, ir, ig, ib, null, h);
+      if (cap) quad(chunk, O(f0, y1), O(f1, y1), I(f1, y1), I(f0, y1), 0, 1, 0, ir, ig, ib, null, h);
+      if (pn) chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
     };
     const list = edgePanels[i];
     if (list && list.length) {
-      for (const pn of list) solid(pn.f0, pn.f1, pn);
+      for (const pn of list) {
+        if (pn.kind === 'lintel') continue; // drawn with its door below
+        if (pn.level > 0) solid(pn.f0, pn.f1, pn, pn.y0 - shell.floor, pn.y1 - shell.floor, false, true, pn.y1 < shell.ceil - 0.01 || roofGrid);
+        else solid(pn.f0, pn.f1, pn, 0, top, true, false, multi || roofGrid);
+      }
     } else {
       // no panels (no interior plan): the solid runs between the doors
       let f = 0;
       for (const d of doors) {
-        if (d.f0 > f) solid(f, d.f0, null);
+        if (d.f0 > f) solid(f, d.f0, null, 0, top, true, false, false);
         f = d.f1;
       }
-      if (f < 1) solid(f, 1, null);
+      if (f < 1) solid(f, 1, null, 0, top, true, false, false);
+      if (multi) solid(0, 1, null, top, ceilTop, false, false, false);
+    }
+    // the roof rim above the top ceiling and its underside over a broken panel: with a roof tile
+    // grid each piece goes with the roof tile it belongs to (it breaks with it), else permanent
+    if (h > ceilTop + 0.01 && roofGrid) {
+      for (const [f0, f1, pn] of rimPieces(shell, a, c, qa, qc)) {
+        const i0 = chunk.buf.idx.length;
+        quad(chunk, O(f0, ceilTop), O(f1, ceilTop), O(f1, h), O(f0, h), nx, 0, nz, wr, wg, wb, wa(len, f0, f1, ceilTop, h), h);
+        quad(chunk, O(f0, ceilTop), O(f1, ceilTop), I(f1, ceilTop), I(f0, ceilTop), 0, -1, 0, ir, ig, ib, null, h);
+        if (pn) chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
+      }
+    } else if (h > ceilTop + 0.01) {
+      quad(chunk, O(0, ceilTop), O(1, ceilTop), O(1, h), O(0, h), nx, 0, nz, wr, wg, wb, wa(len, 0, 1, ceilTop, h), h);
+      quad(chunk, O(0, ceilTop), O(1, ceilTop), I(1, ceilTop), I(0, ceilTop), 0, -1, 0, ir, ig, ib, null, h);
     }
     for (const d of doors) {
-      // above the opening: outer lintel face, inner face, underside
-      quad(chunk, O(d.f0, dh), O(d.f1, dh), O(d.f1, h), O(d.f0, h), nx, 0, nz, wr, wg, wb, wa(len, d.f0, d.f1, dh, h), h);
-      quad(chunk, I(d.f0, dh), I(d.f1, dh), I(d.f1, shell.ceil-shell.floor), I(d.f0, shell.ceil-shell.floor), -nx, 0, -nz, ir, ig, ib, null, h);
+      // above the opening up to the ground ceiling: outer lintel face, inner face, underside
+      // (one breakable lintel panel when the plan has one: interiors/shellPanels.js)
+      const i0 = chunk.buf.idx.length;
+      quad(chunk, O(d.f0, dh), O(d.f1, dh), O(d.f1, top), O(d.f0, top), nx, 0, nz, wr, wg, wb, wa(len, d.f0, d.f1, dh, top), h);
+      quad(chunk, I(d.f0, dh), I(d.f1, dh), I(d.f1, top), I(d.f0, top), -nx, 0, -nz, ir, ig, ib, null, h);
       quad(chunk, O(d.f0, dh), O(d.f1, dh), I(d.f1, dh), I(d.f0, dh), 0, -1, 0, ir, ig, ib, null, h);
+      // the lintel's top toward a broken upper-storey panel (or roof tile) above it
+      if (multi || roofGrid) quad(chunk, O(d.f0, top), O(d.f1, top), I(d.f1, top), I(d.f0, top), 0, 1, 0, ir, ig, ib, null, h);
+      const lp = (edgePanels[i] || []).find((p) => p.kind === 'lintel' && p.f0 === d.f0 && p.f1 === d.f1);
+      if (lp) chunk.panelRanges.push(lp, i0, chunk.buf.idx.length - i0);
     }
   }
   // interior floor (just above the ground layers) and ceiling; the inner ring has the
   // footprint's vertex order, so the footprint triangulation is reused
   hcap(chunk, inner, tris, 0.03, 1, FLOOR_COLOR[b.mat] || FLOOR_COLOR.brick, h);
   // the ceiling is wound to face down but lit with an up normal, so it reads as a bright
-  // painted ceiling instead of picking up the dim ground hemisphere colour
-  hcap(chunk, inner, tris, shell.ceil-shell.floor, -1, CEILING_COLOR, h, 1);
+  // painted ceiling instead of picking up the dim ground hemisphere colour (with a roof tile
+  // grid InteriorMeshes draws it around the tiles)
+  if (!roofGrid) hcap(chunk, inner, tris, ceilTop, -1, CEILING_COLOR, h, 1);
+  // the roof with its breakable tiles is part of the shell: seen from afar, so the shell chunk
+  if (roofGrid) addRoofGeometry(chunk, shell, h, { quad, hcapFlat, roof: { outer: pts, hex: roofHex, ceiling: CEILING_COLOR } });
   // interior partitions + room floors (InteriorMeshes.js)
   // (into `roomChunk`: the building's own interior mesh, drawn only from nearby, see view.update)
   if (shell.plan) addInteriorGeometry(roomChunk, shell, h, { quad, hcapFlat });
+  return roofGrid;
+}
+
+/**
+ * The roof rim along footprint edge a -> c (inner face qa -> qc), split where it crosses the
+ * roof tile grid (plan.roof): [[f0, f1, roof tile panel | null], ...] in edge fractions. Each
+ * piece belongs to the tile just inside the wall at its middle (the cell it lies in).
+ */
+function rimPieces(shell, a, c, qa, qc) {
+  const plan = shell.plan;
+  const g = plan.roof;
+  const F = plan.frame;
+  const [pa, pb] = toLocal(F, a[0], a[1]);
+  const [qa2, qb2] = toLocal(F, c[0], c[1]);
+  const fs = [0, 1];
+  const cut = (p0, p1, lo, hi, cnt) => {
+    if (Math.abs(p1 - p0) < 1e-9) return;
+    for (let k = 1; k < cnt; k++) {
+      const v = lo + ((hi - lo) * k) / cnt;
+      const f = (v - p0) / (p1 - p0);
+      if (f > 1e-6 && f < 1 - 1e-6) fs.push(f);
+    }
+  };
+  cut(pa, qa2, g.a0, g.a1, g.na);
+  cut(pb, qb2, g.b0, g.b1, g.nb);
+  fs.sort((x, y) => x - y);
+  const out = [];
+  for (let k = 0; k + 1 < fs.length; k++) {
+    const f0 = fs[k];
+    const f1 = fs[k + 1];
+    if (f1 - f0 < 1e-6) continue;
+    const fm = (f0 + f1) / 2;
+    // a point a little inside the outer face (a third of the way to the inner face)
+    const ox = a[0] + (c[0] - a[0]) * fm;
+    const oz = a[1] + (c[1] - a[1]) * fm;
+    const ix = qa[0] + (qc[0] - qa[0]) * fm;
+    const iz = qa[1] + (qc[1] - qa[1]) * fm;
+    const [la, lb] = toLocal(F, ox + (ix - ox) / 3, oz + (iz - oz) / 3);
+    let pn = null;
+    if (la >= g.a0 && la < g.a1 && lb >= g.b0 && lb < g.b1) {
+      const i = Math.min(g.na - 1, Math.floor(((la - g.a0) / (g.a1 - g.a0)) * g.na));
+      const j = Math.min(g.nb - 1, Math.floor(((lb - g.b0) / (g.b1 - g.b0)) * g.nb));
+      const id = g.ids[i * g.nb + j];
+      pn = id >= 0 ? plan.panels[id] : null;
+    }
+    out.push([f0, f1, pn]);
+  }
+  return out;
 }
 
 /** Horizontal polygon (flat [x, z, ...]) facing up, triangulated here (room floor overlays). */
@@ -741,20 +839,47 @@ const BUS_HALF_W = SCHOOL_BUS.halfWidth + 0.05;
 const BUS_LANE = 6; // m between lane centres (3 m between parked buses side by side)
 const BUS_GAP = 2.5; // m between a bus's rear and the next one's front bumper
 const BUS_MAX = 10; // per bus loop
+// A parked bus is ~14.4 m long, about three cars end to end; it takes twice a car's
+// 300 hp (12 pickaxe swings) rather than three times, so breaking one stays practical.
+export const BUS_HP = 600;
+
+/**
+ * Blank (hidden = true) or restore one breakable object's triangles inside merged meshes.
+ * `cut` = { parts: [[geometry, indexStart, indexCount], ...], saved: null, hidden: false }
+ * (collider.meshCut). Blanked triangles collapse onto one vertex (degenerate), so the merged
+ * draw calls stay as they are. Returns false when already in that state.
+ */
+export function setMeshCutHidden(cut, hidden) {
+  if (!cut || cut.hidden === hidden) return false;
+  if (!cut.saved) cut.saved = cut.parts.map(([g, s, n]) => g.index.array.slice(s, s + n));
+  cut.parts.forEach(([g, s, n], i) => {
+    const idx = g.index;
+    if (hidden) idx.array.fill(idx.array[s], s, s + n);
+    else idx.array.set(cut.saved[i], s);
+    idx.addUpdateRange(s, n);
+    idx.needsUpdate = true;
+  });
+  cut.hidden = hidden;
+  return true;
+}
 
 /**
  * Parks rows of school buses on every `busloop` area (scripts/compose-map.mjs re-tags a
  * school's bus loop), aligned with the area's long axis and all facing the same way. The
- * bodies are merged per material (4 draw calls in total). Each bus gets an indestructible
- * box collider (kind 'vehicle': stand on its roof, take cover behind it; blockedAt sees it,
- * so bots path around it and loot never lands in it). Returns the number of buses parked.
+ * bodies are merged per material (4 draw calls in total). Each bus gets a breakable box
+ * collider (kind 'vehicle', BUS_HP like a parked car's 300: stand on its roof, take cover
+ * behind it, shoot / mine / blow it up; blockedAt sees it, so bots path around it and loot
+ * never lands in it). collider.meshCut records the bus's index ranges in the merged meshes
+ * so view.hideCollider / showCollider blank and restore just that bus. Returns the number
+ * of buses parked.
  */
-function parkSchoolBuses(world, data, root) {
+export function parkSchoolBuses(world, data, root) {
   const loops = data.areas.filter((a) => a.k === 'busloop');
   if (!loops.length) return 0;
   const byMat = {};
   const parts = schoolBusParts();
   const m = new THREE.Matrix4();
+  const cols = [];
   let n = 0;
   for (const a of loops) {
     const p = a.p;
@@ -838,8 +963,10 @@ function parkSchoolBuses(world, data, root) {
         [cx - fx * BUS_HALF_LEN + vx * BUS_HALF_W, cz - fz * BUS_HALF_LEN + vz * BUS_HALF_W],
       ];
       const col = world.addPoly(corners, SCHOOL_BUS.groundY + SCHOOL_BUS.top, 'vehicle', 'metal', [], { y0: gy });
+      col.hp = col.maxHp = BUS_HP;
       col.x = cx;
       col.z = cz;
+      cols.push(col);
       n++;
     }
   }
@@ -847,8 +974,14 @@ function parkSchoolBuses(world, data, root) {
   const mats = schoolBusMaterials();
   const group = new THREE.Group();
   group.name = 'school-buses';
+  for (const c of cols) c.meshCut = { parts: [], saved: null, hidden: false };
   for (const k in byMat) {
-    const mesh = new THREE.Mesh(mergeGeometries(byMat[k], false), mats[k]);
+    // every bus adds the same parts, so bus i owns index range [i * per, (i + 1) * per)
+    const per = byMat[k].reduce((t, g) => t + g.index.count, 0) / n;
+    const geo = mergeGeometries(byMat[k], false);
+    geo.index.setUsage(THREE.DynamicDrawUsage);
+    cols.forEach((c, i) => c.meshCut.parts.push([geo, i * per, per]));
+    const mesh = new THREE.Mesh(geo, mats[k]);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     group.add(mesh);
@@ -1041,12 +1174,11 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
       const R = chunk.panelRanges;
       for (let i = 0; i < R.length; i += 3) {
         let rec = panelRanges.get(R[i]);
-        if (!rec) panelRanges.set(R[i], (rec = { geo: g, ranges: [], saved: null, hidden: false }));
-        if (rec.geo !== g) {
-          console.warn('[world] panel geometry split across meshes: not breakable visually');
-          continue;
-        }
-        rec.ranges.push(R[i + 1], R[i + 2]);
+        if (!rec) panelRanges.set(R[i], (rec = { parts: [], hidden: false }));
+        // a roof tile's top is in the shell mesh, its ceiling side in the room mesh
+        let part = rec.parts.find((p) => p.geo === g);
+        if (!part) rec.parts.push((part = { geo: g, ranges: [], saved: null }));
+        part.ranges.push(R[i + 1], R[i + 2]);
       }
     }
     const mesh = new THREE.Mesh(g, bMat);
@@ -1296,7 +1428,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     if (!trees.has(name)) name = TREE_NAMES.find((t) => trees.has(t));
     if (!name) return false;
     const s = 0.8 + rng() * 0.55;
-    const rec = trees.add(name, x, z, rng() * 6.28, s, null, world.terrainHeight(x, z));
+    const rec = trees.add(name, x, z, rng() * 6.28, s, null, world.surfaceHeight(x, z)); // same ground as its collider (addCircle), not the raw DEM
     const h = TREE_H[name] * s;
     world.addCircle(x, z, 0.32 + h * 0.022, h * 0.8, 'tree', 'wood', 200, [rec]);
     harvestables.trees++;
@@ -1396,49 +1528,55 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     hidePanel(c, panel) {
       const rec = panelRanges.get(panel);
       if (!rec || rec.hidden) return false;
-      const idx = rec.geo.index;
-      const arr = idx.array;
-      const R = rec.ranges;
-      if (!rec.saved) {
-        let tot = 0;
-        for (let i = 1; i < R.length; i += 2) tot += R[i];
-        rec.saved = new arr.constructor(tot);
-        let o = 0;
-        for (let i = 0; i < R.length; i += 2) {
-          rec.saved.set(arr.subarray(R[i], R[i] + R[i + 1]), o);
-          o += R[i + 1];
+      for (const part of rec.parts) {
+        const idx = part.geo.index;
+        const arr = idx.array;
+        const R = part.ranges;
+        if (!part.saved) {
+          let tot = 0;
+          for (let i = 1; i < R.length; i += 2) tot += R[i];
+          part.saved = new arr.constructor(tot);
+          let o = 0;
+          for (let i = 0; i < R.length; i += 2) {
+            part.saved.set(arr.subarray(R[i], R[i] + R[i + 1]), o);
+            o += R[i + 1];
+          }
         }
+        for (let i = 0; i < R.length; i += 2) {
+          const v = arr[R[i]];
+          arr.fill(v, R[i], R[i] + R[i + 1]); // degenerate triangles
+          idx.addUpdateRange(R[i], R[i + 1]);
+        }
+        idx.needsUpdate = true;
       }
-      for (let i = 0; i < R.length; i += 2) {
-        const v = arr[R[i]];
-        arr.fill(v, R[i], R[i] + R[i + 1]); // degenerate triangles
-        idx.addUpdateRange(R[i], R[i + 1]);
-      }
-      idx.needsUpdate = true;
       rec.hidden = true;
       return true;
     },
     showPanel(c, panel) {
       const rec = panelRanges.get(panel);
       if (!rec || !rec.hidden) return false;
-      const idx = rec.geo.index;
-      const R = rec.ranges;
-      let o = 0;
-      for (let i = 0; i < R.length; i += 2) {
-        idx.array.set(rec.saved.subarray(o, o + R[i + 1]), R[i]);
-        idx.addUpdateRange(R[i], R[i + 1]);
-        o += R[i + 1];
+      for (const part of rec.parts) {
+        const idx = part.geo.index;
+        const R = part.ranges;
+        let o = 0;
+        for (let i = 0; i < R.length; i += 2) {
+          idx.array.set(part.saved.subarray(o, o + R[i + 1]), R[i]);
+          idx.addUpdateRange(R[i], R[i + 1]);
+          o += R[i + 1];
+        }
+        idx.needsUpdate = true;
       }
-      idx.needsUpdate = true;
       rec.hidden = false;
       return true;
     },
     /** Hide the instances behind a harvested collider. */
     hideCollider(col) {
+      if (col.meshCut) setMeshCutHidden(col.meshCut, true); // a parked school bus
       if (!Array.isArray(col.ref)) return;
       for (const rec of col.ref) (TREE_H[rec.name] ? trees : props).hide(rec);
     },
     showCollider(col) {
+      if (col.meshCut) setMeshCutHidden(col.meshCut, false);
       if (!Array.isArray(col.ref)) return;
       for (const rec of col.ref) (TREE_H[rec.name] ? trees : props).show(rec);
     },
