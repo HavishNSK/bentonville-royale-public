@@ -49,7 +49,7 @@
 // The shop catalog's prices are mirrored here (PRICES) so a client cannot buy for free.
 
 import { Server, getServerByName } from 'partyserver';
-import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS } from '../src/game/Cosmetics.js';
+import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES } from '../src/game/Cosmetics.js';
 import { verifyGoogleIdToken } from './googleIdToken.js';
 import { applyMatchStats } from './matchStats.js';
 import { boxStats, validateBoxResult, applyBoxResult, boxRateLimited, boxFlags } from './boxRating.js';
@@ -87,10 +87,15 @@ const SECLOG_KEEP = 500; // newest security-log rows kept (seclog:<time>)
 const MAX_FRIENDS = 100;
 const BOX_BOARD_TOP = 25;
 const BOX_BOARD_MIN_GAMES = 10; // games needed to be listed on the Box Fights board
-const REWARD_GAP_MS = 60 * 1000; // at most one match reward per minute per account
+const REWARD_GAP_MS = 2 * 60 * 1000; // at most one match reward per 2 minutes per account (was 1)
+// Match payout (made harder to earn on 2026-11-19; the old values are in brackets)
+export const REWARD_OUTLAST_MAX = 120; // coins for outlasting everyone, scaled by placement [250]
+export const REWARD_PER_KILL = 35; // [75]
+export const REWARD_WIN = 200; // [400]
+export const REWARD_MATCH_CAP = 600; // most coins one match can pay [1500]
 // Rewarded ads (src/net/Ads.js): coins for watching an ad to the end. The server can't see the
 // ad itself, so it caps how often the client may claim: AD_REWARD_DAILY per UTC day, one per gap.
-export const AD_REWARD_COINS = 100;
+export const AD_REWARD_COINS = 50; // [100]
 export const AD_REWARD_DAILY = 5;
 const AD_REWARD_GAP_MS = 20 * 1000;
 
@@ -154,6 +159,7 @@ function upgradeAccount(acc) {
   if (!Array.isArray(eq.emotes)) eq.emotes = DEFAULT_EQUIPPED.emotes.slice();
   if (!PICKAXES[eq.pickaxe] || !acc.owned.includes(eq.pickaxe)) eq.pickaxe = DEFAULT_EQUIPPED.pickaxe;
   if (!BACKBLINGS[eq.backbling] || !acc.owned.includes(eq.backbling)) eq.backbling = DEFAULT_EQUIPPED.backbling;
+  if (!GLIDERS[eq.glider] || !acc.owned.includes(eq.glider)) eq.glider = DEFAULT_EQUIPPED.glider;
   return acc;
 }
 
@@ -811,10 +817,13 @@ export class Accounts extends Server {
         const id = String(m.item || '');
         const price = PRICES[id];
         if (price == null) return err('That item is not in the shop.');
-        if (acc.owned.includes(id)) return err('You already own that.');
+        const bundle = BUNDLES[id];
+        const grant = bundle ? bundle.items.filter((it) => !acc.owned.includes(it)) : [id];
+        if (bundle ? !grant.length : acc.owned.includes(id)) return err(bundle ? 'You already own everything in that bundle.' : 'You already own that.');
         if (acc.coins < price) return err('Not enough coins.');
         acc.coins -= price;
-        acc.owned.push(id);
+        acc.owned.push(...grant);
+        if (bundle && !acc.owned.includes(id)) acc.owned.push(id); // the shop shows the bundle as owned
         await this._save(acc);
         this._push(lower, { t: 'profile', profile: profileOf(acc) });
         return json({ profile: profileOf(acc) });
@@ -833,6 +842,10 @@ export class Accounts extends Server {
           if (!acc.owned.includes(m.backbling) || !BACKBLINGS[m.backbling]) return err('You do not own that back bling.');
           upgradeAccount(acc).equipped.backbling = m.backbling;
         }
+        if (m.glider != null) {
+          if (!acc.owned.includes(m.glider) || !GLIDERS[m.glider]) return err('You do not own that glider.');
+          upgradeAccount(acc).equipped.glider = m.glider;
+        }
         if (Array.isArray(m.emotes)) {
           const list = m.emotes.slice(0, EMOTE_SLOTS).map((e) => (e && acc.owned.includes(e) && String(e).startsWith('emote_') ? e : null));
           while (list.length < EMOTE_SLOTS) list.push(null);
@@ -843,7 +856,7 @@ export class Accounts extends Server {
         return json({ profile: profileOf(acc) });
       }
       case 'reward': {
-        // match payout: outlasted (scaled), 75 per elimination, 400 for a win
+        // match payout: outlasted (scaled), per elimination and a win bonus, capped (REWARD_* above)
         // Coin payout is rate-limited; wins/kills still count so the boards stay honest after quick rematches.
         const now = Date.now();
         const players = Math.max(1, Math.min(100, m.players | 0));
@@ -853,8 +866,8 @@ export class Accounts extends Server {
         const rateLimited = now - (acc.lastReward || 0) < REWARD_GAP_MS;
         let earned = 0;
         if (!rateLimited) {
-          const outlasted = Math.round(((players - placement) / Math.max(1, players - 1)) * 250);
-          earned = Math.min(1500, outlasted + kills * 75 + (won ? 400 : 0));
+          const outlasted = Math.round(((players - placement) / Math.max(1, players - 1)) * REWARD_OUTLAST_MAX);
+          earned = Math.min(REWARD_MATCH_CAP, outlasted + kills * REWARD_PER_KILL + (won ? REWARD_WIN : 0));
           acc.coins += earned;
           acc.lastReward = now;
         }

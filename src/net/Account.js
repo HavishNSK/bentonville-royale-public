@@ -27,7 +27,7 @@
 // require a signed-in account. Guest localStorage no longer stores a coin balance.
 
 import { partyHost, isLocal } from './Net.js';
-import { DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, SKINS, EMOTES, PICKAXES, BACKBLINGS } from '../game/Cosmetics.js';
+import { DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, SKINS, EMOTES, PICKAXES, BACKBLINGS, GLIDERS } from '../game/Cosmetics.js';
 import { ELO_START, clampElo, tierOf } from '../game/BoxElo.js';
 
 const TOKEN_KEY = 'bentonville-royale.account';
@@ -122,6 +122,7 @@ function guestProfile() {
       skin: owned.includes(eq.skin) && SKINS[eq.skin] ? eq.skin : DEFAULT_EQUIPPED.skin,
       pickaxe: owned.includes(eq.pickaxe) && PICKAXES[eq.pickaxe] ? eq.pickaxe : DEFAULT_EQUIPPED.pickaxe,
       backbling: owned.includes(eq.backbling) && BACKBLINGS[eq.backbling] ? eq.backbling : DEFAULT_EQUIPPED.backbling,
+      glider: owned.includes(eq.glider) && GLIDERS[eq.glider] ? eq.glider : DEFAULT_EQUIPPED.glider,
       emotes: Array.from({ length: EMOTE_SLOTS }, (_, i) => {
         const e = Array.isArray(eq.emotes) ? eq.emotes[i] : DEFAULT_EQUIPPED.emotes[i];
         return e && owned.includes(e) && EMOTES[e] ? e : null;
@@ -263,19 +264,20 @@ export function createAccount() {
       return r.profile;
     },
 
-    async equip({ skin, emotes, pickaxe, backbling } = {}) {
+    async equip({ skin, emotes, pickaxe, backbling, glider } = {}) {
       const p = acct.profile;
       // optimistic: the locker updates at once, the server confirms
       if (skin && p.owned.includes(skin)) p.equipped.skin = skin;
       if (pickaxe && p.owned.includes(pickaxe)) p.equipped.pickaxe = pickaxe;
       if (backbling && p.owned.includes(backbling)) p.equipped.backbling = backbling;
+      if (glider && p.owned.includes(glider)) p.equipped.glider = glider;
       if (emotes) p.equipped.emotes = emotes.slice(0, EMOTE_SLOTS);
       emit('change', p);
       if (!acct.signedIn) {
         saveGuest();
         return p;
       }
-      const r = await api('equip', { token, skin, emotes, pickaxe, backbling });
+      const r = await api('equip', { token, skin, emotes, pickaxe, backbling, glider });
       setProfile(r.profile);
       if (skin) acct.setStatus(status.s, status.party);
       return r.profile;

@@ -384,7 +384,11 @@ function regionTargets(key, model, kitsInUse) {
   return kitsInUse.map((k) => [k, key]);
 }
 
-const SKIN_KEYS = new Set(['name', 'model', 'tint', 'rarity', 'price', 'parts', 'colors', 'addons', 'note']);
+const SKIN_KEYS = new Set(['name', 'model', 'tint', 'rarity', 'price', 'parts', 'colors', 'addons', 'note', 'idle', 'gear']);
+// optional standing-still pose (Character idlePose); null = the kit's own idle
+export const IDLE_POSES = ['paws'];
+// optional extra gear drawn outside the recipe system (Character / render/FurGear.js)
+export const GEAR = ['furPaws'];
 
 /**
  * Any skin def -> {
@@ -399,6 +403,8 @@ export function normalizeSkin(def) {
   const d = def && typeof def === 'object' ? def : {};
   for (const k of Object.keys(d)) if (!SKIN_KEYS.has(k)) warnings.push(`unknown field ${JSON.stringify(k)}`);
   const model = RECIPE_KITS.includes(d.model) ? d.model : 'player';
+  if (d.gear != null && !GEAR.includes(d.gear)) errors.push(`gear ${JSON.stringify(d.gear)} is not known (${GEAR.join(', ')})`);
+  if (d.idle != null && !IDLE_POSES.includes(d.idle)) errors.push(`idle ${JSON.stringify(d.idle)} is not a pose (${IDLE_POSES.join(', ')})`);
   if (d.model != null && model !== d.model) errors.push(`model ${JSON.stringify(d.model)} is not a kit`);
   let tint = null;
   if (d.tint != null) {

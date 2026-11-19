@@ -40,7 +40,7 @@ import { createInventoryPanel } from '../ui/inventoryPanel.js';
 import { createEmoteWheel } from '../ui/emoteWheel.js';
 import { Minimap } from '../ui/Minimap.js';
 import { CharacterKit, Character, registerKits } from './Character.js';
-import { skinDef, emoteDef, pickaxeDef, DEFAULT_EQUIPPED, PICKAXES, BACKBLINGS } from './Cosmetics.js';
+import { skinDef, emoteDef, pickaxeDef, DEFAULT_EQUIPPED, PICKAXES, BACKBLINGS, GLIDERS } from './Cosmetics.js';
 import { Combat, rayActor } from './Combat.js';
 import { canFastTravel, travelTargets, nearestPoi, landAt } from './fastTravel.js';
 import { Pings } from './Pings.js';
@@ -141,6 +141,7 @@ export class Game {
     this.pickaxe = DEFAULT_EQUIPPED.pickaxe;
     this.backbling = DEFAULT_EQUIPPED.backbling;
     this.boxEloSelf = ELO_START; // Box Fights Elo we report to the other players (main.js: account profile)
+    this.glider = DEFAULT_EQUIPPED.glider;
     this.state = 'menu'; // 'menu' | 'loading' | 'drop' | 'play' | 'over'
     this.paused = false;
     this.loaded = false;
@@ -425,36 +426,39 @@ export class Game {
    * Outfit (Cosmetics.SKINS id) for the local player and the emotes on their wheel. Applied
    * now when loaded (the character is rebuilt with that model / tint), else at load.
    */
-  setCosmetics({ skin, emotes, pickaxe, backbling } = {}) {
+  setCosmetics({ skin, emotes, pickaxe, backbling, glider } = {}) {
     if (skin) this.skin = skin;
     if (emotes) this.emotes = emotes.slice();
     if (pickaxe && PICKAXES[pickaxe]) this.pickaxe = pickaxe;
     if (this.hud && this.hud.setPickaxeName) this.hud.setPickaxeName(pickaxeDef(this.pickaxe).name);
     if (backbling && BACKBLINGS[backbling]) this.backbling = backbling;
+    if (glider && GLIDERS[glider]) this.glider = glider;
     if (this.loaded && this.player) this._applySkin();
   }
 
   /** A new Character wearing outfit `skinId` (null when kits are missing). */
-  makeSkinCharacter(skinId, canopyColor, pickaxe, backbling) {
+  makeSkinCharacter(skinId, canopyColor, pickaxe, backbling, glider) {
     const def = skinDef(skinId);
     const kit = this.kits && (this.kits[def.model] || this.kits.player);
-    return kit ? new Character(kit, { weapons: this.weaponScenes, canopyColor, tint: def.tint ?? undefined, skin: def, pickaxe, backbling }) : null;
+    return kit ? new Character(kit, { weapons: this.weaponScenes, canopyColor, tint: def.tint ?? undefined, skin: def, pickaxe, backbling, glider }) : null;
   }
 
   /** Swaps a remote human's / puppet's character for outfit `skinId` (keeps visibility, pose state resets). */
-  reskinActor(a, skinId, pickaxe, backbling) {
+  reskinActor(a, skinId, pickaxe, backbling, glider) {
     if (!a) return;
     const px = PICKAXES[pickaxe] ? pickaxe : null;
     const bb = BACKBLINGS[backbling] ? backbling : null;
     if (px) a.pickaxeCos = px;
+    const gl = GLIDERS[glider] ? glider : null;
     if (bb) a.backbling = bb;
+    if (gl) a.glider = gl;
     if (!skinId || a.skin === skinId) {
-      if (a.character && (px || bb)) a.character.setLoadout({ pickaxe: px, backbling: bb });
+      if (a.character && (px || bb || gl)) a.character.setLoadout({ pickaxe: px, backbling: bb, glider: gl });
       return;
     }
     a.skin = skinId;
     const old = a.character;
-    const ch = this.makeSkinCharacter(skinId, old && old.canopy ? old.canopy.material.color.getHex() : 0xff7a45, a.pickaxeCos, a.backbling);
+    const ch = this.makeSkinCharacter(skinId, old && old.canopy ? old.canopy.material.color.getHex() : 0xff7a45, a.pickaxeCos, a.backbling, a.glider);
     if (!ch) return;
     if (old) {
       ch.root.visible = old.root.visible;
@@ -477,11 +481,11 @@ export class Game {
     if (!kit || !p) return;
     const key = def.model + '|' + def.tint + '|' + (def.parts || def.colors || def.addons ? this.skin : ''); // recipe skins rebuild per id
     if (p.character && p._skinKey === key) {
-      p.character.setLoadout({ pickaxe: this.pickaxe, backbling: this.backbling });
+      p.character.setLoadout({ pickaxe: this.pickaxe, backbling: this.backbling, glider: this.glider });
       return;
     }
     const old = p.character;
-    const ch = new Character(kit, { weapons: this.weaponScenes, canopyColor: 0xffc21f, tint: def.tint ?? undefined, skin: def, pickaxe: this.pickaxe, backbling: this.backbling });
+    const ch = new Character(kit, { weapons: this.weaponScenes, canopyColor: 0xffc21f, tint: def.tint ?? undefined, skin: def, pickaxe: this.pickaxe, backbling: this.backbling, glider: this.glider });
     if (old) {
       ch.root.visible = old.root.visible;
       ch.root.position.copy(old.root.position);

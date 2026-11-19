@@ -14,7 +14,7 @@
 import * as THREE from 'three';
 import { loadGLB, loadJSON } from '../core/assets.js';
 import { CharacterKit, Character, registerKits, cosmeticMesh } from '../game/Character.js';
-import { skinDef, SKINS, PICKAXES, BACKBLINGS, cosmeticDef } from '../game/Cosmetics.js';
+import { skinDef, SKINS, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, cosmeticDef } from '../game/Cosmetics.js';
 
 import { LINEUP_MAX as MAX_SHOWN, lineUpSpots as spots, lineUpHalfWidth } from './lineup.js';
 
@@ -118,6 +118,7 @@ export function createShowcase(parent) {
   let previewSkin = null;
   let previewPick = null;
   let previewBB = null;
+  let previewGlider = null; // a glider being tried on: the front character shows its glide pose
   let emoteId = null;
   let active = false;
   let last = 0;
@@ -126,7 +127,7 @@ export function createShowcase(parent) {
   async function build() {
     const my = ++gen;
     const want = members.slice(0, MAX_SHOWN).map((m, i) =>
-      i === 0 ? { ...m, skin: previewSkin || m.skin, pickaxe: previewPick || m.pickaxe, backbling: previewBB || m.backbling } : m
+      i === 0 ? { ...m, skin: previewSkin || m.skin, pickaxe: previewPick || m.pickaxe, backbling: previewBB || m.backbling, glider: previewGlider || m.glider } : m
     );
     let weapons = {};
     try {
@@ -144,7 +145,7 @@ export function createShowcase(parent) {
       const s = slots[i];
       const key = w ? skinKey(w.skin) : null;
       if (s && s.key === key) {
-        s.ch.setLoadout({ pickaxe: w.pickaxe || 'pick_default', backbling: w.backbling || 'bb_outfit' });
+        s.ch.setLoadout({ pickaxe: w.pickaxe || 'pick_default', backbling: w.backbling || 'bb_outfit', glider: w.glider || 'gl_default' });
         s.holder.position.set(at[i].x, 0, at[i].z);
         continue;
       }
@@ -163,7 +164,7 @@ export function createShowcase(parent) {
         continue;
       }
       if (my !== gen) return;
-      const ch = new Character(kit, { weapons, tint: def.tint ?? undefined, skin: def, pickaxe: w.pickaxe || 'pick_default', backbling: w.backbling || 'bb_outfit' });
+      const ch = new Character(kit, { weapons, tint: def.tint ?? undefined, skin: def, pickaxe: w.pickaxe || 'pick_default', backbling: w.backbling || 'bb_outfit', glider: w.glider || 'gl_default' });
       const holder = new THREE.Group();
       holder.position.set(at[i].x, 0, at[i].z);
       const ped = new THREE.Mesh(pedGeo, pedMat);
@@ -291,7 +292,12 @@ export function createShowcase(parent) {
     // touch toward the middle like a squad photo
     for (const s of slots) if (s) s.holder.rotation.y = spin - s.holder.position.x * 0.12;
     placeTags();
-    for (const s of slots) if (s) s.ch.update(dt, { fwd: 0, side: 0, speed: 0, grounded: true, gliding: false, heading: Math.PI, pitch: 0 });
+    for (const s of slots) {
+      if (!s) continue;
+      const glide = !!previewGlider && s === slots[0];
+      s.ch.update(dt, { fwd: 0, side: 0, speed: 0, grounded: !glide, gliding: glide, heading: Math.PI, pitch: 0 });
+      s.ch.root.position.y = glide ? 0.7 : 0; // a glider being tried on hovers over the pedestal
+    }
     renderer.render(scene, camera);
   }
 
@@ -314,7 +320,11 @@ export function createShowcase(parent) {
   const _c = new THREE.Vector3();
   const _sz = new THREE.Vector3();
 
-  async function drawThumb(id) {
+  /**
+   * One cosmetic drawn alone on a transparent square. size: pixels; skin: the outfit wearing an
+   * emote / glider (default the rogue).
+   */
+  async function drawThumb(id, { size = THUMB, skin = null } = {}) {
     const c = cosmeticDef(id);
     if (!c) return null;
     let weapons = {};
@@ -335,23 +345,38 @@ export function createShowcase(parent) {
       tr.setClearColor(0x000000, 0);
     }
     clearTimeout(trIdle);
+    tr.setSize(size, size, false);
     let obj = null;
     let ch = null;
     if (c.kind === 'backbling' && c.def.none) return null;
-    const ownCape = c.kind === 'backbling' && !c.def.src; // "outfit's own cape": the rogue from behind
-    if (c.kind === 'skin' || c.kind === 'emote' || ownCape) {
-      const def = skinDef(c.kind === 'skin' ? id : 'skin_rogue');
+    const ownCape = c.kind === 'backbling' && !c.def.src && !c.def.proc; // "outfit's own cape": the rogue from behind
+    if (c.kind === 'skin' || c.kind === 'emote' || c.kind === 'glider' || ownCape) {
+      const def = skinDef(c.kind === 'skin' ? id : skin || 'skin_rogue');
       const kit = await kitFor(def.model);
-      ch = new Character(kit, { weapons: {}, tint: def.tint ?? undefined, skin: def });
-      const st = { fwd: 0, side: 0, speed: 0, grounded: true, gliding: false, heading: Math.PI, pitch: 0 };
+      const glide = c.kind === 'glider';
+      ch = new Character(kit, { weapons: {}, tint: def.tint ?? undefined, skin: def, glider: glide ? id : undefined });
+      const st = { fwd: 0, side: 0, speed: 0, grounded: !glide, gliding: glide, heading: Math.PI, pitch: 0 };
       if (c.kind === 'emote') {
         ch.emote(true, id);
         for (let i = 0; i < 24; i++) ch.update(0.05, st); // into the move, fully faded in
-      } else for (let i = 0; i < 4; i++) ch.update(0.05, st);
+      } else for (let i = 0; i < (glide ? 24 : 4); i++) ch.update(0.05, st); // a glider eases into its pose
       obj = ch.root;
-      obj.rotation.y = ownCape ? Math.PI * 0.82 : 0.35;
+      obj.rotation.y = ownCape ? Math.PI * 0.82 : glide ? 1.15 : 0.35; // a glider shows its pose side-on
       tCam.position.set(0, 1.05, 3.9);
       tCam.lookAt(0, 0.88, 0);
+      if (glide) {
+        // the glide pose tips the body over: fit the camera to it instead of the standing frame
+        obj.updateMatrixWorld(true);
+        _box.makeEmpty();
+        obj.traverseVisible((o) => {
+          if (o.isMesh) _box.expandByObject(o, true); // visible parts only: the hidden canopy would skew the fit
+        });
+        _box.getCenter(_c);
+        _box.getSize(_sz);
+        const d = (Math.max(_sz.x, _sz.y, _sz.z) * 0.62) / Math.tan((tCam.fov * Math.PI) / 360);
+        tCam.position.set(_c.x, _c.y + d * 0.15, _c.z + d);
+        tCam.lookAt(_c);
+      }
     } else {
       const m = cosmeticMesh(id, weapons.pickaxe);
       if (!m) return null;
@@ -360,7 +385,7 @@ export function createShowcase(parent) {
       m.position.set(0, 0, 0);
       m.quaternion.identity();
       if (c.kind === 'pickaxe') m.rotation.z = -0.65; // a jaunty diagonal
-      else if (c.def.src && c.def.src[2] === 'back') m.rotation.y = 0.35; // shields / books: their face
+      else if ((c.def.src && c.def.src[2] === 'back') || c.def.proc) m.rotation.y = 0.35; // shields / books / built-in back blings: the side that faces out
       else m.rotation.y = Math.PI * 0.85; // a cape shows its outside
       obj.updateMatrixWorld(true);
       _box.setFromObject(obj);
@@ -389,11 +414,68 @@ export function createShowcase(parent) {
     return url;
   }
 
+  /**
+   * A bundle's shop banner (16:9): violet backdrop with sun-gold corner wedges, the outfit large on
+   * the right, the other items (glider worn by the outfit, pickaxe, back bling) around the left.
+   */
+  async function bundleArt(id) {
+    const b = BUNDLES[id];
+    const skin = b.items.find((x) => SKINS[x]) || null;
+    const rest = b.items.filter((x) => x !== skin);
+    const W = 800;
+    const H = 450;
+    const cv = document.createElement('canvas');
+    cv.width = W;
+    cv.height = H;
+    const g = cv.getContext('2d');
+    const bg = g.createRadialGradient(W * 0.66, H * 0.45, 30, W * 0.5, H * 0.5, W * 0.72);
+    bg.addColorStop(0, '#8b6cf2');
+    bg.addColorStop(0.55, '#5a3fc6');
+    bg.addColorStop(1, '#271a66');
+    g.fillStyle = bg;
+    g.fillRect(0, 0, W, H);
+    // sun-gold wedges in the corners
+    g.fillStyle = '#ffc21f';
+    const wedge = (pts) => {
+      g.beginPath();
+      g.moveTo(pts[0], pts[1]);
+      for (let i = 2; i < pts.length; i += 2) g.lineTo(pts[i], pts[i + 1]);
+      g.closePath();
+      g.fill();
+    };
+    wedge([W * 0.1, 0, W * 0.24, 0, W * 0.2, H * 0.07]);
+    wedge([W * 0.78, 0, W * 0.92, 0, W * 0.8, H * 0.08]);
+    wedge([0, H * 0.82, 0, H, W * 0.16, H]);
+    wedge([W, H * 0.8, W, H, W * 0.84, H]);
+    const load = (url) =>
+      new Promise((res) => {
+        if (!url) return res(null);
+        const im = new Image();
+        im.onload = () => res(im);
+        im.onerror = () => res(null);
+        im.src = url;
+      });
+    if (skin) {
+      const hero = await load(await drawThumb(skin, { size: 560 }));
+      if (hero) g.drawImage(hero, W * 0.42, -H * 0.04, H * 1.26, H * 1.26); // big, cropped at the knees
+    }
+    // left side, like a shop poster: glider top, pickaxe across the middle, back bling low
+    const spots = { glider: [W * 0.04, -H * 0.04, H * 0.62], pickaxe: [W * 0.22, H * 0.3, H * 0.62], backbling: [W * 0.02, H * 0.46, H * 0.5] };
+    for (const it of rest) {
+      const c = cosmeticDef(it);
+      const at = c && spots[c.kind];
+      if (!at) continue;
+      const im = await load(await drawThumb(it, { size: 320, skin }));
+      if (im) g.drawImage(im, at[0], at[1], at[2], at[2]);
+    }
+    return cv.toDataURL('image/png');
+  }
+
   return {
     el: wrap,
     thumb(id) {
       if (!thumbs.has(id)) {
-        const p = (thumbQ = thumbQ.then(() => drawThumb(id)).catch(() => null));
+        const p = (thumbQ = thumbQ.then(() => (BUNDLES[id] ? bundleArt(id) : drawThumb(id))).catch(() => null));
         thumbs.set(id, p);
       }
       return thumbs.get(id);
@@ -414,11 +496,15 @@ export function createShowcase(parent) {
       if (!same) build();
     },
     preview(id) {
-      const was = [previewSkin, previewPick, previewBB].join();
-      previewSkin = SKINS[id] ? id : null;
-      previewPick = PICKAXES[id] ? id : null;
-      previewBB = BACKBLINGS[id] ? id : null;
-      if ([previewSkin, previewPick, previewBB].join() === was) return;
+      const was = [previewSkin, previewPick, previewBB, previewGlider].join();
+      // a bundle tries on everything in it at once (its glider pose included)
+      const ids = BUNDLES[id] ? BUNDLES[id].items : [id];
+      const pick = (table) => ids.find((x) => table[x]) || null;
+      previewSkin = pick(SKINS);
+      previewPick = pick(PICKAXES);
+      previewBB = pick(BACKBLINGS);
+      previewGlider = BUNDLES[id] ? null : pick(GLIDERS); // a bundle stands on the pedestal to show the outfit
+      if ([previewSkin, previewPick, previewBB, previewGlider].join() === was) return;
       build().then(() => {
         // a pickaxe preview shows it off with a swing; a back bling turns the line-up around
         const s = slots[0];

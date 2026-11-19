@@ -56,6 +56,42 @@ export const SKINS = {
       { shape: 'cylinder', bone: 'head', pos: [0.27, 0.12, 0.36], rot: [0, 0, 64], scale: [0.028, 0.3, 0.028], color: '#1b1d24', mirror: true }, // barbels
     ],
   },
+  // recipe skin: Scruff, a kid with dog DNA (tools/skins/examples/scruff.json). The rogue's tunic
+  // recoloured as a big dusky-purple sweater, the mage's bare head with a curly ink mop, floppy
+  // dog ears, cheek blush, a ribbed sweater collar and a fluffy tail with a lighter tip
+  skin_scruff: {
+    name: 'Scruff',
+    model: 'player',
+    idle: 'paws', // stands with both paws held up in front (Character idlePose)
+    gear: 'furPaws', // realistic furry paw boots and paw gloves (render/FurGear.js)
+    tint: null,
+    rarity: 'legendary',
+    price: 5000,
+    parts: { head: 'bot_c', hat: null, cape: null },
+    colors: {
+      skin: '#c98a5e',
+      hair: '#1b1d24',
+      eyes: '#3a2418',
+      shirt: '#463a58',
+      cloak: '#3a3048',
+      leather: '#2e2640',
+      pouch: '#b9a3d6',
+      metal: '#b9a3d6',
+      gloves: '#f4a3c4', // under the fur paw gloves
+      pants: '#2a2540',
+      boots: '#f4a3c4', // under the fur boots
+    },
+    addons: [
+      { shape: 'dome', bone: 'head', pos: [0, 0.44, -0.03], scale: [0.98, 0.8, 0.96], color: '#1b1d24' }, // curly mop
+      { shape: 'cone', bone: 'head', pos: [0.17, 0.62, 0.36], rot: [118, 0, -12], scale: [0.2, 0.24, 0.12], color: '#1b1d24', mirror: true }, // fringe curls
+      { shape: 'cone', bone: 'head', pos: [0, 0.66, 0.38], rot: [112, 0, 0], scale: [0.2, 0.26, 0.12], color: '#1b1d24' },
+      { shape: 'capsule', bone: 'head', pos: [0.47, 0.44, -0.04], rot: [0, 0, 18], scale: [0.34, 0.5, 0.52], color: '#f29ab8', mirror: true }, // floppy ears (pink)
+      { shape: 'sphere', bone: 'head', pos: [0.2, 0.17, 0.33], rot: [0, 22, 0], scale: [0.13, 0.065, 0.06], color: '#e88aa0', mirror: true }, // blush, pressed onto the cheeks
+      { shape: 'torus', bone: 'chest', pos: [0, 0.2, 0.01], scale: [0.52, 0.12, 0.46], tube: 0.32, color: '#2e2640' }, // sweater collar
+      { shape: 'capsule', bone: 'hips', pos: [0, 0.19, -0.46], rot: [-53, 0, 0], scale: [0.42, 0.46, 0.42], color: '#2a2228' }, // tail
+      { shape: 'sphere', bone: 'hips', pos: [0, 0.33, -0.64], scale: [0.24, 0.22, 0.24], color: '#3d3442' }, // tail tuft
+    ],
+  },
 };
 
 /**
@@ -78,6 +114,8 @@ export const PICKAXES = {
   pick_shadow: { name: 'Shadow Reaper', src: ['bot_b', '2H_Axe'], tint: 0x8a78c8, swing: ['2H_Melee_Attack_Spin', '2H_Melee_Attack_Chop'], rarity: 'legendary', price: 1800 },
   pick_paddle: { name: 'Pickleball Paddle', src: null, proc: 'paddle', tint: null, swing: ['1H_Melee_Attack_Slice_Horizontal', '1H_Melee_Attack_Slice_Diagonal'], rarity: 'rare', price: 700 },
   pick_mug: { name: 'Root Beer Float', src: ['bot_b', 'Mug'], tint: null, swing: ['Unarmed_Melee_Attack_Punch_A', 'Unarmed_Melee_Attack_Punch_B'], rarity: 'legendary', price: 1500 },
+  // Scruff set: a big fuzzy pink paw on a handle (src/render/PupGear.js), bopped pads-first
+  pick_paw: { name: 'Paw Pounder', src: null, proc: 'paw', tint: null, swing: ['1H_Melee_Attack_Chop', 'Unarmed_Melee_Attack_Punch_A'], rarity: 'epic', price: 2000 },
 };
 
 /**
@@ -97,6 +135,32 @@ export const BACKBLINGS = {
   bb_shield_spike: { name: 'Spike Shield', src: ['bot_a', 'Spike_Shield', 'back'], tint: null, rarity: 'epic', price: 1000 },
   bb_shield_badge: { name: 'Bentonville Badge', src: ['bot_a', 'Badge_Shield', 'back'], tint: null, rarity: 'rare', price: 800 },
   bb_spellbook: { name: 'Spellbook', src: ['bot_c', 'Spellbook', 'back'], tint: null, rarity: 'rare', price: 700 },
+  // Scruff set: a chubby rainbow gecko plush clinging to the back (proc: built in src/render/PupGear.js)
+  bb_gecko: { name: 'Sticky Buddy', src: null, proc: 'gecko', tint: null, rarity: 'epic', price: 1000 },
+};
+
+/**
+ * How you come down from the bus. canopy: colour of the classic canopy over the character;
+ * pose: no canopy, a body pose instead (Character.update): 'paws' belly-down with both paws held
+ * up in front, 'kick' belly-down with paws up and legs kicking behind, 'spin' upright with one
+ * knee up, twirling slowly.
+ */
+export const GLIDERS = {
+  gl_default: { name: 'Classic Canopy', canopy: null, rarity: 'common', price: 0 },
+  // Scruff set: dog-DNA powers, no glider needed
+  gl_paws: { name: 'Paws Up', pose: 'paws', rarity: 'epic', price: 1000 },
+  // legs kicking behind you, paws up, belly-down
+  gl_kick: { name: 'Puppy Kick', pose: 'kick', rarity: 'epic', price: 1200 },
+  // upright with one knee up, paws up, twirling slowly on the way down
+  gl_spin: { name: 'Tail Spin', pose: 'spin', rarity: 'rare', price: 800 },
+};
+
+/**
+ * Bundles: one purchase grants every item in `items` (the ones you don't own yet). Bought for its
+ * full price; refused when you already own them all (party/accounts.js 'buy').
+ */
+export const BUNDLES = {
+  bundle_scruff: { name: 'Femboy Jaithra Bundle', items: ['skin_scruff', 'pick_paw', 'bb_gecko', 'gl_paws'], rarity: 'legendary', price: 10000 },
 };
 
 /** clip: animation name; loop: keeps going until you move; hold: clip to loop after `clip` once;
@@ -127,13 +191,16 @@ for (const [id, s] of Object.entries(SKINS)) if (s.price > 0) PRICES[id] = s.pri
 for (const [id, e] of Object.entries(EMOTES)) if (e.price > 0) PRICES[id] = e.price;
 for (const [id, e] of Object.entries(PICKAXES)) if (e.price > 0) PRICES[id] = e.price;
 for (const [id, e] of Object.entries(BACKBLINGS)) if (e.price > 0) PRICES[id] = e.price;
+for (const [id, e] of Object.entries(GLIDERS)) if (e.price > 0) PRICES[id] = e.price;
+for (const [id, e] of Object.entries(BUNDLES)) PRICES[id] = e.price;
 
 /** Owned by every new account. */
-export const DEFAULT_OWNED = [SKINS, PICKAXES, BACKBLINGS, EMOTES].flatMap((t) => Object.keys(t).filter((k) => t[k].price === 0));
+export const DEFAULT_OWNED = [SKINS, PICKAXES, BACKBLINGS, GLIDERS, EMOTES].flatMap((t) => Object.keys(t).filter((k) => t[k].price === 0));
 export const DEFAULT_EQUIPPED = {
   skin: 'skin_rogue',
   pickaxe: 'pick_default',
   backbling: 'bb_outfit',
+  glider: 'gl_default',
   emotes: ['emote_cheer', 'emote_sit', null, null, null, null],
 };
 
@@ -142,14 +209,17 @@ export const SLOTS = {
   skin: { table: SKINS, prefix: 'skin_', label: 'Outfit' },
   backbling: { table: BACKBLINGS, prefix: 'bb_', label: 'Back Bling' },
   pickaxe: { table: PICKAXES, prefix: 'pick_', label: 'Pickaxe' },
+  glider: { table: GLIDERS, prefix: 'gl_', label: 'Glider' },
 };
 
-/** { kind: 'skin'|'pickaxe'|'backbling'|'emote', def } for any catalog id, else null. */
+/** { kind: 'skin'|'pickaxe'|'backbling'|'glider'|'bundle'|'emote', def } for any catalog id, else null. */
 export function cosmeticDef(id) {
   if (!id) return null;
   if (SKINS[id]) return { kind: 'skin', def: SKINS[id] };
   if (PICKAXES[id]) return { kind: 'pickaxe', def: PICKAXES[id] };
   if (BACKBLINGS[id]) return { kind: 'backbling', def: BACKBLINGS[id] };
+  if (GLIDERS[id]) return { kind: 'glider', def: GLIDERS[id] };
+  if (BUNDLES[id]) return { kind: 'bundle', def: BUNDLES[id] };
   if (EMOTES[id]) return { kind: 'emote', def: EMOTES[id] };
   return null;
 }
@@ -171,6 +241,10 @@ export function swingClips() {
 
 export function backblingDef(id) {
   return BACKBLINGS[id] || BACKBLINGS.bb_outfit;
+}
+
+export function gliderDef(id) {
+  return GLIDERS[id] || GLIDERS.gl_default;
 }
 
 /** Bot `id`'s pickaxe and back bling: picked from the id, so host and clients agree. */
@@ -197,7 +271,7 @@ export function emoteClips() {
 
 /** Daily shop rotation: `n` items picked by date (same for everyone that day). */
 export function featuredToday(n = 4, date = new Date()) {
-  const ids = Object.keys(PRICES);
+  const ids = Object.keys(PRICES).filter((id) => !BUNDLES[id]); // bundles have their own shop row
   let seed = date.getUTCFullYear() * 400 + date.getUTCMonth() * 31 + date.getUTCDate();
   const rnd = () => {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
@@ -209,17 +283,19 @@ export function featuredToday(n = 4, date = new Date()) {
   return out;
 }
 
-/** A loadout as one short string for the party lobby: "skin|pickaxe|backbling". */
+/** A loadout as one short string for the party lobby: "skin|pickaxe|backbling|glider". */
 export function lookString(eq = {}) {
-  return [eq.skin || DEFAULT_EQUIPPED.skin, eq.pickaxe || DEFAULT_EQUIPPED.pickaxe, eq.backbling || DEFAULT_EQUIPPED.backbling].join('|');
+  return [eq.skin || DEFAULT_EQUIPPED.skin, eq.pickaxe || DEFAULT_EQUIPPED.pickaxe, eq.backbling || DEFAULT_EQUIPPED.backbling, eq.glider || DEFAULT_EQUIPPED.glider].join('|');
 }
 
-/** lookString() back to { skin, pickaxe, backbling } (unknown parts fall back to defaults). */
+/** lookString() back to { skin, pickaxe, backbling, glider } (unknown or missing parts, as in
+ *  old three-part strings, fall back to defaults). */
 export function parseLook(s) {
-  const [skin, pickaxe, backbling] = String(s || '').split('|');
+  const [skin, pickaxe, backbling, glider] = String(s || '').split('|');
   return {
     skin: SKINS[skin] ? skin : DEFAULT_EQUIPPED.skin,
     pickaxe: PICKAXES[pickaxe] ? pickaxe : DEFAULT_EQUIPPED.pickaxe,
     backbling: BACKBLINGS[backbling] ? backbling : DEFAULT_EQUIPPED.backbling,
+    glider: GLIDERS[glider] ? glider : DEFAULT_EQUIPPED.glider,
   };
 }
