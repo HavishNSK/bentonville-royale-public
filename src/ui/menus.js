@@ -838,7 +838,6 @@ export function createMenus(root, opts = {}) {
     const waiting = v.members.filter((m) => !m.leader && !m.ready).length;
     if (v.isLeader) {
       if (waiting) return `Waiting for ${waiting} to ready up`;
-      if (others) return `${others} in this mode. Press PLAY to join them.`;
       return v.members.length > 1 ? 'Everyone is ready. Press PLAY.' : '';
     }
     const me = v.members.find((m) => m.you);
