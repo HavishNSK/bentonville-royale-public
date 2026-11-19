@@ -35,15 +35,15 @@ function cellUse(k) {
 const OLD_SKIN_PRICES = {
   skin_knight: 800, skin_barbarian: 800, skin_mage: 800, skin_rogue_ember: 1200, skin_mage_frost: 1200,
   skin_knight_gold: 1600, skin_barbarian_shadow: 2000, skin_rogue_moss: 1500, skin_knight_crimson: 1200,
-  skin_knight_midnight: 2000, skin_barbarian_frost: 1200, skin_barbarian_lava: 1600, skin_mage_rose: 1500,
-  skin_mage_void: 2000, skin_rogue_dusk: 1200,
+  skin_knight_midnight: 2000, skin_barbarian_lava: 1600, skin_mage_rose: 1500,
+  skin_mage_void: 2000,
 };
 const OLD_SKIN_LOOK = {
   skin_rogue: ['player', null], skin_knight: ['bot_a', null], skin_barbarian: ['bot_b', null], skin_mage: ['bot_c', null],
   skin_rogue_ember: ['player', 0xff8a7a], skin_mage_frost: ['bot_c', 0x9fe4ff], skin_knight_gold: ['bot_a', 0xffd36b],
   skin_barbarian_shadow: ['bot_b', 0x8a78c8], skin_rogue_moss: ['player', 0x9fe08a], skin_knight_crimson: ['bot_a', 0xff7f86],
-  skin_knight_midnight: ['bot_a', 0x7d86c9], skin_barbarian_frost: ['bot_b', 0xb4e8ff], skin_barbarian_lava: ['bot_b', 0xffa25a],
-  skin_mage_rose: ['bot_c', 0xffa8d6], skin_mage_void: ['bot_c', 0x8f7bd8], skin_rogue_dusk: ['player', 0xc9a2ff],
+  skin_barbarian_lava: ['bot_b', 0xffa25a], // skin_knight_midnight was restyled as a recipe (2026-11-19)
+  skin_mage_rose: ['bot_c', 0xffa8d6], skin_mage_void: ['bot_c', 0x8f7bd8],
 };
 
 test('every catalog skin validates against the recipe schema (no errors, no warnings)', () => {

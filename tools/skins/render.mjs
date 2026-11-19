@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const QA_LIB = path.join(ROOT, 'tools/qa/lib/browser.mjs');
@@ -70,7 +70,7 @@ async function plan(job) {
     } catch (e) {
       throw new Error(`${job.arg} is not valid JSON: ${e.message}`);
     }
-    const { encodeRecipe } = await import(path.join(ROOT, 'src/game/skinRecipe.js'));
+    const { encodeRecipe } = await import(pathToFileURL(path.join(ROOT, 'src/game/skinRecipe.js')).href);
     const base = path.basename(job.arg).replace(/\.json$/i, '').replace(/[^A-Za-z0-9_.-]/g, '_');
     return { query: 'recipe=' + encodeRecipe(obj), file: `recipe-${base}.png` };
   }
@@ -126,7 +126,7 @@ async function main() {
   if (!fs.existsSync(QA_LIB) || !fs.existsSync(path.join(ROOT, 'tools/qa/node_modules/playwright'))) {
     throw new Error('tools/qa is not set up: cd tools/qa && npm i && npx playwright install chromium');
   }
-  const { launchWithWebGL, attachDiagnostics, newSink } = await import(QA_LIB);
+  const { launchWithWebGL, attachDiagnostics, newSink } = await import(pathToFileURL(QA_LIB).href);
   fs.mkdirSync(o.out, { recursive: true });
 
   let server = null;

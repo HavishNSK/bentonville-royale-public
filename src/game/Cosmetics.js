@@ -24,12 +24,21 @@ export const SKINS = {
   skin_barbarian_shadow: { name: 'Shadow Barbarian', model: 'bot_b', tint: 0x8a78c8, rarity: 'legendary', price: 2000 },
   skin_rogue_moss: { name: 'Ozark Moss Rogue', model: 'player', tint: 0x9fe08a, rarity: 'epic', price: 1500 },
   skin_knight_crimson: { name: 'Crimson Crusader', model: 'bot_a', tint: 0xff7f86, rarity: 'rare', price: 1200 },
-  skin_knight_midnight: { name: 'Midnight Knight', model: 'bot_a', tint: 0x7d86c9, rarity: 'legendary', price: 2000 },
-  skin_barbarian_frost: { name: 'Frostbeard', model: 'bot_b', tint: 0xb4e8ff, rarity: 'rare', price: 1200 },
+  // a living shadow: vantablack armour, near-black cape, gunmetal trim and cold glowing eyes
+  skin_knight_midnight: {
+    name: 'Midnight Knight',
+    model: 'bot_a',
+    tint: null,
+    rarity: 'legendary',
+    price: 2000,
+    colors: {
+      armor: '#0b0c10', helmet: '#0b0c10', chainmail: '#121318', cape: '#07070a', leather: '#0e0f13', belt: '#0e0f13',
+      pants: '#0a0b0e', badge: '#16171d', trim: '#2b2f3a', metal: '#2b2f3a', skin: '#14151b', hair: '#07070a', eyes: '#bfd0ff',
+    },
+  },
   skin_barbarian_lava: { name: 'Lava Brute', model: 'bot_b', tint: 0xffa25a, rarity: 'epic', price: 1600 },
   skin_mage_rose: { name: 'Rose Mage', model: 'bot_c', tint: 0xffa8d6, rarity: 'epic', price: 1500 },
   skin_mage_void: { name: 'Void Mage', model: 'bot_c', tint: 0x8f7bd8, rarity: 'legendary', price: 2000 },
-  skin_rogue_dusk: { name: 'Dusk Runner', model: 'player', tint: 0xc9a2ff, rarity: 'rare', price: 1200 },
   // recipe skin: the reboot van's catfish colours (violet, cream, sun-gold, ink) on a kitbash
   // of the rogue's tunic, the mage's head and the barbarian's legs, with a finned cap and barbels
   skin_catfish_ken: {
@@ -102,8 +111,6 @@ export const SKINS = {
  */
 export const PICKAXES = {
   pick_default: { name: 'Default Pickaxe', src: null, tint: null, swing: ['2H_Melee_Attack_Chop'], rarity: 'common', price: 0 },
-  pick_frost: { name: 'Frostbite', src: null, tint: 0x9fe4ff, swing: ['2H_Melee_Attack_Chop'], rarity: 'uncommon', price: 500 },
-  pick_gilded: { name: 'Gilded Pick', src: null, tint: 0xffd36b, swing: ['2H_Melee_Attack_Chop', '2H_Melee_Attack_Slice'], rarity: 'rare', price: 800 },
   pick_hatchet: { name: 'Bus Loop Hatchet', src: ['bot_b', '1H_Axe'], tint: null, swing: ['1H_Melee_Attack_Chop', '1H_Melee_Attack_Slice_Diagonal'], rarity: 'uncommon', price: 500 },
   pick_dagger: { name: 'Back Alley Dagger', src: ['player', 'Knife'], tint: null, swing: ['1H_Melee_Attack_Stab', '1H_Melee_Attack_Slice_Horizontal'], rarity: 'uncommon', price: 500 },
   pick_wand: { name: 'Sparkle Wand', src: ['bot_c', '1H_Wand'], tint: null, swing: ['Spellcast_Shoot', '1H_Melee_Attack_Slice_Horizontal'], rarity: 'uncommon', price: 600 },
@@ -127,9 +134,7 @@ export const BACKBLINGS = {
   bb_outfit: { name: "Outfit's Own Cape", src: null, tint: null, rarity: 'common', price: 0 },
   bb_none: { name: 'No Back Bling', src: null, none: true, tint: null, rarity: 'common', price: 0 },
   bb_cape_rogue: { name: 'Rogue Cape', src: ['player', 'Rogue_Cape', 'cape'], tint: null, rarity: 'uncommon', price: 400 },
-  bb_cape_knight: { name: 'Knight Cape', src: ['bot_a', 'Knight_Cape', 'cape'], tint: null, rarity: 'uncommon', price: 400 },
   bb_cape_barbarian: { name: 'Fur Cape', src: ['bot_b', 'Barbarian_Cape', 'cape'], tint: null, rarity: 'uncommon', price: 400 },
-  bb_cape_mage: { name: 'Mage Mantle', src: ['bot_c', 'Mage_Cape', 'cape'], tint: null, rarity: 'uncommon', price: 400 },
   bb_cape_royal: { name: 'Sunset Cape', src: ['bot_a', 'Knight_Cape', 'cape'], tint: 0xffd36b, rarity: 'epic', price: 1000 },
   bb_shield_round: { name: 'Round Shield', src: ['bot_a', 'Round_Shield', 'back'], tint: null, rarity: 'rare', price: 700 },
   bb_shield_spike: { name: 'Spike Shield', src: ['bot_a', 'Spike_Shield', 'back'], tint: null, rarity: 'epic', price: 1000 },
@@ -287,6 +292,39 @@ export function emoteClips() {
     if (e.hold) out.add(e.hold);
   }
   return [...out];
+}
+
+/**
+ * Items taken out of the shop, with the price they sold for: the account server refunds owners
+ * once (party/accounts.js refundRetired) and drops them from their locker. Keep entries here so
+ * accounts that have not logged in since still get their coins back.
+ */
+export const RETIRED = Object.freeze({
+  skin_rogue_dusk: 1200, // Dusk Runner
+  skin_barbarian_frost: 1200, // Frostbeard
+  pick_gilded: 800, // Gilded Pick
+  pick_frost: 500, // Frostbite
+  bb_cape_knight: 400, // Knight Cape
+  bb_cape_mage: 400, // Mage Mantle
+});
+
+/**
+ * Refund every retired item (Cosmetics RETIRED) the account owns: coins back at the price it sold
+ * for, item out of the locker. Returns the coins refunded (0 when nothing changed). The account server
+ * runs it on every account load (party/accounts.js _acc) and saves the result, so each item is refunded exactly once.
+ */
+export function refundRetired(acc) {
+  if (!acc || !Array.isArray(acc.owned)) return 0;
+  let coins = 0;
+  const kept = [];
+  for (const id of acc.owned) {
+    if (Object.prototype.hasOwnProperty.call(RETIRED, id)) coins += RETIRED[id];
+    else kept.push(id);
+  }
+  if (kept.length === acc.owned.length) return 0;
+  acc.owned = kept;
+  acc.coins = (acc.coins | 0) + coins;
+  return coins;
 }
 
 /** Daily shop rotation: `n` items picked by date (same for everyone that day). */

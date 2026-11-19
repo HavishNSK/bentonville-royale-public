@@ -51,7 +51,7 @@
 // The shop catalog's prices are mirrored here (PRICES) so a client cannot buy for free.
 
 import { Server, getServerByName } from 'partyserver';
-import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, priceFor } from '../src/game/Cosmetics.js';
+import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, SKINS, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, refundRetired, priceFor } from '../src/game/Cosmetics.js';
 import { verifyGoogleIdToken } from './googleIdToken.js';
 import { applyMatchStats, openMatch, settleMatch } from './matchStats.js';
 import { boxStats, validateBoxResult, applyBoxResult, boxRateLimited, boxFlags } from './boxRating.js';
@@ -157,7 +157,7 @@ function json(body, status = 200) {
 function upgradeAccount(acc) {
   for (const id of DEFAULT_OWNED) if (!acc.owned.includes(id)) acc.owned.push(id);
   const eq = (acc.equipped = acc.equipped || {});
-  if (!eq.skin) eq.skin = DEFAULT_EQUIPPED.skin;
+  if (!eq.skin || !SKINS[eq.skin] || !acc.owned.includes(eq.skin)) eq.skin = DEFAULT_EQUIPPED.skin;
   if (!Array.isArray(eq.emotes)) eq.emotes = DEFAULT_EQUIPPED.emotes.slice();
   if (!PICKAXES[eq.pickaxe] || !acc.owned.includes(eq.pickaxe)) eq.pickaxe = DEFAULT_EQUIPPED.pickaxe;
   if (!BACKBLINGS[eq.backbling] || !acc.owned.includes(eq.backbling)) eq.backbling = DEFAULT_EQUIPPED.backbling;
@@ -229,7 +229,13 @@ export class Accounts extends Server {
   // ---------------------------------------------------------------- storage
 
   async _acc(lower) {
-    return lower ? (await this.ctx.storage.get('user:' + lower)) || null : null;
+    const acc = lower ? (await this.ctx.storage.get('user:' + lower)) || null : null;
+    // shop items that were taken out: refund the owner once and save it straight away
+    if (acc && refundRetired(acc) > 0) {
+      upgradeAccount(acc);
+      await this._save(acc);
+    }
+    return acc;
   }
 
   async _save(acc) {
