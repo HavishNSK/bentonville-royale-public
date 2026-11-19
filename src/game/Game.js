@@ -22,6 +22,7 @@
 // storm, bots, storm damage and the win check are left to the host.
 
 import * as THREE from 'three';
+import { boxBotNames } from '../core/botProfile.js';
 import { CAMERA, PLAYER, QUALITY, MATCH, DROP_ZONES, BOT_NAMES, WEAPONS, AMMO, STORM, MATERIALS, KNOCK, REBOOT, CONSUMABLES, isRankedMatch, makeRng, clamp, damp, TAU } from '../core/config.js';
 import { canSandboxLoadout, canCreativeMap, giveSandboxWeapon, sandboxBotStatus, spawnSandboxBot, clearSandboxBots, purgeSandboxBodies, setSandboxBotsHostile } from './sandboxLoadout.js';
 import { normalizeMode, assignTeams, teamCount, teamAlive, sameTeam, TEAM_CSS, TEAM_NOUN } from './Teams.js';
@@ -755,7 +756,8 @@ export class Game {
     // everyone is moved to their spawn by the first round start below
     const positions = Array.from({ length: botCount }, () => ({ x: c.x, y: layout.floorY, z: layout.rect.minZ + 2, heading: 0 }));
     try {
-      this.bots.spawn(botCount, rng, { names: botNames(botCount, rng), difficulty: this.settings.difficulty, positions, teams: botTeams, loadout: boxLoadout(), idBase });
+      // one shared profile for every bot on both teams (src/core/botProfile.js): Bot Alpha, Bot Bravo, ...
+      this.bots.spawn(botCount, rng, { names: boxBotNames(botCount), difficulty: this.settings.difficulty, positions, teams: botTeams, loadout: boxLoadout(), idBase });
     } catch (err) {
       this._error('bots.spawn', err);
     }

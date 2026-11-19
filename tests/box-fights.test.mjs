@@ -277,12 +277,12 @@ test('sideOfTeam', () => {
 });
 
 test('loadout ids are frozen and the whitelist rejects hostile input', () => {
-  assert.deepEqual([...BOX_LOADOUT_IDS], ['pump'], 'one kit for everyone');
+  assert.deepEqual([...BOX_LOADOUT_IDS], ['standard'], 'one kit for everyone');
   assert.ok(Object.isFrozen(BOX_LOADOUT_IDS));
   for (const id of BOX_LOADOUT_IDS) { assert.equal(boxLoadoutId(id), id); assert.equal(normalizeBoxLoadout(id), id); }
-  for (const bad of ['tactical', 'heavy', '__proto__', 'constructor', 'toString', 'PUMP', ' pump', null, undefined, 5, {}, [], ['pump']]) {
+  for (const bad of ['tactical', 'heavy', '__proto__', 'constructor', 'toString', 'STANDARD', ' standard', 'pump', null, undefined, 5, {}, [], ['standard']]) {
     assert.equal(boxLoadoutId(bad), null, String(bad));
-    assert.equal(normalizeBoxLoadout(bad), 'pump', String(bad));
+    assert.equal(normalizeBoxLoadout(bad), 'standard', String(bad));
   }
 });
 
@@ -310,16 +310,16 @@ test('every loadout preset is valid and fully accepted by Inventory', () => {
     for (const [k, n] of Object.entries(L.ammo)) assert.equal(inv.ammo[k], n, `${id} ${k}`);
     for (const m of MATERIALS) assert.equal(inv.mats[m], 500);
   }
-  assert.equal(BOX_LOADOUTS.pump.ammo.shells, 30);
-  assert.deepEqual(BOX_LOADOUTS.pump.items.map((it) => it.id), ['shotgun', 'rifle', 'smg', 'tonic', 'medkit']);
+  assert.equal(BOX_LOADOUTS.standard.ammo.shells, 30);
+  assert.deepEqual(BOX_LOADOUTS.standard.items.map((it) => it.id), ['shotgun', 'rifle', 'smg', 'tonic']);
   assert.equal(BOX_LOADOUTS.tactical, undefined);
   assert.equal(BOX_LOADOUTS.heavy, undefined);
 });
 
-test('boxLoadout returns fresh copies and defaults to pump', () => {
-  assert.deepEqual(boxLoadout(), boxLoadout('pump'));
-  assert.deepEqual(boxLoadout('nope'), boxLoadout('pump'));
-  assert.deepEqual(boxLoadout('__proto__'), boxLoadout('pump'));
+test('boxLoadout returns fresh copies and defaults to standard', () => {
+  assert.deepEqual(boxLoadout(), boxLoadout('standard'));
+  assert.deepEqual(boxLoadout('nope'), boxLoadout('standard'));
+  assert.deepEqual(boxLoadout('__proto__'), boxLoadout('standard'));
   for (const id of BOX_LOADOUT_IDS) {
     const a = boxLoadout(id);
     a.items[0].id = 'x'; a.ammo.shells = 1; a.mats.wood = 1;

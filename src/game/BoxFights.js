@@ -28,33 +28,30 @@ export const BOX_FIGHT = deepFreeze({
 
 const MAT_MAX = 500;
 const kit = (weapons, shells, extraAmmo) => ({
-  items: [
-    ...weapons,
-    { type: 'consumable', id: 'tonic', count: 2 },
-    { type: 'consumable', id: 'medkit', count: 2 },
-  ],
+  items: [...weapons, { type: 'consumable', id: 'tonic', count: 2 }],
   ammo: { shells, ...extraAmmo },
   mats: { wood: MAT_MAX, brick: MAT_MAX, metal: MAT_MAX },
   selected: 0,
 });
 const w = (id, rarity) => ({ type: 'weapon', id, rarity });
 
-// one kit for everyone (the id stays so stray / older values normalise to it)
-export const BOX_LOADOUT_IDS = Object.freeze(['pump']);
+// one kit for everyone, players and bots alike (src/core/botProfile.js loadout: 'standard'):
+// pump shotgun, assault rifle, SMG, 2 shield potions, 500 of each material
+export const BOX_LOADOUT_IDS = Object.freeze(['standard']);
 
 /** Loadout presets in Inventory.reset() shape. Deep-frozen; use boxLoadout() for a mutable copy. */
 export const BOX_LOADOUTS = deepFreeze({
-  pump: kit([w('shotgun', 'epic'), w('rifle', 'epic'), w('smg', 'rare')], 30, { medium: 180, light: 240 }),
+  standard: kit([w('shotgun', 'epic'), w('rifle', 'epic'), w('smg', 'rare')], 30, { medium: 180, light: 240 }),
 });
 
 /** The id if it is a known preset, else null. Whitelist lookup only: never indexes by the input. */
 export const boxLoadoutId = (v) => (typeof v === 'string' && BOX_LOADOUT_IDS.includes(v) ? v : null);
-export const normalizeBoxLoadout = (v) => boxLoadoutId(v) || 'pump';
+export const normalizeBoxLoadout = (v) => boxLoadoutId(v) || 'standard'; // incl. the old 'pump' id
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
-/** A fresh, mutable copy of a preset (unknown ids become 'pump'). */
-export function boxLoadout(id = 'pump') {
+/** A fresh, mutable copy of a preset (unknown ids become 'standard'). */
+export function boxLoadout(id = 'standard') {
   return clone(BOX_LOADOUTS[normalizeBoxLoadout(id)]);
 }
 

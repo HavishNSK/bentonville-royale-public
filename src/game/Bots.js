@@ -65,6 +65,7 @@ import {
   BOT_NAMES, DROP_ZONES, STORM, KNOCK, REBOOT, SWIM, angleDelta, clamp, weaponStats,
 } from '../core/config.js';
 import { sameTeam } from './Teams.js';
+import { botProfile, profileToDifficulty } from '../core/botProfile.js';
 import { PRESETS, simpleEditMask } from './Structures.js';
 import { busPosAt, jumpTimeFor } from './DropBus.js';
 import { route as roomRoute } from '../world/Interiors.js';
@@ -198,17 +199,22 @@ const COVER_ON_HIT = 0.35; // share of hit reactions (x diff.wallOnHit) that rai
 const TOWER_CHANCE = 0.4; // enemy above: tower up instead of a ramp rush
 const COVER_CHANCE = 0.25; // mid range, not hurt: a cover pocket instead of a wall / ramp
 
-// Box Fights (arena) tuning, layered over DIFFICULTY: the arena is small and every fight is a
-// build fight, so bots place pieces faster, ramp-rush at you more and turtle in a box less.
-// (buildRate: s per piece; boxFight: chance to box up; highGround: chance to ramp at a level target;
+// Box Fights (arena) tuning, layered over DIFFICULTY, then the shared bot profile on top
+// (src/core/botProfile.js: reaction, aim, build speed, push threshold, edits; every arena bot
+// uses its match's one preset). The arena is small and every fight is a build fight, so bots
+// ramp-rush at you more and turtle in a box less.
+// (boxFight: chance to box up; highGround: chance to ramp at a level target;
 // arenaPush: chance a healthy bot ramp-pushes at its target instead of boxing up, both when a
 // fight starts (_boxFight) and when shot (_wallOnHit))
 const ARENA_TUNE = {
-  easy: { buildRate: 0.3, buildCooldown: 3 },
-  normal: { buildRate: 0.18, buildCooldown: 1.2, buildChance: 0.9, highGround: 0.5, boxFight: 0.35, arenaPush: 0.55 },
-  hard: { buildRate: 0.12, buildCooldown: 0.3, highGround: 0.85, boxFight: 0.5, arenaPush: 0.7 },
+  easy: { buildCooldown: 3 },
+  normal: { buildCooldown: 1.2, buildChance: 0.9, highGround: 0.5, boxFight: 0.35, arenaPush: 0.55 },
+  hard: { buildCooldown: 0.3, highGround: 0.85, boxFight: 0.5, arenaPush: 0.7 },
 };
-const ARENA_DIFFICULTY = Object.fromEntries(Object.entries(DIFFICULTY).map(([k, d]) => [k, Object.freeze({ ...d, ...(ARENA_TUNE[k] || {}) })]));
+const ARENA_DIFFICULTY = Object.fromEntries(
+  Object.entries(DIFFICULTY).map(([k, d]) => [k, Object.freeze({ ...d, ...(ARENA_TUNE[k] || {}), ...profileToDifficulty(botProfile(k)) })])
+);
+const ARENA_TOO_CLOSE = 2.5; // m: arena bots only back off when this close (no backing off to rifle range)
 const ARENA_PUSH_HP = 100; // arena: shot with at least this much health + shield, ramp at them instead of boxing
 // arena juke: shot while standing still (boxed, trapping, holding a build): sidestep left / right
 const JUKE_HURT = 0.9; // s after the last hit the bot keeps juking
@@ -319,6 +325,14 @@ export class Bots {
     if (this.diffName) this.diff = this._diffTable()[this.diffName] || this.diff;
   }
 
+  /** Box Fights: every bot gets the profile's fixed caution / aggression (no per-bot rolls). */
+  _arenaPersonality(b) {
+    if (!this.arena) return;
+    const p = botProfile(b.diffName);
+    b.caution = p.caution;
+    b.aggression = p.aggression;
+  }
+
   /** DIFFICULTY, or its Box Fights variant (ARENA_TUNE) while an arena is set. */
   _diffTable() {
     return this.arena ? ARENA_DIFFICULTY : DIFFICULTY;
@@ -418,6 +432,7 @@ export class Bots {
       }
       const b = newBrain(actor, t, rng);
       b.diffName = this.diffName;
+      this._arenaPersonality(b);
       if (spot) {
         // fixed start (Box Fights): already on the ground, thinking right away
         b.state = 'wander';
@@ -589,6 +604,7 @@ export class Bots {
     }
     const b = newBrain(actor, { x, z }, this.rng);
     b.diffName = name;
+    this._arenaPersonality(b);
     b.sandbox = actor.sandbox;
     b.state = 'wander';
     b.launchAt = 0;
@@ -1463,7 +1479,8 @@ export class Bots {
     b.lastSeenZ = src.pos.z;
     const snap = (ang) => (Math.round(ang / (Math.PI / 2)) * Math.PI) / 2;
     const toward = Math.atan2(src.pos.x - bx.x, -(src.pos.z - bx.z));
-    if (a.health < BOX_FLEE_HEALTH) {
+    if (a.health < BOX_FLEE_HEALTH && !this.arena) {
+      // (Box Fights: no running away, always out toward them)
       this._leaveBox(b, snap(toward + Math.PI));
       b.retreatUntil = t + BOX_FLEE_TIME + this.rng() * 1.5;
       b.fleeUntil = b.retreatUntil;
@@ -2730,12 +2747,12 @@ export class Bots {
     const provoked = t - b.hurtAt < 6;
     let fight = false;
     if (target) {
-      if (armed) fight = provoked || b.state === 'engage' || dist < 20 + b.aggression * (this.diff.sight - 20) * 0.55;
+      if (armed) fight = !!this.arena || provoked || b.state === 'engage' || dist < 20 + b.aggression * (this.diff.sight - 20) * 0.55;
       else fight = dist < 6 && (provoked || !this._hasGun(target.inventory));
       // in the storm (or about to be): run for the circle, shooting back on the way (_act)
       if (urgent) fight = false;
       // badly hurt with heals in the bag: break off and patch up (cautious bots more often)
-      if (fight && !b.box && dist > 8 && a.health + a.shield < 45 && t > b.retreatUntil + 6 && this.rng() < 0.35 + b.caution * 0.5 &&
+      if (fight && !this.arena && !b.box && dist > 8 && a.health + a.shield < 45 && t > b.retreatUntil + 6 && this.rng() < 0.35 + b.caution * 0.5 &&
           (findConsumable(inv, 'medkit') >= 0 || findConsumable(inv, 'tonic') >= 0)) {
         b.retreatUntil = t + 3 + this.rng() * 2;
       }
@@ -2855,9 +2872,9 @@ export class Bots {
         let fw = 0;
         if (!b.targetVisible) fw = 1;
         else if (d > pref * 1.35) fw = 1;
-        else if (d < pref * 0.55) fw = -0.8;
+        else if (d < (this.arena ? ARENA_TOO_CLOSE : pref * 0.55)) fw = -0.8;
         // cracked shield / healing / reloading: push them (decided once per target window)
-        const weak = b.targetVisible && target && (target.health + target.shield < 75 || (target._bot && (target._bot.healing > 0 || target._bot.reloading > 0)));
+        const weak = b.targetVisible && target && (target.health + target.shield < (this.diff.pushHp ?? 75) || (target._bot && (target._bot.healing > 0 || target._bot.reloading > 0)));
         if (weak && t > (b.pushRollAt || 0)) {
           b.pushRollAt = t + 2.5;
           b.pushUntil = this.rng() < this.diff.pushWeak * (0.6 + b.aggression * 0.4) ? t + 2.5 : 0;
@@ -3680,6 +3697,7 @@ export class Bots {
     a.inventory.reset(loadout);
     const b = newBrain(a, { x, z }, this.rng);
     b.diffName = old.diffName;
+    this._arenaPersonality(b);
     b.sandbox = old.sandbox;
     b.state = 'wander';
     b.launchAt = 0;

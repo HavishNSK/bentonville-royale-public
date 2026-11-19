@@ -439,3 +439,32 @@ test('arena difficulty: faster building and less boxing than the battle royale t
   env.bots.setArena(null);
   assert.equal(env.bots.diff, DIFFICULTY.hard, 'back to the normal table off the arena');
 });
+
+test('arena: a badly hurt bot under fire never retreats or backs away from the shooter', () => {
+  for (const difficulty of ['normal', 'hard']) {
+    for (const seed of [1, 2, 3, 4]) {
+      const env = makeArena(seed);
+      env.bots.setArena(LAYOUT);
+      const [bot] = env.bots.spawn(1, env.rng, { positions: [{ x: -224, y: FLOOR, z: 170, heading: Math.PI }], teams: [2], loadout: loadout(), difficulty, idBase: 1 });
+      const me = { id: 99, team: 1, isBot: false, pos: new THREE.Vector3(-224, FLOOR, 184), vel: new THREE.Vector3(), grounded: true, alive: true, downed: false, health: 100, shield: 100, invulnerable: true, heading: 0, pitch: 0 };
+      env.combat.actors.push(me);
+      env.combat.onDamage = (t, a, info) => env.bots.notifyDamage(t, a, info);
+      const start = Math.hypot(bot.pos.x - me.pos.x, bot.pos.z - me.pos.z);
+      let far = 0;
+      const states = new Set();
+      for (let i = 0; i < 15 * 30; i++) {
+        env.bots.update(1 / 30, { player: me, storm, humans: [me] });
+        if (env.structures.update) env.structures.update(1 / 30);
+        if (i % 9 === 0) {
+          env.combat.applyDamage(bot, 3, { source: me });
+          bot.health = 25; // badly hurt the whole time, shield gone
+          bot.shield = 0;
+        }
+        states.add(bot._bot.state);
+        far = Math.max(far, Math.hypot(bot.pos.x - me.pos.x, bot.pos.z - me.pos.z));
+      }
+      assert.ok(!states.has('retreat'), `${difficulty} seed ${seed}: retreated (${[...states]})`);
+      assert.ok(far <= start + 3, `${difficulty} seed ${seed}: backed off to ${far.toFixed(1)} m from ${start.toFixed(1)} m`);
+    }
+  }
+});
