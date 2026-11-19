@@ -133,8 +133,8 @@ For future gameplay changes, add targeted unit/integration coverage and critical
 ### Releasing an update
 
 1. Add an entry at the top of `src/data/patchNotes.js` and bump `version` in `package.json` and `package-lock.json` to match.
-2. For a flyer, set `FLYER.version` in `src/data/updateFlyer.js` to that version and update its copy. Put its images in `public/ui/news/`: in-game captures with the HUD hidden, JPEG screenshots and transparent PNG item renders, about 600 KB total. Every player sees the flyer once, the first time the title screen shows after the update.
-3. Run `npm test` (`tests/update-flyer.test.mjs` checks the versions match and every image exists) and `npm run build`.
+2. For a flyer, set `FLYER.version` in `src/data/updateFlyer.js` to that version and update its copy. Its images in `public/ui/news/` (JPEG scene captures with the HUD hidden, transparent PNG item renders) are produced headlessly from a shot list: write `tools/flyer/shots/<version>.mjs`, run `node tools/flyer/capture.mjs`, then check the result with `node tools/flyer/preview.mjs`. The full workflow is in [tools/flyer/README.md](tools/flyer/README.md). Every player sees the flyer once, the first time the title screen shows after the update.
+3. Run `npm test` (`tests/update-flyer.test.mjs` and `tests/flyer-assets.test.mjs` check the versions, that every image exists within its size budget with alt text, and that the shot list covers every image) and `npm run build`.
 
 ## Repository Structure
 
@@ -153,6 +153,7 @@ bentonville-royale/
 ├── public/data/            # Processed map and supplemental data
 ├── scripts/                # Optional map-data generation tools
 ├── tools/qa/               # Standalone Playwright smoke harness
+├── tools/flyer/            # Update-flyer image capture (shot lists) and flyer preview
 ├── tools/skins/            # Outfit recipe tools: skin lab renderer, atlas swatch lister
 ├── credits/                # Asset and data provenance
 ├── agents/                 # Historical contracts and handoff reports

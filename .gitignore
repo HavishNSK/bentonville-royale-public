@@ -5,6 +5,7 @@ _dl
 data-raw
 tools/qa/node_modules
 tools/qa/out
+tools/flyer/out
 .DS_Store
 .env
 .env.*
