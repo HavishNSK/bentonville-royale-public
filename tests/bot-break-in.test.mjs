@@ -94,3 +94,23 @@ test('no mats, enemy in plain sight 25 m off but not shooting: it farms (then it
   const m = bot.inventory.mats;
   assert.ok(m.wood + m.brick + m.metal > 0, 'has mats now');
 });
+
+test('farming is spread over time: ~80-mat sessions with rests in between, not one burst', () => {
+  const { world, bots, bot, b, player } = sim('normal');
+  // trees all over, like the real map (one every ~14 m)
+  for (let x = -150; x <= 150; x += 14) for (let z = -150; z <= 150; z += 14) world.addCircle(x + 5, z + 3, 0.6, 6, 'tree', 'wood', 2000, []);
+  player.pos.set(180, 0, 180); // nobody around
+  player.alive = false;
+  const total = () => { const m = bot.inventory.mats; return m.wood + m.brick + m.metal; };
+  const at = [];
+  for (let s = 0; s < 90; s++) {
+    for (let i = 0; i < 60; i++) bots.update(1 / 60, { player });
+    at.push(total());
+  }
+  // the first session stops around FARM_SESSION, well short of everything at once
+  const firstStop = at.findIndex((v, i) => i > 0 && v > 0 && at[i + 5] === v);
+  assert.ok(firstStop > 0, `a session ended: ${at.join(',')}`);
+  assert.ok(at[firstStop] >= 60 && at[firstStop] <= 120, `first session gathered ${at[firstStop]}`);
+  // and later it farms again (mats keep growing over the minute and a half)
+  assert.ok(at[at.length - 1] > at[firstStop] + 40, `more later: ${at[firstStop]} -> ${at[at.length - 1]}`);
+});

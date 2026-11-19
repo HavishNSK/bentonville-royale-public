@@ -48,7 +48,7 @@ test('a spawned bot stands on open ground 25 m (+-1) in front of the player, arm
   assert.equal(bot.gliding, false);
   const cur = bot.inventory.current();
   assert.ok(cur && cur.type === 'weapon', 'gun in hand');
-  assert.equal(bot.inventory.mats.wood, 0, 'no free mats: it farms its own');
+  assert.ok(bot.infiniteMats && bot.inventory.mats.wood >= 999, 'Sandbox: infinite mats, like the player');
   assert.equal(bot.damageScale, DIFFICULTY.normal.damageScale);
   assert.equal(sandboxBotLoadout('easy').items.length, 2, 'easy: rifle + medkit');
 });

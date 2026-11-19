@@ -1,5 +1,5 @@
 // BENTONVILLE ROYALE — sandbox gun picker. Menu-only; never used in a match.
-import { WEAPON_IDS, WEAPONS, AMMO, CONSUMABLES, weaponRarities, clampWeaponRarity } from '../core/config.js';
+import { WEAPON_IDS, WEAPONS, AMMO, CONSUMABLES, PLAYER, MATERIALS, weaponRarities, clampWeaponRarity } from '../core/config.js';
 
 export function canSandboxLoadout(game) {
   return !!(game && game.freeBuild && (game.state === 'play' || game.state === 'over'));
@@ -123,7 +123,7 @@ export function sandboxBotStatus(game) {
   return { count, cap: SANDBOX_BOT_CAP, canSpawn: !reason, reason, bodies, hostile: !!(game && game.sandboxBotsHostile) };
 }
 
-/** A basic loadout for a sandbox bot of difficulty `d`: a rifle (+ a shotgun above easy), ammo, a medkit. No mats: it farms. */
+/** A basic loadout for a sandbox bot of difficulty `d`: a rifle (+ a shotgun above easy), ammo, a medkit. Mats: infinite (spawnSandboxBot). */
 export function sandboxBotLoadout(d) {
   const rarity = d === 'hard' ? 'epic' : d === 'normal' ? 'rare' : 'common';
   const items = [{ type: 'weapon', id: 'rifle', rarity, mag: WEAPONS.rifle.mag }];
@@ -132,7 +132,7 @@ export function sandboxBotLoadout(d) {
   return {
     items,
     ammo: { medium: 240, shells: 30 },
-    mats: {}, // none: like any bot (and the player in a match) they farm their own
+    mats: {}, // topped up to the cap while it lives (bot.infiniteMats, like the player in Sandbox)
     selected: 0,
   };
 }
@@ -176,7 +176,11 @@ export function spawnSandboxBot(game, d) {
     heading: Math.atan2(p.pos.x - x, -(p.pos.z - z)),
     sandbox: true,
   });
-  if (bot) bot.sandboxSeq = game._sandboxBotSeq;
+  if (bot) {
+    bot.sandboxSeq = game._sandboxBotSeq;
+    bot.infiniteMats = true; // Sandbox: build freely, like the player (Bots tops it up)
+    for (const m of MATERIALS) bot.inventory.mats[m] = PLAYER.matCap;
+  }
   return { bot, reason: null };
 }
 

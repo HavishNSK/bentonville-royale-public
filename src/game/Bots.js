@@ -104,12 +104,17 @@ const GRUDGE_REFRESH = { easy: 3, normal: 2, hard: 1 };
 const TOWER_LEVELS = 4; // ramps (each: the ramp + a wall on its far edge), mats permitting
 const TOWER_MIN = 3;
 // Bots get their materials like a player: nothing on landing, then harvesting and loot.
-const HARVEST_LOW = 60; // total mats under this: harvesting comes before looting
+// Farming is spread over the match: short sessions (FARM_SESSION mats), then a rest
+// (FARM_REST s) doing other things, so a bot's mats build up as the game goes on.
+const HARVEST_LOW = 150; // total mats under this: harvesting comes before looting (and mid-fight farming starts)
+const FARM_SESSION = 80; // mats one farming session gathers before the bot moves on
+const FARM_REST = 30; // s (+-30 %) between sessions
+const HARVEST_EMERGENCY = 30; // under this a bot may farm again at once (it can barely build)
 const HARVEST_SCAN = 30; // m: how far around a low bot looks for something to harvest (trees, rocks, a building wall)
 const FARM_FIGHT_DIST = 35; // m: out of mats, a bot farms mid-fight while the enemy is out of sight or this far
 const FARM_CALM = 3; // s unshot ...
 const FARM_SAFE = 6; // ... with the enemy farther than this (m): farm too
-const FARM_TARGET = 100; // mats a bot that started farming mid-fight keeps going to
+const HARVEST_MAX = 500; // a bot stops harvesting at this many mats in all
 const TOWER_NEAR = 20; // m: closer fights are boxed / trapped instead
 const TOWER_FAR = 120;
 const TOWER_CLOSE = 10; // m: an enemy this close ends a tower (fight it instead)
@@ -1838,8 +1843,9 @@ export class Bots {
       if (!fight && !b.targetVisible) b.target = null;
     }
     const mate = this._downedMate(b, all);
-    if (mate && !urgent) state = 'revive';
     // out of mats mid-fight with them out of sight or far off: farm what is near, then back to it
+    this._farmSessionCheck(b);
+    if (mate && !urgent) state = 'revive';
     else if (fight && this._farmMidFight(b, dist) && ((b.harvest && b.harvest.alive && t < b.harvestUntil) || this._pickHarvest(b))) state = 'harvest';
     else if (fight) state = 'engage';
     else if (urgent) state = 'rotate';
@@ -2858,11 +2864,9 @@ export class Bots {
   _farmMidFight(b, dist) {
     const a = b.actor;
     if (b.box || b.trap || !a.grounded) return false;
-    // starts under HARVEST_LOW; once farming, goes on to FARM_TARGET (a few walls' worth, not 20)
-    const m = a.inventory.mats;
-    const total = (m.wood || 0) + (m.brick || 0) + (m.metal || 0);
-    const farming = b.state === 'harvest' && b.harvest && b.harvest.alive;
-    if (!(total < HARVEST_LOW || (farming && total < FARM_TARGET))) return false;
+    // starts under HARVEST_LOW (and not resting between sessions); a session runs to its goal
+    const total = this._matTotal(a);
+    if (!(b.farmGoal > 0 && total < b.farmGoal) && !(total < HARVEST_LOW && !this._farmResting(b, total))) return false;
     const calm = this.time - (b.hurtAt ?? -Infinity) > FARM_CALM;
     return !b.targetVisible || dist > FARM_FIGHT_DIST || (calm && dist > FARM_SAFE);
   }
@@ -2896,6 +2900,24 @@ export class Bots {
     return best;
   }
 
+  _matTotal(a) {
+    const m = a.inventory && a.inventory.mats;
+    return m ? (m.wood || 0) + (m.brick || 0) + (m.metal || 0) : 0;
+  }
+
+  /** Between farming sessions (unless nearly out of mats). */
+  _farmResting(b, total) {
+    return this.time < (b.farmRestUntil || 0) && total >= HARVEST_EMERGENCY;
+  }
+
+  /** A farming session that reached its goal ends: drop the target and rest a while. */
+  _farmSessionCheck(b) {
+    if (!(b.farmGoal > 0) || this._matTotal(b.actor) < b.farmGoal) return;
+    b.farmGoal = 0;
+    b.harvest = null;
+    b.farmRestUntil = this.time + FARM_REST * (0.7 + this.rng() * 0.6);
+  }
+
   /** Total build mats under HARVEST_LOW. */
   _lowMats(a) {
     const m = a.inventory && a.inventory.mats;
@@ -2905,8 +2927,11 @@ export class Bots {
   _pickHarvest(b) {
     const a = b.actor;
     const m = a.inventory.mats;
-    if (m.wood + m.brick + m.metal >= 300 || !this.combat) return false;
+    const total = m.wood + m.brick + m.metal;
+    if (total >= HARVEST_MAX || !this.combat) return false;
     if (this.time < b.harvestCooldown) return false;
+    const inSession = b.farmGoal > 0 && total < b.farmGoal;
+    if (!inSession && this._farmResting(b, total)) return false;
     const low = this._lowMats(a);
     // something harvestable ahead; a bot low on mats looks all around, further, for the nearest
     let c = null;
@@ -2931,7 +2956,9 @@ export class Bots {
     }
     b.harvest = c;
     b.harvestUntil = this.time + 7;
-    b.harvestCooldown = this.time + (low ? 3 : 10);
+    // in a session: on to the next tree / wall right away; a new session: set its goal
+    b.harvestCooldown = this.time + (inSession || low ? 0.5 : 10);
+    if (!inSession) b.farmGoal = Math.min(HARVEST_MAX, total + FARM_SESSION);
     return true;
   }
 
@@ -3737,6 +3764,8 @@ export class Bots {
     b.bloom = Math.max(0, b.bloom - dt * 0.08);
     const inv = a.inventory;
 
+    // Sandbox bots: infinite mats (kept at the cap, like the player there)
+    if (a.infiniteMats && inv.mats) for (const m of MATERIALS) if (inv.mats[m] < PLAYER.matCap) inv.mats[m] = PLAYER.matCap;
     if (b.bqI < b.bqN) this._buildStep(b);
     if (b.box) this._boxTick(b);
     else this._enclosureCheck(b);
