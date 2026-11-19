@@ -1150,7 +1150,14 @@ export function addFurnishingGeometry(chunk,shell,h,{quad,floorAt}) {
   if (!plan) return;
   const ctx = {chunk,F:plan.frame,h,quad,floorAt,n:0};
   for (const p of plan.furniture || []) prop(ctx,shell,p);
-  for (const s of plan.signs || []) plaque(chunk,shell,s,h,quad);
+  for (const s of plan.signs || []) {
+    const i0 = chunk.buf ? chunk.buf.idx.length : 0;
+    plaque(chunk,shell,s,h,quad);
+    // a room sign hangs on its door's lintel: it goes when the lintel breaks
+    const lintel = (plan.panels || []).find(pn => pn.kind === 'lintel' && pn.level === s.level && pn.e === undefined &&
+      Math.hypot(pn.x - s.x, pn.z - s.z) < 0.3 && s.y > pn.y0 && s.y < pn.y1 + 0.2);
+    if (lintel && chunk.panelRanges && chunk.buf) chunk.panelRanges.push(lintel, i0, chunk.buf.idx.length - i0);
+  }
 }
 
 const UP = Object.freeze([0,1,0]);

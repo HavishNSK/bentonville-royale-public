@@ -33,10 +33,11 @@
 //   burst gun (a multiplayer client forwards it to the host like a trigger pull).
 //
 // Building wall panels (World.panelHit / breakPanel, src/world/Interiors.js):
-// - a pickaxe swing that hits a panel damages it by PICKAXE.harvest and yields
-//   PICKAXE.yield[panel.mat] exactly like a tree; bullets do BUILDING_WALL.bulletMult x
-//   damage and yield nothing. Only panels break (floors, slabs, stairs, roofs never do),
-//   and the building collider itself is never removed.
+// - a pickaxe swing that hits a panel damages it by PICKAXE.harvest and yields mats of the
+//   panel's material: BUILDING_WALL.yield for a wall or roof panel of an enterable building
+//   (outer, inner, lintel, roof), PICKAXE.yield[mat] for a floor tile or a solid block; bullets
+//   do BUILDING_WALL.bulletMult x damage and yield nothing (nor do explosions). Only panels
+//   break (slabs outside floor tiles and stairs never do); the building collider stays.
 // - `damagePanel` is authoritative-only; `breakPanel(c, panel, point)` hides the panel and
 //   plays the break effect (a multiplayer client calls it for the host's `wx` event).
 // - Hooks: onPanelDamage(c, panel, info) while hp > 0, onPanelBreak(c, panel, info) on
@@ -403,6 +404,8 @@ export class Combat {
         this.vehicles.damage(res.hit.car, dmg, { source: this._shooter || null, weapon: w.id }, res.hit.part, res.hit.idx);
       } else if (c && res.hit.kind === 'piece' && this.structures) {
         this.structures.damage(c, dmg, _pt);
+      } else if (c && c.pump && this.pumps) {
+        this.pumps.damage(c.pump, dmg, { source: this._shooter || null, weapon: w.id }); // gas pump (GasPumps.js)
       } else if (res.hit.panel) {
         this.damagePanel(c, res.hit.panel, dmg * BUILDING_WALL.bulletMult, _pt); // no mats from bullets
       } else if (this._isHarvestable(c) || this._isBreakable(c)) {
@@ -665,6 +668,14 @@ export class Combat {
 
     let c = hitCopy && hitCopy.collider;
     let point = hitCopy ? _pt.set(hitCopy.x, hitCopy.y, hitCopy.z) : null;
+    // a gas pump: dents it like a car (GasPumps.js), no materials
+    if (c && c.pump && this.pumps) {
+      if (this.authoritative) this.pumps.damage(c.pump, CAR.pickaxeDamage, { source: shooter, weapon: 'pickaxe' });
+      if (this.fx) this.fx.impact(point, _n.set(hitCopy.nx, hitCopy.ny, hitCopy.nz), 'metal');
+      if (this.sfx) this.sfx.play('hit_metal', { x: point.x, y: point.y, z: point.z });
+      out.pump = c.pump;
+      return out;
+    }
     if (c && hitCopy.kind === 'piece' && this.structures) {
       if (this.authoritative) this.structures.damage(c, PICKAXE.harvest, point);
       if (this.fx) this.fx.harvestHit(point, c.mat || 'wood', false);
@@ -735,10 +746,12 @@ export class Combat {
     return out;
   }
 
-  /** Pickaxe hit on a building wall panel: harvested like a tree (PICKAXE.harvest hp, PICKAXE.yield mats). */
+  /** Pickaxe hit on a building panel: PICKAXE.harvest hp off it, mats as in the header (BUILDING_WALL.yield for walls / roofs). */
   _swingPanel(shooter, c, pn, point, out) {
     const mat = pn.mat === 'brick' || pn.mat === 'metal' ? pn.mat : 'wood';
-    out.harvested = { mat, count: PICKAXE.yield[mat] };
+    // walls and roofs of enterable buildings give BUILDING_WALL.yield; floor tiles / solid blocks as before
+    const count = pn.kind === 'floor' || pn.kind === 'block' ? PICKAXE.yield[mat] : BUILDING_WALL.yield;
+    out.harvested = { mat, count };
     out.collider = pn; // { hp, maxHp, alive }: what the HUD object bar reads
     out.building = c;
     out.panel = pn;

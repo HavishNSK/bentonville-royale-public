@@ -335,7 +335,11 @@ export const PICKAXE = {
 // floorHp: each breakable floor / ceiling tile between storeys (interiors/floorTiles.js).
 // roofHp: each breakable roof tile (interiors/shellPanels.js). A solid (non-enterable)
 // building breaks as one block with hp[mat] x a size factor (World.finishBuildings).
-export const BUILDING_WALL = { hp: { wood: 300, brick: 450, metal: 600 }, innerHp: 150, floorHp: 200, roofHp: 300, panelW: 4, bulletMult: 0.5 };
+// lintels: the wall over a door (outer: building material + hp[mat]; interior: wood + innerHp).
+// yield: mats per pickaxe swing on any wall or roof panel of an enterable building (outer,
+// inner, lintel, roof incl. its rim), of the panel's material; floor tiles and solid blocks keep
+// PICKAXE.yield. Bullets and explosions break panels but grant no mats.
+export const BUILDING_WALL = { hp: { wood: 300, brick: 450, metal: 600 }, innerHp: 150, floorHp: 200, roofHp: 300, panelW: 4, bulletMult: 0.5, yield: 10 };
 
 export const MATERIALS = ['wood', 'brick', 'metal'];
 export const MATERIAL_COLOR = { wood: 0xb9803f, brick: 0xb5533c, metal: 0x8d99a6 };

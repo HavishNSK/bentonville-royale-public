@@ -365,6 +365,11 @@ export function addRoofGeometry(chunk, shell, h, api, styles = LANDMARK_STYLE) {
     const id = g.ids[i * g.nb + j];
     if (id < 0) continue;
     const pn = plan.panels[id];
+    const C = cell(i, j);
+    if (pn.clip || Math.abs(C.a0 - pn.a0) > 1e-4 || Math.abs(C.b0 - pn.b0) > 1e-4) {
+      addClippedRoofCell(chunk, quad, cap, W, g, i, j, C, pn, O, I, yT, yU, hex, ceiling, edge, F, h);
+      continue;
+    }
     const { a0, b0, a1, b1 } = pn;
     const i0 = chunk.buf.idx.length;
     quad(chunk, W(a0, b0, yT), W(a1, b0, yT), W(a1, b1, yT), W(a0, b1, yT), 0, 1, 0, rr, rg, rb, null, h);
@@ -400,6 +405,46 @@ export function addRoofGeometry(chunk, shell, h, api, styles = LANDMARK_STYLE) {
       quad(chunk, W(A[0], A[1], yU), W(B[0], B[1], yU), W(B[0], B[1], yT), W(A[0], A[1], yT), n[0] * sg, 0, n[1] * sg, ...edge, null, h);
     }
   }
+}
+
+/**
+ * One roof grid cell the footprint only partly covers (a clipped roof tile, or a sliver joined to
+ * a neighbouring tile; interiors/shellPanels.js), in its tile's panel range: the roof top over the
+ * cell clipped to the footprint, the ceiling under it (clipped to the inner face) and the cut
+ * faces toward neighbouring tiles. The rim's outer face along the footprint edges is drawn by
+ * WorldMeshes.addShell, in the same tile's range. A cut face toward a cell with no tile is drawn
+ * outside the range (it shows once this tile breaks).
+ */
+function addClippedRoofCell(chunk, quad, cap, W, g, i, j, C, pn, O, I, yT, yU, hex, ceiling, edge, F, h) {
+  const id = pn.id;
+  const idAt = (ii, jj) => (ii >= 0 && jj >= 0 && ii < g.na && jj < g.nb ? g.ids[ii * g.nb + jj] : -1);
+  const i0 = chunk.buf.idx.length;
+  cap(O, C, yT, hex, 1, 1);
+  cap(I, C, yU, ceiling, -1, 1); // wound down, lit as up: a bright painted ceiling
+  const cp = clipRect(O, C.a0, C.b0, C.a1, C.b1);
+  const m = cp.length >> 1;
+  const later = [];
+  const eps = 1e-4;
+  for (let k = 0; k < m; k++) {
+    const l = (k + 1) % m;
+    const pa = cp[k * 2], pb = cp[k * 2 + 1], qa = cp[l * 2], qb = cp[l * 2 + 1];
+    if (Math.abs(pa - qa) < eps && Math.abs(pb - qb) < eps) continue;
+    // which cell side the edge lies on (a cut face toward that neighbour), or none (footprint edge)
+    let side = null;
+    if (Math.abs(pa - C.a0) < eps && Math.abs(qa - C.a0) < eps) side = [i - 1, j, F.ux, F.uz, -1];
+    else if (Math.abs(pa - C.a1) < eps && Math.abs(qa - C.a1) < eps) side = [i + 1, j, F.ux, F.uz, 1];
+    else if (Math.abs(pb - C.b0) < eps && Math.abs(qb - C.b0) < eps) side = [i, j - 1, F.vx, F.vz, -1];
+    else if (Math.abs(pb - C.b1) < eps && Math.abs(qb - C.b1) < eps) side = [i, j + 1, F.vx, F.vz, 1];
+    if (!side) continue;
+    const [ni, nj, nx, nz, sg] = side;
+    const nid = idAt(ni, nj);
+    if (nid === id) continue; // the same tile on both sides (a joined sliver)
+    const face = [W(pa, pb, yU), W(qa, qb, yU), W(qa, qb, yT), W(pa, pb, yT)];
+    if (nid >= 0) quad(chunk, ...face, nx * sg, 0, nz * sg, ...edge, null, h);
+    else later.push([face, -nx * sg, -nz * sg]);
+  }
+  chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
+  for (const [face, nx, nz] of later) quad(chunk, ...face, nx, 0, nz, ...edge, null, h);
 }
 
 /**
@@ -553,12 +598,13 @@ export function addInteriorGeometry(chunk, shell, h, api, styles = LANDMARK_STYL
             quad(chunk, A(s * tb, y1 - TOP_BAND), B(s * tb, y1 - TOP_BAND), B(s * tb, y1), A(s * tb, y1), nx, 0, nz, lr, lg, lb, null, h);
           }
         }
-        const pn = meta.panel >= 0 ? plan.panels[meta.panel] : null;
-        if (pn) chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
       } else {
         // lintel underside
         quad(chunk, A(-1, y0), B(-1, y0), B(1, y0), A(1, y0), 0, -1, 0, mr, mg, mb, null, h);
       }
+      // a solid run or a lintel (both breakable panels): its quads blank together
+      const pn = meta.panel >= 0 ? plan.panels[meta.panel] : null;
+      if (pn) chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
     }
   }
   addStairGeometry(chunk,shell,h,api);

@@ -58,6 +58,12 @@ const GROUND_STEP = 2;
 // Outer wall thickness (m). Collision walls are capsules of radius SHELL_T / 2
 // running along the footprint offset inward by SHELL_T / 2.
 const SHELL_T = 0.4;
+// A ray meeting the roof rim (outer face above the top ceiling) looks this far (m, horizontally)
+// past the face for the roof tile it belongs to.
+const RIM_NUDGE = 0.05;
+
+/** Panels laid along a footprint edge (e, f0, f1): outer walls and the walls over outer doors. */
+const isEdgePanel = (pn) => pn.kind === 'outer' || (pn.kind === 'lintel' && pn.e !== undefined);
 // Door opening: clear width (m) along the wall and height (m) above the floor.
 // PLAYER.radius is 0.42, so 1.8 m leaves ~0.5 m of slack on each side.
 const DOOR_W = 1.8;
@@ -602,7 +608,7 @@ export class World {
     s.dead = 0; // number of broken panels
     s.edgePanels = [];
     for (const pn of s.panels) {
-      if (pn.kind !== 'outer') continue;
+      if (!isEdgePanel(pn)) continue; // outer panels and the walls over the outer doors
       (s.edgePanels[pn.e] || (s.edgePanels[pn.e] = [])).push(pn);
     }
     // per level: 1 = wall entry solid (lintels always 1, a wall entry follows its panel)
@@ -643,7 +649,9 @@ export class World {
    * builds, split at panel boundaries; a broken panel leaves an opening like a door).
    *   segs      ground-storey panels (block a body whose feet are below the ground ceiling)
    *   upSegs    upper-storey panels, stride 6: ax, az, bx, bz, y0, y1 (block within y0..y1)
+   *   lintels   the alive walls over the outer doors (kind 'lintel' panels with an edge)
    *   overHoles broken top-storey panels: the roof rim above still blocks a head above the ceiling
+   *             (unless that rim's roof tile is broken too, see _shellPush)
    */
   _rebuildShellSegs(c) {
     const s = c.shell;
@@ -653,9 +661,17 @@ export class World {
     const segs = [];
     const up = [];
     const over = [];
+    const lintels = [];
+    let hasLintels = false;
     const topLevel = s.plan ? s.plan.levels.length - 1 : 0;
     for (const pn of s.panels) {
-      if (pn.kind !== 'outer') continue;
+      if (!isEdgePanel(pn)) continue;
+      if (pn.kind === 'lintel') {
+        hasLintels = true;
+        if (pn.alive) lintels.push(pn.ax, pn.az, pn.bx, pn.bz);
+        else if (topLevel === 0) over.push(pn.ax, pn.az, pn.bx, pn.bz);
+        continue;
+      }
       const i = pn.e;
       const k = (i + 1) % n;
       const ax = mid[i * 2];
@@ -690,6 +706,7 @@ export class World {
     s.segs = new Float32Array(segs);
     s.upSegs = new Float32Array(up);
     s.overHoles = new Float32Array(over);
+    if (hasLintels) s.lintels = new Float32Array(lintels);
   }
 
   /** The hollow-building collider with map id `id` (or c itself when given a collider). */
@@ -764,7 +781,7 @@ export class World {
       // the whole solid building goes (or comes back): out of every collision query
       if (pn.alive) this.restore(c);
       else this.remove(c);
-    } else if (pn.kind === 'outer') this._rebuildShellSegs(c);
+    } else if (isEdgePanel(pn)) this._rebuildShellSegs(c); // outer wall / outer door lintel
     else if (pn.kind === 'floor') s.deadFloors = (s.deadFloors || 0) + (pn.alive ? -1 : 1);
     else if (pn.kind === 'roof') s.deadRoofs += pn.alive ? -1 : 1;
     else s.wallOn[pn.level][pn.wall] = pn.alive ? 1 : 0;
@@ -812,8 +829,15 @@ export class World {
     return !!pn && !pn.alive;
   }
 
-  /** Is fraction u of outer edge e at height y inside a broken panel? */
-  _deadAt(s, e, u, y) {
+  /**
+   * Is fraction u of outer edge e at height y inside a broken panel? Above the top ceiling (the
+   * roof rim) it is the roof tile at (x, z) (a point just inside the wall) when given.
+   */
+  _deadAt(s, e, u, y, x, z) {
+    if (y > s.ceil && s.deadRoofs && x !== undefined) {
+      const tile = this._roofTileAt(s, x, z);
+      if (tile && !tile.alive) return true;
+    }
     const list = s.edgePanels[e];
     if (!list) return false;
     for (let i = 0; i < list.length; i++) {
@@ -1256,6 +1280,8 @@ export class World {
         const dz = pos.z - (az + ez * t);
         const d2 = dx * dx + dz * dz;
         if (d2 >= lim2) continue;
+        // a broken top-storey panel under a broken rim (roof tile): nothing above it either
+        if (pass === 2 && s.deadRoofs && this._roofOpen(c, ax + ex * t, az + ez * t)) continue;
         const d = Math.sqrt(d2);
         let nx;
         let nz;
@@ -2232,6 +2258,7 @@ export class World {
     let slabPanel = null;
     let roofT = -1; // roof hit (top or underside) and its roof tile, if breakable
     let roofPanel = null;
+    const hInv = 1 / (Math.hypot(dx, dz) || 1); // per metre of horizontal travel (rim tile lookup)
     const T = this.terrain;
     // Terrain: marched cell by cell below. Exactly level rays (dy === 0: bot steering
     // feelers) skip it, because every slope is walkable. A ray that starts under the
@@ -2363,7 +2390,7 @@ export class World {
             const y = oy + dy * t;
             if (y < c.y0 || y > (planes ? c.eave + roofRise(planes, ox + dx * t, oz + dz * t) : c.h)) continue;
             if (c.shell && y < c.shell.doorTop && this._inDoor(c.shell, b, u)) continue; // through a door
-            if (c.shell && c.shell.dead && this._deadAt(c.shell, b, u, y)) continue; // through a broken panel
+            if (c.shell && c.shell.dead && this._deadAt(c.shell, b, u, y, ox + dx * (t + RIM_NUDGE * hInv), oz + dz * (t + RIM_NUDGE * hInv))) continue; // through a broken panel / rim tile
             best = t;
             found = true;
             if (c.shell) {
@@ -2723,6 +2750,11 @@ export class World {
       out.edge = edgeE;
       out.u = edgeU;
       out.panel = this.panelAt(out.collider, edgeE, edgeU, out.y);
+      // the roof rim (outer wall band above the top ceiling) belongs to the roof tile behind it
+      const s = out.collider && out.collider.shell;
+      if (!out.panel && s && s.roof && out.y > s.ceil) {
+        out.panel = this._roofTileAt(s, out.x + dx * RIM_NUDGE * hInv, out.z + dz * RIM_NUDGE * hInv);
+      }
     } else if (best === wallT) out.panel = wallPanel;
     else if (best === slabT) out.panel = slabPanel;
     else if (best === roofT) out.panel = roofPanel;
