@@ -790,7 +790,18 @@ export class Player {
     const az = p.z + fz * reach;
     const top = world.groundHeight(ax, az, p.y, MANTLE.max);
     const rise = top - p.y;
-    if (!(rise > MANTLE.min && rise <= MANTLE.max)) return null;
+    if (!(rise > MANTLE.min && rise <= MANTLE.max)) {
+      // nothing to climb at the probe point: a THIN obstacle (fence, rail) may sit between us and it
+      for (let s = this.radius + 0.05; s <= reach + 0.05; s += 0.05) {
+        const t = world.groundHeight(p.x + fx * s, p.z + fz * s, p.y, MANTLE.max);
+        const r = t - p.y;
+        if (r > MANTLE.min && r <= MANTLE.max) {
+          if (world.ceilingAbove(p.x, p.z, p.y, 0.05) <= t + 0.05 + this.height) return null;
+          return this._findVault(world, fx, fz, s, t, r);
+        }
+      }
+      return null;
+    }
     // a floor over our own head is a ceiling, not a ledge in front of us: never climb through it
     // (checked at the body centre and its front edge)
     const ex = p.x + fx * this.radius;
@@ -805,12 +816,41 @@ export class Player {
     const lx = p.x + fx * (reach + 0.35);
     const lz = p.z + fz * (reach + 0.35);
     const land = world.groundHeight(lx, lz, top + 0.05);
+    if (land < top - 0.4) return this._findVault(world, fx, fz, reach, top, rise);
     if (Math.abs(land - top) > 0.4) return null;
     if (world.ceilingAbove(lx, lz, land) - land < this.height * 0.9) return null;
     _mv.set(lx, land + 0.02, lz);
     world.resolveCircle(_mv, this.radius, this.height);
     if (Math.hypot(_mv.x - lx, _mv.z - lz) > 0.25) return null; // a wall above the ledge
     return { t: 0, dur: 0.22 + rise * 0.12, x0: p.x, y0: p.y, z0: p.z, x1: _mv.x, y1: land + 0.05, z1: _mv.z };
+  }
+
+  /**
+   * Vault: the ledge ahead is THIN (a fence, a railing, a low wall: nothing to stand on just past
+   * its face) and the far side is open. The body lifts to clear its top and carries over to a
+   * spot past it, in the air; gravity finishes the drop (same mantle plan / animation path).
+   */
+  _findVault(world, fx, fz, reach, top, rise) {
+    const p = this.pos;
+    const over = reach + 1.0;
+    const vx = p.x + fx * over;
+    const vz = p.z + fz * over;
+    // far side: walkable ground no higher than where we stand + a step, and no lid over the arc
+    const far = world.groundHeight(vx, vz, p.y + 0.6);
+    if (!(far > p.y - 6 && far <= p.y + 0.6)) return null;
+    const y1 = top + 0.1;
+    if (world.ceilingAbove(vx, vz, far) < y1 + this.height) return null;
+    // the whole carry over the top must be clear at that height (closed glass, a wall behind...)
+    for (let k = 0; k <= 8; k++) {
+      const t = k / 8;
+      const x = p.x + (vx - p.x) * t;
+      const z = p.z + (vz - p.z) * t;
+      _mv.set(x, y1, z);
+      world.resolveCircle(_mv, this.radius, this.height);
+      if (Math.hypot(_mv.x - x, _mv.z - z) > 0.03) return null;
+    }
+    _mv.set(vx, y1, vz);
+    return { t: 0, dur: 0.3 + rise * 0.12, x0: p.x, y0: p.y, z0: p.z, x1: _mv.x, y1, z1: _mv.z, vault: true };
   }
 
   _land(vy, g) {
@@ -1382,7 +1422,9 @@ export class Player {
     if (rec) {
       const swap = rec.kind === 'item' && rec.item && this.inventory.wouldSwap && this.inventory.wouldSwap(rec.item);
       const verb = rec.kind === 'item' ? (swap ? 'Swap for' : 'Pick up') : 'Open';
-      g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] ' + verb + ' ' + (rec.label || ''));
+      // chest / ammo box labels already carry the verb ("Open Chest"): don't say "Open Open Chest"
+      const label = rec.label || '';
+      g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] ' + (label.startsWith(verb + ' ') ? label : verb + ' ' + label));
       if (input.actionHit('interact')) this.interactWith(rec, g);
       return;
     }

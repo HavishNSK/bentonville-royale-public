@@ -16,7 +16,9 @@
 //   me {token}  logout {token}
 //   rename {token, name}  only while profile.mustRename (the current name has a swear word / slur)
 //   buy {token, item}   equip {token, skin?, emotes?}
-//   reward {token, kills, placement, players, won, ranked} -> {profile, earned, ranked}
+//   matchStart {token}                                    -> {matchId}  (opens a match ticket; see matchStats.js)
+//   reward {token, matchId, kills, placement, players, won, ranked} -> {profile, earned, ranked, rankedReason?}
+//     (closes the ticket: one result per match; kills / wins are capped by real match time)
 //   boxResult {token, size, won, score:[us,them], oppElo, forfeit?} -> {ok, elo, delta, tier, games} (429 {ok:false, rateLimited:true} when under 30 s apart)
 //   adReward {token}                                      -> {profile, earned}  (rewarded ad; AD_REWARD_DAILY a day)
 //     (wins/kills reach the boards only when ranked === true: a HARD match that includes bots)
@@ -51,7 +53,7 @@
 import { Server, getServerByName } from 'partyserver';
 import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, priceFor } from '../src/game/Cosmetics.js';
 import { verifyGoogleIdToken } from './googleIdToken.js';
-import { applyMatchStats } from './matchStats.js';
+import { applyMatchStats, openMatch, settleMatch } from './matchStats.js';
 import { boxStats, validateBoxResult, applyBoxResult, boxRateLimited, boxFlags } from './boxRating.js';
 import { tierOf } from '../src/game/BoxElo.js';
 import { nameIsClean } from '../src/net/chatFilter.js';
@@ -855,32 +857,50 @@ export class Accounts extends Server {
         this._sendFriendsOf(lower);
         return json({ profile: profileOf(acc) });
       }
+      case 'matchStart': {
+        // A match ticket: `reward` only pays a result that closes one (party/matchStats.js).
+        const next = openMatch(acc, randHex(16), Date.now());
+        if (next !== acc) await this._save(next);
+        return json({ matchId: next.liveMatch.id });
+      }
       case 'reward': {
         // match payout: outlasted (scaled), per elimination and a win bonus, capped (REWARD_* above)
-        // Coin payout is rate-limited; wins/kills still count so the boards stay honest after quick rematches.
+        // Results are client-reported. Each one must close the ticket from matchStart, so a script
+        // cannot post results in a loop; settleMatch caps kills / wins by real match time and the
+        // ranked count per day. Coin payout is also rate-limited.
         const now = Date.now();
         const players = Math.max(1, Math.min(100, m.players | 0));
         const placement = Math.max(1, Math.min(players, m.placement | 0 || players));
-        const kills = Math.max(0, Math.min(40, m.kills | 0));
-        const won = !!m.won && placement === 1;
-        const rateLimited = now - (acc.lastReward || 0) < REWARD_GAP_MS;
+        const reqKills = Math.max(0, Math.min(40, m.kills | 0));
+        const reqWon = !!m.won && placement === 1;
+        const reqRanked = m.ranked === true;
+        const settled = settleMatch(acc, typeof m.matchId === 'string' ? m.matchId : undefined, { kills: reqKills, players, won: reqWon, ranked: reqRanked }, now);
+        // Flag results that look impossible or unlikely so a dev can review them (never an auto-ban).
+        // Flags use the requested numbers, so a refused or capped claim still shows up in /flags.
+        let flagged = settled.acc || acc;
+        for (const f of rewardFlags({ kills: reqKills, players, placement, won: reqWon, ranked: reqRanked }, acc, now)) flagged = addFlag(flagged, f, now);
+        if (settled.error) {
+          if (flagged !== acc) {
+            await this._save(flagged);
+            if (flagged.flagCount !== acc.flagCount) await this.ctx.storage.put('flagged:' + lower, { at: now });
+          }
+          return err('This match result could not be saved. Play a new match to earn coins and ranks.', 409);
+        }
+        const { kills, won, ranked } = settled;
+        let next = flagged;
+        const rateLimited = now - (next.lastReward || 0) < REWARD_GAP_MS;
         let earned = 0;
         if (!rateLimited) {
           const outlasted = Math.round(((players - placement) / Math.max(1, players - 1)) * REWARD_OUTLAST_MAX);
           earned = Math.min(REWARD_MATCH_CAP, outlasted + kills * REWARD_PER_KILL + (won ? REWARD_WIN : 0));
-          acc.coins += earned;
-          acc.lastReward = now;
+          next = { ...next, coins: next.coins + earned, lastReward: now };
         }
         // Leaderboard stats only for HARD bot-difficulty matches (client-reported, like kills).
-        const ranked = m.ranked === true;
-        acc.stats = applyMatchStats(acc.stats, { kills, won, ranked });
-        // Flag results that look impossible or unlikely so a dev can review them (never an auto-ban).
-        const flags = rewardFlags({ kills, players, placement, won, ranked }, acc, now);
-        let next = trackRanked(acc, { ranked, won, now });
-        for (const f of flags) next = addFlag(next, f, now);
+        next = { ...next, stats: applyMatchStats(next.stats, { kills, won, ranked }) };
+        next = trackRanked(next, { ranked, won, now });
         if (next.flagCount !== acc.flagCount) await this.ctx.storage.put('flagged:' + lower, { at: now });
         await this._save(next);
-        return json({ profile: profileOf(next), earned, rateLimited, ranked });
+        return json({ profile: profileOf(next), earned, rateLimited, ranked, rankedReason: settled.reason || null });
       }
       case 'boxResult': {
         // Box Fights ladder: client-reported (not verifiable), rate-limited, flagged for review.

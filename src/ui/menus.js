@@ -54,7 +54,10 @@ const GAME_IDS = ['br', 'boxfights'];
 const GAME_LABELS = { br: 'BATTLE ROYALE', boxfights: 'BOX FIGHTS' };
 const BOX_MODE_LABELS = { solo: '1V1', duo: '2V2', trio: '3V3', ffa: 'FFA' };
 const modeLabel = (game, mode) => (game === 'boxfights' ? BOX_MODE_LABELS[mode] || MODE_LABELS[mode] : MODE_LABELS[mode]);
-const gameSeg = (ref) => `<div class="mn-seg mn-seg-game" data-ref="${ref}" role="group" aria-label="Game">${GAME_IDS.map((g) => `<button type="button" data-game="${g}">${GAME_LABELS[g]}</button>`).join('')}</div>`;
+// Box Fights is new: a star, gold label and a NEW pill until the player has picked it once
+const BOX_SEEN_KEY = 'bentonville-royale.triedBoxFights';
+const gameLabel = (g) => (g === 'boxfights' ? `${icon('wall')}<span>${GAME_LABELS[g]}</span><em class="mn-new" aria-label="new mode">NEW</em>` : `<span>${GAME_LABELS[g]}</span>`);
+const gameSeg = (ref) => `<div class="mn-seg mn-seg-game" data-ref="${ref}" role="group" aria-label="Game">${GAME_IDS.map((g) => `<button type="button" data-game="${g}"${g === 'boxfights' ? ' class="is-fresh"' : ''}>${gameLabel(g)}</button>`).join('')}</div>`;
 const PARTY_SLOTS = 4;
 
 // Functions get the current key bindings (tips follow rebinds).
@@ -311,6 +314,7 @@ export function createMenus(root, opts = {}) {
          ${toggle('invertY', 'Invert mouse Y')}
          ${range('fov', 'Field of view', 55, 100, 1)}
          <div class="mn-row"><span>Graphics quality</span>${seg('quality', QUALITY_OPTIONS)}</div>
+         ${toggle('fullscreen', 'Fullscreen when playing', 'Turn off to play in the browser window. If your FPS drops to 20-30 in fullscreen but is fine after Escape, turn this off (or turn off Radeon Chill / Frame Rate Target Control in AMD Software).')}
          ${range('fpsCap', 'FPS limit', 30, 250, 10)}
          ${toggle('rawMouse', 'Raw mouse input', 'Reads the mouse directly while it is locked to the game. If your FPS drops in a match but goes back up when you press Escape, try switching this.')}
          ${toggle('dynamicResolution', 'Dynamic resolution', 'Lowers the resolution a little when the game can\'t keep up, so it stays smooth instead of dropping to 20-30 FPS.')}
@@ -970,6 +974,24 @@ export function createMenus(root, opts = {}) {
     }
     const id = partyView && partyView.members.find((m) => String(m.id) === b.dataset.member);
     if (id) selectSlot(selectedSlot === id.id ? null : id.id);
+  });
+  // once Box Fights has been picked, drop its NEW pill and shimmer everywhere
+  const boxSeen = () => {
+    for (const b of wrap.querySelectorAll('button[data-game="boxfights"]')) b.classList.remove('is-fresh');
+  };
+  try {
+    if (localStorage.getItem(BOX_SEEN_KEY)) boxSeen();
+  } catch {
+    /* private mode: the badge just stays */
+  }
+  wrap.addEventListener('click', (e) => {
+    if (!(e.target.closest && e.target.closest('button[data-game="boxfights"]'))) return;
+    try {
+      localStorage.setItem(BOX_SEEN_KEY, '1');
+    } catch {
+      /* private mode */
+    }
+    boxSeen();
   });
   T.pgame.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-game]');

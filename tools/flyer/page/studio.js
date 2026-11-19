@@ -34,7 +34,9 @@ export function hideUi(on = true) {
   if (on && !st) {
     st = document.createElement('style');
     st.id = 'flyer-studio-hide';
-    st.textContent = 'body > :not(#game) { visibility: hidden !important; } #game { cursor: none !important; }';
+    // descendants too: a shown HUD element with its own `visibility: visible` (the round banner)
+    // would otherwise override its hidden parent
+    st.textContent = 'body > :not(#game), body > :not(#game) * { visibility: hidden !important; } #game { cursor: none !important; }';
     document.head.appendChild(st);
   } else if (!on && st) st.remove();
   const g = window.__game && window.__game.raw;

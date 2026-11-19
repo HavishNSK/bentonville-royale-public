@@ -114,7 +114,7 @@ Place a personal track at `local-music/menu.mp3`. The dev/preview middleware ser
 | M / Escape | Full map / pause |
 | N | Sandbox map (sandbox only; remappable in Settings). Click **WEAPONS** for pictured guns, or a named POI to travel. Fast travel and the weapon menu are not available in matches. **M** still opens the same map in sandbox. |
 
-Click into gameplay to capture the pointer. Settings include sensitivity, invert Y, volume, graphics quality, bot difficulty, and optional Google view. Bots react to being shot at once: they turn on the shooter, put a wall up on the same frame and keep hunting that shooter (a grudge) until one of them dies, they lose range or the storm forces a rotation. Hard bots shot from 20–120 m build a ramp-and-wall tower toward the shooter, climb it and shoot from the top ramp, rebuilding it if it breaks; up close they box-fight and try to box the enemy in. Bots land with some wood (Normal 60, Hard 120), break out of their own boxes when stuck, and old bot-built pieces far from any human are recycled once the world passes 60% of the build-piece cap (`Bots._reclaimPieces`; player pieces are never removed). Only matches on **Hard** bot difficulty count toward the RANKS leaderboards (wins and eliminations); Easy and Normal matches still pay coins. In multiplayer the host's difficulty is sent in the start message and decides for everyone. The client reports `ranked` with the match result and the account server (`party/accounts.js`) adds wins/kills only when `ranked === true`. Like kills, this is client-reported, not anti-cheat. Touch gameplay is not implemented.
+Click into gameplay to capture the pointer. Settings include sensitivity, invert Y, volume, graphics quality, bot difficulty, and optional Google view. Bots react to being shot at once: they turn on the shooter, put a wall up on the same frame and keep hunting that shooter (a grudge) until one of them dies, they lose range or the storm forces a rotation. Hard bots shot from 20–120 m build a ramp-and-wall tower toward the shooter, climb it and shoot from the top ramp, rebuilding it if it breaks; up close they box-fight and try to box the enemy in. Bots land with some wood (Normal 60, Hard 120), break out of their own boxes when stuck, and old bot-built pieces far from any human are recycled once the world passes 60% of the build-piece cap (`Bots._reclaimPieces`; player pieces are never removed). Only matches on **Hard** bot difficulty count toward the RANKS leaderboards (wins and eliminations); Easy and Normal matches still pay coins. In multiplayer the host's difficulty is sent in the start message and decides for everyone. The client reports `ranked` with the match result and the account server (`party/accounts.js`) adds wins/kills only when `ranked === true`. Like kills, this is client-reported, not anti-cheat. To stop a script from posting results in a loop, the client asks the account server for a match ticket when a match starts (`matchStart`) and must send it back with the result; each ticket is accepted once, eliminations are capped at one per 5 seconds of real match time and at the number of other players, a win needs at least 3 minutes, and an account gets at most 30 ranked results per UTC day (`party/matchStats.js`). This limits how fast fake results can add up; it does not prove a result is real. Touch gameplay is not implemented.
 
 ## Commands and Verification
 
@@ -308,6 +308,37 @@ Outfits live in `SKINS` in `src/game/Cosmetics.js` (pure data, also read by the 
 **Scruff set and gliders.** `skin_scruff` (Femboy Jaithra), the `pick_paw` pickaxe (Paw Pounder) and the `bb_gecko` back bling (Rainbow Gecko) are an outside design contribution; the pickaxe and back bling are built in code in `src/render/PupGear.js` (`proc` items, like the pickleball paddle). Gliders are a cosmetic slot (`GLIDERS` in `Cosmetics.js`, `gl_` ids): `gl_default` is the free classic canopy, and `gl_paws` (Paws Up) hides the canopy and flies the character belly-down with both arms up. The glider is sold in the shop, picked in the locker, saved with the account (the account server's `equip` accepts `glider`, so the deployed party Worker must be redeployed for signed-in accounts to keep it), sent to the host in the match-start `sk` action (`gl`, checked against `GLIDERS`) and included in the lobby look string (`skin|pickaxe|backbling|glider`; older three-part strings still parse). The four Scruff pieces are sold together as the Femboy Jaithra Bundle (`bundle_scruff`, 25,000 coins against 27,500 bought separately) and one by one: the shop's FEATURED row shows the bundle with each piece beside it, and the BUNDLES row sits at the bottom. `bundlePrice` in `Cosmetics.js` lowers the bundle's price by the share of pieces an account already owns; the account server's `buy` charges that price (`priceFor`), so the party Worker must be redeployed for the discount to apply. `tests/gliders.test.mjs` covers the catalog, bundle pricing and look strings.
 
 Outfits can be checked without the game: `skinlab.html` is a dev-only page (not in the production build), and `node tools/skins/render.mjs --skin <id> | --recipe <file> | --swatches <kit> | --probe <kit> | --all` renders it to PNGs in `tools/skins/out/` with the QA harness's headless Chromium. `tests/skin-recipes.test.mjs` validates every outfit. See [tools/skins/README.md](tools/skins/README.md) for the recipe format, region names per kit, addon shapes and the workflow from a description or reference image to a new outfit.
+
+## Bentonville High School Landmark
+
+Bentonville High School is a bespoke point of interest in `src/world/bhs/`, built to look like the real campus. It sits in the south-centre tile of the composed map. The build contract is [docs/bhs/BHS_CONTRACT.md](docs/bhs/BHS_CONTRACT.md). The look is defined in [docs/bhs/STYLE_BIBLE.md](docs/bhs/STYLE_BIBLE.md): the palette sampled from reference photos, materials, facades and hero spaces.
+
+- **Kit** (`src/world/bhs/kit/`):
+  - a palette and procedural canvas materials, with world-space UVs and no image files
+  - a pure builder: walls with doors and windows, slabs, stairs with a smooth deck ramp, railings, columns, lights, loot
+  - a plan engine that turns a building described as data (outline, courtyards, rooms per storey, voids, stair halls, raised volumes, a facade function) into geometry
+  - a generated bot waypoint graph (`world.siteNav`, combined with Crystal Bridges' graph)
+  - merged meshes, one per (group, look), with interiors streamed by distance and a small pool of real lights following the camera
+- **North Building** (`north.js`, replaces map building 952075843):
+  - 3 storeys, U-shaped around a courtyard
+  - the west main entrance in a niche between the brick commons frontage and the light-block stair tower: glass doors, a canopy, the sign band with an original tiger emblem, and a 2-storey curtain wall
+  - a 3-storey commons atrium with a glass-railed walkway and a feature stair
+  - wings of classrooms and labs, a media centre, a lecture hall and four stair halls
+- **Main building** (`south.js`, replaces 952075842):
+  - 2 storeys with raised volumes: Tiger Arena, the auxiliary gym, the cafeteria clerestory, the Arend Arts Center house and fly tower, and the library
+  - the entry court with its water channel and arch beam, the Arend's stepped brick drums, and the covered walkway to the North Building
+- **Hero interiors and rooms** (`interior/`):
+  - the gym, the library and the Arend theatre
+  - a seeded classroom generator (subject-driven layouts and lived-in props)
+  - `fill.js`: hallway lockers, offices, restrooms and storage
+- **Tiger Stadium** (`stadium.js`, `stadiumMeshes.js`):
+  - a regulation field with the home grandstand and press box on the west
+  - the visitor stand was removed so the North Building entrance plaza stays open
+  - the real stadium is about 280 m west across SE J St and is moved into the tile
+- **Data** (`data.js`): storey overrides keyed by id, and the stadium site cleared of unmapped parking aisles. The map JSON is unchanged.
+- **Reference photos are private.** They live outside the repo, and `scripts/hooks/pre-commit` (copy it to `.git/hooks/`) rejects any `bhs-refs` path and stray images. The match-loop camera is `node tools/qa/bhs-shot.mjs --url <dev url> --views tools/bhs/views.json`; it writes renders and photo comparisons outside the repo.
+- **Not included:** no logos or mascot art copied from photos (the emblem is original), no real names, room numbers or security details, and no official floor plans. Spaces without photos are approximate (see `HACKATHON_NOTES.md`).
+- **Verification:** `tests/bhs-*.test.mjs` and `npm test`.
 
 ## Map and Asset Maintenance
 

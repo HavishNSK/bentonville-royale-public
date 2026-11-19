@@ -1,6 +1,6 @@
-// v0.17.0 "BOMBS and Bridges": the update flyer matches the newest patch notes and package
-// version, opens once per version, every image it shows is shipped, and the rocket launcher
-// (whose fire path read an undefined variable) launches its rocket.
+// The update flyer (v0.20.0 "BHS and Box Fights") matches the newest patch notes and package
+// version, opens once per version, and every image it shows is shipped. Also kept from v0.17.0:
+// the rocket launcher (whose fire path read an undefined variable) launches its rocket.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
@@ -13,13 +13,14 @@ import { Combat } from '../src/game/Combat.js';
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url)));
 const lock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url)));
 
-test('the flyer is for a released version, named BOMBS and Bridges; package versions match', () => {
+test('the flyer is for the newest released version, named BHS and Box Fights; package versions match', () => {
   // the flyer shows once per FLYER.version (updateFlyer.js), so a later patch without a flyer of
   // its own keeps showing it to players who have not seen it yet
   const notes = PATCH_NOTES.find((n) => n.version === FLYER.version);
   assert.ok(notes, 'flyer version has patch notes');
-  assert.equal(notes.title, 'BOMBS and Bridges');
-  assert.equal(FLYER.title.join(' '), 'BOMBS and Bridges');
+  assert.equal(FLYER.version, LATEST_VERSION, 'the flyer is for the newest patch notes entry');
+  assert.equal(notes.title, 'BHS and Box Fights');
+  assert.equal(FLYER.title.join(' '), 'BHS and Box Fights');
   assert.equal(pkg.version, LATEST_VERSION);
   assert.equal(lock.version, LATEST_VERSION);
   assert.equal(lock.packages[''].version, LATEST_VERSION);
@@ -42,9 +43,11 @@ test('every flyer image is shipped in public/ and has alt text', () => {
     assert.match(src, /^\/ui\/news\/[a-z0-9-]+\.(png|jpg)$/);
     assert.ok(existsSync(new URL('../public' + src, import.meta.url)), `${src} missing`);
   }
-  // the three explosives are pictured
-  const names = FLYER.sections.find((s) => s.id === 'bombs').items.map((i) => i.name);
-  assert.deepEqual(names, ['Rocket Launcher', 'Grenade', 'Smoke Grenade']);
+  // Bentonville High and Box Fights are both pictured
+  for (const id of ['bhs', 'boxfights']) {
+    const sec = FLYER.sections.find((s) => s.id === id);
+    assert.ok(sec && sec.images && sec.images.length >= 1, `${id} section has images`);
+  }
 });
 
 test('the flyer opens once per version', async () => {

@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { createCrystalBridges, hasCrystalBridges } from './crystal-bridges/index.js';
 import { TILE as CB_TILE } from './crystal-bridges/site.js';
+import { createBhs, hasBhs } from './bhs/index.js';
 import { makeRng } from '../core/config.js';
 import { flattenModel } from '../core/assets.js';
 import { pointInPoly } from './World.js';
@@ -1031,6 +1032,9 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // reserves its site (src/world/crystal-bridges/)
   const cb = hasCrystalBridges(data) ? createCrystalBridges(world, data) : null;
   const skipFlat = (pts, k) => !!cb && cb.skipFlat(pts, k);
+  // ---- Bentonville High School (bespoke landmark, src/world/bhs/): Tiger Stadium colliders, right
+  // after Crystal Bridges so both keep stable box ids; the school buildings stay generic below
+  const bhs = hasBhs(data) ? createBhs(world, data) : null;
 
   // ---- ground
   progress(0.02, 'Laying out the ground');
@@ -1115,7 +1119,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // 8th Street Market is a converted plant: warm industrial grey, not a sky-blue slab
   tintIds('market_8th', { wall: 0xbdb3a1, roof: 0x6f7376 });
   tintIds('compton_gardens',   { wall: 0xd6cebc, roof: 0x8a8070 });
-  tintIds('bentonville_high',  { wall: 0xb04030, roof: 0x6b4a3a });
+  // bentonville_high: both buildings are bespoke kit buildings (src/world/bhs/), no generic tint
   tintIds('bentonville_west',  { wall: 0xd4cfc6, roof: 0x556678 });
   tintIds('community_center',  { wall: 0xa8b2bc, roof: 0x7a8a96 });
   tints.set(912841351, { wall: 0xd6cebc, roof: 0x8a8070 });
@@ -1127,6 +1131,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   for (const bd of data.buildings) {
     if (!bd.p || bd.p.length < 3) continue;
     if (cb && cb.skipBuilding(bd.id)) continue; // replaced by the bespoke pavilions
+    if (bhs && bhs.skipBuilding(bd.id)) continue; // replaced by a bespoke BHS kit building (src/world/bhs/)
     let cx = 0;
     let cz = 0;
     for (const p of bd.p) {
@@ -1590,6 +1595,20 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     view.hideCollider = (col) => (col && col.type === 'box' ? cbView.hideCollider(col) : hide(col));
     view.showCollider = (col) => (col && col.type === 'box' ? cbView.showCollider(col) : show(col));
     view.frame = (dt, ctx) => cbView.update(dt, ctx); // every frame (water, gallery, lighting)
+  }
+  if (bhs) {
+    // Tiger Stadium + the school facade dressing; its breakable boxes are routed by owner
+    const bhsView = await bhs.buildMeshes(root);
+    view.bhs = bhsView;
+    const hide = view.hideCollider;
+    const show = view.showCollider;
+    view.hideCollider = (col) => (bhsView.owns(col) ? bhsView.hideCollider(col) : hide(col));
+    view.showCollider = (col) => (bhsView.owns(col) ? bhsView.showCollider(col) : show(col));
+    const frame = view.frame;
+    view.frame = (dt, ctx) => {
+      if (frame) frame(dt, ctx);
+      bhsView.update(dt, ctx);
+    };
   }
   progress(0.85, 'World ready');
   return view;

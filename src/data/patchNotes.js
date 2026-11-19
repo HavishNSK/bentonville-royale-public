@@ -7,6 +7,143 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.20.0',
+    date: '2026-11-19',
+    title: 'BHS and Box Fights',
+    sections: [
+      {
+        heading: 'New mode: Box Fights',
+        items: [
+          'Pick BATTLE ROYALE or BOX FIGHTS on the party panel (or in a private match), then 1V1, 2V2, 3V3 or 4V4. Bots can fill the empty spots.',
+          'Two teams in a two-storey indoor arena floating in the void. No storm, no loot, no bus.',
+          'Every round starts with a wall down the middle: you can\'t see the other team for the 5 second countdown. At FIGHT it slides up into the ceiling.',
+          'First team to win 3 rounds takes the match. Everyone respawns with full health and shield each round.',
+          'One kit for everyone: pump shotgun, assault rifle, SMG, 2 shield tonics, 2 medkits and 500 of each material.',
+        ],
+      },
+      {
+        heading: 'Box Fights rating (Elo)',
+        items: [
+          'Box Fights now has its own rating, worked out like chess Elo. Everyone starts at 1000. Beat higher-rated players to climb faster.',
+          'Bots have fixed ratings: Easy 800, Normal 1200, Hard 1600.',
+          'Six tiers to climb: Trail Rat, Creek Hopper, Square Regular, Bridge Walker, Ozark Legend and Mayor of Bentonville.',
+          'The result screen shows how many points you won or lost. Your rating and tier sit in the account bar, and there is a Box Fights board under RANKS.',
+          'Sign in to get rated. Results are sent by each player\'s game, so they are reviewed, not guaranteed. Leaving after FIGHT counts as a loss.',
+        ],
+      },
+      {
+        heading: 'Building',
+        items: [
+          'One tap, one ramp: a quick tap no longer stacks a second ramp over your head.',
+          'Ramps are never placed under your own feet, and nothing can be built through the Box Fights middle wall.',
+        ],
+      },
+      {
+        heading: 'Title screen',
+        items: [
+          'Cleaner title screen: the MUSEUM button and the key hints are gone. Your controls are in Settings.',
+          'Bentonville High School, rebuilt, is the star of this update\'s splash: go see the North Building entrance, the Arend Arts Center and Tiger Arena.',
+        ],
+      },
+    ],
+  },
+  /* v0.19.5 (Bentonville High rebuilt): commented out; the co-developers write the release notes for this update.
+  {
+    version: '0.19.5',
+    date: '2026-11-19',
+    title: 'Back to School: Bentonville High, rebuilt',
+    sections: [
+      {
+        heading: 'The biggest POI drop yet',
+        items: [
+          'Bentonville High School is completely rebuilt, inside and out, to look like the real school. Two full buildings, every floor, every room. Drop in and see if you can find your locker.',
+          'Built from real photos of the campus: red brick, cast-stone bands, silver metal panels, big blue glass and white roofs you can recognize from the sky.',
+          '"NOW ENTERING BENTONVILLE HIGH SCHOOL": a banner greets you at the campus, with the tiger emblem slamming down onto it.',
+        ],
+      },
+      {
+        heading: 'North Building',
+        items: [
+          'The main entrance on the west side: glass doors under a big canopy, a two-storey glass wall, the MAIN ENTRANCE sign with the tiger emblem, and the tall stair tower.',
+          'Walk in like a student: the lobby, the huge cafeteria on your left, the crosswalk exit on your right, and the main hallway straight ahead, looping all the way around the building.',
+          'The cafeteria is a three-storey atrium with wood walls, round tables, banners and a glass-railed walkway you can fight across from above.',
+          'Classrooms on all three floors, with glass windows into the hallway and out onto the green courtyard in the middle.',
+          'Four big corner stairwells take you from floor 1 to 3, plus a two-storey media center and a lecture hall.',
+          'A huge American flag flies over the entrance plaza on a 14 m pole.',
+        ],
+      },
+      {
+        heading: 'Main Building',
+        items: [
+          'The Arend Arts Center: a giant auditorium with nearly 1,800 seats, a balcony, and a raised stage behind a red curtain. Take the stage. Claim the balcony.',
+          'Tiger Arena: a full competition gym with a painted court, 12-row bleachers on both sides and a running-track balcony up top. Plus an auxiliary gym with a climbing wall.',
+          'A two-storey library with a glass-railed mezzanine, long rows of shelves and a computer zone.',
+          'A second cafeteria with lunch tables all around the reboot van, the entry court with its water channel and arch, and the curved brick front of the arts center.',
+          'A covered walkway and a crosswalk connect the two buildings.',
+        ],
+      },
+      {
+        heading: 'Every room is different',
+        items: [
+          'Over 100 classrooms, each set up for its subject: science labs with fume hoods, art rooms with easels and a kiln, computer labs, band and choir rooms on risers, kitchens, robotics labs and more.',
+          'Desks in rows, pods, U-shapes and circles, backpacks on chairs, posters, flags, plants, whiteboards. No two rooms next to each other look alike.',
+          'Hallways lined with lockers, offices, restrooms and storage rooms, with carpet, wood and polished floors.',
+        ],
+      },
+      {
+        heading: 'Loot everywhere',
+        items: [
+          'Bentonville High is now the loot capital of the map: well over 150 chests across the campus, plus ammo boxes and floor loot.',
+          'Check the hallways, classrooms, closets, stairwell landings, the stage, the press box, the gym concourse and the library mezzanine.',
+          'Loot no longer floats: if you blow up the floor under a chest, the chest drops to the floor below.',
+        ],
+      },
+      {
+        heading: 'Break everything, vault anything',
+        items: [
+          'Every wall, window, floor, stair, bleacher and roof at the school can be destroyed. Land on the roof, blast a hole, drop straight into class.',
+          'New: vault! Jump at a fence or railing to vault over it. Works on fences and rails anywhere on the map.',
+          'Tiger Stadium got a clean-up: the visitor stand is gone so the school\'s main entrance plaza is wide open, and the scoreboard is lit up: TIGERS 28, GUEST 14, fourth quarter.',
+        ],
+      },
+      {
+        heading: 'Fixes',
+        items: [
+          'Fixed the chest prompt saying "Open Open Chest".',
+          'Multiplayer: everyone needs to refresh for this update.',
+        ],
+      },
+    ],
+  },
+  */
+  {
+    version: '0.19.4',
+    date: '2026-11-19',
+    title: 'Fullscreen setting',
+    sections: [
+      {
+        heading: 'Settings',
+        items: [
+          'New setting: Fullscreen when playing (Settings > Game, on by default). Turn it off to play in the browser window.',
+          'Stuck at 20-30 FPS in fullscreen but fine after pressing Escape? Some graphics drivers slow down a fullscreen browser. Turn this setting off, or turn off Radeon Chill and Frame Rate Target Control in AMD Software.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.19.3',
+    date: '2026-11-19',
+    title: 'FPS details',
+    sections: [
+      {
+        heading: 'Settings',
+        items: [
+          'Show FPS now also shows what each frame costs, mouse events per second, your resolution, mouse lock and fullscreen, and your graphics card. If your FPS drops, a screenshot of it helps us find out why.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.19.2',
     date: '2026-11-19',
     title: 'FPS limit and raw mouse',

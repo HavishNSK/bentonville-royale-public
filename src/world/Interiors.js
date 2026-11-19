@@ -82,7 +82,7 @@ import { furnishInterior } from './interiors/furnishings.js';
 import { addFloorTiles } from './interiors/floorTiles.js';
 import { addShellPanels } from './interiors/shellPanels.js';
 
-export const INTERIOR_VERSION = 10;
+export const INTERIOR_VERSION = 11; // 10: 0.2-update interiors; 11: + Bentonville High 2 + 3 storeys (src/world/bhs/)
 const ROOF_SLAB = 0.35; // roof slab over a one-storey building's full-height room (World ROOF_T)
 
 const HUB = { corridor: 1, hall: 1, lobby: 1, sales: 1, living: 1, open: 1 };
