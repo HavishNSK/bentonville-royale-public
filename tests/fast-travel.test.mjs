@@ -74,6 +74,17 @@ test('gas stations are sandbox travel targets: labelled by map direction, clicka
   // two in one direction get numbers, west to east
   const twin = gasTargets([{ key: 'a', x: 200, z: 300 }, { key: 'b', x: 350, z: 250 }], bounds);
   assert.deepEqual(twin.map((g) => g.label), ['Gas Station (SE 1)', 'Gas Station (SE 2)']);
+  // branded stations: the brand name, numbered only when two of one brand share a direction
+  const branded = gasTargets(
+    [
+      { key: 'a', label: 'Clam Oil', x: 200, z: 300 },
+      { key: 'b', label: 'Clam Oil', x: 350, z: 250 },
+      { key: 'c', label: 'Floor Mart', x: 300, z: 320 },
+      { key: 'd', label: 'Circle O', x: -300, z: -300 },
+    ],
+    bounds,
+  );
+  assert.deepEqual(branded.map((g) => g.label), ['Circle O (NW)', 'Clam Oil (SE 1)', 'Clam Oil (SE 2)', 'Floor Mart (SE)']);
   // with the POIs: POIs first, then the stations; a click near a station picks it
   const game = { world: { landmarks: {}, bounds }, gasStations: stations };
   const all = travelTargets(game);

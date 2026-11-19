@@ -50,6 +50,8 @@ import { Vehicles } from './Vehicles.js';
 import { buildCarMesh } from '../render/CarMesh.js';
 import { planGasStations, buildGasStations, STATION } from './vehicles/gasStations.js';
 import { buildGasStationMesh } from '../render/GasStationMesh.js';
+import { GasPumps } from './GasPumps.js';
+import { NozzleHose } from '../render/NozzleHose.js';
 import { CAR } from './vehicles/cars.js';
 import { Grenades, launcherModel } from './Grenades.js';
 import { Player, placeOrbitCamera, itemLabel } from './Player.js';
@@ -374,13 +376,26 @@ export class Game {
     }
     this.vehicles.viewer = this.camera.position;
     this.vehicles.local = this.player;
-    this.vehicles.stations = this.gasStations; // a car stopped at a pump refuels
+    this.vehicles.stations = this.gasStations; // station meshes are distance-culled with the cars
     this.vehicles.onEvent = (e) => {
       if (this.net && this.net.isHost && this.net.started && this.net.events) this.net.events.push(e);
     };
     this.combat.vehicles = this.vehicles;
     this.grenades.vehicles = this.vehicles;
     this.bots.vehicles = this.vehicles;
+    // gas pumps: the nozzle that refuels cars; pumps burn and blow up (GasPumps.js)
+    this.pumps = new GasPumps({ world: this.world, fx: this.fx, sfx, combat: this.combat, vehicles: this.vehicles, hoseView: new NozzleHose(this.scene) });
+    try {
+      this.pumps.setup(this.gasStations);
+    } catch (err) {
+      this._error('pumps.setup', err);
+    }
+    this.pumps.viewer = this.camera.position;
+    this.pumps.onEvent = (e) => {
+      if (this.net && this.net.isHost && this.net.started && this.net.events) this.net.events.push(e);
+    };
+    this.combat.pumps = this.pumps;
+    this.grenades.pumps = this.pumps;
     this.dropBus = new DropBusMesh();
     this.scene.add(this.dropBus.root);
     this.busRoute = null;
@@ -836,6 +851,7 @@ export class Game {
     this.mates = members.filter((a) => a !== p);
     if (this.reboot) this.reboot.reset({ teamMode: this.teamMode, authoritative: !(this.net && this.net.isClient), myTeam: this.teamMode ? p.team : null });
     if (this.vehicles) this.vehicles.reset({ authoritative: !(this.net && this.net.isClient) });
+    if (this.pumps) this.pumps.reset({ authoritative: !(this.net && this.net.isClient) });
   }
 
   /**
@@ -1216,9 +1232,10 @@ export class Game {
     else if (info.wipe) text = killer ? `${killer.name} wiped ${victim.name}` : `${victim.name} was eliminated`;
     else if (info.weapon === 'car_explosion' && !killer) text = `${victim.name} went up with their car`;
     else if (info.weapon === 'car_ram' && !killer) text = `${victim.name} was run over`;
+    else if (info.weapon === 'pump_explosion' && !killer) text = `${victim.name} was caught in a gas pump blast`;
     else if (info.explosive && !killer) text = `${victim.name} blew themselves up`;
     else if (killer) {
-      const how = info.weapon === 'pickaxe' ? 'bonked' : info.weapon === 'car_ram' ? 'ran over' : info.weapon === 'car_explosion' ? 'blew up the car with' : info.explosive ? 'blew up' : info.headshot ? 'headshot' : 'eliminated';
+      const how = info.weapon === 'pickaxe' ? 'bonked' : info.weapon === 'car_ram' ? 'ran over' : info.weapon === 'car_explosion' ? 'blew up the car with' : info.weapon === 'pump_explosion' ? 'blew up a gas pump on' : info.explosive ? 'blew up' : info.headshot ? 'headshot' : 'eliminated';
       text = `${killer.name} ${how} ${victim.name}`;
     } else text = `${victim.name} was eliminated`;
     if (killer === p) kind = 'kill';
@@ -1518,6 +1535,11 @@ export class Game {
       } catch (err) {
         this._error('vehicles.update', err);
       }
+      try {
+        if (this.pumps) this.pumps.update(dt, this.combat.actors);
+      } catch (err) {
+        this._error('pumps.update', err);
+      }
     }
 
     // match end (team modes: a team is out once nobody on it is alive; dead members wait)
@@ -1775,7 +1797,8 @@ export class Game {
       }
     }
     if (fullOpen && this.freeBuild && hud.setMapTravel) {
-      const travel = travelTargets(this);
+      // the side list names POIs only; gas stations are reached by clicking their pump icon
+      const travel = travelTargets(this).filter((t) => !t.gas);
       const here = nearestPoi(travel, p.pos.x, p.pos.z, 160);
       hud.setMapTravel(travel, here && here.key);
     } else if (fullOpen && hud.setMapStats) {
@@ -1835,7 +1858,7 @@ export class Game {
     }
     // gas stations: always on the map, labelled on the full map (and the mini view when in sight)
     if (this.gasStations && (this.state === 'play' || this.state === 'drop')) {
-      for (const st of this.gasStations) blips.push({ x: st.x, z: st.z, kind: 'fuel', label: STATION.label.toUpperCase() });
+      for (const st of this.gasStations) blips.push({ x: st.x, z: st.z, kind: 'fuel', label: (st.label || STATION.label).toUpperCase() });
     }
     // drivable cars nearby (not the one we ride in: our own arrow is on it)
     if (this.vehicles && (this.state === 'play' || this.state === 'drop')) {

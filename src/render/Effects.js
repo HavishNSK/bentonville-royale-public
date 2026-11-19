@@ -27,6 +27,7 @@
  *   fx.shieldPop(position)
  *   fx.elimination(position, color)               // position = feet of the eliminated character
  *   fx.explosion(position, { radius = 5 })        // grenade blast; the ground ring spreads to `radius`
+ *   fx.flames(position, scale = 1)                // one tick of flames on something burning (gas pumps)
  *   fx.grenadeBlink(position)                     // one blink of a live grenade's fuse light
  *   fx.rocketTrail(position)                      // exhaust of a flying rocket, once per trail step
  *   fx.ring(position, { color = 0xffffff, radius = 3, duration = 0.5 })
@@ -1861,6 +1862,22 @@ export class Effects {
     if (fire) colJ(P.soot, 0.06);
     else colJ(P.dust, 0.06);
     this._puff(x, y, z, (rnd() - 0.5) * 0.5, 1.2 + rnd() * 0.6, (rnd() - 0.5) * 0.5, 0.3, 1.1 + rnd() * 0.4, 1.2 + rnd() * 0.4, fire ? 0.6 : 0.45);
+  }
+
+  /** Flames licking up from something burning (a gas pump): hot glows rising, now and then soot. */
+  flames(position, scale = 1) {
+    const x = position.x, y = position.y, z = position.z;
+    const n = this._n(4);
+    for (let i = 0; i < n; i++) {
+      colMix(P.flash, P.flashDeep, rnd());
+      this._sp(x + (rnd() - 0.5) * 0.5 * scale, y + rnd() * 0.25, z + (rnd() - 0.5) * 0.4 * scale, (rnd() - 0.5) * 0.4, 1.8 + rnd() * 1.4, (rnd() - 0.5) * 0.4, 0.3 + rnd() * 0.25, 0.6 * scale, 0.12 * scale, GLOW, 0.9, 0.95, 0, 0.4, 0);
+    }
+    col(P.hot);
+    this._sp(x, y + 0.1, z, 0, 0.8, 0, 0.2, 0.5 * scale, 0.3 * scale, GLOW, 0.9, 0.9, 0, 0.2, 0);
+    if (this._smoke && rnd() < 0.4) {
+      colJ(P.soot, 0.06);
+      this._puff(x, y + 0.7, z, (rnd() - 0.5) * 0.4, 1.4 + rnd() * 0.6, (rnd() - 0.5) * 0.4, 0.35, 1.1 + rnd() * 0.4, 1.3 + rnd() * 0.4, 0.55);
+    }
   }
 
   dustPuff(position, opts) {

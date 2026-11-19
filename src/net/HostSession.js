@@ -27,6 +27,7 @@
 import * as THREE from 'three';
 import { PLAYER, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, MATCH, REBOOT, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
 import { CAR } from '../game/vehicles/cars.js';
+import { PUMP_NET_SLACK } from '../game/GasPumps.js';
 import { Character } from '../game/Character.js';
 import { heldSlot } from '../game/Inventory.js';
 import { SKINS, EMOTES, PICKAXES, BACKBLINGS } from '../game/Cosmetics.js';
@@ -243,6 +244,7 @@ export class HostSession {
       map: game.mapId, // clients on a different map file refuse to play (stale cache / deploy)
       storm: { cx: s.cx, cz: s.cz, r: s.r, nextCx: s.nextCx, nextCz: s.nextCz, nextR: s.nextR, phase: s.phase, mode: s.mode, secondsLeft: s.secondsLeft, dps: s.dps },
       loot,
+      pumps: game.pumps ? game.pumps.snapshot() : [], // gas pumps already hurt / burning / blown up
     };
     for (const c of this.room.clients.values()) {
       if (!this.remotes.has(c.id)) continue;
@@ -955,6 +957,21 @@ export class HostSession {
           a.lastHorn = this.time;
           V.horn(a.vehicle);
         } else if (m.op === 'lean') V.setLean(a, !!m.on);
+        return;
+      }
+      case 'pmp': {
+        // gas pump nozzle (GasPumps.js): grab (p = pump id) / hang up / fuel a car (c = car id, -1 stops).
+        // Everything is checked again here and every frame after (PUMP_NET_SLACK of lag allowance).
+        const P = g.pumps;
+        if (!P || a.inBus || a.airborneDrop) return;
+        if (m.op === 'grab') {
+          const pump = P.byId.get(m.p);
+          if (pump) P.grab(a, pump, PUMP_NET_SLACK);
+        } else if (m.op === 'hang') P.hangUp(a, !!m.snap);
+        else if (m.op === 'fuel') {
+          const car = m.c >= 0 && g.vehicles ? g.vehicles.byId.get(m.c) : null;
+          P.setFueling(a, car || null);
+        }
         return;
       }
       case 'drv': {

@@ -1,8 +1,8 @@
-// BENTONVILLE ROYALE — gas stations: where they stand, what is solid there, and pump refuelling.
+// BENTONVILLE ROYALE — gas stations: where they stand, what is solid there, which brand they fly.
 //
 // None of the real fuel stations in the raw OSM extract (data-raw/) fall inside the composed tile
-// map (scripts/compose-map.mjs keeps only the cut-out POI tiles), so the stations are generic
-// "Gas Station" lots picked from the map geometry: beside a street, on open ground (no building,
+// map (scripts/compose-map.mjs keeps only the cut-out POI tiles), so the stations are invented
+// lots (each flying one of the made-up brands of gasBrands.js) picked from the map geometry: beside a street, on open ground (no building,
 // road, path, stream, water, parking lot, pitch or bus loop), at least one in every quadrant of
 // the map and STATION.minGap apart. Pure geometry over the map data: same spots on every machine.
 //
@@ -11,21 +11,23 @@
 //                                                // rocks and benches keep out of it
 //   buildGasStations(world, stations, { scene, meshFactory })  // after the world meshes: the
 //                                                // colliders, one mesh per station, a gas can
-//   pumpNear(stations, x, z) / refuelAtPump(car, stations, dt) / pumpStatus(car, stations)
+//   pumpNear(stations, x, z)                    // nearest pump spot
+//
+// Pumps (hp, fire, chain explosions) and the hand-held nozzle that refuels cars live in
+// game/GasPumps.js; the per-station brand (sign, trim colours, map label) in gasBrands.js.
 //
 // Station-local frame: u along the street, v away from it (v = 0 is the lot's street-side edge,
 // STATION.roadGap metres off the kerb). World = (ox, oz) + u * (cos yaw, sin yaw) + v * (-sin yaw,
 // cos yaw): the same axes as an oriented World box with that yaw (boxColliders.js), and a mesh
 // built with x = u, z = v gets rotation.y = -yaw.
 //
-// The art is an original cartoon design in the game's palette with a generic fuel-pump
-// pictogram; stations carry only the plain label "Gas Station" (no brand names, logos or trade
-// dress).
+// The art is an original cartoon design in the game's palette. Station names and marks come from
+// the invented brands in gasBrands.js (no real brand names, logos or trade dress).
 
-import { CAR } from './cars.js';
+import { brandFor } from './gasBrands.js';
 
 export const STATION = Object.freeze({
-  label: 'Gas Station',
+  label: 'Gas Station', // generic name (each station's own label is its brand name)
   count: 6, // stations wanted (one per quadrant first, then the most spread-out extra spots)
   minGap: 150, // m between stations
   roadGap: 3.5, // m from the kerb to the lot (street lamps / hydrants stand 2.3 m off the kerb)
@@ -40,10 +42,22 @@ export const STATION = Object.freeze({
   kiosk: { u0: -5.5, u1: 5.5, v0: 15.5, v1: 21, h: 3.6 },
   sign: { u: -10.8, v: 16, pole: 0.15, y0: 4.2, y1: 6.3, hu: 1.25, hv: 0.18 },
   gasCan: { u: 7.6, v: 17.6 },
-  // refuelling
-  pumpRange: 3.5, // m from the car's centre to a pump
-  stopSpeed: 1.2, // m/s: slower than this counts as stopped
+  pumpRange: 3.5, // m: pumpNear's default search radius
+  // the nozzle (GasPumps.js): grab it on foot, walk it to a car, hold fire to pump
+  grabRange: 2, // m from the player to the pump to grab its nozzle
+  hoseLen: 6, // m: walk further from the pump and the nozzle snaps back to it
+  fuelRange: 2.5, // m from the nozzle (the player) to a car's body to fuel it
   refuelRate: 10, // fuel per second (an empty tank fills in 10 s)
+  // pumps take damage, burn and blow up (GasPumps.js)
+  pumpHp: 150,
+  fireAt: 0.35, // hp fraction: the pump catches fire and burns down on its own
+  burnRate: 14, // hp per second while burning (from 35% that is about 4 s)
+  chainDelay: [0.6, 2.2], // s: each other pump of an exploded pump's station catches fire after this
+  blastRadius: 7, // m
+  blastDamage: 70, // to a character at the pump (falls off to blastMinDamage at the edge)
+  blastMinDamage: 15,
+  blastCarDamage: 220, // to cars in the radius (Vehicles.blast falloff)
+  blastPumpDamage: 90, // to pumps of other stations in the radius (none are that close today)
   drawDist: 320, // m: meshes further than this from the camera are hidden
 });
 
@@ -273,7 +287,10 @@ export function pickStations(cands, bounds, count = STATION.count) {
     if (!best) break;
     out.push(best);
   }
-  return out.map((c, i) => ({ ...c, i, key: 'gas' + i, label: STATION.label, mesh: null, colliders: [] }));
+  return out.map((c, i) => {
+    const brand = brandFor(i);
+    return { ...c, i, key: 'gas' + i, brand: brand.id, label: brand.name, mesh: null, colliders: [] };
+  });
 }
 
 /** Station-local corners of the lot (plan polygon, clockwise in u/v). */
@@ -324,9 +341,10 @@ export function stationSolids() {
   const out = [];
   const c = S.canopy;
   out.push({ part: 'canopy', u: (c.u0 + c.u1) / 2, v: (c.v0 + c.v1) / 2, hu: (c.u1 - c.u0) / 2, hv: (c.v1 - c.v0) / 2, y0: c.y0, y1: c.y1, mat: 'metal' });
+  let pk = 0; // pump index (same order as stationPumps)
   for (const iv of S.islands) {
     for (const su of [-1, 1]) out.push({ part: 'post', u: su * S.postU, v: iv, hu: S.post, hv: S.post, y0: 0, y1: c.y0, mat: 'metal' });
-    for (const pu of S.pumpU) out.push({ part: 'pump', u: pu, v: iv, hu: S.pump.hu, hv: S.pump.hv, y0: 0, y1: S.pump.h, mat: 'metal' });
+    for (const pu of S.pumpU) out.push({ part: 'pump', k: pk++, u: pu, v: iv, hu: S.pump.hu, hv: S.pump.hv, y0: 0, y1: S.pump.h, mat: 'metal' });
   }
   const k = S.kiosk;
   out.push({ part: 'kiosk', u: (k.u0 + k.u1) / 2, v: (k.v0 + k.v1) / 2, hu: (k.u1 - k.u0) / 2, hv: (k.v1 - k.v0) / 2, y0: 0, y1: k.h, mat: 'brick' });
@@ -336,7 +354,7 @@ export function stationSolids() {
   return out;
 }
 
-/** World positions of a station's pumps: [{ x, z }]. */
+/** World positions of a station's pumps: [{ x, z }] (same order as stationSolids' pumps). */
 export function stationPumps(st) {
   if (st._pumps) return st._pumps;
   const out = [];
@@ -346,9 +364,26 @@ export function stationPumps(st) {
 }
 
 /**
- * After the world meshes: registers each station's colliders (indestructible boxes: canopy roof,
- * posts, pumps, kiosk, sign), adds its mesh (meshFactory() -> THREE.Object3D in station-local
- * space, ground at y = 0) and a gas can on the ground beside the kiosk (world.fixedLoot).
+ * Station-local pumps in stationSolids / stationPumps order: [{ k, u, v, side }]. `side` (-1 / +1)
+ * is the pump's outer end along u, where the nozzle hangs in its holster.
+ */
+export function pumpSpots() {
+  const out = [];
+  for (const iv of STATION.islands) for (const pu of STATION.pumpU) out.push({ k: out.length, u: pu, v: iv, side: pu < 0 ? -1 : 1 });
+  return out;
+}
+
+/** Station-local point where a pump's hose leaves its body (u, y, v). */
+export function pumpHoseLocal(spot) {
+  const P = STATION.pump;
+  return { u: spot.u + spot.side * P.hu * 0.6, y: P.h - 0.25, v: spot.v };
+}
+
+/**
+ * After the world meshes: registers each station's colliders (boxes: canopy roof, posts, pumps,
+ * kiosk, sign; pump boxes carry `pumpIdx`, their hp lives in GasPumps.js), adds its mesh
+ * (meshFactory(brand) -> THREE.Object3D in station-local space, ground at y = 0) and a gas can on
+ * the ground beside the kiosk (world.fixedLoot).
  */
 export function buildGasStations(world, stations, { scene = null, meshFactory = null } = {}) {
   if (!world || !stations) return stations;
@@ -356,6 +391,7 @@ export function buildGasStations(world, stations, { scene = null, meshFactory = 
   const p = { x: 0, z: 0 };
   const loot = [];
   for (const st of stations) {
+    const brand = brandFor(st.i);
     st.y = world.surfaceHeight ? world.surfaceHeight(st.x, st.z) : 0;
     st.colliders = [];
     if (world.addBox) {
@@ -363,13 +399,14 @@ export function buildGasStations(world, stations, { scene = null, meshFactory = 
         stationToWorld(st, s.u, s.v, p);
         const col = world.addBox({ cx: p.x, cz: p.z, hx: s.hu, hz: s.hv, yaw: st.yaw, y0: st.y + s.y0, y1: st.y + s.y1, kind: 'gasStation', mat: s.mat, hp: Infinity, ref: null });
         col.gasStation = st.i;
+        if (s.part === 'pump') col.pumpIdx = s.k;
         st.colliders.push(col);
       }
     }
     const gc = stationToWorld(st, STATION.gasCan.u, STATION.gasCan.v);
     loot.push({ kind: 'item', x: gc.x, y: world.surfaceHeight ? world.surfaceHeight(gc.x, gc.z) : st.y, z: gc.z, yaw: st.yaw, item: { type: 'consumable', id: 'gascan', count: 1 } });
     if (scene && meshFactory) {
-      const m = meshFactory();
+      const m = meshFactory(brand);
       if (m) {
         m.position.set(st.ox, st.y, st.oz);
         m.rotation.y = -st.yaw;
@@ -400,27 +437,4 @@ export function pumpNear(stations, x, z, range = STATION.pumpRange, y = null) {
     }
   }
   return best;
-}
-
-/**
- * Pump refuelling for one car (authoritative side): a live car stopped next to a pump gains
- * STATION.refuelRate fuel per second up to CAR.fuelMax. Returns the fuel added (0 when none).
- */
-export function refuelAtPump(car, stations, dt) {
-  if (!car || !car.alive || !(dt > 0) || !(car.fuel < CAR.fuelMax)) return 0;
-  if (!(Math.abs(car.speed || 0) <= STATION.stopSpeed)) return 0;
-  if (!pumpNear(stations, car.x, car.z, STATION.pumpRange, car.y)) return 0;
-  const add = Math.min(CAR.fuelMax - car.fuel, STATION.refuelRate * dt);
-  car.fuel = Math.max(0, car.fuel) + add;
-  return add;
-}
-
-/**
- * HUD state for a car: 'fill' (stopped at a pump, filling), 'full' (at a pump, tank full),
- * 'stop' (moving past a pump: stop to refuel) or null (no pump in reach).
- */
-export function pumpStatus(car, stations) {
-  if (!car || !car.alive || !pumpNear(stations, car.x, car.z, STATION.pumpRange, car.y)) return null;
-  if (!(Math.abs(car.speed || 0) <= STATION.stopSpeed)) return 'stop';
-  return car.fuel < CAR.fuelMax - 0.5 ? 'fill' : 'full';
 }

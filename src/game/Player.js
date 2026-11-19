@@ -21,6 +21,8 @@ import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIAL
 import { sameTeam } from './Teams.js';
 import { placeOnShoulder } from './Combat.js';
 import { CAR } from './vehicles/cars.js';
+import { distToCar } from './vehicles/carHit.js';
+import { STATION } from './vehicles/gasStations.js';
 
 const PIECE_ACTIONS = { buildWall: 'wall', buildFloor: 'floor', buildRamp: 'ramp', buildCone: 'cone' };
 export const FREEFALL_SPEED = 38;
@@ -630,18 +632,10 @@ export class Player {
       this._carHintT = 6;
     }
     this._carHintT = Math.max(0, (this._carHintT || 0) - dt);
-    // at a gas station pump: stopping there fills the tank (Vehicles / gasStations.js)
-    const pump = veh && veh.pumpStatus && car ? veh.pumpStatus(car) : null;
+    // at a gas pump: the nozzle is grabbed on foot (GasPumps.js)
+    const pump = car && g.pumps && car.fuel < CAR.fuelMax - 0.5 ? g.pumps.pumpFor({ id: -1, pos: { x: car.x, y: car.y, z: car.z } }, 4.5) : null;
     if (this.useT <= 0 && pump) {
-      g.hud.prompt(
-        pump === 'fill'
-          ? `Refuelling at the pump  ${Math.floor(car.fuel)}/${CAR.fuelMax}`
-          : pump === 'full'
-            ? 'Tank full'
-            : driver
-              ? 'Stop at the pump to refuel'
-              : 'Gas pump: the driver can stop here to refuel',
-      );
+      g.hud.prompt(`Gas pump: get out and grab the nozzle to refuel  ${Math.floor(car.fuel)}/${CAR.fuelMax}`);
     } else if (this.useT <= 0 && this._carHintT <= 0) g.hud.prompt(null);
     else if (this.useT <= 0) {
       g.hud.prompt(
@@ -986,7 +980,8 @@ export class Player {
     this.placeCooldown -= dt;
 
     // equipped model on the character
-    const eqId = this.buildPiece ? 'pickaxe' : cur ? (cur.type === 'weapon' ? cur.id : CONSUMABLES[cur.id] && CONSUMABLES[cur.id].throwable ? cur.id : 'none') : 'pickaxe';
+    const nozzle = g.pumps && !this.vehicle ? g.pumps.heldPump(this) : null; // gas pump nozzle in hand
+    const eqId = nozzle ? 'none' : this.buildPiece ? 'pickaxe' : cur ? (cur.type === 'weapon' ? cur.id : CONSUMABLES[cur.id] && CONSUMABLES[cur.id].throwable ? cur.id : 'none') : 'pickaxe';
     if (eqId !== this.lastEquipped) {
       if (this.lastEquipped !== null) g.sfx.play('weapon_switch', { volume: 0.5 });
       this.lastEquipped = eqId;
@@ -1031,6 +1026,14 @@ export class Player {
         return;
       }
     }
+
+    // ---- a gas pump nozzle in hand (GasPumps.js): no weapon, no building; fire pumps fuel
+    if (nozzle) {
+      this._nozzleInput(input, g, nozzle, lmb);
+      this.triggerHeld = lmb;
+      return;
+    }
+    if (this._nzPump) this._nozzleGone(g);
 
     // ---- interact (revive a knocked teammate first); in a car E gets you out instead
     const rv = this.vehicle ? 0 : this._reviveInput(input, g, dt);
@@ -1261,6 +1264,79 @@ export class Player {
     return 1;
   }
 
+  /**
+   * One frame holding a gas pump's nozzle (GasPumps.js). Interact, a slot switch or a build piece
+   * hangs it up; walking more than STATION.hoseLen from the pump snaps it back. Within
+   * STATION.fuelRange of a car, holding fire pumps fuel into it (solo / host directly, a client asks
+   * the host with 'pmp' actions; the fuel comes back as the car's 'vf' events).
+   */
+  _nozzleInput(input, g, pump, lmb) {
+    const hud = g.hud;
+    const net = clientNet(g);
+    const L = (a, d) => '[' + (input.label ? input.label(a) : d) + ']';
+    if (this._nzPump !== pump) {
+      this._nzPump = pump;
+      this._nzSel = this.inventory.selected;
+      this._nzHang = -1;
+      this._nzCar = null;
+    }
+    if (g.structures) g.structures.setGhost(null);
+    this.placement = null;
+    this.throwAim = false;
+    if (this.editing) this._endEdit(g);
+    // a client waits for the host to confirm the hang-up (asks again after a second)
+    const now = g.time || 0;
+    if (this._nzHang >= 0 && now - this._nzHang < 1) return;
+    const d = Math.hypot(this.pos.x - pump.x, this.pos.z - pump.z);
+    const snap = d > STATION.hoseLen;
+    if (snap || input.actionHit('interact') || this.buildPiece || this.inventory.selected !== this._nzSel) {
+      this._nozzleFuel(g, null);
+      if (hud.setRevive) hud.setRevive(null);
+      hud.prompt(null);
+      if (snap) hud.toast('Too far: the hose snapped back to the pump', 'warn');
+      if (net) {
+        this._nzHang = now;
+        net.action({ k: 'pmp', op: 'hang', snap: snap ? 1 : 0 });
+      } else g.pumps.hangUp(this, snap);
+      return;
+    }
+    const car = g.pumps.fuelTarget(this);
+    const hang = `${L('interact', 'E')} Hang up`;
+    if (!car) {
+      this._nozzleFuel(g, null);
+      if (hud.setRevive) hud.setRevive(null);
+      hud.prompt(`Take the nozzle to a car (${Math.max(0, Math.floor(STATION.hoseLen - d))} m of hose left)  ·  ${hang}`);
+      return;
+    }
+    const full = !(car.fuel < CAR.fuelMax - 0.01);
+    const pumping = lmb && !full;
+    this._nozzleFuel(g, pumping ? car : null);
+    if (pumping) {
+      if (hud.setRevive) hud.setRevive({ pct: car.fuel / CAR.fuelMax, name: `${car.spec.name} ${Math.floor(car.fuel)}/${CAR.fuelMax}`, verb: 'FUELLING' });
+      hud.prompt(null); // the progress ring sits where the prompt goes
+    } else {
+      if (hud.setRevive) hud.setRevive(null);
+      hud.prompt(full ? `Tank full  ·  ${hang}` : `${L('fire', 'LMB')} Hold to fuel the ${car.spec.name}  ${Math.floor(car.fuel)}/${CAR.fuelMax}  ·  ${hang}`);
+    }
+  }
+
+  /** Start / stop pumping into `car` (null): solo / host directly, a client tells the host. */
+  _nozzleFuel(g, car) {
+    if (this._nzCar === car) return;
+    this._nzCar = car;
+    const net = clientNet(g);
+    if (net) net.action({ k: 'pmp', op: 'fuel', c: car ? car.id : -1 });
+    else if (g.pumps) g.pumps.setFueling(this, car);
+  }
+
+  /** The nozzle left our hand (hung up, snapped back, the pump blew up): tidy the HUD. */
+  _nozzleGone(g) {
+    this._nzPump = null;
+    this._nzCar = null;
+    this._nzHang = -1;
+    if (g.hud && g.hud.setRevive) g.hud.setRevive(null);
+  }
+
   _stopReboot(g) {
     if (!this.rebootVan) return;
     const net = clientNet(g);
@@ -1310,6 +1386,19 @@ export class Player {
     // drivable cars: get in (the driver's seat when it is free)
     const veh = g.vehicles;
     const car = veh && !this.airborneDrop && !this.carrying ? veh.nearest(this) : null;
+    // a gas pump in reach (closer than the car): grab its nozzle (GasPumps.js)
+    const pump = g.pumps && !this.airborneDrop && !this.carrying && this.mode === 'ground' ? g.pumps.pumpFor(this) : null;
+    if (pump && (!car || Math.hypot(pump.x - this.pos.x, pump.z - this.pos.z) <= distToCar(car, this.pos.x, this.pos.z))) {
+      g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] Grab the nozzle  ·  ' + (pump.st.label || STATION.label));
+      if (input.actionHit('interact')) {
+        this._cancelReload();
+        this._cancelUse();
+        const net = clientNet(g);
+        if (net) net.action({ k: 'pmp', op: 'grab', p: pump.id });
+        else g.pumps.grab(this, pump);
+      }
+      return;
+    }
     if (car) {
       g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] ' + (car.seats[0] ? 'Get in ' : 'Drive ') + car.spec.name);
       if (input.actionHit('interact')) {

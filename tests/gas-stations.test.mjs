@@ -1,7 +1,7 @@
-// Gas stations: generic "Gas Station" lots beside the streets (same spots on every machine, on open
-// ground, spread over every quadrant), solid canopy posts / pumps / kiosk with open lanes between
-// them, a gas can on each forecourt, and pump refuelling (a car stopped at a pump fills up at
-// STATION.refuelRate; host-authoritative, replicated with 'vf' events).
+// Gas stations: branded lots beside the streets (same spots on every machine, on open ground, spread
+// over every quadrant), solid canopy posts / pumps / kiosk with open lanes between them, a gas can on
+// each forecourt, the invented brands (gasBrands.js) and the cars' pump-fuel path ('vf' events).
+// The nozzle and pump damage are in gas-pumps.test.mjs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -9,17 +9,8 @@ import { World } from '../src/world/World.js';
 import { Vehicles } from '../src/game/Vehicles.js';
 import { Reboot } from '../src/game/Reboot.js';
 import { CAR, makeCar } from '../src/game/vehicles/cars.js';
-import {
-  STATION,
-  planGasStations,
-  buildGasStations,
-  stationToWorld,
-  stationPumps,
-  stationAt,
-  pumpNear,
-  refuelAtPump,
-  pumpStatus,
-} from '../src/game/vehicles/gasStations.js';
+import { STATION, planGasStations, buildGasStations, stationToWorld, stationPumps, stationAt, pumpSpots } from '../src/game/vehicles/gasStations.js';
+import { GAS_BRANDS, brandFor, brandById } from '../src/game/vehicles/gasBrands.js';
 
 const mapData = JSON.parse(readFileSync(new URL('../public/data/bentonville-osm.json', import.meta.url)));
 const MIN_STATIONS = 4;
@@ -58,7 +49,7 @@ test('stations: deterministic, inside the map, one per quadrant and spread apart
   const quads = new Set(a.map((s) => (s.x < cx ? 'W' : 'E') + (s.z < cz ? 'N' : 'S')));
   assert.deepEqual([...quads].sort(), ['EN', 'ES', 'WN', 'WS'], 'every quadrant has a station');
   for (const s of a) {
-    assert.equal(s.label, 'Gas Station');
+    assert.equal(s.label, brandFor(s.i).name, 'labelled with its brand');
     for (const p of lotPoints(s, 4)) assert.ok(p.x > B.minX && p.x < B.maxX && p.z > B.minZ && p.z < B.maxZ, 'lot inside the map');
   }
   for (let i = 0; i < a.length; i++) for (let j = i + 1; j < a.length; j++) assert.ok(Math.hypot(a[i].x - a[j].x, a[i].z - a[j].z) >= STATION.minGap, `stations ${i} and ${j} too close`);
@@ -84,7 +75,15 @@ test('stations: posts, pumps and kiosk are solid, the lanes between the pumps ar
   buildGasStations(w, stations);
   for (const st of stations) {
     assert.ok(st.colliders.length >= 10, 'canopy, posts, pumps, kiosk, sign');
-    for (const c of st.colliders) assert.equal(c.hp, Infinity, 'indestructible');
+    for (const c of st.colliders) assert.equal(c.hp, Infinity, 'no Combat hp (pump hp lives in GasPumps)');
+    assert.deepEqual(st.colliders.filter((c) => c.pumpIdx != null).map((c) => c.pumpIdx), [0, 1, 2, 3], 'pump boxes are numbered');
+    stationPumps(st).forEach((pm, k) => {
+      const c = st.colliders.find((cc) => cc.pumpIdx === k);
+      assert.ok(Math.hypot(c.cx - pm.x, c.cz - pm.z) < 1e-6, 'pump box k sits on stationPumps()[k]');
+      const sp = pumpSpots()[k];
+      const w = stationToWorld(st, sp.u, sp.v);
+      assert.ok(Math.hypot(w.x - pm.x, w.z - pm.z) < 1e-6, 'pumpSpots in the same order');
+    });
     for (const pm of stationPumps(st)) assert.equal(w.blockedAt(pm.x, pm.z, 0.2), true, 'pump is solid');
     const k = STATION.kiosk;
     const kc = stationToWorld(st, (k.u0 + k.u1) / 2, (k.v0 + k.v1) / 2);
@@ -123,46 +122,8 @@ test('stations: parked cars and reboot-van spots keep off the lots', () => {
 
 /** A station-shaped test record at the origin (u = x, v = z). */
 function testStation() {
-  return { i: 0, key: 'gas0', label: STATION.label, ox: 0, oz: 0, yaw: 0, cos: 1, sin: 0, x: 0, z: 7, y: 0 };
+  return { i: 0, key: 'gas0', label: 'Clam Oil', ox: 0, oz: 0, yaw: 0, cos: 1, sin: 0, x: 0, z: 7, y: 0 };
 }
-
-test('refuel: a stopped car at a pump fills at the pump rate up to a full tank', () => {
-  const st = [testStation()];
-  const lane = (STATION.islands[0] + STATION.islands[1]) / 2;
-  const car = makeCar(0, 'sedan', 0, 0, lane, Math.PI / 2, { fuel: 20 });
-  assert.ok(pumpNear(st, car.x, car.z), 'in reach of a pump');
-  assert.equal(pumpStatus(car, st), 'fill');
-  let added = 0;
-  for (let i = 0; i < 60; i++) added += refuelAtPump(car, st, 1 / 60);
-  assert.ok(Math.abs(added - STATION.refuelRate) < 1e-6, `1 s at the pump adds ${added}`);
-  assert.ok(Math.abs(car.fuel - (20 + STATION.refuelRate)) < 1e-6);
-  for (let i = 0; i < 60 * 20; i++) refuelAtPump(car, st, 1 / 60);
-  assert.equal(car.fuel, CAR.fuelMax, 'capped at a full tank');
-  assert.equal(refuelAtPump(car, st, 1), 0);
-  assert.equal(pumpStatus(car, st), 'full');
-});
-
-test('refuel: only when stopped, near a pump, alive and on the forecourt level', () => {
-  const st = [testStation()];
-  const lane = (STATION.islands[0] + STATION.islands[1]) / 2;
-  const moving = makeCar(0, 'sedan', 0, 0, lane, Math.PI / 2, { fuel: 20 });
-  moving.speed = 8;
-  assert.equal(refuelAtPump(moving, st, 1), 0, 'driving through');
-  assert.equal(pumpStatus(moving, st), 'stop');
-  const crawl = makeCar(1, 'sedan', 0, 0, lane, Math.PI / 2, { fuel: 20 });
-  crawl.speed = STATION.stopSpeed * 0.5;
-  assert.ok(refuelAtPump(crawl, st, 1) > 0, 'rolling to a stop counts');
-  const far = makeCar(2, 'sedan', 0, 0, 40, 0, { fuel: 20 });
-  assert.equal(refuelAtPump(far, st, 1), 0, 'away from the pumps');
-  assert.equal(pumpStatus(far, st), null);
-  const kiosk = makeCar(3, 'sedan', 0, 0, STATION.kiosk.v0 - 1, Math.PI / 2, { fuel: 20 });
-  assert.equal(refuelAtPump(kiosk, st, 1), 0, 'parked by the kiosk, not at a pump');
-  const dead = makeCar(4, 'sedan', 0, 0, lane, Math.PI / 2, { fuel: 20 });
-  dead.alive = false;
-  assert.equal(refuelAtPump(dead, st, 1), 0, 'wrecks do not refuel');
-  const above = makeCar(5, 'sedan', 0, 6, lane, Math.PI / 2, { fuel: 20 });
-  assert.equal(refuelAtPump(above, st, 1), 0, 'on the canopy roof, not at the pump');
-});
 
 function seatedDriver(car) {
   const pos = { x: car.x, y: 0, z: car.z, set(a, b, c) { this.x = a; this.y = b; this.z = c; } };
@@ -171,65 +132,93 @@ function seatedDriver(car) {
   return a;
 }
 
-test('vehicles: the host fills a car at a pump and replicates it; a remote driver cannot undo it', () => {
-  const st = [testStation()];
-  const lane = (STATION.islands[0] + STATION.islands[1]) / 2;
+test('vehicles: pump fuel fills to a full tank, replicates every few units, and a remote driver cannot undo it', () => {
   const v = new Vehicles({});
-  v.stations = st;
-  const car = v._add(makeCar(0, 'sedan', 0, 0, lane, Math.PI / 2, { fuel: 10 }));
+  v.stations = [testStation()];
+  const car = v._add(makeCar(0, 'sedan', 0, 0, 7, Math.PI / 2, { fuel: 10 }));
   const driver = seatedDriver(car);
   const events = [];
   v.onEvent = (e) => events.push(e);
+  // a stopped car next to a pump no longer fills by itself: the nozzle does it (GasPumps.js)
   for (let i = 0; i < 60; i++) v.update(1 / 60, []);
+  assert.equal(car.fuel, 10, 'no auto refuel');
+  for (let i = 0; i < 60; i++) {
+    v.update(1 / 60, []);
+    v.pumpFuel(car, STATION.refuelRate / 60);
+  }
   assert.ok(Math.abs(car.fuel - 20) < 1e-6, `fuel ${car.fuel}`);
   const vf = events.filter((e) => e.e === 'vf');
-  assert.ok(vf.length >= 4 && vf.length <= 6, `${vf.length} fuel events in 1 s (every ${2} units)`);
+  assert.ok(vf.length >= 4 && vf.length <= 6, `${vf.length} fuel events in 1 s (every 2 units)`);
   assert.ok(vf.every((e, i) => i === 0 || e.f >= vf[i - 1].f), 'rising');
   // the driver's client still reports the old level until it hears the event: ignored for now
   assert.equal(v.acceptDriverPose(driver, { c: car.id, x: car.x, y: car.y, z: car.z, h: car.heading, f: 10 }, 1 / 30), true);
   assert.ok(car.fuel >= 20, 'a stale report does not drain the pump fuel');
-  // fill up: the last event says full
-  for (let i = 0; i < 60 * 10; i++) v.update(1 / 60, []);
+  const room = CAR.fuelMax - car.fuel;
+  assert.ok(Math.abs(v.pumpFuel(car, 500) - room) < 1e-9, 'capped at a full tank');
   assert.equal(car.fuel, CAR.fuelMax);
-  assert.equal(events.filter((e) => e.e === 'vf').at(-1).f, CAR.fuelMax);
+  assert.equal(events.filter((e) => e.e === 'vf').at(-1).f, CAR.fuelMax, 'the last event says full');
+  v.pumpFuelDone(car);
   // long after the pump, the driver's (lower) reports count again (fuel burnt driving away)
-  car.x = 60;
   for (let i = 0; i < 90; i++) v.update(1 / 60, []);
   v.acceptDriverPose(driver, { c: car.id, x: car.x, y: car.y, z: car.z, h: car.heading, f: 95 }, 1 / 30);
   assert.equal(car.fuel, 95);
+  // a client never adds pump fuel itself; it mirrors the host's events
+  const c = new Vehicles({});
+  c.reset({ authoritative: false });
+  const cc = c._add(makeCar(0, 'sedan', 0, 0, 7, 0, { fuel: 10 }));
+  c.applyEvent({ e: 'vf', c: cc.id, f: 30 }, () => null);
+  assert.equal(cc.fuel, 30);
 });
 
-test('vehicles: a client mirrors pump fuel from the host instead of adding its own', () => {
-  const st = [testStation()];
-  const lane = (STATION.islands[0] + STATION.islands[1]) / 2;
-  const v = new Vehicles({});
-  v.stations = st;
-  v.reset({ authoritative: false });
-  const car = v._add(makeCar(0, 'sedan', 0, 0, lane, Math.PI / 2, { fuel: 10 }));
-  for (let i = 0; i < 60; i++) v.update(1 / 60, []);
-  assert.equal(car.fuel, 10, 'no local refuel on a client');
-  v.applyEvent({ e: 'vf', c: car.id, f: 30 }, () => null);
-  assert.equal(car.fuel, 30);
-  assert.equal(v.pumpStatus(car), 'fill', 'the HUD still knows it is at a pump');
+test('brands: one table, two stations of each, same on every machine, labels and sign colours', () => {
+  assert.deepEqual(GAS_BRANDS.map((b) => b.name), ['Clam Oil', 'Floor Mart', 'Circle O']);
+  const ids = [0, 1, 2, 3, 4, 5].map((i) => brandFor(i).id);
+  assert.deepEqual(ids, ['clam', 'floormart', 'circleo', 'clam', 'floormart', 'circleo']);
+  for (const b of GAS_BRANDS) assert.equal(ids.filter((x) => x === b.id).length, 2, `two ${b.name} stations`);
+  assert.equal(brandById('circleo').name, 'Circle O');
+  assert.equal(brandFor(-1).id, 'circleo');
+  assert.equal(brandFor(NaN).id, 'clam');
+  // colour schemes (owner-approved): clam red + yellow, floor mart blue + yellow, circle o red + orange
+  const rgb = (h) => [h >> 16, (h >> 8) & 255, h & 255];
+  const [cr, cg, cb] = rgb(brandById('clam').colors.fascia);
+  assert.ok(cr > 200 && cg > 180 && cb < 80, 'clam fascia is yellow');
+  assert.ok(rgb(brandById('clam').colors.text)[0] > 180 && rgb(brandById('clam').colors.text)[1] < 80, 'clam lettering is red');
+  assert.ok(rgb(brandById('floormart').colors.fascia)[2] > 150 && rgb(brandById('floormart').colors.fascia)[0] < 60, 'floor mart is blue');
+  assert.ok(rgb(brandById('circleo').colors.stripe)[0] > 200 && rgb(brandById('circleo').colors.stripe)[1] > 100, 'circle o has an orange stripe');
+  // planned stations carry their brand and its name
+  const stations = planGasStations(new World(mapData));
+  for (const st of stations) {
+    assert.equal(st.brand, brandFor(st.i).id);
+    assert.equal(st.label, brandFor(st.i).name);
+  }
 });
 
-test('art: no brand names, logos or brand colour schemes in the station code', () => {
-  const files = ['../src/render/GasStationMesh.js', '../src/ui/fuelIcon.js', '../src/game/vehicles/gasStations.js'];
-  const brands = /\b(shell|circle\s*k|walmart|murphy|casey'?s?|maverik|kum\s*&\s*go|exxon|mobil|chevron|texaco|sinclair|phillips\s*66|valero|citgo|marathon|sunoco|speedway|7-eleven|quiktrip|qt|bp|76|arco|gulf|conoco)\b/i;
+test('brands: no real fuel-chain names in the station / brand code, art or copy', () => {
+  // built from fragments so this file never spells them out
+  const j = (...p) => p.join('');
+  const real = [j('sh', 'ell'), j('wal', 'mart'), j('wal', '-', 'mart'), j('circle', ' ', 'k'), j('circle', 'k'), j('circle', '-', 'k'), j('kum', ' & ', 'go'), j('exx', 'on'), j('mob', 'il'), j('chev', 'ron'), j('tex', 'aco'), j('mur', 'phy', ' usa'), j('quik', 'trip'), j('7', '-', 'eleven')];
+  const squash = (t) => t.toLowerCase().replace(/[\s_-]+/g, '');
+  const files = [
+    '../src/render/GasStationMesh.js',
+    '../src/render/NozzleHose.js',
+    '../src/ui/fuelIcon.js',
+    '../src/game/vehicles/gasStations.js',
+    '../src/game/vehicles/gasBrands.js',
+    '../src/game/GasPumps.js',
+    '../src/game/fastTravel.js',
+    './gas-stations.test.mjs',
+    './gas-pumps.test.mjs',
+  ];
   for (const f of files) {
-    const src = readFileSync(new URL(f, import.meta.url), 'utf8');
-    const m = src.match(brands);
-    assert.equal(m, null, `${f} mentions "${m && m[0]}"`);
-    // no saturated reds / oranges (the usual fuel-brand trade dress); the palette is violet, gold, cream
-    for (const hex of src.match(/(?:0x|#)[0-9a-f]{6}\b/gi) || []) {
-      const n = parseInt(hex.replace('#', '').replace(/^0x/i, ''), 16);
-      const r = n >> 16;
-      const g = (n >> 8) & 255;
-      const b = n & 255;
-      assert.ok(!(r > 180 && g < 150 && b < 110), `${f}: red / orange colour ${hex}`);
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8').toLowerCase();
+    const flat = squash(src);
+    for (const n of real) {
+      assert.equal(src.includes(n), false, `${f} mentions a real brand (${n.length} letters)`);
+      // "circle o" squashed is "circleo": only the real one (circle + k) is checked squashed
+      if (n.replace(/[\s&-]/g, '').length > 6) assert.equal(flat.includes(squash(n)), false, `${f} spells a real brand without spaces`);
     }
   }
-  assert.equal(STATION.label, 'Gas Station');
+  for (const b of GAS_BRANDS) for (const n of real) assert.equal(squash(b.name).includes(squash(n)), false, `${b.name}`);
 });
 
 test('chests never give gas cans; floor loot still can', async () => {

@@ -12,9 +12,9 @@
 //   v.onEvent = (e) => {}             // host: replicate (see HostSession / ClientSession)
 //   v.applyEvent(e, actorById)        // client: mirror the host's events
 //   v.poses() / v.applyPoses(rows)    // host -> clients: where the moving cars are
-//   v.stations = [...]                // gas stations (vehicles/gasStations.js): a car stopped at a
-//                                     // pump refuels (authoritative; clients get 'vf' events)
-//   v.pumpStatus(car)                 // HUD: 'fill' | 'full' | 'stop' | null
+//   v.stations = [...]                // gas stations (vehicles/gasStations.js): meshes culled here
+//   v.pumpFuel(car, add) / v.pumpFuelDone(car)  // a pump nozzle fills a car (GasPumps.js;
+//                                     // authoritative; clients get 'vf' events every few units)
 //
 // Authoritative (solo / host) decides seats, damage, explosions and run-overs. A multiplayer
 // client drives its own car (local physics, sent to the host with 'drv' actions) and mirrors
@@ -26,7 +26,7 @@
 import { CAR, CAR_TYPES, CAR_TYPE_IDS, carGeom, makeCar, pickSeat, nextSeat, seatOf, ramDamage, worldToCar } from './vehicles/cars.js';
 import { rayCars, seatWorldPos, exitSpot, distToCar } from './vehicles/carHit.js';
 import { stepCar } from './vehicles/carPhysics.js';
-import { refuelAtPump, pumpStatus, STATION } from './vehicles/gasStations.js';
+import { STATION } from './vehicles/gasStations.js';
 import { sameTeam } from './Teams.js';
 
 const DRAW_DIST = 260; // m: cars further than this from the camera are hidden
@@ -434,25 +434,28 @@ export class Vehicles {
     return true;
   }
 
-  /** HUD: is `car` at a gas pump? 'fill' | 'full' | 'stop' (moving) | null. */
-  pumpStatus(car) {
-    return this.stations && this.stations.length ? pumpStatus(car, this.stations) : null;
+  /**
+   * Authoritative: a pump nozzle (GasPumps.js) pours `add` fuel into `car`, up to a full tank.
+   * Clients hear about it every PUMP_SEND units and when it is full. Returns the fuel added.
+   */
+  pumpFuel(car, add) {
+    if (!car || !car.alive || !(add > 0)) return 0;
+    const before = Math.max(0, car.fuel);
+    car.fuel = Math.min(CAR.fuelMax, before + add);
+    car._pumpT = this.time;
+    if (car._pumpSent == null) car._pumpSent = before;
+    if (car.fuel >= CAR.fuelMax || car.fuel - car._pumpSent >= PUMP_SEND) {
+      car._pumpSent = car.fuel;
+      this._emit({ e: 'vf', c: car.id, f: Math.round(car.fuel) });
+    }
+    return car.fuel - before;
   }
 
-  /** Authoritative: a car stopped at a pump fills up; clients hear about it every few units. */
-  _pump(car, dt) {
-    const add = refuelAtPump(car, this.stations, dt);
-    if (add > 0) {
-      car._pumpT = this.time;
-      if (car._pumpSent == null) car._pumpSent = car.fuel - add;
-      if (car.fuel >= CAR.fuelMax || car.fuel - car._pumpSent >= PUMP_SEND) {
-        car._pumpSent = car.fuel;
-        this._emit({ e: 'vf', c: car.id, f: Math.round(car.fuel) });
-      }
-    } else if (car._pumpSent != null) {
-      if (Math.round(car._pumpSent) !== Math.round(car.fuel)) this._emit({ e: 'vf', c: car.id, f: Math.round(car.fuel) });
-      car._pumpSent = null;
-    }
+  /** The nozzle stopped pumping into `car`: one last 'vf' when clients are behind. */
+  pumpFuelDone(car) {
+    if (!car || car._pumpSent == null) return;
+    if (Math.round(car._pumpSent) !== Math.round(car.fuel)) this._emit({ e: 'vf', c: car.id, f: Math.round(car.fuel) });
+    car._pumpSent = null;
   }
 
   // ---------------------------------------------------------------- damage
@@ -585,7 +588,6 @@ export class Vehicles {
       if (this.authoritative) {
         this._runOver(car, actors);
         this._ramPieces(car, dt);
-        if (this.stations) this._pump(car, dt);
       }
       for (let i = 0; i < car.seats.length; i++) if (car.seats[i]) this._pin(car, i, car.seats[i]);
     }

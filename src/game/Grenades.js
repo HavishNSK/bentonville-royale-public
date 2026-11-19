@@ -755,6 +755,8 @@ export class Grenades {
 
     // ---- drivable cars
     if (this.vehicles) this.vehicles.blast(c, R + 1, rk ? CAR.rocketDamage : CAR.grenadeDamage, { source: g.owner, weapon: rk ? 'rocket_launcher' : 'grenade' });
+    // ---- gas pumps (GasPumps.js): a blast in range can set one on fire or blow it up
+    if (this.pumps) this.pumps.blast(c, R + 1, rk ? CAR.rocketDamage : CAR.grenadeDamage, { source: g.owner, weapon: rk ? 'rocket_launcher' : 'grenade' });
 
     // ---- built pieces
     const st = this.structures;

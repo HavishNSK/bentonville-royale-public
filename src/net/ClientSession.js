@@ -223,6 +223,7 @@ export class ClientSession {
       game.combat.register(pup);
     }
     this.aliveCount = start.roster.length;
+    if (game.pumps && start.pumps) game.pumps.applySnapshot(start.pumps); // gas pumps already hurt / gone
     // tell the host (and through it everyone) which outfit we wear
     if (game.skin && SKINS[game.skin]) this.action({ k: 'sk', id: game.skin, px: game.pickaxe, bb: game.backbling });
     // Follow-up rounds of a burst gun are scheduled by Combat; forward each one like a trigger pull.
@@ -488,6 +489,12 @@ export class ClientSession {
       case 'vh':
       case 'vf':
         if (g.vehicles) g.vehicles.applyEvent(e, (id) => this.actorById(id));
+        return;
+      case 'pmd':
+      case 'pmf':
+      case 'pmx':
+      case 'pmn':
+        if (g.pumps) g.pumps.applyEvent(e, (id) => this.actorById(id));
         return;
       case 'rcp':
         if (g.reboot) g.reboot.applyEvent(e);

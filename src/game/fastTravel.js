@@ -23,8 +23,9 @@ export function poiTargets(landmarks, zones = DROP_ZONES) {
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
 /**
- * Gas stations as travel targets ({ key, label, x, z, gas }), labelled by where they sit on the
- * map ("Gas Station (NW)"; north = -z). `stations` from planGasStations, `bounds` the map's.
+ * Gas stations as travel targets ({ key, label, x, z, gas }), labelled with their brand and where
+ * they sit on the map ("Clam Oil (NW)"; north = -z; "Gas Station" when a station has no label).
+ * `stations` from planGasStations, `bounds` the map's.
  */
 export function gasTargets(stations, bounds) {
   if (!Array.isArray(stations) || !stations.length) return [];
@@ -36,14 +37,15 @@ export function gasTargets(stations, bounds) {
     if (!s || !Number.isFinite(s.x) || !Number.isFinite(s.z)) continue;
     const ang = Math.atan2(s.x - cx, -(s.z - cz)); // 0 = north, clockwise
     const dir = COMPASS[((Math.round(ang / (Math.PI / 4)) % 8) + 8) % 8];
-    out.push({ key: s.key || 'gas' + i, dir, label: `Gas Station (${dir})`, x: s.x, z: s.z, gas: true });
+    const name = typeof s.label === 'string' && s.label ? s.label : 'Gas Station';
+    out.push({ key: s.key || 'gas' + i, dir, name, label: `${name} (${dir})`, x: s.x, z: s.z, gas: true });
   }
-  // two in the same direction: number them, west to east (or north to south)
+  // two of a brand in the same direction: number them, west to east (or north to south)
   const byDir = new Map();
-  for (const g of out) byDir.set(g.dir, [...(byDir.get(g.dir) || []), g]);
-  for (const [dir, list] of byDir) {
+  for (const g of out) byDir.set(g.label, [...(byDir.get(g.label) || []), g]);
+  for (const list of byDir.values()) {
     if (list.length < 2) continue;
-    list.sort((a, b) => a.x - b.x || a.z - b.z).forEach((g, k) => (g.label = `Gas Station (${dir} ${k + 1})`));
+    list.sort((a, b) => a.x - b.x || a.z - b.z).forEach((g, k) => (g.label = `${g.name} (${g.dir} ${k + 1})`));
   }
   return out.sort((a, b) => a.label.localeCompare(b.label)); // listed in order (E, N, NW, SE 1, SE 2...)
 }
