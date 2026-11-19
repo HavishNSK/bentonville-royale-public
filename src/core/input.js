@@ -52,6 +52,7 @@ export class Input {
       if (e.button < 5) this.keys.delete('Mouse' + e.button);
     };
     this._move = (e) => {
+      this.moveEvents = (this.moveEvents || 0) + 1; // FPS overlay: mouse events per second
       if (!this.locked) return;
       this.dx += e.movementX || 0;
       this.dy += e.movementY || 0;

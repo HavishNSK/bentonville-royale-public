@@ -61,3 +61,8 @@ test('FPS limit and raw mouse settings are sanitized', () => {
   assert.equal(sanitizeSettings({ fpsCap: '144' }).fpsCap, 144);
   assert.equal(sanitizeSettings({ rawMouse: true }).rawMouse, true);
 });
+
+test('fullscreen when playing is on by default and can be turned off', () => {
+  assert.equal(sanitizeSettings({}).fullscreen, true);
+  assert.equal(sanitizeSettings({ fullscreen: false }).fullscreen, false);
+});
