@@ -11,6 +11,8 @@ import { WEAPONS, CONSUMABLES, RARITY_COLOR, CAMERA } from '/src/core/config.js'
 import { grenadeModel, smokeGrenadeModel, launcherModel } from '/src/game/Grenades.js';
 import { toonize } from '/src/render/Toon.js';
 import { PAVILIONS } from '/src/world/crystal-bridges/site.js';
+import { cosmeticDef } from '/src/game/Cosmetics.js';
+import { createShowcase } from '/src/ui/Showcase.js';
 
 const D2R = Math.PI / 180;
 
@@ -332,8 +334,46 @@ function itemRenderer(px) {
  * One item alone on a transparent square: the game's toon materials, its sun + sky fill, a 3/4
  * view. Returns a PNG data: URL. Rendered at 2x and scaled down for clean edges.
  */
+// cosmetics (outfits, pickaxes, back blings, gliders): the shop's own card render (Showcase.thumb),
+// the same models and materials the locker shows, scaled to the shot size
+let _showcase = null;
+async function renderCosmetic(spec, def) {
+  const size = spec.size || 360;
+  if (!_showcase) {
+    const host = document.createElement('div');
+    host.style.cssText = 'position:fixed;left:-9999px;top:0;width:400px;height:400px';
+    document.body.appendChild(host);
+    _showcase = createShowcase(host);
+  }
+  const url = await _showcase.thumb(spec.item, spec.skin ? { skin: spec.skin } : {});
+  if (!url) throw new Error(`no render for cosmetic "${spec.item}"`);
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  const out = document.createElement('canvas');
+  out.width = out.height = size;
+  const ctx = out.getContext('2d');
+  const glow = spec.glow === true ? spec.rarity || def.rarity : spec.glow || null;
+  if (glow) {
+    const col = new THREE.Color(RARITY_COLOR[glow] || 0xffffff);
+    const grd = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    grd.addColorStop(0, `rgba(${(col.r * 255) | 0},${(col.g * 255) | 0},${(col.b * 255) | 0},0.55)`);
+    grd.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, size, size);
+  }
+  const f = spec.fill || 0.92;
+  const k = Math.min((size * f) / img.width, (size * f) / img.height);
+  const w = img.width * k;
+  const h = img.height * k;
+  ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+  return out.toDataURL('image/png');
+}
+
 export async function renderItem(spec) {
   const g = game();
+  const cos = !WEAPONS[spec.item] && !CONSUMABLES[spec.item] ? cosmeticDef(spec.item) : null;
+  if (cos && cos.kind !== 'emote' && cos.kind !== 'bundle') return renderCosmetic(spec, cos.def);
   const size = spec.size || 360;
   const { obj, rarity } = itemSource(spec.item);
   toonize(obj, { saturate: 1.15 });

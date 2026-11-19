@@ -35,10 +35,25 @@ export const FLYER = {
         { src: '/ui/news/v20-box-fight.jpg', alt: 'Mid-fight in the Box Fights arena: players boxed up behind wooden walls on the checkered floor' },
       ],
       bullets: [
-        '1V1, 2V2, 3V3 or 4V4: flip the party panel to BOX FIGHTS, or pick it in a private match',
+        '1V1, 2V2, 3V3 or FFA: pick BOX FIGHTS, press PLAY, then join a public lobby, host one, or enter a private code',
         'A two-storey indoor arena. A wall hides the other team for the 5 second countdown, then slides up at FIGHT',
-        'First to 3 rounds. Everyone gets the same kit: pump, AR, SMG, 2 tonics, 2 medkits, 500 mats',
+        'First to 5 rounds. Everyone gets the same kit: pump, AR, SMG, 2 shield tonics, 500 mats',
         'Building fix: one tap, one ramp, and never a ramp under your own feet',
+      ],
+    },
+    {
+      id: 'bundle',
+      tag: 'SHOP',
+      title: 'The Femboy Jaithra Bundle',
+      items: [
+        { img: '/ui/news/v20-item-jaithra.png', name: 'Femboy Jaithra', rarity: 'legendary', text: 'A kid with dog DNA: floppy ears, fluffy tail, paws up' },
+        { img: '/ui/news/v20-item-paw.png', name: 'Paw Pounder', rarity: 'epic', text: 'A big fuzzy paw on a stick, bopped pads first' },
+        { img: '/ui/news/v20-item-gecko.png', name: 'Rainbow Gecko', rarity: 'epic', text: 'A chubby rainbow gecko plush clinging to your back' },
+        { img: '/ui/news/v20-item-pawsup.png', name: 'Paws Up', rarity: 'epic', text: 'No glider needed: drop belly-down with both paws up' },
+      ],
+      bullets: [
+        'All four for 25,000 coins, or 27,500 bought one by one',
+        'Each piece is also sold on its own in the FEATURED row, and the bundle gets cheaper for pieces you already own',
       ],
     },
     {

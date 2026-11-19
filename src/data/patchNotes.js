@@ -14,11 +14,15 @@ export const PATCH_NOTES = [
       {
         heading: 'New mode: Box Fights',
         items: [
-          'Pick BATTLE ROYALE or BOX FIGHTS on the party panel (or in a private match), then 1V1, 2V2, 3V3 or 4V4. Bots can fill the empty spots.',
-          'Two teams in a two-storey indoor arena floating in the void. No storm, no loot, no bus.',
+          'Pick BOX FIGHTS on the party panel and press PLAY: browse public lobbies by mode, host your own, join a private lobby with its 6-character code, or play with bots offline.',
+          'Modes: 1V1, 2V2, 3V3 and FFA (2 to 6 players). Lobbies hold up to 6, and bots fill the empty spots unless the host turns Fill off. Every bot plays at the same difficulty, picked by the host.',
+          'Wait for the match in the lobby room: walk around, jump and emote while the host sets it up.',
+          'Two teams (or everyone for themselves in FFA) in a two-storey indoor arena floating in the void. No storm, no loot, no bus.',
           'Every round starts with a wall down the middle: you can\'t see the other team for the 5 second countdown. At FIGHT it slides up into the ceiling.',
-          'First team to win 3 rounds takes the match. Everyone respawns with full health and shield each round.',
-          'One kit for everyone: pump shotgun, assault rifle, SMG, 2 shield tonics, 2 medkits and 500 of each material.',
+          'First team to win 5 rounds takes the match (the host can change it). FFA is 10 rounds, most eliminations wins, or first to 15. Everyone respawns with full health and shield each round.',
+          'One kit for everyone: pump shotgun, assault rifle, SMG, 2 shield tonics and 500 of each material.',
+          'The results screen shows everyone\'s eliminations, damage and builds. Back to Lobby keeps the same players together.',
+          'If the host leaves mid-match, another player takes over and the match keeps going.',
         ],
       },
       {
@@ -36,6 +40,14 @@ export const PATCH_NOTES = [
         items: [
           'One tap, one ramp: a quick tap no longer stacks a second ramp over your head.',
           'Ramps are never placed under your own feet, and nothing can be built through the Box Fights middle wall.',
+        ],
+      },
+      {
+        heading: 'Shop',
+        items: [
+          'New: the Femboy Jaithra Bundle. The Femboy Jaithra outfit, the Paw Pounder pickaxe, the Rainbow Gecko back bling and the Paws Up glider for 25,000 coins (27,500 bought one by one).',
+          'Every piece is also sold on its own, and the bundle gets cheaper for the pieces you already own.',
+          'The shop opens on a FEATURED row: the bundle and each of its pieces. Bundles moved to the bottom.',
         ],
       },
       {

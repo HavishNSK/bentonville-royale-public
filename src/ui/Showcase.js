@@ -6,7 +6,7 @@
 //   sc.emote('emote_spin')      // the "you" character plays it (null stops)
 //   sc.setActive(on)            // render loop on / off (title screen visible)
 //   sc.preview(id|null)         // shop / locker: try an outfit, pickaxe or back bling on (null = back)
-//   await sc.thumb(id)          // PNG data URL of any cosmetic (shop / locker cards), cached
+//   await sc.thumb(id, {skin}?) // PNG data URL of any cosmetic (shop / locker cards), cached; skin: worn by a glider / emote render
 //
 // Up to MAX_SHOWN members stand in a shallow V; the camera refits so nobody is ever cropped,
 // and name tags follow each character's feet. Drag to turn them. Characters load lazily (the GLBs are shared with the match load).
@@ -473,12 +473,13 @@ export function createShowcase(parent) {
 
   return {
     el: wrap,
-    thumb(id) {
-      if (!thumbs.has(id)) {
-        const p = (thumbQ = thumbQ.then(() => (BUNDLES[id] ? bundleArt(id) : drawThumb(id))).catch(() => null));
-        thumbs.set(id, p);
+    thumb(id, { skin = null } = {}) {
+      const key = skin ? `${id}@${skin}` : id;
+      if (!thumbs.has(key)) {
+        const p = (thumbQ = thumbQ.then(() => (BUNDLES[id] ? bundleArt(id) : drawThumb(id, skin ? { skin } : {}))).catch(() => null));
+        thumbs.set(key, p);
       }
-      return thumbs.get(id);
+      return thumbs.get(key);
     },
     setMembers(list) {
       const next = (list || []).slice(0, MAX_SHOWN);

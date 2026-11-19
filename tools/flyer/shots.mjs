@@ -52,8 +52,10 @@
 // Item shot (transparent PNG of one model with the game's toon lighting, fixed 3/4 angle):
 //   {
 //     kind: 'item', file: 'bb-item-grenade.png',
-//     item: 'grenade',          // weapon id (WEAPONS), consumable id (CONSUMABLES), or a loot
-//                               // model name: chest | ammo | crate
+//     item: 'grenade',          // weapon id (WEAPONS), consumable id (CONSUMABLES), a loot
+//                               // model name: chest | ammo | crate, or a cosmetic id (skin_*,
+//                               // pick_*, bb_*, gl_*: the shop card render; yaw/elev/rotate unused;
+//     skin: 'skin_scruff',      //  cosmetics only: the outfit a glider is shown on)
 //     size: 360,                // square px, default ITEM_SIZE
 //     yaw: 55, elev: 18,        // camera azimuth / elevation in degrees (default 55 / 18)
 //     rotate: [0, 0, 0],        // model rotation in degrees before framing, if it needs it
@@ -75,7 +77,7 @@ export const REF_RE = /^(landmark|van|pavilion|door):[a-z0-9_-]+$|^player$/;
 export const FILE_RE = /^[a-z0-9-]+\.(png|jpg)$/;
 
 const SCENE_KEYS = new Set(['kind', 'file', 'mode', 'size', 'quality', 'player', 'camera', 'distance', 'hidePlayer', 'settle', 'setup', 'fresh', 'note']);
-const ITEM_KEYS = new Set(['kind', 'file', 'item', 'size', 'yaw', 'elev', 'rotate', 'fill', 'glow', 'rarity', 'note']);
+const ITEM_KEYS = new Set(['kind', 'file', 'item', 'size', 'yaw', 'elev', 'rotate', 'fill', 'glow', 'rarity', 'skin', 'note']);
 
 const num = (v) => typeof v === 'number' && Number.isFinite(v);
 

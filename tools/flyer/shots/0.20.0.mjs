@@ -37,6 +37,11 @@ const fightFor = (size, after) => `
 export default {
   version: '0.20.0',
   shots: [
+    // Femboy Jaithra Bundle item cards: the shop's own card renders (studio renderCosmetic)
+    { kind: 'item', file: 'v20-item-jaithra.png', item: 'skin_scruff', glow: true, note: 'bundle card: the outfit' },
+    { kind: 'item', file: 'v20-item-paw.png', item: 'pick_paw', glow: true, note: 'bundle card: the pickaxe' },
+    { kind: 'item', file: 'v20-item-gecko.png', item: 'bb_gecko', glow: true, note: 'bundle card: the back bling' },
+    { kind: 'item', file: 'v20-item-pawsup.png', item: 'gl_paws', skin: 'skin_scruff', glow: true, note: 'bundle card: the glider, flown by the bundle outfit' },
     {
       kind: 'scene',
       file: 'v20-bhs-entrance.jpg',
