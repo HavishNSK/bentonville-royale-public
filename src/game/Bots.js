@@ -197,6 +197,26 @@ const BUILD_Q = 16; // most queued pieces in one build response
 const COVER_ON_HIT = 0.35; // share of hit reactions (x diff.wallOnHit) that raise a cover pocket
 const TOWER_CHANCE = 0.4; // enemy above: tower up instead of a ramp rush
 const COVER_CHANCE = 0.25; // mid range, not hurt: a cover pocket instead of a wall / ramp
+
+// Box Fights (arena) tuning, layered over DIFFICULTY: the arena is small and every fight is a
+// build fight, so bots place pieces faster, ramp-rush at you more and turtle in a box less.
+// (buildRate: s per piece; boxFight: chance to box up; highGround: chance to ramp at a level target;
+// arenaPush: chance a healthy bot ramp-pushes at its target instead of boxing up, both when a
+// fight starts (_boxFight) and when shot (_wallOnHit))
+const ARENA_TUNE = {
+  easy: { buildRate: 0.3, buildCooldown: 3 },
+  normal: { buildRate: 0.18, buildCooldown: 1.2, buildChance: 0.9, highGround: 0.5, boxFight: 0.35, arenaPush: 0.55 },
+  hard: { buildRate: 0.12, buildCooldown: 0.3, highGround: 0.85, boxFight: 0.5, arenaPush: 0.7 },
+};
+const ARENA_DIFFICULTY = Object.fromEntries(Object.entries(DIFFICULTY).map(([k, d]) => [k, Object.freeze({ ...d, ...(ARENA_TUNE[k] || {}) })]));
+const ARENA_PUSH_HP = 100; // arena: shot with at least this much health + shield, ramp at them instead of boxing
+// arena juke: shot while standing still (boxed, trapping, holding a build): sidestep left / right
+const JUKE_HURT = 0.9; // s after the last hit the bot keeps juking
+const JUKE_MIN = 0.28; // s per side, at least
+const JUKE_VAR = 0.3; // + up to this much more (random), so the rhythm cannot be timed
+const JUKE_AMP = 1.1; // m either side of the spot it holds (inside a 4 m box cell)
+const JUKE_STUCK = 0.3; // m moved in 0.5 s under fire below which the bot counts as pinned
+const _jk = { x: 0, z: 0 };
 const SIMPLE_EDIT_CHANCE = 0.35; // a peek uses the tile's simple-edit shape when it still lines up
 const HEAR = 160; // metres: gunfire this close can draw a bot in (third party)
 const BUILD_ROOM = 0.85; // bots stop starting builds past this share of BUILD.maxPieces
@@ -296,6 +316,12 @@ export class Bots {
    */
   setArena(layout) {
     this.arena = layout && layout.rect ? layout : null;
+    if (this.diffName) this.diff = this._diffTable()[this.diffName] || this.diff;
+  }
+
+  /** DIFFICULTY, or its Box Fights variant (ARENA_TUNE) while an arena is set. */
+  _diffTable() {
+    return this.arena ? ARENA_DIFFICULTY : DIFFICULTY;
   }
 
   /** Random point inside the arena rect (inset by `inset` m) at floor height. */
@@ -336,7 +362,7 @@ export class Bots {
     const world = this.world;
     this.rng = rng;
     this.diffName = DIFFICULTY[opts.difficulty] ? opts.difficulty : 'normal';
-    this.diff = DIFFICULTY[this.diffName];
+    this.diff = this._diffTable()[this.diffName];
     this._baseDiffName = this.diffName; // the match's difficulty (per-bot: b.diffName, _useDiff)
     if (opts.quality) this.setQuality(opts.quality);
     const names = shuffled(opts.names || BOT_NAMES, rng);
@@ -712,7 +738,7 @@ export class Bots {
     const name = b ? b.diffName : this._baseDiffName;
     if (!name || !DIFFICULTY[name] || name === this.diffName) return;
     this.diffName = name;
-    this.diff = DIFFICULTY[name];
+    this.diff = this._diffTable()[name];
   }
 
   _onDamage(b, victim, amount, info) {
@@ -1032,7 +1058,11 @@ export class Bots {
     let mode = 'wall';
     let afford = 0;
     for (const m of MATERIALS) afford += Math.floor(a.inventory.mats[m] / BUILD.cost);
-    const nearShot = Math.hypot(src.pos.x - a.pos.x, src.pos.z - a.pos.z) <= FAR_SHOT;
+    const srcD = Math.hypot(src.pos.x - a.pos.x, src.pos.z - a.pos.z);
+    const nearShot = srcD <= FAR_SHOT;
+    // Box Fights: healthy and not on top of them: build at the shooter (ramps up to them, then
+    // the rush follow-up traps them) rather than wall up and trade from a box
+    if (this.arena && !b.box && srcD > BOX_MIN && a.health + a.shield >= ARENA_PUSH_HP && this.rng() < (diff.arenaPush || 0) && this._buildPush(b, src)) return true;
     if (nearShot && diff.buildPieces >= 5 && afford >= 5 && !b.box && this.rng() < (RAMP_BOX_CHANCE[this.diffName] || 0)) {
       // a ramp box: four walls with a ramp up the middle toward the shooter; peek over the front
       // wall from the top of the ramp, shoot, drop back down into cover (_boxTick, ramp peeks)
@@ -1083,6 +1113,39 @@ export class Bots {
     return n;
   }
 
+  /**
+   * Box Fights: just shot while holding a spot (ox, oz)? Writes a point beside it to _jk, across
+   * the line to the shooter, switching sides every JUKE_MIN..+JUKE_VAR s, and returns true.
+   * False outside the arena or when nothing hit us for JUKE_HURT s (hold the spot as before).
+   */
+  _juke(b, ox, oz, amp = JUKE_AMP) {
+    const t = this.time;
+    const src = b.lastHitBy;
+    if (!this.arena || !src || !src.pos || t - (b.hurtAt ?? -Infinity) > JUKE_HURT) return false;
+    // pinned (against our own pieces on the way to the spot): sidestep where we are instead
+    const a = b.actor;
+    if (t >= (b.jukeCheckAt || 0)) {
+      b.jukeStuck = b.jukeCheckAt > 0 && Math.hypot(a.pos.x - b.jukeX, a.pos.z - b.jukeZ) < JUKE_STUCK;
+      b.jukeX = a.pos.x;
+      b.jukeZ = a.pos.z;
+      b.jukeCheckAt = t + 0.5;
+    }
+    if (b.jukeStuck) {
+      ox = a.pos.x;
+      oz = a.pos.z;
+    }
+    if (t >= (b.jukeUntil || 0)) {
+      b.jukeSide = b.jukeSide > 0 ? -1 : 1;
+      b.jukeUntil = t + JUKE_MIN + this.rng() * JUKE_VAR;
+    }
+    const dx = src.pos.x - ox;
+    const dz = src.pos.z - oz;
+    const d = Math.hypot(dx, dz) || 1;
+    _jk.x = ox - (dz / d) * b.jukeSide * amp;
+    _jk.z = oz + (dx / d) * b.jukeSide * amp;
+    return true;
+  }
+
   // ------------------------------------------------------------- box fighting
 
   /**
@@ -1116,6 +1179,8 @@ export class Bots {
     if ((!force && t < (b.boxRollAt || 0)) || b.bqI < b.bqN) return false;
     if (!force && t - (b.lastRushAt ?? -Infinity) < 6) return false; // mid-push toward them: finish it (trap)
     b.boxRollAt = t + 3 + this.rng() * 2;
+    // Box Fights: healthy, with them out past box-in range: build at them instead of boxing up
+    if (!force && this.arena && a.health + a.shield >= ARENA_PUSH_HP && this.rng() < (diff.arenaPush || 0) && this._buildPush(b, target)) return false;
     if (!force && this.rng() > diff.boxFight) return false;
     if (st.count >= BUILD.maxPieces * BUILD_ROOM) return false;
     const mat = bestMat(a.inventory);
@@ -2780,10 +2845,11 @@ export class Bots {
         const fx = dx / d;
         const fz = dz / d;
         // strafe side flips every so often
-        if (t > b.strafeUntil) {
+        const juking = this.arena && t - (b.hurtAt ?? -Infinity) < JUKE_HURT;
+        if (t > b.strafeUntil || (juking && !b.strafe)) {
           b.strafe = this.rng() < 0.5 ? -1 : 1;
-          if (this.rng() < 0.2) b.strafe = 0;
-          b.strafeUntil = t + 0.6 + this.rng() * 1.1;
+          if (this.rng() < 0.2 && !juking) b.strafe = 0;
+          b.strafeUntil = t + (juking ? JUKE_MIN + this.rng() * JUKE_VAR : 0.6 + this.rng() * 1.1);
           if (this.rng() < 0.12 && a.grounded) b.wantJump = true;
         }
         let fw = 0;
@@ -2866,6 +2932,10 @@ export class Bots {
               tr.peekT = Math.min(tr.peekT, t + (this.diffName === 'hard' ? 0.05 : 0.15));
               speed = 0;
             } else speed = left > 1.5 ? (this.diffName === 'hard' ? PLAYER.sprintSpeed : PLAYER.runSpeed) : PLAYER.walkSpeed;
+          } else if (this._juke(b, gx, gz)) {
+            gx = _jk.x;
+            gz = _jk.z;
+            speed = PLAYER.runSpeed;
           } else speed = left > 0.4 ? PLAYER.walkSpeed : 0;
           stop = 0.15;
           break;
@@ -2882,7 +2952,11 @@ export class Bots {
             gz -= Math.cos(b.box.face) * k;
             b.wantJump = false;
           }
-          speed = Math.hypot(gx - a.pos.x, gz - a.pos.z) > 0.4 ? PLAYER.walkSpeed : 0;
+          if (!b.box.ramp && this._juke(b, gx, gz)) {
+            gx = _jk.x;
+            gz = _jk.z;
+            speed = PLAYER.runSpeed;
+          } else speed = Math.hypot(gx - a.pos.x, gz - a.pos.z) > 0.4 ? PLAYER.walkSpeed : 0;
           stop = 0.15;
           break;
         }
@@ -2906,8 +2980,12 @@ export class Bots {
             b.rushUntil = 0;
           }
         } else if (b.bqMode === 'box' && t < b.holdUntil) {
-          // boxed up: stay inside while it goes up (and heal / reload behind it)
-          speed = 0;
+          // boxed up: stay inside while it goes up (and heal / reload behind it); shot meanwhile
+          // in the arena: juke on the spot
+          if (this._juke(b, a.pos.x, a.pos.z, 0.6)) {
+            gx = _jk.x;
+            gz = _jk.z;
+          } else speed = 0;
         }
         break;
       }
@@ -3116,6 +3194,14 @@ export class Bots {
         const cur = inv.current();
         if (cur && cur.type === 'weapon' && cur.mag < WEAPONS[cur.id].mag && b.reloading <= 0) this._startReload(b, cur);
       }
+    }
+    // Box Fights: under fire and pinned in place (run into our own pieces on the way somewhere):
+    // sidestep where we stand. Not mid ramp-rush or while pickaxing a wall (those stand on purpose)
+    if (state === 'engage' && this.arena && t >= b.rushUntil && t >= (b.smashUntil || 0) && this._juke(b, gx, gz) && b.jukeStuck) {
+      gx = _jk.x;
+      gz = _jk.z;
+      speed = Math.max(speed, PLAYER.runSpeed);
+      stop = 0.15;
     }
     if (state !== 'wander') b.wanderGoal = false;
     if (state !== 'retreat' && state !== 'heal') b.coverC = null;
@@ -3953,7 +4039,9 @@ export class Bots {
       b.buildCooldown = t + 0.5;
       return;
     }
-    if (pushing) {
+    // arena: shot but still healthy, with room to climb: ramp at them, not a box
+    const arenaPush = !!this.arena && underFire && maxN >= 3 && room >= 1 && d > 8 && a.health + a.shield >= ARENA_PUSH_HP;
+    if (pushing || arenaPush) {
       // fall through to the rush branch below
     } else if (maxN >= 5 && hurt && d < 40) {
       // 1x1 box around the bot's own cell: front wall first, then sides, back, roof
@@ -3970,7 +4058,7 @@ export class Bots {
     }
     if (mode) {
       // box chosen above
-    } else if (maxN >= 3 && room >= 1 && (pushing || high || ((t - (b.farHitAt ?? -Infinity) < 6 || t - (b.lastRushAt ?? -Infinity) < 4) && d > RUSH_TRAP_DIST) || (d > 18 && this.rng() < 0.45) || (diff.highGround && d > 8 && d < 45 && this.rng() < diff.highGround))) {
+    } else if (maxN >= 3 && room >= 1 && (pushing || arenaPush || high || ((t - (b.farHitAt ?? -Infinity) < 6 || t - (b.lastRushAt ?? -Infinity) < 4) && d > RUSH_TRAP_DIST) || (d > 18 && this.rng() < 0.45) || (diff.highGround && d > 8 && d < 45 && this.rng() < diff.highGround))) {
       // ramp rush: a chain of rising ramps toward the target, run up while it is built
       mode = 'rush';
       const ramps = Math.min(maxN, room, high ? 2 + Math.ceil((tgt.pos.y - py) / BUILD.level) : 3);

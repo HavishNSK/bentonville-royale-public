@@ -375,3 +375,67 @@ test('2v2 hard and normal: bots fight too', { todo: 'normal 2v2 bots still box t
     }
   }
 });
+
+// ---- shot while holding a spot: juke side to side; build at the shooter (ARENA_TUNE)
+
+/** One arena bot vs a fixed, unkillable shooter `gap` m away that hits it every 0.3 s while in sight. */
+function shotBot({ difficulty, seed, gap, secs = 20 }) {
+  const env = makeArena(seed);
+  env.bots.setArena(LAYOUT);
+  const cx = -224;
+  const cz = 176;
+  const [bot] = env.bots.spawn(1, env.rng, { positions: [{ x: cx, y: FLOOR, z: cz - gap / 2, heading: Math.PI }], teams: [2], loadout: loadout(), difficulty, idBase: 1 });
+  const me = { id: 99, team: 1, isBot: false, pos: new THREE.Vector3(cx, FLOOR, cz + gap / 2), vel: new THREE.Vector3(), grounded: true, alive: true, downed: false, health: 100, shield: 100, invulnerable: true, heading: 0, pitch: 0 };
+  env.combat.actors.push(me);
+  env.combat.onDamage = (t, a, info) => env.bots.notifyDamage(t, a, info);
+  let prev = null;
+  let run = 0;
+  let maxStill = 0;
+  let firstRamp = null;
+  const dt = 1 / 30;
+  for (let i = 0; i < secs * 30; i++) {
+    env.bots.update(dt, { player: me, storm, humans: [me] });
+    if (env.structures.update) env.structures.update(dt);
+    if (firstRamp === null) for (const p of env.structures.slots.values()) if (p && p.alive && p.kind === 'ramp') firstRamp = i * dt;
+    if (i % 9 || !env.bots._los(me.pos.x, FLOOR + 1.5, me.pos.z, bot.pos.x, bot.pos.y + 1.2, bot.pos.z)) continue;
+    env.combat.applyDamage(bot, 4, { source: me });
+    if (bot.health < 40) bot.health = 100; // keep it fighting
+    run = prev && Math.hypot(bot.pos.x - prev.x, bot.pos.z - prev.z) < 0.25 ? run + 1 : 0;
+    maxStill = Math.max(maxStill, run);
+    prev = { x: bot.pos.x, z: bot.pos.z };
+  }
+  return { maxStill, firstRamp };
+}
+
+test('arena: a bot being shot never stands still for more than two hits in a row', () => {
+  for (const difficulty of ['normal', 'hard']) {
+    for (const gap of [8, 16]) {
+      for (const seed of [1, 2, 3, 4]) {
+        const { maxStill } = shotBot({ difficulty, seed, gap });
+        assert.ok(maxStill <= 2, `${difficulty} ${gap} m seed ${seed}: ${maxStill} hits in a row standing still`);
+      }
+    }
+  }
+});
+
+test('arena: most bots start building ramps at a shooter 16 m away within 2 s', () => {
+  for (const difficulty of ['normal', 'hard']) {
+    const fast = [1, 2, 3, 4, 5, 6].filter((seed) => {
+      const { firstRamp } = shotBot({ difficulty, seed, gap: 16, secs: 3 });
+      return firstRamp !== null && firstRamp <= 2;
+    }).length;
+    assert.ok(fast >= 3, `${difficulty}: ${fast}/6 ramped within 2 s`);
+  }
+});
+
+test('arena difficulty: faster building and less boxing than the battle royale tables; cleared with the arena', async () => {
+  const { DIFFICULTY } = await import('../src/core/config.js');
+  const env = makeArena(1);
+  env.bots.setArena(LAYOUT);
+  env.bots.spawn(1, env.rng, { positions: [POS[0]], teams: [1], loadout: loadout(), difficulty: 'hard', idBase: 1 });
+  assert.ok(env.bots.diff.buildRate < DIFFICULTY.hard.buildRate);
+  assert.ok(env.bots.diff.boxFight < DIFFICULTY.hard.boxFight);
+  assert.ok(env.bots.diff.arenaPush > 0);
+  env.bots.setArena(null);
+  assert.equal(env.bots.diff, DIFFICULTY.hard, 'back to the normal table off the arena');
+});
