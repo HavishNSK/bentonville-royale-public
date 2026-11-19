@@ -60,6 +60,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   editOnRelease: false, // releasing the mouse after selecting edit tiles confirms the edit
   editWheelReset: false, // the mouse wheel resets the piece being edited
   difficulty: 'normal', // 'easy' | 'normal' | 'hard'
+  fpsCap: 250, // FPS limit, 30 .. 250; FPS_UNLIMITED (250) = no limit
+  rawMouse: false, // pointer lock with unadjustedMovement (raw input, no OS acceleration)
   dynamicResolution: true, // drop the render resolution under load instead of the frame rate
   performanceMode: false, // Chromebook / weak laptop: half-res, no post, short draw distances
   googleTiles: false, // optional Google Photorealistic 3D Tiles view (needs VITE_GOOGLE_MAPS_API_KEY)
@@ -85,6 +87,7 @@ export const CROSSHAIR_COLORS = Object.freeze({
 export const CROSSHAIR_LIMITS = Object.freeze({ size: [0.75, 1.4], thickness: [0.75, 1.5] });
 
 export const QUALITY_OPTIONS = ['low', 'medium', 'high'];
+export const FPS_UNLIMITED = 250;
 export const DIFFICULTY_OPTIONS = ['easy', 'normal', 'hard'];
 
 const num = (v, lo, hi, fallback) => {
@@ -125,6 +128,8 @@ export function sanitizeSettings(raw) {
     editOnRelease: bool(s.editOnRelease, d.editOnRelease),
     editWheelReset: bool(s.editWheelReset, d.editWheelReset),
     difficulty: DIFFICULTY_OPTIONS.includes(s.difficulty) ? s.difficulty : d.difficulty,
+    fpsCap: Math.round(num(s.fpsCap, 30, FPS_UNLIMITED, d.fpsCap)),
+    rawMouse: bool(s.rawMouse, d.rawMouse),
     dynamicResolution: bool(s.dynamicResolution, d.dynamicResolution),
     performanceMode: bool(s.performanceMode, d.performanceMode),
     // Performance mode forces Google tiles off (too heavy for Chromebooks).

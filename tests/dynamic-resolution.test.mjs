@@ -51,3 +51,13 @@ test('dynamic resolution is on by default and can be turned off', () => {
   assert.equal(sanitizeSettings({}).dynamicResolution, true);
   assert.equal(sanitizeSettings({ dynamicResolution: false }).dynamicResolution, false);
 });
+
+test('FPS limit and raw mouse settings are sanitized', () => {
+  const d = sanitizeSettings({});
+  assert.equal(d.fpsCap, 250);
+  assert.equal(d.rawMouse, false);
+  assert.equal(sanitizeSettings({ fpsCap: 5 }).fpsCap, 30);
+  assert.equal(sanitizeSettings({ fpsCap: 9999 }).fpsCap, 250);
+  assert.equal(sanitizeSettings({ fpsCap: '144' }).fpsCap, 144);
+  assert.equal(sanitizeSettings({ rawMouse: true }).rawMouse, true);
+});

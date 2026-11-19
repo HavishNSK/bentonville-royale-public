@@ -7,6 +7,21 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.19.2',
+    date: '2026-11-19',
+    title: 'FPS limit and raw mouse',
+    sections: [
+      {
+        heading: 'Settings',
+        items: [
+          'New FPS limit slider (Settings > Game): 30 to 240, or Unlimited.',
+          'New Raw mouse input toggle. If your FPS drops in a match but jumps back up when you press Escape, try turning it on (or off) to see which is smoother on your PC.',
+          'Dynamic resolution stays off while the FPS limit is under 50, so a low limit does not make the game blurry.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.19.1',
     date: '2026-11-19',
     title: 'Smoother on PC',
