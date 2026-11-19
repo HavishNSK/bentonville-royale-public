@@ -57,6 +57,7 @@ import { heldSlot } from './Inventory.js';
 import * as StructMod from './Structures.js';
 import * as BotsMod from './Bots.js';
 import { createFpsMeter } from '../ui/fpsMeter.js';
+import { DynamicResolution } from '../render/DynamicResolution.js';
 import { graphicsQuality } from '../ui/settings.js';
 import { planBusRoute, makeRoute, routeWire, busPosAt, planBotTargets, DropBusMesh } from './DropBus.js';
 
@@ -152,6 +153,7 @@ export class Game {
     // post chain (ink outlines + bloom + tone mapping); plain render when the preset disables both
     const q0 = QUALITY[graphicsQuality(this.settings)] || QUALITY.medium;
     this.post = new Post(this.renderer, this.scene, this.camera, { outline: q0.outline, bloom: q0.bloom, msaa: q0.msaa });
+    this.dynRes = new DynamicResolution(); // lowers the render resolution while the GPU can't keep up
     this._applyPixelRatio();
 
     this.input = new Input(canvas);
@@ -1286,6 +1288,7 @@ export class Game {
     input.endFrame();
     // rolling averages (window.__game.perf): sim / present CPU ms, frame interval, draw calls
     const t2 = performance.now();
+    this._updateDynRes(dt, t2 - t0, live && !this.paused);
     const k = 0.05;
     pf.sim += (t1 - t0 - pf.sim) * k;
     pf.present += (t2 - t1 - pf.present) * k;
@@ -1833,12 +1836,38 @@ export class Game {
     this._cullT = 0;
   }
 
+  /**
+   * Dynamic resolution (settings.dynamicResolution): fed every frame of a match in a visible,
+   * focused window; re-applies the pixel ratio when the controller changes its scale.
+   */
+  _updateDynRes(dt, cpuMs, active) {
+    const dyn = this.dynRes;
+    if (!dyn) return;
+    const on = this.settings.dynamicResolution !== false && !this.settings.performanceMode;
+    if (!on) {
+      if (dyn.scale !== 1) {
+        dyn.reset();
+        this._setPixelRatio();
+      }
+      return;
+    }
+    if (!active || document.hidden || (document.hasFocus && !document.hasFocus())) return;
+    if (dyn.update(dt * 1000, cpuMs)) this._setPixelRatio();
+  }
+
   _applyPixelRatio() {
     const q = QUALITY[graphicsQuality(this.settings)] || QUALITY.medium;
-    const pr = Math.min(window.devicePixelRatio || 1, q.pixelRatio) * (q.renderScale || 1);
+    if (this.post) this.post.configure({ outline: q.outline, bloom: q.bloom, msaa: q.msaa });
+    if (this.dynRes) this.dynRes.reset(); // new preset: start again from full resolution
+    this._setPixelRatio();
+  }
+
+  _setPixelRatio() {
+    const q = QUALITY[graphicsQuality(this.settings)] || QUALITY.medium;
+    const dyn = this.dynRes ? this.dynRes.scale : 1;
+    const pr = Math.min(window.devicePixelRatio || 1, q.pixelRatio) * (q.renderScale || 1) * dyn;
     this.renderer.setPixelRatio(pr);
     if (this.post) {
-      this.post.configure({ outline: q.outline, bloom: q.bloom, msaa: q.msaa });
       this.post.setPixelRatio(pr);
       this.post.setSize(window.innerWidth, window.innerHeight);
     }
@@ -1849,6 +1878,7 @@ export class Game {
     const h = window.innerHeight;
     this.renderer.setSize(w, h, false);
     if (this.post) this.post.setSize(w, h);
+    this._setPixelRatio(); // dragged to a monitor with other display scaling
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }

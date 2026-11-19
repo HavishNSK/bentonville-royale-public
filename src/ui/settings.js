@@ -60,6 +60,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   editOnRelease: false, // releasing the mouse after selecting edit tiles confirms the edit
   editWheelReset: false, // the mouse wheel resets the piece being edited
   difficulty: 'normal', // 'easy' | 'normal' | 'hard'
+  dynamicResolution: true, // drop the render resolution under load instead of the frame rate
   performanceMode: false, // Chromebook / weak laptop: half-res, no post, short draw distances
   googleTiles: false, // optional Google Photorealistic 3D Tiles view (needs VITE_GOOGLE_MAPS_API_KEY)
   // Gun crosshair look (hud.setCrosshairStyle). Cosmetic only: fixed palette, capped size,
@@ -124,6 +125,7 @@ export function sanitizeSettings(raw) {
     editOnRelease: bool(s.editOnRelease, d.editOnRelease),
     editWheelReset: bool(s.editWheelReset, d.editWheelReset),
     difficulty: DIFFICULTY_OPTIONS.includes(s.difficulty) ? s.difficulty : d.difficulty,
+    dynamicResolution: bool(s.dynamicResolution, d.dynamicResolution),
     performanceMode: bool(s.performanceMode, d.performanceMode),
     // Performance mode forces Google tiles off (too heavy for Chromebooks).
     googleTiles: s.performanceMode === true ? false : s.googleTiles === true,

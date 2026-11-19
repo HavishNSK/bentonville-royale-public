@@ -296,6 +296,7 @@ export function createMenus(root, opts = {}) {
          ${toggle('invertY', 'Invert mouse Y')}
          ${range('fov', 'Field of view', 55, 100, 1)}
          <div class="mn-row"><span>Graphics quality</span>${seg('quality', QUALITY_OPTIONS)}</div>
+         ${toggle('dynamicResolution', 'Dynamic resolution', 'Lowers the resolution a little when the game can\'t keep up, so it stays smooth instead of dropping to 20-30 FPS.')}
          ${toggle('performanceMode', 'Performance mode (Chromebook)', 'Half resolution, no bloom/outlines/shadows, shorter draw distance. Best for Chromebooks and weak laptops.')}
          <div class="mn-row"><span>Bot difficulty<small class="mn-hint">${RANKED_NOTE}</small></span>${seg('difficulty', DIFFICULTY_OPTIONS)}</div>
          ${toggle('autoPickupAmmo', 'Auto-pickup ammo & mats', 'Walk over ammo and materials to take them without pressing interact.')}

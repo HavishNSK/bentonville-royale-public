@@ -7,6 +7,21 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.19.1',
+    date: '2026-11-19',
+    title: 'Smoother on PC',
+    sections: [
+      {
+        heading: 'Performance',
+        items: [
+          'Fixed the game getting stuck at 20 FPS on some PCs. When your graphics card falls behind, the game now lowers the resolution a little instead of the frame rate, and raises it again when things calm down.',
+          'New setting: Dynamic resolution (Settings > Game, on by default). Turn it off if you would rather keep full resolution.',
+          'Moving the game to a monitor with different display scaling now picks the right resolution.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.19.0',
     date: '2026-11-18',
     title: 'Cars',
