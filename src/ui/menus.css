@@ -1542,18 +1542,19 @@ body:has(.br-chat.is-collapsed:not(.is-match)) .mn-title-side {
   justify-content: center;
   gap: calc(var(--u) * 6);
 }
+/* not picked: a faded red; picked: a vibrant red (plus the cream ring and check below) */
 .mn-seg-game button[data-game='boxfights'] {
   position: relative;
   overflow: hidden;
-  background: var(--br-coral);
+  background: #d99a94;
   color: var(--br-ink);
   font-size: calc(var(--u) * 17);
 }
 .mn-seg-game button[data-game='boxfights']:not(.is-on):not(:disabled):hover {
-  background: #ff7563;
+  background: #e98a80;
 }
 .mn-seg-game button[data-game='boxfights'].is-on {
-  background: var(--br-coral);
+  background: #ff2e1f;
   color: var(--br-ink);
 }
 .mn-seg-game button[data-game='boxfights'] .br-ico,
