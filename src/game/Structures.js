@@ -1323,11 +1323,20 @@ export class Structures {
       const [kind, mat, x, y, z, rot100, hp, key, ed = 0, dr] = row;
       keep.add(key);
       let have = this.slots.get(key);
+      // the host rebuilt this slot (a round start): another kind or material is a new piece
+      if (have && (have.kind !== kind || have.mat !== mat)) {
+        this.remove(have, false);
+        have = null;
+      }
       if (!have) {
         have = this.placeBuilt({ kind, x, y, z, rot: rot100 / 100, key, level: Math.round(y / 3), valid: true }, mat, null, { quiet: false });
         if (!have) continue;
       }
       have.hp = Math.max(1, Math.min(have.maxHp, hp));
+      if (have.hp >= have.maxHp && have.taken) {
+        have.taken = 0; // repaired / rebuilt on the host: no cracks
+        this._paint(have);
+      }
       if (kind === 'ramp') {
         const q = rampQuarter(rot100 / 100);
         if (q !== rampQuarter(have.rot)) this.edit(have, q);
@@ -1349,6 +1358,9 @@ export class Structures {
     p.hp = p.maxHp;
     p.growing = false;
     p.age = 99;
+    // place() drew it at age 0 (squashed flat, pale) and a finished piece is never redrawn by update()
+    this._writeMatrix(p);
+    this._paint(p);
     return p;
   }
 

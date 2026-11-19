@@ -27,6 +27,7 @@ export function packTeams(parties, size) {
 /**
  * Box Fights: two teams of capacity `size`. tickets are in queue order (oldest first),
  * each {partyId, ticketId, fill, at, members:[{token, leader}]}.
+ * A match holding a No Fill ticket starts only when every team is full or No Fill, so no bots join it.
  * Returns {match, nextAt}; match = {teams:[{tickets, tokens, allowBots}x2], hostToken, used}
  * or null. nextAt is the ms timestamp the next check could form a match (null if none).
  */
@@ -49,7 +50,12 @@ export function packBoxFight(tickets, size, now, { windowMs = 10000, soloWaitMs 
   const done = (b) => b.sealed || b.tokens.length >= size;
   let due;
   if (bins.every(done)) due = now;
-  else {
+  else if (bins.some((b) => b.sealed)) {
+    // No Fill: never start with bots (not even an all-bot opponent); keep searching. Fill tickets
+    // queued behind it still get their own bot match after the wait, without the No Fill parties.
+    const rest = tickets.filter((t) => t.fill !== false);
+    return rest.length ? packBoxFight(rest, size, now, { windowMs, soloWaitMs }) : { match: null, nextAt: null };
+  } else {
     const oldest = Math.min(...used.map((t) => t.at));
     due = oldest + (bins.every((b) => b.tickets.length) ? windowMs : soloWaitMs);
   }

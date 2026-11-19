@@ -156,3 +156,47 @@ test('boxfight FFA: short lobby waits, then starts with bots; No Fill needs 2 hu
   assert.ok(r.match.teams.every((x) => !x.allowBots));
   assert.deepEqual(packBoxFfa([], 6, 0), { match: null, nextAt: null });
 });
+
+// Owner bug: a No Fill duo queued 2v2, waited ~30 s and got a match against 2 bots.
+const botsAdded = (m, size) => m.teams.reduce((n, t) => n + (t.tokens.length === 0 || t.allowBots ? size - t.tokens.length : 0), 0);
+
+test('boxfight No Fill: a lone No Fill party keeps searching, never gets a bot opponent', () => {
+  for (const size of [2, 3]) {
+    const t = [party('a', size, { fill: false, at: 0 })];
+    for (const now of [0, 30000, 60000, 1e9]) assert.equal(packBoxFight(t, size, now).match, null, `size ${size} at ${now}`);
+    const short = [party('a', 1, { fill: false, at: 0 })];
+    assert.equal(packBoxFight(short, size, 1e9).match, null);
+  }
+});
+
+test('boxfight No Fill: vs a short-handed Fill side no bots are added; the Fill side still gets its bot match alone', () => {
+  const t = [party('a', 2, { fill: false, at: 0 }), party('b', 1, { at: 100 })];
+  let r = packBoxFight(t, 2, 5000);
+  assert.equal(r.match, null);
+  r = packBoxFight(t, 2, 1e9);
+  // whatever forms must not put the No Fill party in a match with bots
+  if (r.match) {
+    assert.ok(!r.match.used.includes('ta'), 'No Fill party must not be matched with bots');
+    assert.deepEqual(r.match.used, ['tb']);
+  }
+  assert.equal(packBoxFight(t, 2, 30099).match, null);
+  assert.deepEqual(packBoxFight(t, 2, 30100).match.used, ['tb']);
+  // a second Fill solo completes the other side: humans only, at once
+  const full = packBoxFight([...t, party('c', 1, { at: 200 })], 2, 300).match;
+  assert.deepEqual(ids(full), [['ta'], ['tb', 'tc']]);
+  assert.equal(botsAdded(full, 2), 0);
+});
+
+test('boxfight No Fill: two No Fill parties meet without bots', () => {
+  const { match } = packBoxFight([party('a', 2, { fill: false }), party('b', 2, { fill: false })], 2, 0);
+  assert.deepEqual(ids(match), [['ta'], ['tb']]);
+  assert.equal(botsAdded(match, 2), 0);
+});
+
+test('boxfight Fill: a lone Fill party still gets bots after the solo wait (1v1/2v2/3v3)', () => {
+  for (const size of [1, 2, 3]) {
+    const r = packBoxFight([party('a', size, { at: 0 })], size, 30000);
+    assert.ok(r.match, `size ${size}`);
+    assert.deepEqual(r.match.teams[1].tokens, []);
+  }
+});

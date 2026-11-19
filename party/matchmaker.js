@@ -16,7 +16,8 @@
 //
 // Box Fights rooms instead pack exactly two teams of the mode's size with
 // packBoxFight (party/matchPack.js), as many matches as the queue allows; a match
-// waits for both teams to fill, or starts with bots after the pack window. 'bf-ffa' packs up
+// waits for both teams to fill, or starts with bots after the pack window (never when a No Fill
+// party is in it: that keeps searching for human opponents). 'bf-ffa' packs up
 // to 6 humans, one per side (packBoxFfa).
 
 import { Server, getServerByName } from 'partyserver';
