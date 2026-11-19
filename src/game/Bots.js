@@ -3219,7 +3219,9 @@ export class Bots {
   _maybeBuild(b, fx, fz, d) {
     const st = this.structures;
     const tgt = b.target;
-    if (!st || !tgt || !b.targetVisible || b.bqI < b.bqN) return;
+    // in sight, or out of sight but shooting us right now (we know where it comes from)
+    const shotBy = tgt && b.lastHitBy === tgt && this.time - (b.hurtAt ?? -Infinity) < 4;
+    if (!st || !tgt || !(b.targetVisible || shotBy) || b.bqI < b.bqN) return;
     const t = this.time;
     if (t < b.buildCooldown) return;
     const diff = this.diff;
