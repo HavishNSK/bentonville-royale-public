@@ -660,3 +660,9 @@
     transition: none;
   }
 }
+
+/* the global chat dock (src/ui/chat.css, bottom-left) covered BACK on the browser / settings /
+   code screens; it stays available in the lobby room */
+body:has(.mn-bf.is-on:not(.mn-bf-room)) .br-chat {
+  display: none;
+}
