@@ -51,7 +51,7 @@
 // The shop catalog's prices are mirrored here (PRICES) so a client cannot buy for free.
 
 import { Server, getServerByName } from 'partyserver';
-import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, SKINS, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, refundRetired, priceFor } from '../src/game/Cosmetics.js';
+import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, EMOTES, SKINS, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, refundRetired, priceFor } from '../src/game/Cosmetics.js';
 import { verifyGoogleIdToken } from './googleIdToken.js';
 import { applyMatchStats, openMatch, settleMatch } from './matchStats.js';
 import { boxStats, validateBoxResult, applyBoxResult, boxRateLimited, boxFlags } from './boxRating.js';
@@ -159,6 +159,8 @@ function upgradeAccount(acc) {
   const eq = (acc.equipped = acc.equipped || {});
   if (!eq.skin || !SKINS[eq.skin] || !acc.owned.includes(eq.skin)) eq.skin = DEFAULT_EQUIPPED.skin;
   if (!Array.isArray(eq.emotes)) eq.emotes = DEFAULT_EQUIPPED.emotes.slice();
+  // emotes taken out of the shop (or no longer owned) leave their wheel slot empty
+  eq.emotes = eq.emotes.slice(0, EMOTE_SLOTS).map((e) => (e && EMOTES[e] && acc.owned.includes(e) ? e : null));
   if (!PICKAXES[eq.pickaxe] || !acc.owned.includes(eq.pickaxe)) eq.pickaxe = DEFAULT_EQUIPPED.pickaxe;
   if (!BACKBLINGS[eq.backbling] || !acc.owned.includes(eq.backbling)) eq.backbling = DEFAULT_EQUIPPED.backbling;
   if (!GLIDERS[eq.glider] || !acc.owned.includes(eq.glider)) eq.glider = DEFAULT_EQUIPPED.glider;

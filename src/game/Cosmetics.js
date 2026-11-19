@@ -21,24 +21,81 @@ export const SKINS = {
   skin_rogue_ember: { name: 'Ember Rogue', model: 'player', tint: 0xff8a7a, rarity: 'rare', price: 1200 },
   skin_mage_frost: { name: 'Frost Mage', model: 'bot_c', tint: 0x9fe4ff, rarity: 'rare', price: 1200 },
   skin_knight_gold: { name: 'Golden Knight', model: 'bot_a', tint: 0xffd36b, rarity: 'epic', price: 1600 },
-  skin_barbarian_shadow: { name: 'Shadow Barbarian', model: 'bot_b', tint: 0x8a78c8, rarity: 'legendary', price: 2000 },
+  // Primal Barbarian (was Shadow Barbarian; same id so owners keep it): a tiger pelt in place of the bear,
+  // black stripes on the head and down the back, white fangs, a gold collar. An exclusive legendary.
+  skin_barbarian_shadow: {
+    name: 'Primal Barbarian',
+    model: 'bot_b',
+    tint: null,
+    rarity: 'legendary',
+    price: 7500,
+    colors: {
+      fur: '#f2841a', hat: '#f2841a', cape: '#f2841a', teeth: '#fff6e6', tunic: '#3a2418', leather: '#1b1d24', trim: '#1b1d24',
+      hair: '#5a3418', pants: '#fff1d6', boots: '#1b1d24', gloves: '#fff1d6', metal: '#ffc21f',
+    },
+    addons: [
+      { shape: 'box', bone: 'head', pos: [0.13, 0.85, 0.02], rot: [0, 0, 12], scale: [0.05, 0.06, 0.42], color: '#15161b', mirror: true },
+      { shape: 'box', bone: 'head', pos: [0, 0.8, 0.3], rot: [40, 0, 0], scale: [0.05, 0.06, 0.2], color: '#15161b' },
+      { shape: 'box', bone: 'head', pos: [0.4, 0.62, 0], rot: [0, 0, -14], scale: [0.05, 0.22, 0.08], color: '#15161b', mirror: true },
+      { shape: 'box', bone: 'head', pos: [0.395, 0.5, -0.22], rot: [0, 0, -14], scale: [0.05, 0.18, 0.08], color: '#15161b', mirror: true },
+      { shape: 'box', bone: 'chest', pos: [0.17, -0.12, -0.32], rot: [0, 0, 28], scale: [0.26, 0.055, 0.04], color: '#15161b', mirror: true },
+      { shape: 'box', bone: 'chest', pos: [0.17, -0.33, -0.335], rot: [0, 0, 28], scale: [0.26, 0.055, 0.04], color: '#15161b', mirror: true },
+      { shape: 'box', bone: 'chest', pos: [0.17, -0.54, -0.35], rot: [0, 0, 28], scale: [0.24, 0.055, 0.04], color: '#15161b', mirror: true },
+      { shape: 'torus', bone: 'chest', pos: [0, 0.2, 0.06], rot: [80, 0, 0], scale: [0.66, 0.66, 0.66], tube: 0.09, color: '#ffc21f' },
+    ],
+  },
   skin_rogue_moss: { name: 'Ozark Moss Rogue', model: 'player', tint: 0x9fe08a, rarity: 'epic', price: 1500 },
   skin_knight_crimson: { name: 'Crimson Crusader', model: 'bot_a', tint: 0xff7f86, rarity: 'rare', price: 1200 },
   // a living shadow: vantablack armour, near-black cape, gunmetal trim and cold glowing eyes
   skin_knight_midnight: {
-    name: 'Midnight Knight',
+    name: 'Vanta Knight',
     model: 'bot_a',
     tint: null,
     rarity: 'legendary',
-    price: 2000,
+    price: 7500,
     colors: {
       armor: '#0b0c10', helmet: '#0b0c10', chainmail: '#121318', cape: '#07070a', leather: '#0e0f13', belt: '#0e0f13',
       pants: '#0a0b0e', badge: '#16171d', trim: '#2b2f3a', metal: '#2b2f3a', skin: '#14151b', hair: '#07070a', eyes: '#bfd0ff',
     },
   },
+  // sharp dark suit, white shirt, red tie, black hair and sunglasses (knight kit without helmet or cape)
+  skin_software_engineer: {
+    name: 'Software Engineer',
+    model: 'bot_a',
+    tint: null,
+    rarity: 'legendary',
+    price: 7500,
+    parts: { hat: null, cape: null },
+    colors: {
+      armor: '#262a33', chainmail: '#1e2129', cape: '#262a33', pants: '#262a33', leather: '#15161b', belt: '#15161b',
+      trim: '#30343f', badge: '#30343f', metal: '#9aa0aa', hair: '#15161b',
+    },
+    addons: [
+      { shape: 'box', bone: 'chest', pos: [0, 0.1, 0.25], scale: [0.24, 0.12, 0.04], color: '#f4f2ec' }, // shirt collar
+      { shape: 'box', bone: 'chest', pos: [0, -0.06, 0.255], rot: [9, 0, 0], scale: [0.08, 0.3, 0.03], color: '#a3242c' }, // tie
+      { shape: 'box', bone: 'chest', pos: [0, 0.12, 0.275], scale: [0.1, 0.07, 0.035], color: '#a3242c' }, // knot
+      // big wraparound shades: lenses angled round the face, a heavy brow bar, reflection glints, arms to the ears
+      { shape: 'box', bone: 'head', pos: [0.17, 0.3, 0.39], rot: [0, 12, 0], scale: [0.27, 0.16, 0.035], color: '#0b0c10', mirror: true },
+      { shape: 'box', bone: 'head', pos: [0, 0.385, 0.415], scale: [0.62, 0.04, 0.04], color: '#15161b' },
+      { shape: 'box', bone: 'head', pos: [0.2, 0.33, 0.41], rot: [0, 12, 35], scale: [0.13, 0.022, 0.012], color: '#7fd4ff', mirror: true },
+      { shape: 'box', bone: 'head', pos: [0.38, 0.36, 0.17], rot: [0, 90, 0], scale: [0.42, 0.035, 0.03], color: '#15161b', mirror: true },
+      { shape: 'box', bone: 'head', pos: [0, 0.31, 0.43], scale: [0.08, 0.03, 0.02], color: '#15161b' },
+    ],
+  },
   skin_barbarian_lava: { name: 'Lava Brute', model: 'bot_b', tint: 0xffa25a, rarity: 'epic', price: 1600 },
   skin_mage_rose: { name: 'Rose Mage', model: 'bot_c', tint: 0xffa8d6, rarity: 'epic', price: 1500 },
-  skin_mage_void: { name: 'Void Mage', model: 'bot_c', tint: 0x8f7bd8, rarity: 'legendary', price: 2000 },
+  // all hot pink: robe, hat, cape and boots in pink shades, light pink trim and buttons
+  skin_mage_void: {
+    name: 'Bubblegum Mage',
+    model: 'bot_c',
+    tint: null,
+    rarity: 'legendary',
+    price: 5000,
+    colors: {
+      robe: '#ff2e93', hat: '#ff2e93', cape: '#d10f74', trim: '#ff9ccc', hatband: '#ff6fb5', belt: '#c40a6a', metal: '#ffd1e8',
+      pants: '#ff5aab', boots: '#e0147f', pouch: '#ff6fb5', hair: '#ff3ea0',
+    },
+  },
   // recipe skin: the reboot van's catfish colours (violet, cream, sun-gold, ink) on a kitbash
   // of the rogue's tunic, the mage's head and the barbarian's legs, with a finned cap and barbels
   skin_catfish_ken: {
@@ -138,7 +195,7 @@ export const BACKBLINGS = {
   bb_cape_royal: { name: 'Sunset Cape', src: ['bot_a', 'Knight_Cape', 'cape'], tint: 0xffd36b, rarity: 'epic', price: 1000 },
   bb_shield_round: { name: 'Round Shield', src: ['bot_a', 'Round_Shield', 'back'], tint: null, rarity: 'rare', price: 700 },
   bb_shield_spike: { name: 'Spike Shield', src: ['bot_a', 'Spike_Shield', 'back'], tint: null, rarity: 'epic', price: 1000 },
-  bb_shield_badge: { name: 'Bentonville Badge', src: ['bot_a', 'Badge_Shield', 'back'], tint: null, rarity: 'rare', price: 800 },
+  bb_shield_badge: { name: 'Bentonville Badge', src: ['bot_a', 'Badge_Shield', 'back'], tint: null, rarity: 'common', price: 300 },
   bb_spellbook: { name: 'Spellbook', src: ['bot_c', 'Spellbook', 'back'], tint: null, rarity: 'rare', price: 700 },
   // Scruff set: a chubby rainbow gecko plush clinging to the back (proc: built in src/render/PupGear.js)
   bb_gecko: { name: 'Rainbow Gecko', src: null, proc: 'gecko', tint: null, rarity: 'epic', price: 3500 },
@@ -175,15 +232,12 @@ export const EMOTES = {
   emote_cheer: { name: 'Cheer', clip: 'Cheer', loop: true, rarity: 'common', price: 0 },
   emote_sit: { name: 'Take a Seat', clip: 'Sit_Floor_Down', hold: 'Sit_Floor_Idle', rarity: 'common', price: 0 },
   emote_spin: { name: 'Whirlwind', clip: '2H_Melee_Attack_Spinning', loop: true, rarity: 'rare', price: 500 },
-  emote_magic: { name: 'Magic Hands', clip: 'Spellcasting', loop: true, rarity: 'uncommon', price: 400 },
   emote_jab: { name: 'Shadow Box', clip: 'Unarmed_Melee_Attack_Punch_A', loop: true, rarity: 'uncommon', price: 300 },
   emote_kick: { name: 'High Kick', clip: 'Unarmed_Melee_Attack_Kick', loop: true, rarity: 'uncommon', price: 300 },
   emote_nap: { name: 'Nap Time', clip: 'Lie_Down', hold: 'Lie_Idle', rarity: 'rare', price: 600 },
   emote_turtle: { name: 'Turtle Up', clip: 'Blocking', loop: true, rarity: 'common', price: 200 },
   emote_hype: { name: 'Hype Jump', clip: 'Jump_Full_Long', loop: true, rarity: 'epic', price: 800 },
-  emote_bow: { name: 'Take a Bow', clip: 'Interact', loop: true, rarity: 'uncommon', price: 300 },
   emote_flex: { name: 'Flex', clip: '2H_Melee_Idle', loop: true, rarity: 'common', price: 200 },
-  emote_dodge: { name: 'Dodge Roll', clip: 'Dodge_Forward', loop: true, rarity: 'rare', price: 500 },
   emote_slice: { name: 'Sword Dance', clip: '2H_Melee_Attack_Slice', loop: true, rarity: 'epic', price: 800 },
   emote_throw: { name: 'Fastball', clip: 'Throw', loop: true, rarity: 'uncommon', price: 300 },
   emote_dead: { name: 'Play Dead', clip: 'Death_B', once: true, rarity: 'rare', price: 600 },
@@ -306,6 +360,9 @@ export const RETIRED = Object.freeze({
   pick_frost: 500, // Frostbite
   bb_cape_knight: 400, // Knight Cape
   bb_cape_mage: 400, // Mage Mantle
+  emote_magic: 400, // Magic Hands
+  emote_bow: 300, // Take a Bow
+  emote_dodge: 500, // Dodge Roll
 });
 
 /**

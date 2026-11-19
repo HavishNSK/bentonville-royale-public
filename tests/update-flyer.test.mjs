@@ -18,7 +18,9 @@ test('the flyer is for the newest released version, named BHS and Box Fights; pa
   // its own keeps showing it to players who have not seen it yet
   const notes = PATCH_NOTES.find((n) => n.version === FLYER.version);
   assert.ok(notes, 'flyer version has patch notes');
-  assert.equal(FLYER.version, LATEST_VERSION, 'the flyer is for the newest patch notes entry');
+  // (0.20.1, a shop patch, has no flyer of its own: the 0.20.0 flyer stays, not re-shown)
+  const idx = (v) => PATCH_NOTES.findIndex((n) => n.version === v);
+  assert.ok(idx(FLYER.version) >= idx(LATEST_VERSION), 'the flyer is not ahead of the newest patch notes entry');
   assert.equal(notes.title, 'BHS and Box Fights');
   assert.equal(FLYER.title.join(' '), 'BHS and Box Fights');
   assert.equal(pkg.version, LATEST_VERSION);

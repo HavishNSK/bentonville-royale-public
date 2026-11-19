@@ -1,0 +1,19 @@
+{
+  "name": "Bubblegum Mage",
+  "model": "bot_c",
+  "rarity": "legendary",
+  "price": 5000,
+  "colors": {
+    "robe": "#ff2e93",
+    "hat": "#ff2e93",
+    "cape": "#d10f74",
+    "trim": "#ff9ccc",
+    "hatband": "#ff6fb5",
+    "belt": "#c40a6a",
+    "metal": "#ffd1e8",
+    "pants": "#ff5aab",
+    "boots": "#e0147f",
+    "pouch": "#ff6fb5",
+    "hair": "#ff3ea0"
+  }
+}

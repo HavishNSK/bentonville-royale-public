@@ -7,6 +7,20 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.20.1',
+    date: '2026-11-19',
+    title: 'Item Shop Revamp',
+    sections: [
+      {
+        heading: 'Item Shop',
+        items: [
+          'The item shop got a revamp: redundant skins and items were removed, and anyone who bought them got their coins back.',
+          'New exclusive legendary skins: Software Engineer, Primal Barbarian, Vanta Knight and more!',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.20.0',
     date: '2026-11-19',
     title: 'BHS and Box Fights',

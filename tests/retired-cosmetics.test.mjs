@@ -1,15 +1,15 @@
 // Retired shop items: gone from every catalog and the shop, refunded once to their owners.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RETIRED, SKINS, PICKAXES, BACKBLINGS, PRICES, cosmeticDef, featuredToday, refundRetired } from '../src/game/Cosmetics.js';
+import { RETIRED, SKINS, PICKAXES, BACKBLINGS, EMOTES, PRICES, cosmeticDef, featuredToday, refundRetired } from '../src/game/Cosmetics.js';
 
-const GONE = ['skin_rogue_dusk', 'skin_barbarian_frost', 'pick_gilded', 'pick_frost', 'bb_cape_knight', 'bb_cape_mage'];
+const GONE = ['skin_rogue_dusk', 'skin_barbarian_frost', 'pick_gilded', 'pick_frost', 'bb_cape_knight', 'bb_cape_mage', 'emote_magic', 'emote_bow', 'emote_dodge'];
 
 test('the removed items are out of the catalog and the shop', () => {
   for (const id of GONE) {
     assert.ok(RETIRED[id] > 0, `${id} keeps its refund price`);
     assert.equal(cosmeticDef(id), null, `${id} is not in any table`);
-    assert.ok(!(id in SKINS) && !(id in PICKAXES) && !(id in BACKBLINGS) && !(id in PRICES), id);
+    assert.ok(!(id in SKINS) && !(id in PICKAXES) && !(id in BACKBLINGS) && !(id in EMOTES) && !(id in PRICES), id);
   }
   // the daily rotation never features one, over a year of dates
   for (let d = 0; d < 366; d++) for (const id of featuredToday(6, new Date(Date.UTC(2026, 0, 1 + d)))) assert.ok(!GONE.includes(id), id);
