@@ -7,6 +7,47 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.20.0',
+    date: '2026-11-19',
+    title: 'BHS and Box Fights',
+    sections: [
+      {
+        heading: 'New mode: Box Fights',
+        items: [
+          'Pick BATTLE ROYALE or BOX FIGHTS on the party panel (or in a private match), then 1V1, 2V2, 3V3 or 4V4. Bots can fill the empty spots.',
+          'Two teams in a two-storey indoor arena floating in the void. No storm, no loot, no bus.',
+          'Every round starts with a wall down the middle: you can\'t see the other team for the 5 second countdown. At FIGHT it slides up into the ceiling.',
+          'First team to win 3 rounds takes the match. Everyone respawns with full health and shield each round.',
+          'One kit for everyone: pump shotgun, assault rifle, SMG, 2 shield tonics, 2 medkits and 500 of each material.',
+        ],
+      },
+      {
+        heading: 'Box Fights rating (Elo)',
+        items: [
+          'Box Fights now has its own rating, worked out like chess Elo. Everyone starts at 1000. Beat higher-rated players to climb faster.',
+          'Bots have fixed ratings: Easy 800, Normal 1200, Hard 1600.',
+          'Six tiers to climb: Trail Rat, Creek Hopper, Square Regular, Bridge Walker, Ozark Legend and Mayor of Bentonville.',
+          'The result screen shows how many points you won or lost. Your rating and tier sit in the account bar, and there is a Box Fights board under RANKS.',
+          'Sign in to get rated. Results are sent by each player\'s game, so they are reviewed, not guaranteed. Leaving after FIGHT counts as a loss.',
+        ],
+      },
+      {
+        heading: 'Building',
+        items: [
+          'One tap, one ramp: a quick tap no longer stacks a second ramp over your head.',
+          'Ramps are never placed under your own feet, and nothing can be built through the Box Fights middle wall.',
+        ],
+      },
+      {
+        heading: 'Title screen',
+        items: [
+          'Cleaner title screen: the MUSEUM button and the key hints are gone. Your controls are in Settings.',
+          'Bentonville High School (rebuilt in 0.19.5) is the star of this update\'s splash: go see the North Building entrance, the Arend Arts Center and Tiger Arena.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.19.5',
     date: '2026-11-19',
     title: 'Back to School: Bentonville High, rebuilt',

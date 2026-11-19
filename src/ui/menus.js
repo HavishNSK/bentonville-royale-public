@@ -53,7 +53,10 @@ const GAME_IDS = ['br', 'boxfights'];
 const GAME_LABELS = { br: 'BATTLE ROYALE', boxfights: 'BOX FIGHTS' };
 const BOX_MODE_LABELS = { solo: '1V1', duo: '2V2', trio: '3V3', squad: '4V4' };
 const modeLabel = (game, mode) => (game === 'boxfights' ? BOX_MODE_LABELS[mode] || MODE_LABELS[mode] : MODE_LABELS[mode]);
-const gameSeg = (ref) => `<div class="mn-seg mn-seg-game" data-ref="${ref}" role="group" aria-label="Game">${GAME_IDS.map((g) => `<button type="button" data-game="${g}">${GAME_LABELS[g]}</button>`).join('')}</div>`;
+// Box Fights is new: a star, gold label and a NEW pill until the player has picked it once
+const BOX_SEEN_KEY = 'bentonville-royale.triedBoxFights';
+const gameLabel = (g) => (g === 'boxfights' ? `${icon('wall')}<span>${GAME_LABELS[g]}</span><em class="mn-new" aria-label="new mode">NEW</em>` : `<span>${GAME_LABELS[g]}</span>`);
+const gameSeg = (ref) => `<div class="mn-seg mn-seg-game" data-ref="${ref}" role="group" aria-label="Game">${GAME_IDS.map((g) => `<button type="button" data-game="${g}"${g === 'boxfights' ? ' class="is-fresh"' : ''}>${gameLabel(g)}</button>`).join('')}</div>`;
 const PARTY_SLOTS = 4;
 
 // Functions get the current key bindings (tips follow rebinds).
@@ -884,6 +887,24 @@ export function createMenus(root, opts = {}) {
     }
     const id = partyView && partyView.members.find((m) => String(m.id) === b.dataset.member);
     if (id) selectSlot(selectedSlot === id.id ? null : id.id);
+  });
+  // once Box Fights has been picked, drop its NEW pill and shimmer everywhere
+  const boxSeen = () => {
+    for (const b of wrap.querySelectorAll('button[data-game="boxfights"]')) b.classList.remove('is-fresh');
+  };
+  try {
+    if (localStorage.getItem(BOX_SEEN_KEY)) boxSeen();
+  } catch {
+    /* private mode: the badge just stays */
+  }
+  wrap.addEventListener('click', (e) => {
+    if (!(e.target.closest && e.target.closest('button[data-game="boxfights"]'))) return;
+    try {
+      localStorage.setItem(BOX_SEEN_KEY, '1');
+    } catch {
+      /* private mode */
+    }
+    boxSeen();
   });
   T.pgame.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-game]');

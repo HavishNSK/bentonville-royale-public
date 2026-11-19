@@ -1403,6 +1403,78 @@
 .mn-party-opts .mn-seg-game button {
   flex: 1;
 }
+/* BOX FIGHTS (new mode): its own coral "fight" colour, a wall icon, a NEW pill and a short
+   shimmer until first picked. Both options are bright, so the picked one also gets a cream
+   ring and a check (never colour alone). */
+.mn-seg-game button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--u) * 6);
+}
+.mn-seg-game button[data-game='boxfights'] {
+  position: relative;
+  overflow: hidden;
+  background: var(--br-coral);
+  color: var(--br-ink);
+  font-size: calc(var(--u) * 17);
+}
+.mn-seg-game button[data-game='boxfights']:not(.is-on):not(:disabled):hover {
+  background: #ff7563;
+}
+.mn-seg-game button[data-game='boxfights'].is-on {
+  background: var(--br-coral);
+  color: var(--br-ink);
+}
+.mn-seg-game button[data-game='boxfights'] .br-ico,
+.mn-seg-game button[data-game='boxfights'] svg {
+  width: 1.2em;
+  height: 1.2em;
+  flex: none;
+}
+.mn-seg-game button.is-on {
+  box-shadow: inset 0 0 0 calc(var(--u) * 3) var(--br-cream);
+}
+.mn-seg-game button.is-on > span::before {
+  content: '\2713\00a0';
+}
+.mn-new {
+  display: none;
+  padding: 0 calc(var(--u) * 6);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: 999px;
+  background: var(--br-sun);
+  color: var(--br-ink);
+  font-family: var(--br-display);
+  font-style: normal;
+  font-size: calc(var(--u) * 11);
+  letter-spacing: 0.06em;
+  line-height: 1.4;
+  transform: rotate(-4deg);
+}
+.mn-seg-game button.is-fresh .mn-new {
+  display: inline-block;
+}
+.mn-seg-game button.is-fresh::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 246, 220, 0.55) 50%, transparent 65%);
+  transform: translateX(-120%);
+  animation: mn-shimmer 1.6s ease-in-out 0.8s 2;
+  pointer-events: none;
+}
+@keyframes mn-shimmer {
+  to {
+    transform: translateX(120%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mn-seg-game button.is-fresh::after {
+    animation: none;
+    display: none;
+  }
+}
 .mn-seg button[hidden] {
   display: none;
 }

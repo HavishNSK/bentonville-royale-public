@@ -1,5 +1,22 @@
 # Patch Notes
 
+## [2026-11-19] — v0.20.0: BHS and Box Fights
+Box Fights arrives as a second game mode with its own Elo rating, alongside Bentonville High (rebuilt in v0.19.5), which leads the update flyer.
+
+- **Box Fights** (`src/game/BoxFights.js`, `src/render/BoxArena.js`): 1V1 to 4V4 via the party panel's BATTLE ROYALE | BOX FIGHTS switch or a private match; bots can fill empty spots.
+  - a two-storey indoor arena in the void (no storm, loot or bus)
+  - a middle wall hides each team for the 5 s countdown and slides up at FIGHT
+  - first to 3 rounds; full health and shield every round
+  - one kit: pump shotgun, assault rifle, SMG, 2 shield tonics, 2 medkits, 500 of each material
+- **Box Fights Elo** (`src/game/BoxElo.js`, `party/boxRating.js`): chess-style rating, start 1000; bots rated Easy 800 / Normal 1200 / Hard 1600; tiers Trail Rat, Creek Hopper, Square Regular, Bridge Walker, Ozark Legend, Mayor of Bentonville. Result-screen +/- row, account bar rating, Box Fights board under RANKS. Requires sign-in.
+- **Building:** one ramp per tap; a ramp is never placed under your own feet; nothing builds through the middle wall.
+- **Title screen:** the MUSEUM button and the key hints are removed (controls are in Settings).
+- **Update flyer:** "BHS and Box Fights" (`src/data/updateFlyer.js`, `tools/flyer/shots/0.20.0.mjs`).
+- **Notes:**
+  - Box Fights results are self-reported by each player's browser (like BR ranks): validated, rate-limited and flagged for review on the server, not verified. No anti-cheat.
+  - Online party Box Fights and online Elo need the PartyKit/Worker deploy (`party/`); local Box Fights vs bots works without it.
+  - `tests/box-fights-bots.test.mjs` has bot-aggression metric tests that do not pass yet.
+
 ## [2026-11-19] — v0.19.5: Back to School, Bentonville High rebuilt
 The biggest POI revamp yet. Bentonville High School is rebuilt from the ground up, inside and out, matched against real photos of the campus. It's packed with loot.
 
