@@ -6,6 +6,7 @@
 // NEW badge until a player opens the notes for the newest version.
 
 export const PATCH_NOTES = [
+  /* v0.19.5 (Bentonville High rebuilt): commented out; the co-developers write the release notes for this update.
   {
     version: '0.19.5',
     date: '2026-11-19',
@@ -69,6 +70,34 @@ export const PATCH_NOTES = [
         items: [
           'Fixed the chest prompt saying "Open Open Chest".',
           'Multiplayer: everyone needs to refresh for this update.',
+        ],
+      },
+    ],
+  },
+  */
+  {
+    version: '0.19.4',
+    date: '2026-11-19',
+    title: 'Fullscreen setting',
+    sections: [
+      {
+        heading: 'Settings',
+        items: [
+          'New setting: Fullscreen when playing (Settings > Game, on by default). Turn it off to play in the browser window.',
+          'Stuck at 20-30 FPS in fullscreen but fine after pressing Escape? Some graphics drivers slow down a fullscreen browser. Turn this setting off, or turn off Radeon Chill and Frame Rate Target Control in AMD Software.',
+        ],
+      },
+    ],
+  },
+  {
+    version: '0.19.3',
+    date: '2026-11-19',
+    title: 'FPS details',
+    sections: [
+      {
+        heading: 'Settings',
+        items: [
+          'Show FPS now also shows what each frame costs, mouse events per second, your resolution, mouse lock and fullscreen, and your graphics card. If your FPS drops, a screenshot of it helps us find out why.',
         ],
       },
     ],

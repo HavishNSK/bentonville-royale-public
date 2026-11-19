@@ -63,7 +63,7 @@ import * as InvMod from './Inventory.js';
 import { heldSlot } from './Inventory.js';
 import * as StructMod from './Structures.js';
 import * as BotsMod from './Bots.js';
-import { createFpsMeter } from '../ui/fpsMeter.js';
+import { createFpsMeter, setFpsDetails } from '../ui/fpsMeter.js';
 import { DynamicResolution } from '../render/DynamicResolution.js';
 import { graphicsQuality, FPS_UNLIMITED } from '../ui/settings.js';
 import { planBusRoute, makeRoute, routeWire, busPosAt, planBotTargets, DropBusMesh } from './DropBus.js';
@@ -178,7 +178,9 @@ export class Game {
     this.input.rawMouse = !!this.settings.rawMouse;
     this._lockAndFullscreen = () => {
       this.input.lock();
-      if (!document.fullscreenElement) {
+      // settings.fullscreen off: stay in the window (some GPU drivers, e.g. AMD Radeon Chill /
+      // Frame Rate Target Control, throttle a fullscreen browser to 20-30 FPS)
+      if (this.settings.fullscreen !== false && !document.fullscreenElement) {
         document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
       }
     };
@@ -197,6 +199,7 @@ export class Game {
     this._loop = this._loop.bind(this);
     requestAnimationFrame(this._loop);
     this._startBackgroundClock();
+    setFpsDetails(() => this._fpsDetails());
 
     // QA console hooks (teleport, give, damage, raw game access) exist only in `vite` dev builds.
     // Shipping them let anyone, especially a match host, teleport or give themselves items mid-game.
@@ -2503,6 +2506,10 @@ export class Game {
     if (sfx.setUiVolume) sfx.setUiVolume(this.settings.uiVolume ?? 1);
     if (this.settings.musicVolume != null) sfx.setMusicVolume(this.settings.musicVolume);
     if (typeof document !== 'undefined') createFpsMeter(document.body).setVisible(!!this.settings.showFps); // shared with the settings screen
+    // turned fullscreen off mid-match: leave it now
+    if (this.settings.fullscreen === false && typeof document !== 'undefined' && document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    }
     if (this.input) {
       this.input.setBindings(this.settings.bindings);
       this.input.rawMouse = !!this.settings.rawMouse;
@@ -2538,6 +2545,37 @@ export class Game {
     }
     if (!active || document.hidden || (document.hasFocus && !document.hasFocus())) return;
     if (dyn.update(dt * 1000, cpuMs)) this._setPixelRatio();
+  }
+
+  /** Second line of the FPS overlay: where a slow frame goes (see src/ui/fpsMeter.js). */
+  _fpsDetails() {
+    const now = performance.now();
+    const moves = this.input ? this.input.moveEvents || 0 : 0;
+    const span = (now - (this._fpsDiagT || now)) / 1000;
+    const rate = span > 0 ? Math.round((moves - (this._fpsDiagMoves || 0)) / span) : 0;
+    this._fpsDiagT = now;
+    this._fpsDiagMoves = moves;
+    if (this._gpuName === undefined) {
+      this._gpuName = '';
+      try {
+        const gl = this.renderer.getContext();
+        const ext = gl.getExtension('WEBGL_debug_renderer_info');
+        const raw = String(gl.getParameter(ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER) || '');
+        this._gpuName = raw.replace(/^ANGLE \(/, '').replace(/\)$/, '').replace(/ Direct3D.*$/, '').slice(0, 60);
+      } catch {
+        /* no debug info */
+      }
+    }
+    const pf = this.perf;
+    const c = this.renderer.domElement;
+    const on = (v) => (v ? 'on' : 'off');
+    const dyn = this.dynRes ? Math.round(this.dynRes.scale * 100) : 100;
+    const cap = this.settings.fpsCap && this.settings.fpsCap < FPS_UNLIMITED ? ` · cap ${this.settings.fpsCap}` : '';
+    return (
+      `game ${(pf.sim + pf.present).toFixed(1)}ms · frame ${pf.frame.toFixed(0)}ms · mouse ${rate}/s\n` +
+      `${c.width}x${c.height} · res ${dyn}% · lock ${on(this.input && this.input.locked)} · full ${on(document.fullscreenElement)} · raw ${on(this.settings.rawMouse)}${cap}\n` +
+      this._gpuName
+    );
   }
 
   _applyPixelRatio() {

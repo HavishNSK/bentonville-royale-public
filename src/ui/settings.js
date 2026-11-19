@@ -63,6 +63,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   simpleEdit: false, // one click on a tile makes the common edit for it (door, window, ...) at once
   simpleBuild: false, // the preset key places whole structures (box, ramp + wall, tower, cover)
   difficulty: 'normal', // 'easy' | 'normal' | 'hard'
+  fullscreen: true, // go fullscreen when a match starts / resumes
   fpsCap: 250, // FPS limit, 30 .. 250; FPS_UNLIMITED (250) = no limit
   rawMouse: false, // pointer lock with unadjustedMovement (raw input, no OS acceleration)
   dynamicResolution: true, // drop the render resolution under load instead of the frame rate
@@ -133,6 +134,7 @@ export function sanitizeSettings(raw) {
     simpleEdit: bool(s.simpleEdit, d.simpleEdit),
     simpleBuild: bool(s.simpleBuild, d.simpleBuild),
     difficulty: DIFFICULTY_OPTIONS.includes(s.difficulty) ? s.difficulty : d.difficulty,
+    fullscreen: bool(s.fullscreen, d.fullscreen),
     fpsCap: Math.round(num(s.fpsCap, 30, FPS_UNLIMITED, d.fpsCap)),
     rawMouse: bool(s.rawMouse, d.rawMouse),
     dynamicResolution: bool(s.dynamicResolution, d.dynamicResolution),
