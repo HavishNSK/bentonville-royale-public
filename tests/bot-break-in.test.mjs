@@ -114,3 +114,27 @@ test('farming is spread over time: ~80-mat sessions with rests in between, not o
   // and later it farms again (mats keep growing over the minute and a half)
   assert.ok(at[at.length - 1] > at[firstStop] + 40, `more later: ${at[firstStop]} -> ${at[at.length - 1]}`);
 });
+
+test('after an elimination, an unpressured bot walks to the body and emotes; a hit cuts it off', () => {
+  const { bots, bot, b, player } = sim('hard');
+  bots.rng = () => 0.01; // the dice say taunt
+  const body = { pos: new THREE.Vector3(bot.pos.x + 6, bot.pos.y, bot.pos.z), alive: false, isPlayer: true };
+  player.alive = false;
+  b.target = null;
+  b.targetVisible = false;
+  b.hurtAt = -100;
+  assert.ok(bots.notifyKill(bot, body));
+  let emoted = false;
+  for (let i = 0; i < 6 * 60; i++) {
+    bots.update(1 / 60, { player });
+    if (bot.emoting) emoted = true;
+    if (emoted) break;
+  }
+  assert.ok(emoted, `emoted over the body (state ${b.state})`);
+  assert.ok(Math.hypot(bot.pos.x - body.pos.x, bot.pos.z - body.pos.z) < 2, 'next to it');
+  // shot mid-taunt: it stops at once
+  bots.notifyDamage(bot, 10, { source: { pos: new THREE.Vector3(bot.pos.x, 0, bot.pos.z - 30), alive: true, team: 999 } });
+  for (let i = 0; i < 30; i++) bots.update(1 / 60, { player });
+  assert.equal(bot.emoting, false, 'taunt cut off by the hit');
+  assert.equal(b.taunt, null);
+});

@@ -337,6 +337,11 @@ export class Game {
       ? new BotsCls({ scene: this.scene, world: this.world, kits: botKits, weaponModels: weaponScenes, loot: this.loot, structures: this.structures, combat: this.combat, fx: this.fx, sfx })
       : new NullBots();
     this.bots.dropLootOnDeath = false; // Game drops every actor's inventory in _onEliminate
+    // a bot's taunt emote reaches the clients like a player's ('em' event)
+    this.bots.onEmote = (a, id) => {
+      const net = this.net;
+      if (net && net.isHost && net.started && net.events) net.events.push({ e: 'em', a: a.id, id });
+    };
     // Catfish Ken's reboot vans (one per POI) and reboot cards (team modes)
     this.reboot = new Reboot({ scene: this.scene, world: this.world, fx: this.fx, sfx });
     try {
@@ -1186,6 +1191,8 @@ export class Game {
         this.loot.drop(it, _v2.set(victim.pos.x + Math.cos(a) * 1.2, victim.pos.y, victim.pos.z + Math.sin(a) * 1.2).clone());
       });
     }
+    // a bot that got the elimination may walk over and emote on the body (Bots.notifyKill)
+    if (killer && killer._bot && this.bots && this.bots.notifyKill && !(this.net && this.net.isClient)) this.bots.notifyKill(killer, victim);
     // feed
     let text;
     let kind = 'elim';

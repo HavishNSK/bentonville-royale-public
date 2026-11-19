@@ -130,6 +130,12 @@ const CB_FULL = 60;
 const CB_MAX = 8;
 const WINDOW = 1 << 4; // wall edit: middle tile (chest / eye height)
 const BOTTOM_ROW = 0b111; // wall edit: the three bottom tiles
+// Taunts: after an elimination, a bot nobody is pressuring may walk to the body and emote
+const TAUNT_CHANCE = { easy: 0.15, normal: 0.3, hard: 0.4 }; // per elimination (halved for a bot victim)
+const TAUNT_EMOTES = ['emote_cheer', 'emote_hype', 'emote_flex'];
+const TAUNT_TIME = 3.5; // s of emoting
+const TAUNT_CALM = 4; // s unhurt before (and while) taunting
+const TAUNT_WINDOW = 10; // s after the elimination to get there
 const RAMP_BOX_CHANCE = { normal: 0.55, hard: 0.8 }; // a hit is answered with a ramp box (4 walls + ramp) this often
 const RAMP_PEEK_UP = 1.15; // m from the box centre up the ramp: eyes over the front wall
 const RAMP_PEEK_DOWN = 1.3; // m down the ramp: covered
@@ -581,6 +587,51 @@ export class Bots {
   // ------------------------------------------------------------- awareness
 
   /** Hook for combat.onDamage: lets a bot react to who hurt it. */
+  /**
+   * An elimination (Game._onEliminate): a bot that got it may queue a taunt over the body
+   * (TAUNT_CHANCE, by the killer's difficulty). It only happens if nobody is pressuring it.
+   */
+  notifyKill(killer, victim) {
+    const b = killer && killer._bot;
+    if (!b || !killer.alive || !victim || victim === killer) return false;
+    const name = b.diffName || this.diffName;
+    let chance = TAUNT_CHANCE[name] ?? TAUNT_CHANCE.normal;
+    if (victim._bot) chance *= 0.5;
+    if (this.rng() > chance) return false;
+    b.taunt = {
+      x: victim.pos.x,
+      z: victim.pos.z,
+      id: TAUNT_EMOTES[Math.floor(this.rng() * TAUNT_EMOTES.length) % TAUNT_EMOTES.length],
+      until: this.time + TAUNT_WINDOW,
+      startAt: 0,
+    };
+    return true;
+  }
+
+  /** Is a queued taunt still on (calm, in time, not mid-emote too long)? */
+  _tauntOk(b) {
+    const tn = b.taunt;
+    const t = this.time;
+    if (!tn) return false;
+    const calm = t - (b.hurtAt ?? -Infinity) > TAUNT_CALM && !(b.targetVisible && b.target && b.target.alive);
+    const late = tn.startAt ? t - tn.startAt > TAUNT_TIME : t > tn.until;
+    // over (done, too late, or pressured mid-emote): drop it; pressured before it began: wait
+    if (late || b.actor.downed || (tn.startAt && !calm)) {
+      this._stopTaunt(b);
+      return false;
+    }
+    return calm && !b.box && !b.trap;
+  }
+
+  _stopTaunt(b) {
+    const a = b.actor;
+    if (b.taunt && b.taunt.startAt) {
+      a.emoting = false;
+      if (a.character) a.character.emote(false);
+    }
+    b.taunt = null;
+  }
+
   notifyDamage(victim, amount, info) {
     const b = victim && victim._bot;
     if (!b || !victim.alive) return;
@@ -1974,6 +2025,7 @@ export class Bots {
     else if (fight && this._farmMidFight(b, dist) && ((b.harvest && b.harvest.alive && t < b.harvestUntil) || this._pickHarvest(b))) state = 'harvest';
     else if (fight) state = 'engage';
     else if (urgent) state = 'rotate';
+    else if (b.taunt && this._tauntOk(b)) state = 'taunt';
     else if (t < b.retreatUntil && target) state = 'retreat';
     else if (b.healing > 0 || this._wantHeal(b)) state = 'heal';
     else if (this._rebootPlan(b)) state = 'reboot';
@@ -1986,6 +2038,7 @@ export class Bots {
     else state = 'wander';
 
     if (state !== 'engage' && b.tower) b.tower = null; // left the fight (storm / heal): off the tower
+    if (state !== 'taunt' && b.taunt && b.taunt.startAt) this._stopTaunt(b); // a fight / the storm cuts it off
     if (state !== 'heal' && b.healing > 0 && !b.box) this._cancelHeal(b); // boxed bots heal mid-fight
     if (state !== 'revive' && a.revivingTarget && this.combat) this.combat.stopRevive(a);
     if (state !== 'reboot' && a.rebootVan) a.rebootVan = null;
@@ -2285,6 +2338,24 @@ export class Bots {
             if (b.lootId != null) b.ignore.set(b.lootId, t + 20);
             b.lootId = null;
           }
+        }
+        break;
+      }
+      case 'taunt': {
+        // walk up to the body, then emote over it for TAUNT_TIME
+        const tn = b.taunt;
+        const d = Math.hypot(tn.x - a.pos.x, tn.z - a.pos.z);
+        gx = tn.x;
+        gz = tn.z;
+        stop = 1.3;
+        if (d > 1.6 && !tn.startAt) break;
+        speed = 0;
+        if (!tn.startAt && a.grounded) {
+          tn.startAt = t;
+          a.emoting = true;
+          a.emoteId = tn.id;
+          if (a.character) a.character.emote(true, tn.id);
+          if (this.onEmote) this.onEmote(a, tn.id); // host: tell the clients (like a player emote)
         }
         break;
       }
