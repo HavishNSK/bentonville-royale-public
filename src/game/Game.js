@@ -887,6 +887,7 @@ export class Game {
     this.combat.noKnock = false;
     if (this.bots.setArena) this.bots.setArena(null);
     this.boxFight = null;
+    if (this.hud && this.hud.el) this.hud.el.classList.remove('is-waitroom'); // waiting room block
     this._setVoid(false);
     if (this.hud.setRounds) this.hud.setRounds(null);
     this.menus.showDropBanner(false);
@@ -1310,6 +1311,86 @@ export class Game {
     this.hud.killFeed(`${a.name} left · ${bot.name} takes over`, 'elim', [a.name, bot.name], this.player.name);
     if (bf.ffa) this._boxHud();
     return bot;
+  }
+
+  /**
+   * HOST MIGRATION (Box Fights lobby matches): this client becomes the host mid-match. Called by
+   * ClientSession when the relay promotes its socket (see the src/net/ClientSession.js header); the
+   * app does not need to call it. host: a HostSession on the promoted socket; plan:
+   * hostTakeover.takeoverPlan(...) + { state (round machine), spawns: Map(id -> spawn),
+   * botDifficulty, ended }. Puppets of humans still connected become RemoteActors (same character);
+   * every other puppet becomes a local bot under the same id (the old host's too: its stats row
+   * carries on, like boxReplaceLeaver). Afterwards this.net === host (net.isHost) and
+   * this.onHostTakeover({ room, session }) fires. Returns true when this game is now the host.
+   */
+  takeOverAsHost(host, plan) {
+    const bf = this.boxFight;
+    const old = this.net;
+    if (!bf || !bf.client || !old || !old.isClient || !host || !plan || !plan.state) return false;
+    const chars = old.releaseForTakeover ? old.releaseForTakeover(this, new Set(plan.remotes.map((r) => r.id))) : new Map();
+    this.net = host;
+    this.combat.authoritative = true;
+    this.grenades.clear(); // client copies in flight would now explode for real
+    bf.client = false;
+    bf.botDifficulty = plan.botDifficulty || 'normal';
+    bf.spawnOf = new Map(plan.spawns || []);
+    const st = plan.state;
+    const warmup = st.phase === 'warmup';
+    this._takeoverBots(plan.bots, bf.botDifficulty);
+    host.adoptMatch(this, { remotes: plan.remotes.map((r) => ({ ...r, character: chars.get(r.id) || null })) });
+    bf.state = st;
+    bf.round = st.round;
+    bf.score = st.score.slice();
+    bf.elims = st.elims.slice();
+    bf.frozen = st.phase !== 'fight';
+    if (bf.ffa) for (const a of this.combat.actors) a.invulnerable = warmup; // FFA countdown protection
+    this._setupTeam();
+    this._voidHideExtras();
+    this._boxHud();
+    host.takeoverSync(this, { state: st, left: plan.left || [], ended: !!plan.ended });
+    this.hud.announce('YOU ARE HOSTING', 'The host left · the match goes on', 2000);
+    if (this.onHostTakeover) {
+      try {
+        this.onHostTakeover({ room: host.room, session: host });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    return true;
+  }
+
+  /** Host migration: the match's bots (and humans who are gone) as local bots, same ids and stats. */
+  _takeoverBots(rows, difficulty) {
+    const bf = this.boxFight;
+    try {
+      this.bots.spawn(0, this.rng || Math.random, { difficulty, positions: [] }); // empty, at the match's difficulty
+    } catch (err) {
+      this._error('box.takeoverBots', err);
+    }
+    for (const r of rows || []) {
+      const pos = { x: r.x, y: r.y, z: r.z, heading: r.heading || 0 };
+      let bot = null;
+      try {
+        bot = this.bots.addBot(difficulty, pos.x, pos.z, { id: r.id, name: r.name, team: r.team, heading: pos.heading, loadout: boxLoadout(), sandbox: false });
+        this.bots.placeActor(bot, pos, boxLoadout(), { health: Math.max(1, r.health), shield: r.shield });
+      } catch (err) {
+        this._error('box.takeoverBot', err);
+        if (bot) this.bots.removeBots((x) => x === bot);
+        continue;
+      }
+      if (this.bots.diff && this.bots.diffName === difficulty) bot.damageScale = this.bots.diff.damageScale; // as spawn() sets it
+      bot.kills = r.kills | 0;
+      bot.assists = r.assists | 0;
+      bot.damageDealt = r.damage || 0;
+      bot.buildsPlaced = r.builds | 0;
+      if (!r.alive) {
+        bot.alive = false;
+        bot.health = 0;
+        bot.shield = 0;
+        if (bot.character) bot.character.root.visible = false;
+      }
+      if (r.replaced) bf.replaced.set(r.id, r.replaced);
+    }
   }
 
   /** Client: count the freeze down locally; the host is authoritative for everything else. */
@@ -1813,6 +1894,7 @@ export class Game {
 
   pause(on) {
     if (this.state !== 'play' && this.state !== 'drop') return;
+    if (this.boxFight && this.boxFight.waiting) return; // lobby room: Esc just frees the mouse for the lobby panel
     if (on === this.paused) return;
     this.paused = on;
     if (on) {
@@ -1968,6 +2050,94 @@ export class Game {
     this.hud.setRevive(null);
     this.hud.setDowned(null);
     this.menus.showResult(this.result);
+  }
+
+  // ---------------------------------------------------------------- Box Fights lobby room (waiting room block)
+  // Walk, jump and emote in the empty FFA arena while a custom lobby fills (src/ui/boxLobbyFlow.js).
+  // No bots, damage, building or rounds. Other lobby members are not shown: each browser has its
+  // own room until the match starts. startMatch / startClientMatch / leave() end it through
+  // _exitBoxFight; exitWaitingRoom() goes back to the menu state without the title screen.
+
+  get inWaitingRoom() {
+    return !!(this.boxFight && this.boxFight.waiting);
+  }
+
+  /** Into the lobby room (game loaded, no match running). Returns whether it is up. */
+  enterWaitingRoom() {
+    if (this.inWaitingRoom) return true;
+    if (!this.loaded || this.net || this.state !== 'menu') return false;
+    this._exitBoxFight();
+    this._applySkin();
+    this._setMode('solo');
+    this.freeBuild = false;
+    this.paused = false;
+    this.result = null;
+    this._matchEndPosted = true; // nothing here is ever reported
+    this.combat.clear();
+    this.combat.authoritative = true;
+    this.bots.clear();
+    if (this.structures) this.structures.clear();
+    this.fx.clear();
+    this.hud.clearTransient();
+    const p = this.player;
+    p.reset();
+    p.team = p.id;
+    p.god = p.invulnerable = true;
+    p.inBus = false;
+    p.mode = 'ground';
+    this.busRoute = null;
+    if (this.dropBus) this.dropBus.root.visible = false;
+    this.combat.register(p);
+    this._enterBoxFight(boxMatchConfig({ mode: 'ffa' }));
+    this.boxFight.waiting = true;
+    this.boxFight.frozen = false;
+    // an empty build area: nothing can be placed
+    if (this.structures) this.structures.buildArea = { minX: 1, maxX: 0, minZ: 1, maxZ: 0, minY: 1, maxY: 0 };
+    this._waitRoomSpawn();
+    this._voidHideExtras();
+    if (p.character) p.character.root.visible = true;
+    this.state = 'play';
+    this.hud.setVisible(true);
+    this.hud.el.classList.add('is-waitroom'); // boxLobby.css: only the emote wheel shows
+    this.hud.showFullMap(false);
+    this._setFullMapInteractive(false);
+    return true;
+  }
+
+  _waitRoomSpawn() {
+    const L = this.boxFight.layout;
+    const p = this.player;
+    p.pos.set(L.center.x, L.floorY, L.center.z);
+    p.vel.set(0, 0, 0);
+    p.heading = 0;
+    p.pitch = 0;
+    p.mode = 'ground';
+    p.grounded = true;
+  }
+
+  /** Per frame in the lobby room: fell out (should not happen) -> back to the middle. */
+  _waitRoomTick() {
+    const bf = this.boxFight;
+    if (this.player && this.player.pos.y < bf.layout.killY) this._waitRoomSpawn();
+  }
+
+  /** Out of the lobby room into the plain menu state (the caller shows the next screen). */
+  exitWaitingRoom() {
+    if (!this.inWaitingRoom) return false;
+    if (this.emoteWheel) this.emoteWheel.hide();
+    const p = this.player;
+    p._wheel = null;
+    if (p.emoting && p.character) p.character.emote(false);
+    p.emoting = false;
+    this._exitBoxFight();
+    p.god = p.invulnerable = false;
+    this.combat.clear();
+    this.state = 'menu';
+    this.paused = false;
+    this.input.unlock();
+    this.hud.setVisible(false);
+    this.hud.clearTransient();
+    return true;
   }
 
   // ---------------------------------------------------------------- events
@@ -2352,7 +2522,8 @@ export class Game {
     if (this.boxArena) this.boxArena.update(dt);
 
     if (this.boxFight) {
-      if (this.state === 'play') this._boxFightTick(dt, input, client);
+      if (this.boxFight.waiting) this._waitRoomTick(); // Box Fights lobby room: no rounds (waiting room block)
+      else if (this.state === 'play') this._boxFightTick(dt, input, client);
       return;
     }
 

@@ -16,6 +16,8 @@ import { lookString, parseLook } from './game/Cosmetics.js';
 import { sameWorld } from './net/worldIdentity.js';
 import { createAds, pickPlatform } from './net/Ads.js';
 import { createReportForm } from './ui/reportForm.js';
+import { createBoxLobbyFlow } from './ui/boxLobbyFlow.js';
+import { keyLabel } from './ui/settings.js';
 
 // Ads (src/net/Ads.js): CrazyGames SDK in the portal build, AdSense H5 when VITE_ADSENSE_CLIENT is
 // set, else none. While an ad plays the game is muted and ignores input.
@@ -136,11 +138,20 @@ const menus = createMenus(uiRoot, {
     if (bf) playBoxFight({ mode: bf.mode, ffaPlayers: bf.ffaPlayers, winRounds: bf.winRounds });
     else playLocal(lastLocal.mode, lastLocal.fill); // the match just played was a battle royale
   }),
+  // Box Fights custom lobbies (src/ui/boxLobbyFlow.js): title entry + results BACK TO LOBBY
+  onBoxLobbies: unlessBanned(() => boxFlow && boxFlow.openHome()),
+  onBoxBack: () => boxFlow && boxFlow.backToLobby(),
   onAdReward: () => watchAdForCoins('match-coins').then(() => setTimeout(refreshAdButton, 2500)),
   onResume: () => game && game.pause(false),
   onReport: () => reportForm.open(),
   onLeave: async () => {
     if (menus.current === 'result') await ads.interstitial('match-end');
+    if (boxFlow && boxFlow.owns()) {
+      // a Box Fights lobby match / Play with Bots: out of the match (and the lobby) to Box Fights home
+      boxFlow.leave();
+      renderParty();
+      return;
+    }
     if (game) game.leave();
     closeMultiplayer();
     sfx.playMusic('menu');
@@ -567,6 +578,7 @@ const account = createAccount();
 // "Report a player": lobby ONLINE list + pause menu. Private reports for the devs (/reports in chat).
 const reportForm = createReportForm(menus.el, account, { onClick: () => sfx.play('ui_click') });
 let meta = null;
+let boxFlow = null; // Box Fights custom lobbies (created once the Game exists)
 
 // The party this tab is in survives a page refresh: rejoined with the same tab token, the
 // party server hands back our old slot (party/partyRoom.js keeps it ~20 s).
@@ -672,6 +684,12 @@ function partySetFill(on) {
 /** The big button for the leader: matchmaking online, a local match offline. */
 function partyPlay() {
   if (matchStatus) return;
+  // Box Fights: no matchmaking from the title; PLAY opens the custom lobby browser
+  const g = party && party.party ? normalizeGame(party.party.game) : lastLocal.game;
+  if (g === 'boxfights') {
+    if (boxFlow) boxFlow.openHome();
+    return;
+  }
   if (party && party.party) {
     if (party.isLeader) party.play();
     return;
@@ -685,6 +703,7 @@ function unreadyForSolo() {
 }
 
 function onMatchFound(plan) {
+  if (boxFlow && boxFlow.busy()) return; // in a Box Fights custom lobby
   const token = party.token;
   const mine = (plan.teams || []).some((t) => (t.tokens || []).includes(token));
   if (!mine) return;
@@ -829,6 +848,31 @@ try {
       if (party) party.setName(name);
     },
   });
+  boxFlow = createBoxLobbyFlow({
+    game,
+    menus,
+    sfx,
+    deps: {
+      account,
+      ensureLoaded,
+      loadGame,
+      closeMultiplayer,
+      unreadyForSolo,
+      playBoxFight,
+      onBack: () => {
+        menus.showTitle();
+        renderParty();
+      },
+      onClick: () => sfx.play('ui_click'),
+      onHover: () => sfx.play('ui_hover', { volume: 0.4 }),
+      keyLabel: (a) => keyLabel((settings.bindings || {})[a]),
+      onCosmetics: (c) => {
+        game.setCosmetics(c);
+        if (party && party.setSkin) party.setSkin(lookString(c));
+        if (meta) meta.refresh();
+      },
+    },
+  });
   // Box Fights Elo we report to other players in a match (guests: the 1000 start)
   const syncBoxElo = (p) => {
     game.boxEloSelf = !p.guest && p.box && Number.isFinite(p.box.elo) ? p.box.elo : 1000;
@@ -862,6 +906,7 @@ try {
   // Box Fights hide the city: Google's real-world tiles go off with it and come back after
   game.onBoxFightChange = (on) => googleTiles.setEnabled(!on && !!settings.googleTiles && !settings.performanceMode);
   game.onMatchEnd = async (r) => {
+    if (boxFlow) boxFlow.onGameMatchEnd(r); // a lobby host reports the score; results get BACK TO LOBBY
     if (r.boxFight) {
       // Box Fights: no coins; a Box Elo change computed by the account server from this browser's report
       const bf = r.boxFight;

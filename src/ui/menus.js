@@ -46,6 +46,7 @@ import { nameplate } from '../net/devs.js';
 import { TEAM_MODES, MODE_LABELS, teamSize } from '../game/Teams.js';
 import { partyCap } from '../game/GameModes.js';
 import { tierOf } from '../game/BoxElo.js';
+import { resultRows, BOT_TAG } from './boxLobbyModel.js';
 
 const MODE_IDS = Object.keys(TEAM_MODES);
 // BATTLE ROYALE | BOX FIGHTS; in Box Fights the team-size buttons read 1V1 / 2V2 / 3V3 / 4V4
@@ -406,10 +407,12 @@ export function createMenus(root, opts = {}) {
          <div class="mn-stat">${icon('clock')}<b class="br-ol" data-ref="time"></b><span>SURVIVED</span></div>
          <div class="mn-stat mn-stat-coins" data-ref="coinStat" hidden><i class="mt-coin" aria-hidden="true"></i><b class="br-ol" data-ref="coins">+0</b><span>COINS</span></div>
        </div>
+       <div class="mn-bf-results" data-ref="bfTable" hidden></div>
        <div class="mn-confetti" data-ref="confetti" aria-hidden="true"></div>
        <div class="mn-stack mn-stack-row">
+         <button class="mn-btn mn-btn-hero" data-act="box-back" data-ref="boxBack" hidden>${icon('back')}<span data-ref="boxBackText">BACK TO LOBBY</span></button>
          <button class="mn-btn mn-btn-hero" data-act="again">${icon('replay')}<span>PLAY AGAIN</span></button>
-         <button class="mn-btn" data-act="menu">${icon('home')}<span>MAIN MENU</span></button>
+         <button class="mn-btn" data-act="menu">${icon('home')}<span data-ref="menuText">MAIN MENU</span></button>
          <button class="mn-btn mn-btn-ad" data-act="adcoins" data-ref="adBtn" hidden><i class="mt-coin" aria-hidden="true"></i><span data-ref="adText">WATCH AD +100</span></button>
        </div>
      </div>`
@@ -418,6 +421,77 @@ export function createMenus(root, opts = {}) {
   const R = {};
   result.querySelectorAll('[data-ref]').forEach((e) => (R[e.dataset.ref] = e));
   let boxResultShown = false;
+  let resultLobby = null; // setResultLobby
+  let resultShown = null; // last showResult payload
+
+  function renderResultActions() {
+    const r = resultShown || {};
+    const lb = r.boxFight ? resultLobby : null;
+    R.boxBack.hidden = !lb;
+    R.boxBack.disabled = !!lb && !lb.host && !lb.offline;
+    R.boxBack.classList.toggle('is-disabled', R.boxBack.disabled);
+    R.boxBackText.textContent = !lb || lb.host || lb.offline ? 'BACK TO LOBBY' : 'WAITING FOR HOST';
+    R.menuText.textContent = lb ? 'LEAVE' : 'MAIN MENU';
+    // multiplayer: no instant rematch; a lobby goes back to its room instead
+    result.querySelector('[data-act=again]').hidden = !!r.mp || (!!lb && !lb.offline);
+  }
+
+  /** Box Fights per-player table (names are other players' text: textContent only). */
+  function renderBoxTable(bf) {
+    const meId = resultLobby && resultLobby.meId != null ? resultLobby.meId : 0;
+    const rows = resultRows(bf, meId);
+    R.bfTable.hidden = !rows.length;
+    R.bfTable.replaceChildren();
+    if (!rows.length) return;
+    const table = document.createElement('table');
+    const cap = document.createElement('caption');
+    cap.className = 'mn-bf-sr';
+    cap.textContent = 'Match stats';
+    const head = document.createElement('tr');
+    for (const t of [bf.ffa ? 'PLAYER' : 'TEAM / PLAYER', 'ELIMS', 'DAMAGE', 'BUILDS']) {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = t;
+      head.appendChild(th);
+    }
+    const thead = document.createElement('thead');
+    thead.appendChild(head);
+    const tbody = document.createElement('tbody');
+    for (const row of rows) {
+      const tr = document.createElement('tr');
+      if (row.you) tr.className = 'is-you';
+      if (!bf.ffa) tr.dataset.side = String(row.side);
+      const name = document.createElement('th');
+      name.scope = 'row';
+      if (!bf.ffa) {
+        const t = document.createElement('i');
+        t.className = 'mn-bf-tteam';
+        t.textContent = 'T' + (row.side + 1);
+        name.appendChild(t);
+      }
+      if (row.isBot) {
+        const bot = document.createElement('i');
+        bot.className = 'mn-bf-bot';
+        bot.setAttribute('role', 'img');
+        bot.setAttribute('aria-label', 'Bot');
+        bot.textContent = BOT_TAG;
+        name.appendChild(bot);
+      }
+      const nm = document.createElement('span');
+      nm.textContent = row.name + (row.replaced ? ` (for ${row.replaced})` : '') + (row.you ? ' (you)' : '');
+      nm.title = nm.textContent;
+      name.appendChild(nm);
+      tr.appendChild(name);
+      for (const n of [row.elims, row.damage, row.builds]) {
+        const td = document.createElement('td');
+        td.textContent = String(n);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.append(cap, thead, tbody);
+    R.bfTable.appendChild(table);
+  }
 
   // ---------------------------------------------------------------- drop banner
   const banner = el(
@@ -432,6 +506,7 @@ export function createMenus(root, opts = {}) {
   banner.querySelectorAll('[data-ref]').forEach((e) => (D[e.dataset.ref] = e));
 
   const screens = [title, settingsEl, lobby, loading, pause, result];
+  const external = new Map(); // section -> name (menus.mount: Box Fights lobby screens)
   let settingsFrom = 'title';
   let current = null;
   let screenHook = null;
@@ -715,6 +790,7 @@ export function createMenus(root, opts = {}) {
         else if (act === 'again') opts.onPlayAgain && opts.onPlayAgain();
         else if (act === 'menu') opts.onLeave && opts.onLeave();
         else if (act === 'adcoins') opts.onAdReward && opts.onAdReward();
+        else if (act === 'box-back') opts.onBoxBack && opts.onBoxBack();
       })
     );
   });
@@ -806,6 +882,11 @@ export function createMenus(root, opts = {}) {
     const idle = (v.state || 'idle') === 'idle' && !v.match;
     const canEdit = v.isLeader && idle;
     const gameId = v.game === 'boxfights' ? 'boxfights' : 'br';
+    // Box Fights: no options here; PLAY opens the lobby browser (src/ui/boxLobby.js), which picks mode,
+    // bots and rounds. No party matchmaking for Box Fights from the title.
+    const box = gameId === 'boxfights';
+    T.pmode.hidden = box;
+    T.pfill.hidden = box;
     T.pgame.querySelectorAll('button').forEach((b) => {
       const on = b.dataset.game === gameId;
       b.classList.toggle('is-on', on);
@@ -840,6 +921,8 @@ export function createMenus(root, opts = {}) {
     if (v.match || v.state === 'matched') {
       label = 'MATCH FOUND';
       disabled = true;
+    } else if (box && v.state !== 'queued') {
+      kind = 'boxfights'; // everyone (leader or not) opens the lobby browser
     } else if (v.isLeader) {
       if (v.state === 'queued') {
         label = 'CANCEL';
@@ -853,7 +936,7 @@ export function createMenus(root, opts = {}) {
     go.dataset.kind = kind;
     go.disabled = disabled;
     go.classList.toggle('is-disabled', disabled);
-    T.pstatus.textContent = partyStatus(v);
+    T.pstatus.textContent = box && idle ? (v.isLeader ? 'PLAY opens Box Fights lobbies: join one, host one, or play with bots.' : 'PLAY opens Box Fights lobbies. Share a lobby code with your party.') : partyStatus(v);
     T.pstatus.classList.toggle('is-queued', v.state === 'queued' || !!v.match || v.state === 'matched');
 
     clearInterval(queueTimer);
@@ -864,6 +947,10 @@ export function createMenus(root, opts = {}) {
   function partyGo() {
     const v = partyView;
     if (!v || v.match || v.state === 'matched') return;
+    if (v.game === 'boxfights' && v.state !== 'queued') {
+      if (opts.onBoxLobbies) opts.onBoxLobbies();
+      return;
+    }
     if (v.isLeader) {
       if (v.state === 'queued') opts.onPartyCancel && opts.onPartyCancel();
       else opts.onPlay && opts.onPlay();
@@ -910,7 +997,39 @@ export function createMenus(root, opts = {}) {
       screenHook = fn;
     },
     get current() {
+      if (external.has(current)) return external.get(current);
       return current === lobby ? 'lobby' : current === title ? 'title' : current === settingsEl ? 'settings' : current === loading ? 'loading' : current === pause ? 'pause' : current === result ? 'result' : null;
+    },
+    /** Adds another screen (a .mn-screen section) to the menus layer under `name`. */
+    mount(section, name) {
+      wrap.insertBefore(section, banner);
+      screens.push(section);
+      external.set(section, String(name));
+    },
+    /** Shows a mounted screen; withBg = the dusk backdrop behind it (off over a live 3D scene). */
+    showScreen(name, withBg = true) {
+      const s = [...external].find(([, n]) => n === name);
+      if (!s) return;
+      api.showDropBanner(false);
+      show(s[0], withBg);
+    },
+    setBackdrop(on) {
+      bg.classList.toggle('is-on', !!on);
+    },
+    /** Box Fights screens share the title's name field (same localStorage key and checks). */
+    setPlayerName(v) {
+      if (T.name.readOnly) return;
+      T.name.value = String(v || '').slice(0, 16);
+      T.name.dispatchEvent(new Event('change'));
+    },
+    nameLocked: () => !!T.name.readOnly,
+    /**
+     * Box Fights results from a custom lobby / Play with Bots: { host, offline, meId } shows BACK TO
+     * LOBBY (guests: disabled until the host goes back) and LEAVE; null = the normal buttons.
+     */
+    setResultLobby(v) {
+      resultLobby = v || null;
+      if (current === result) renderResultActions();
     },
     showTitle() {
       api.showDropBanner(false);
@@ -1077,12 +1196,18 @@ export function createMenus(root, opts = {}) {
       const left = r.placement - 1;
       R.boxElo.hidden = true; // filled by showBoxElo when the account server answers
       boxResultShown = !!r.boxFight;
+      resultShown = r;
+      if (!r.boxFight) {
+        R.bfTable.hidden = true;
+        R.bfTable.replaceChildren();
+      }
       if (r.boxFight) {
         // Box Fights: rounds won, not placement (copy built by BoxFights.boxResultCopy)
         const bf = r.boxFight;
         R.title.textContent = bf.title;
         R.sub.textContent = bf.sub;
         R.placement.textContent = bf.tile;
+        renderBoxTable(bf);
       } else if (team) {
         R.title.textContent = r.victory ? 'LAST TEAM STANDING' : `YOUR ${noun.toUpperCase()} IS OUT`;
         R.sub.textContent = r.victory
@@ -1120,8 +1245,7 @@ export function createMenus(root, opts = {}) {
           R.confetti.appendChild(c);
         }
       }
-      // multiplayer: no instant rematch; the host makes a new room
-      result.querySelector('[data-act=again]').hidden = !!r.mp;
+      renderResultActions();
       if (r.difficulty && !r.ranked) {
         const why = (r.bots | 0) > 0 ? `Unranked match (${String(r.difficulty).toUpperCase()} bots). ${RANKED_NOTE}` : 'No rewards. Bots were off, so you get no coins and this match does not count on the ranks.';
         R.sub.textContent += ` ${why}`;

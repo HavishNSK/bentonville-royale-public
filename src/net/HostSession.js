@@ -38,6 +38,13 @@
 //   and `end` once at match end (bw winning side or -1, sc, el, ff forfeit, ps = stats rows
 //   [id, side, elims, damage, builds, isBot 0|1, name, replacedName|'']). Round resets are applied silently on the host (muted) and replicated
 //   by `rs` alone.
+// - Box Fights HOST MIGRATION (lobby matches; see src/net/hostTakeover.js and Game.takeOverAsHost):
+//   a promoted guest builds this session on its own socket (Net.hostRoomFromGuest), then
+//   adoptMatch(game, { remotes }) instead of prepareMatch / matchStarted (no start message: the guests
+//   are mid-match), then takeoverSync(game, { state, left }) sends one event batch: left + rb per
+//   human a bot replaced (the old host first), then hm {rn, sc, el, ph, t, bx (structure list)}.
+//   Guests answer newHost with action {k:'mig', s, ammo, mats} (their own inventory, accepted once
+//   within MIGRATION_INV_WINDOW s and clamped to the round kit by sanitizeReportedInventory).
 // - Box Fights Elo (proto 7): `bf.botElo` (the host's bot rating) in the start message; each guest
 //   sends action {k:'elo', v} once, the host clamps it and relays {e:'elo', a, v} to everyone (its
 //   own value too). These are reported numbers from browsers, not verified ratings.
@@ -55,9 +62,10 @@ import {
 import { busPosAt, routeWire } from '../game/DropBus.js';
 import { normalizeMode, packHumans, assignTeams, sameTeam, teamAlive } from '../game/Teams.js';
 import { normalizeGame, boxTeams, modeSize } from '../game/GameModes.js';
-import { BOX_FIGHT, boxModeId, boxMatchConfig, boxSlotPlan } from '../game/BoxFights.js';
+import { BOX_FIGHT, boxModeId, boxMatchConfig, boxSlotPlan, boxLoadout } from '../game/BoxFights.js';
 import { reportedElo } from '../game/boxEloMatch.js';
 import { ELO_START } from '../game/BoxElo.js';
+import { MIGRATION_INV_WINDOW, sanitizeReportedInventory } from './hostTakeover.js';
 
 
 // Bots.js colours its canopies with this palette by spawn index (kept in sync by hand).
@@ -343,6 +351,96 @@ export class HostSession {
     this._specSent.clear();
   }
 
+  /**
+   * Host migration: take over a running Box Fight on a promoted socket (no start message; the
+   * guests already play it). remotes: [{ id, name, team, character, x, y, z, heading, alive,
+   * health, shield, kills, assists, damage, builds, boxElo, skin }] (hostTakeover.takeoverPlan
+   * remotes + their reused puppet characters); only guests the room lists are adopted.
+   */
+  adoptMatch(game, { remotes = [] } = {}) {
+    this._wrap(game);
+    this._clearRemotes(game);
+    const Inventory = game.player.inventory.constructor;
+    for (const r of remotes) {
+      if (!this.room.clients.has(r.id)) {
+        if (r.character) {
+          r.character.root.removeFromParent();
+          r.character.dispose();
+        }
+        continue;
+      }
+      // inventory: the round kit until the guest reports its own ('mig')
+      const a = new RemoteActor(r.id, r.name, r.character || null, new Inventory(boxLoadout()));
+      a.team = r.team;
+      a.pos.set(r.x, r.y, r.z);
+      a.drawPos.copy(a.pos);
+      a.heading = r.heading || 0;
+      a.mode = 'ground';
+      a.inBus = false;
+      a.grounded = true;
+      a.alive = !!r.alive;
+      a.health = a.alive ? Math.max(1, r.health) : 0;
+      a.shield = a.alive ? r.shield : 0;
+      a.kills = r.kills | 0;
+      a.assists = r.assists | 0;
+      a.damageDealt = r.damage || 0;
+      a.buildsPlaced = r.builds | 0;
+      if (r.boxElo != null) a.boxElo = r.boxElo;
+      if (r.skin) a.skin = r.skin;
+      a.allowJump = true; // its first state may be meters from the puppet we interpolated
+      a.migrateUntil = MIGRATION_INV_WINDOW; // session time; see _migInventory
+      this.remotes.set(a.id, a);
+      game.combat.register(a);
+    }
+    this._pendingLoot.length = 0;
+    this.events.length = 0;
+    this._invSent.clear();
+    this._specSent.clear();
+    this.seq = 0;
+    this.time = 0;
+    this.ended = false;
+    this.started = true;
+    this.room.started = true;
+    this.room.quietClose = true;
+    this.stats = { t0: performance.now(), snapBytes: 0, snaps: 0, evBytes: 0, invBytes: 0, startBytes: 0 };
+  }
+
+  /**
+   * Host migration: tell the guests what changed and where the match stands. left: [{ id, name }]
+   * humans a bot replaced just now; state: the round machine; ended: the match was already decided.
+   */
+  takeoverSync(game, { state, left = [], ended = false }) {
+    for (const l of left) {
+      this.events.push({ e: 'left', a: l.id });
+      this.events.push({ e: 'rb', a: l.id, n: String(l.name).slice(0, 16) });
+    }
+    this.events.push({
+      e: 'hm',
+      rn: state.round,
+      sc: state.score.slice(0, 6),
+      el: state.elims.slice(0, 6),
+      ph: state.phase,
+      t: rnd(state.t, 2),
+      bx: game.structures ? game.structures.exportNet() : [],
+    });
+    if (ended) this.ended = true; // the old host already sent 'end'
+    this._flushEvents();
+  }
+
+  /** Host migration: a guest's one report of its own inventory (clamped to the round kit). */
+  _migInventory(a, m) {
+    if (this.matchType !== 'boxfights' || !(a.migrateUntil > this.time)) return;
+    a.migrateUntil = 0;
+    const inv = sanitizeReportedInventory(m, boxLoadout());
+    if (!inv) return;
+    const I = a.inventory;
+    for (let i = 0; i < I.slots.length; i++) I.slots[i] = inv.slots[i] || null;
+    for (const k of Object.keys(I.ammo)) I.ammo[k] = inv.ammo[k] || 0;
+    Object.assign(I.mats, inv.mats);
+    if (I.version != null) I.version++;
+    this._invSent.delete(a.id);
+  }
+
   /** Box Fights: fight / round-end events. */
   boxFight(evt) {
     if (this.started) this.events.push(evt);
@@ -365,6 +463,7 @@ export class HostSession {
     this.ended = false;
     this.started = true;
     this.room.started = true;
+    this.room.quietClose = this.matchType === 'boxfights'; // leaving lets the relay migrate the match
     this.time = 0;
     this.stats = { t0: 0, snapBytes: 0, snaps: 0, evBytes: 0, invBytes: 0, startBytes: 0 };
     this._invSent.clear();
@@ -913,6 +1012,7 @@ export class HostSession {
     if (!a || !this.started) return;
     if (msg.seq > a.ack) a.ack = msg.seq;
     if (msg.k === 'elo') return this._boxEloAction(a, msg);
+    if (msg.k === 'mig') return this._migInventory(a, msg);
     if (!a.alive) return;
     // Box Fights countdown: everything is allowed; the middle wall (a world collider) keeps the
     // teams apart and stops shots, and Structures.buildBlock refuses builds on its line
