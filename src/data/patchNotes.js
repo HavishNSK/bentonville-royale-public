@@ -6,6 +6,7 @@
 // NEW badge until a player opens the notes for the newest version.
 
 export const PATCH_NOTES = [
+  /* v0.19.5 (Bentonville High rebuilt): commented out; the co-developers write the release notes for this update.
   {
     version: '0.19.5',
     date: '2026-11-19',
@@ -73,6 +74,7 @@ export const PATCH_NOTES = [
       },
     ],
   },
+  */
   {
     version: '0.19.2',
     date: '2026-11-19',

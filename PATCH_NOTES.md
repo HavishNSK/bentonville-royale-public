@@ -1,5 +1,6 @@
 # Patch Notes
 
+<!-- v0.19.5 (Bentonville High rebuilt): commented out; the co-developers write the release notes.
 ## [2026-11-19] — v0.19.5: Back to School, Bentonville High rebuilt
 The biggest POI revamp yet. Bentonville High School is rebuilt from the ground up, inside and out, matched against real photos of the campus. It's packed with loot.
 
@@ -34,6 +35,7 @@ The biggest POI revamp yet. Bentonville High School is rebuilt from the ground u
   - BHS interiors cost more frame rate than the old empty shells. Other POIs are unaffected.
   - Docs: `docs/bhs/STYLE_BIBLE.md`, `docs/bhs/BHS_CONTRACT.md`.
   - Multiplayer: everyone needs to refresh (interior version 9).
+-->
 
 ## [2026-11-18] — Unreleased: moderation, player reports and security fixes
 - **Security:** the QA console hooks (`window.__game.debug`: teleport, give items, damage anyone) shipped in the production build, so a player, and especially a match host, could teleport or give themselves items mid-game. They now exist only in `vite` dev builds.
