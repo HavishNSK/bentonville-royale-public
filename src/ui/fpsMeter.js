@@ -8,6 +8,13 @@
 // createFpsMeter(document.body) and get the same overlay.
 const meters = new WeakMap();
 
+// Optional diagnostics under the number (Game: frame cost, mouse rate, lock, resolution, GPU),
+// so a player can screenshot it when their FPS drops.
+let detailFn = null;
+export function setFpsDetails(fn) {
+  detailFn = typeof fn === 'function' ? fn : null;
+}
+
 export function createFpsMeter(parent = document.body) {
   const had = meters.get(parent);
   if (had) return had;
@@ -29,7 +36,13 @@ export function createFpsMeter(parent = document.body) {
     const span = now - last;
     if (span >= 500) {
       value = Math.round((frames * 1000) / span);
-      el.textContent = value + ' FPS';
+      let extra = '';
+      try {
+        extra = detailFn ? detailFn() || '' : '';
+      } catch {
+        extra = '';
+      }
+      el.textContent = value + ' FPS' + (extra ? '\n' + extra : '');
       frames = 0;
       last = now;
     }
