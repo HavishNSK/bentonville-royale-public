@@ -517,6 +517,7 @@ export class Game {
     this.matchTime = 0;
     this.result = null;
     this._matchEndPosted = false;
+    this._notifyMatchStart(freeBuild);
     this.paused = false;
     this.sandboxLoadoutOpen = false;
     this.sandboxBotsOpen = false;
@@ -1235,6 +1236,7 @@ export class Game {
     this.matchTime = 0;
     this.result = null;
     this._matchEndPosted = false;
+    this._notifyMatchStart(false);
     this.paused = false;
     this.sandboxLoadoutOpen = false;
     this.sandboxBotsOpen = false;
@@ -1627,6 +1629,16 @@ export class Game {
       this._setFullMapInteractive(false);
     }
     this.menus.showTitle();
+  }
+
+  /** Tell the account layer a real match began (it asks the server for a match ticket). */
+  _notifyMatchStart(freeBuild) {
+    if (freeBuild || !this.onMatchStart) return;
+    try {
+      this.onMatchStart();
+    } catch (err) {
+      console.error(err);
+    }
   }
 
   /** Build the result payload and notify account rewards once per match. */

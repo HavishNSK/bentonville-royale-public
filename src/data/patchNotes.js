@@ -42,11 +42,12 @@ export const PATCH_NOTES = [
         heading: 'Title screen',
         items: [
           'Cleaner title screen: the MUSEUM button and the key hints are gone. Your controls are in Settings.',
-          'Bentonville High School (rebuilt in 0.19.5) is the star of this update\'s splash: go see the North Building entrance, the Arend Arts Center and Tiger Arena.',
+          'Bentonville High School, rebuilt, is the star of this update\'s splash: go see the North Building entrance, the Arend Arts Center and Tiger Arena.',
         ],
       },
     ],
   },
+  /* v0.19.5 (Bentonville High rebuilt): commented out; the co-developers write the release notes for this update.
   {
     version: '0.19.5',
     date: '2026-11-19',
@@ -114,6 +115,7 @@ export const PATCH_NOTES = [
       },
     ],
   },
+  */
   {
     version: '0.19.4',
     date: '2026-11-19',

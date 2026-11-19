@@ -1,7 +1,7 @@
 # Patch Notes
 
 ## [2026-11-19] — v0.20.0: BHS and Box Fights
-Box Fights arrives as a second game mode with its own Elo rating, alongside Bentonville High (rebuilt in v0.19.5), which leads the update flyer.
+Box Fights arrives as a second game mode with its own Elo rating, alongside the rebuilt Bentonville High, which leads the update flyer.
 
 - **Box Fights** (`src/game/BoxFights.js`, `src/render/BoxArena.js`): 1V1 to 4V4 via the party panel's BATTLE ROYALE | BOX FIGHTS switch or a private match; bots can fill empty spots.
   - a two-storey indoor arena in the void (no storm, loot or bus)
@@ -17,6 +17,8 @@ Box Fights arrives as a second game mode with its own Elo rating, alongside Bent
   - Online party Box Fights and online Elo need the PartyKit/Worker deploy (`party/`); local Box Fights vs bots works without it.
   - `tests/box-fights-bots.test.mjs` has bot-aggression metric tests that do not pass yet.
 
+
+<!-- v0.19.5 (Bentonville High rebuilt): commented out; the co-developers write the release notes.
 ## [2026-11-19] — v0.19.5: Back to School, Bentonville High rebuilt
 The biggest POI revamp yet. Bentonville High School is rebuilt from the ground up, inside and out, matched against real photos of the campus. It's packed with loot.
 
@@ -51,6 +53,7 @@ The biggest POI revamp yet. Bentonville High School is rebuilt from the ground u
   - BHS interiors cost more frame rate than the old empty shells. Other POIs are unaffected.
   - Docs: `docs/bhs/STYLE_BIBLE.md`, `docs/bhs/BHS_CONTRACT.md`.
   - Multiplayer: everyone needs to refresh (interior version 9).
+-->
 
 ## [2026-11-18] — Unreleased: moderation, player reports and security fixes
 - **Security:** the QA console hooks (`window.__game.debug`: teleport, give items, damage anyone) shipped in the production build, so a player, and especially a match host, could teleport or give themselves items mid-game. They now exist only in `vite` dev builds.
