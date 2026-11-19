@@ -7,6 +7,8 @@ import { sfx } from './audio/Sfx.js';
 import { createGoogleTilesController, hasGoogleTilesKey } from './render/GoogleTiles.js';
 import { inject as injectAnalytics } from '@vercel/analytics';
 import { teamSize, normalizeMode } from './game/Teams.js';
+import { normalizeGame, validGameMode, lobbyStartCheck } from './game/GameModes.js';
+import { boxSizeForMode, normalizeBoxSize } from './game/BoxFights.js';
 import { createAccount } from './net/Account.js';
 import { createMeta } from './ui/meta.js';
 import { RANKED_NOTE } from './core/config.js';
@@ -91,6 +93,7 @@ const menus = createMenus(uiRoot, {
   onPartyReady: (on) => party && party.ready(on),
   onPartyCancel: () => party && party.cancel(),
   onPartyMode: (mode) => partySetMode(mode),
+  onPartyGame: (g) => partySetGame(g),
   onPartyFill: (on) => partySetFill(on),
   onPartyKick: (id) => party && party.kick(id),
   onPartyPromote: (id) => party && party.promote(id),
@@ -109,20 +112,12 @@ const menus = createMenus(uiRoot, {
       menus.showTitle();
     }
   },
-  onMuseum: async () => {
-    try {
-      closeMultiplayer();
-      await ensureLoaded();
-      game.startMatch(undefined, { freeBuild: true, museum: true });
-    } catch (err) {
-      console.error(err);
-      showError('Could not open the museum: ' + (err && err.message ? err.message : err));
-      menus.showTitle();
-    }
-  },
   onPlayAgain: async () => {
     if (menus.current === 'result') await ads.interstitial('match-end'); // a natural break, on the player's click
-    playLocal(lastLocal.mode, lastLocal.fill);
+    // a Box Fight replays the same size; everything else replays the last local match
+    const bf = game && game.result && game.result.boxFight;
+    if (bf) playBoxFight(bf.size);
+    else playLocal(lastLocal.mode, lastLocal.fill); // the match just played was a battle royale
   },
   onAdReward: () => watchAdForCoins('match-coins').then(() => setTimeout(refreshAdButton, 2500)),
   onResume: () => game && game.pause(false),
@@ -141,6 +136,7 @@ const menus = createMenus(uiRoot, {
     if (!mp || !mp.room) return;
     mp.room.setMode(normalizeMode(mode));
   },
+  onLobbyGame: (g) => mp && mp.room && mp.room.setGame(normalizeGame(g)),
   onLobbyReady: (on) => mp && mp.conn && mp.conn.setReady(on),
   onLobbyLeave: () => {
     closeMultiplayer();
@@ -249,8 +245,10 @@ function errText(err, fallback) {
 
 function hostLobby(info, extra = {}) {
   const waiting = (info.players || []).filter((p) => !p.host && !p.ready).length;
-  const status = waiting ? `Waiting for ${waiting} to ready up.` : 'Share the code. Start when everyone is in.';
-  return { ...info, isHost: true, canStart: !waiting, status, ...extra };
+  // Box Fights: two teams of the mode's size, so too many players (or a lonely No Fill) can't start
+  const check = lobbyStartCheck({ game: info.game, mode: info.mode, fill: info.fill, humans: (info.players || []).length });
+  const status = !check.ok ? check.status : waiting ? `Waiting for ${waiting} to ready up.` : 'Share the code. Start when everyone is in.';
+  return { ...info, isHost: true, canStart: !waiting && check.ok, status, ...extra };
 }
 
 function clientLobby(info, extra = {}) {
@@ -308,7 +306,10 @@ function startHostedMatch() {
   if (!me || me.role !== 'host' || !me.room || me.room.closed || me.room.started) return;
   if (!me.room.allReady()) return;
   const mode = normalizeMode(me.room.mode);
-  return runHostedMatch(me, { fill: me.room.fill, mode, humanTeams: joinOrderTeams(me.room.players, mode) });
+  const kind = normalizeGame(me.room.game);
+  // checked again here: the lobby screen may be a beat behind the room
+  if (!lobbyStartCheck({ game: kind, mode, fill: me.room.fill, humans: me.room.players.length }).ok) return;
+  return runHostedMatch(me, { fill: me.room.fill, mode, game: kind, humanTeams: joinOrderTeams(me.room.players, mode) });
 }
 
 async function runHostedMatch(me, sessionOpts) {
@@ -434,7 +435,7 @@ let partyMod = null;
 let partyGen = 0;
 let partyConnecting = false;
 let matchStatus = ''; // "Match found! ..." while handing off to the game room
-const lastLocal = { mode: 'solo', fill: true }; // offline mode / fill, and what the next party starts with
+const lastLocal = { mode: 'solo', fill: true, game: 'br' }; // offline game / mode / fill, and what the next party starts with
 // Who's online (src/net/Presence.js): every title screen reports its name and what it is doing,
 // so players can see each other and queue in the same mode at the same time.
 let presence = null;
@@ -503,6 +504,7 @@ function partyView() {
       isLeader: true,
       mode: lastLocal.mode,
       fill: lastLocal.fill,
+      game: lastLocal.game,
       state: 'idle',
       members: [{ id: 'me', name: menus.playerName(), ready: true, leader: true, you: true }],
       match: matchStatus,
@@ -517,6 +519,7 @@ function partyView() {
     isLeader: party.isLeader,
     mode: p.mode,
     fill: p.fill,
+    game: normalizeGame(p.game),
     state: p.state,
     queuedSince: p.queuedSince,
     members: p.members.map((m) => ({ ...m, you: m.id === party.you })),
@@ -567,7 +570,7 @@ async function joinParty(code = null, quiet = false) {
   renderParty();
   try {
     partyMod = partyMod || (await import('./net/Party.js'));
-    const p = await partyMod.openParty({ name: menus.playerName(), code, mode: lastLocal.mode, fill: lastLocal.fill, skin: lookString(account.profile.equipped) });
+    const p = await partyMod.openParty({ name: menus.playerName(), code, game: lastLocal.game, mode: lastLocal.mode, fill: lastLocal.fill, skin: lookString(account.profile.equipped) });
     if (gen !== partyGen) return p.leave();
     partyConnecting = false;
     party = p;
@@ -580,6 +583,7 @@ async function joinParty(code = null, quiet = false) {
       if (party !== p) return;
       lastLocal.mode = st.mode;
       lastLocal.fill = st.fill;
+      lastLocal.game = normalizeGame(st.game);
       renderParty();
     };
     p.onNotice = (text, isError) => party === p && menus.partyNotice(text, isError);
@@ -611,10 +615,22 @@ async function joinParty(code = null, quiet = false) {
 
 function partySetMode(mode) {
   mode = normalizeMode(mode);
+  if (!validGameMode(lastLocal.game, mode)) return; // not a mode of the chosen game
   if (party) party.setMode(mode);
   else {
     lastLocal.mode = mode;
     if (mode === 'solo') lastLocal.fill = true;
+    renderParty();
+  }
+}
+
+/** BATTLE ROYALE | BOX FIGHTS for the party (the leader's choice; offline: the next PLAY). */
+function partySetGame(g) {
+  g = normalizeGame(g);
+  if (party && party.setGame) party.setGame(g);
+  else {
+    lastLocal.game = g;
+    if (!validGameMode(g, lastLocal.mode)) lastLocal.mode = 'solo';
     renderParty();
   }
 }
@@ -634,7 +650,7 @@ function partyPlay() {
     if (party.isLeader) party.play();
     return;
   }
-  playLocal(lastLocal.mode, lastLocal.fill);
+  playLocal(lastLocal.mode, lastLocal.fill, lastLocal.game);
 }
 
 function onMatchFound(plan) {
@@ -660,6 +676,8 @@ async function hostMatch(plan, name, token) {
     if (mp !== me) return room.close();
     me.room = room;
     room.mode = normalizeMode(plan.mode);
+    room.game = normalizeGame(plan.game);
+    if (!validGameMode(room.game, room.mode)) throw new Error('This match type is not available.');
     preloadInLobby();
     room.onError = (text) => mp === me && console.warn('[net]', text);
     // wait for every expected player (or 20 s; late joiners are turned away)
@@ -693,7 +711,7 @@ async function hostMatch(plan, name, token) {
       .map((t) => ({ ids: t.tokens.filter((tok) => slotOf.has(tok)).map((tok) => slotOf.get(tok)), allowBots: !!t.allowBots }))
       .filter((t) => t.ids.length);
     matchStatus = '';
-    await runHostedMatch(me, { fill: true, mode: room.mode, humanTeams });
+    await runHostedMatch(me, { fill: true, mode: room.mode, game: room.game, humanTeams });
   } catch (err) {
     console.error(err);
     if (mp !== me) return;
@@ -704,8 +722,26 @@ async function hostMatch(plan, name, token) {
   }
 }
 
+/** Box Fights vs bots: size 1..4 (1v1 .. 4v4), first to 3 rounds in the indoor arena. */
+async function playBoxFight(size) {
+  const n = normalizeBoxSize(size);
+  try {
+    closeMultiplayer();
+    await ensureLoaded();
+    game.startMatch(undefined, { boxFight: { size: n } });
+  } catch (err) {
+    console.error(err);
+    showError('Could not start the box fight: ' + (err && err.message ? err.message : err));
+    menus.showTitle();
+  }
+}
+
 /** Local match with bots (offline, Free Build aside, and PLAY AGAIN after one). */
-async function playLocal(mode = 'solo', fill = true) {
+async function playLocal(mode = 'solo', fill = true, kind = 'br') {
+  if (normalizeGame(kind) === 'boxfights') {
+    const size = boxSizeForMode(normalizeMode(mode));
+    if (size) return playBoxFight(size);
+  }
   lastLocal.mode = normalizeMode(mode);
   lastLocal.fill = fill;
   try {
@@ -783,7 +819,14 @@ try {
     account.init().then(afterAuth);
   }
   // coins + leaderboard stats for every finished match
+  // Box Fights hide the city: Google's real-world tiles go off with it and come back after
+  game.onBoxFightChange = (on) => googleTiles.setEnabled(!on && !!settings.googleTiles && !settings.performanceMode);
   game.onMatchEnd = async (r) => {
+    if (r.boxFight) {
+      // Box Fights are unranked practice: no coins, no leaderboard
+      if (meta) meta.matchReward(0, 'Box Fights are unranked.');
+      return;
+    }
     const players = r.mode && r.mode !== 'solo' ? r.teams : r.total;
     const ranked = !!r.ranked;
     const out = await account.reward({ kills: r.kills | 0, placement: r.placement | 0, players: players | 0, won: !!r.victory, ranked });

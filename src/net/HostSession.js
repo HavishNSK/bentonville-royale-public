@@ -7,7 +7,7 @@
 // (trusted within a speed bound); its actions arrive as reliable messages and
 // are validated and applied here.
 //
-//   const s = new HostSession(room, game, { fill, mode, humanTeams });
+//   const s = new HostSession(room, game, { fill, mode, humanTeams, game: 'br'|'boxfights' });
 //   (mode 'solo'|'duo'|'trio'|'squad'; humanTeams [{ ids, allowBots }] groups room slot ids,
 //   host = 0, into teams; see src/game/Teams.js packHumans / assignTeams)
 //   game.net = s; game.startMatch(seed)   // Game calls the hooks below
@@ -23,6 +23,11 @@
 //   loot add/remove/open, structure place/damage/destroy, harvested props
 //   destroyed, disconnects, match end
 // - per-client inventory when it changes (with the last action seq it reflects)
+// - Box Fights (matchType 'boxfights'): the start message carries `game` + `bf` {size, wins,
+//   teams}; rounds travel as events: rs (round start: number, score, freeze seconds, spawns,
+//   the whole structure list), rf (fight), re (round end: winning side, score), and `end`
+//   once at match end. Round resets are applied silently on the host (muted) and replicated
+//   by `rs` alone.
 
 import * as THREE from 'three';
 import { PLAYER, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, MATCH, REBOOT, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
@@ -34,6 +39,9 @@ import {
 } from './protocol.js';
 import { busPosAt, routeWire } from '../game/DropBus.js';
 import { normalizeMode, packHumans, assignTeams, sameTeam, teamAlive } from '../game/Teams.js';
+import { normalizeGame, boxTeams, modeSize } from '../game/GameModes.js';
+import { BOX_FIGHT, boxSizeForMode } from '../game/BoxFights.js';
+
 
 // Bots.js colours its canopies with this palette by spawn index (kept in sync by hand).
 const BOT_CANOPY = [0x4fc3f7, 0xff7a45, 0x9ccc65, 0xba68c8, 0xffd54f, 0xf06292, 0x4db6ac, 0xa1887f];
@@ -137,9 +145,12 @@ export class RemoteActor {
 }
 
 export class HostSession {
-  constructor(room, game, { fill = true, mode = 'solo', humanTeams = null } = {}) {
+  constructor(room, game, { fill = true, mode = 'solo', humanTeams = null, game: matchType = 'br' } = {}) {
     this.room = room;
     this.game = game;
+    // which game is hosted: 'br' (battle royale) or 'boxfights' (two teams, rounds); never `game`,
+    // which is the Game instance
+    this.matchType = normalizeGame(matchType);
     this.isHost = true;
     this.isClient = false;
     this.fill = fill;
@@ -177,7 +188,9 @@ export class HostSession {
     this._wrap(game);
     this._spawning = true;
     this._clearRemotes(game);
-    const humans = [...this.room.clients.values()].sort((a, b) => a.id - b.id);
+    let humans = [...this.room.clients.values()].sort((a, b) => a.id - b.id);
+    const box = this.matchType === 'boxfights' ? this._boxPlan(humans) : null;
+    if (box) humans = humans.filter((c) => box.team.has(c.id));
     const Inventory = game.player.inventory.constructor;
     const kit = game.kits.player;
     for (const c of humans) {
@@ -187,8 +200,16 @@ export class HostSession {
         game.scene.add(ch.root);
       }
       const a = new RemoteActor(c.id, c.name, ch, new Inventory());
-      // aboard the Drop Bus (Game boards the route before this runs)
-      if (game.busRoute) busPosAt(game.busRoute, 0, a.pos);
+      // aboard the Drop Bus (Game boards the route before this runs); Box Fights: on the
+      // arena floor (Game moves everyone into a spawn box right after)
+      if (box) {
+        const L = game.boxFight ? game.boxFight.layout : null;
+        // off the midline (the middle wall is up); the first round start moves them to their spawn
+        a.pos.set(L ? L.center.x : 0, L ? L.floorY : PLAYER.dropHeight, L ? L.rect.minZ + 2 : 0);
+        a.mode = 'ground';
+        a.inBus = false;
+        a.team = box.team.get(c.id);
+      } else if (game.busRoute) busPosAt(game.busRoute, 0, a.pos);
       else a.pos.set(lm.x, PLAYER.dropHeight, lm.z);
       a.drawPos.copy(a.pos);
       this.remotes.set(c.id, a);
@@ -198,12 +219,80 @@ export class HostSession {
     const slots = MATCH.bots + 1;
     const maxId = humans.length ? humans[humans.length - 1].id : 0;
     const mode = normalizeMode(this.mode);
+    if (box) return { botCount: box.botTeams.length, idBase: maxId + 1, botTeams: box.botTeams, playerTeam: box.team.get(0) };
     if (mode === 'solo') return { botCount: this.fill ? Math.max(0, slots - 1 - humans.length) : 0, idBase: maxId + 1 };
     // teams: listed parties first, everyone else packed in id order; bots fill the rest
     const groups = packHumans(mode, [0, ...humans.map((c) => c.id)], this.humanTeams);
     const plan = assignTeams(mode, groups, { slots, bots: this.fill });
     for (const a of this.remotes.values()) a.team = plan.humanTeam.get(a.id);
     return { botCount: plan.botTeams.length, idBase: maxId + 1, botTeams: plan.botTeams, playerTeam: plan.humanTeam.get(0) };
+  }
+
+  /**
+   * Box Fights: exactly two teams (0 and 1) of the mode's size. Party / lobby groups stay
+   * together; humans who don't fit are sent away ('full'). Bots fill teams that allow them.
+   */
+  _boxPlan(humans) {
+    const mode = normalizeMode(this.mode);
+    const size = Math.max(1, modeSize(mode) || 1);
+    const ids = [0, ...humans.map((c) => c.id)];
+    const groups = packHumans(mode, ids, this.humanTeams);
+    const split = boxTeams(mode, groups.map((g) => g.ids), this.fill);
+    const team = new Map();
+    split.teams.forEach((members, i) => members.forEach((id) => team.set(id, i)));
+    for (const id of split.overflow) if (id !== 0) this.room.kick(id, 'full');
+    const botTeams = [];
+    split.teams.forEach((members, i) => {
+      // a No Fill group keeps its team human-only; an empty team always gets bots
+      const sealed = groups.some((g) => !g.allowBots && g.ids.some((id) => members.includes(id)));
+      const bots = !members.length || (this.fill && !sealed) ? size - members.length : 0;
+      for (let k = 0; k < bots; k++) botTeams.push(i);
+    });
+    return { team, botTeams };
+  }
+
+  /** Runs `fn` without replicating what it does (Box Fights round resets: `rs` carries the result). */
+  muted(fn) {
+    const was = this._spawning;
+    this._spawning = true;
+    try {
+      fn();
+    } finally {
+      this._spawning = was;
+    }
+  }
+
+  /** Box Fights: a round starts. Everyone gets the spawns and the full structure list at once. */
+  boxRoundStart(game, { round, score, freeze, spawnOf }) {
+    if (!this.started) return;
+    const sp = [];
+    for (const [id, s] of spawnOf) sp.push([id, rnd(s.x), rnd(s.y), rnd(s.z), rnd(s.heading, 3)]);
+    this.events.push({ e: 'rs', rn: round, sc: score.slice(0, 2), fz: rnd(freeze, 2), hp: BOX_FIGHT.health, sh: BOX_FIGHT.shield, sp, bx: game.structures ? game.structures.exportNet() : [] });
+    // straight out, ahead of the next snapshot (which already has everyone at their spawn)
+    this._flushEvents();
+    for (const a of this.remotes.values()) {
+      const s = spawnOf.get(a.id);
+      if (!s) continue;
+      a.spawnLock = { x: s.x, y: s.y, z: s.z, until: this.time + freeze + 1 };
+      a.mode = 'ground';
+      a.inBus = false;
+      a.carriedBy = null;
+      this._invSent.delete(a.id);
+      this._syncInventory(a);
+    }
+    this._specSent.clear();
+  }
+
+  /** Box Fights: fight / round-end events. */
+  boxFight(evt) {
+    if (this.started) this.events.push(evt);
+  }
+
+  /** Box Fights: the match is decided (first to N, or a forfeit). */
+  boxFightEnd({ w, sc, team, forfeit = false }) {
+    if (!this.started || this.ended) return;
+    this.ended = true;
+    this.events.push({ e: 'end', w: -1, tm: Number.isInteger(team) ? team : -1, bw: w, sc: sc.slice(0, 2), ff: forfeit ? 1 : 0 });
   }
 
   /** After bots and loot exist: tell everyone. */
@@ -229,9 +318,12 @@ export class HostSession {
     const s = game.storm;
     const loot = [];
     for (const r of game.loot ? game.loot.records : []) loot.push([r.id, r.kind, rnd(r.x), rnd(r.y), rnd(r.z), rnd(r.yaw, 3), r.opened ? 1 : 0, r.item || 0]);
+    const bf = this.matchType === 'boxfights' && game.boxFight ? game.boxFight : null;
     const msg = {
       t: 'start',
       seed: game.seed,
+      game: bf ? 'boxfights' : 'br',
+      bf: bf ? { size: bf.size, wins: bf.state.winRounds, teams: bf.sides.slice(0, 2) } : undefined,
       mode: this.mode,
       diff: game.matchDifficulty || null, // bot difficulty: only 'hard' matches count toward the ranks
       roster,
@@ -360,8 +452,8 @@ export class HostSession {
     const st = game.structures;
     if (st) {
       const place = st.place.bind(st);
-      st.place = (pl, mat, owner) => {
-        const piece = place(pl, mat, owner);
+      st.place = (pl, mat, owner, ...rest) => {
+        const piece = place(pl, mat, owner, ...rest);
         if (piece) ev({ e: 'sp', kind: piece.kind, m: piece.mat, x: piece.x, y: piece.y, z: piece.z, rot: piece.rot, key: piece.key, lv: piece.level, a: owner ? owner.id : -1 });
         return piece;
       };
@@ -429,7 +521,7 @@ export class HostSession {
 
     // match end: last one (team) standing (the host's own victory/defeat screens are Game's)
     const over = g.teamMode ? g.totalTeams > 1 && g.combat.aliveTeams <= 1 : g.totalActors > 1 && g.combat.aliveCount <= 1;
-    if (!this.ended && (g.state === 'play' || g.state === 'over') && over) {
+    if (!this.ended && this.matchType !== 'boxfights' && (g.state === 'play' || g.state === 'over') && over) {
       this.ended = true;
       const w = g.combat.actors.find((a) => a.alive);
       this.events.push({ e: 'end', w: w ? w.id : -1, tm: w && w.team != null ? w.team : -1 });
@@ -656,6 +748,14 @@ export class HostSession {
     const s = decodeState(buf);
     if (!s) return;
     if (a.lastSeq >= 0 && !seqNewer(s.seq, a.lastSeq)) return;
+    // Box Fights round start: drop packets from before the reset (they are far from the new
+    // spawn) until the client reports from its box; never-arriving clients fall back to 'cor'
+    const lock = a.spawnLock;
+    if (lock) {
+      const off = Math.hypot(s.x - lock.x, s.y - lock.y, s.z - lock.z);
+      if (off > 3 && this.time < lock.until + 4) return;
+      a.spawnLock = null; // reported from its box (or the grace ran out): normal checks from here
+    }
     a.lastSeq = s.seq;
     const now = this.time;
     const dt = Math.max(0.03, now - (a.lastStateT || now));
@@ -682,8 +782,11 @@ export class HostSession {
       s.y = a.pos.y;
       s.z = a.pos.z;
     }
-    const b = this.game.world.bounds;
-    const inBounds = s.x > b.minX - 5 && s.x < b.maxX + 5 && s.z > b.minZ - 5 && s.z < b.maxZ + 5;
+    const bfl = this.matchType === 'boxfights' && this.game.boxFight ? this.game.boxFight.layout : null;
+    const b = bfl ? bfl.bounds : this.game.world.bounds;
+    const inBounds = bfl
+      ? s.x > b.minX && s.x < b.maxX && s.z > b.minZ && s.z < b.maxZ && s.y > bfl.floorY - 2 && s.y < bfl.ceilY + 1
+      : s.x > b.minX - 5 && s.x < b.maxX + 5 && s.z > b.minZ - 5 && s.z < b.maxZ + 5;
     const route = this.game.busRoute;
     if (s.mode === 'bus' && route) {
       busPosAt(route, Math.min(this.time, route.tClose), a.pos); // riding: wherever the bus is
@@ -736,6 +839,8 @@ export class HostSession {
     if (!a || !this.started) return;
     if (msg.seq > a.ack) a.ack = msg.seq;
     if (!a.alive) return;
+    // Box Fights countdown: everything is allowed; the middle wall (a world collider) keeps the
+    // teams apart and stops shots, and Structures.buildBlock refuses builds on its line
     // knocked: crawling only (QA helpers and fall damage still go through)
     if (a.downed && msg.k !== 'tp' && msg.k !== 'dbg' && msg.k !== 'fall') return;
     try {
@@ -811,6 +916,12 @@ export class HostSession {
         if (!st || st.at({ ...p })) return;
         const pl = { kind: p.kind, x: +p.x, y: +p.y, z: +p.z, rot: +p.rot, key: p.key, level: p.level, valid: true };
         if (st.fits && !st.fits(pl)) return; // same world rule as the client's ghost (refunded by the inventory sync)
+        // Box Fights: while the middle wall is down, only on your own side of it
+        const bfw = g.boxFight;
+        if (bfw && bfw.dividerUp) {
+          const midZ = bfw.layout.rect.minZ + bfw.layout.cells * 2;
+          if (Math.sign(pl.z - midZ) !== Math.sign(a.pos.z - midZ)) return;
+        }
         if (st.supported && !st.supported(pl)) return; // nothing holding it up: refused (and refunded) like the ghost says
         const piece = st.place(pl, mat, a);
         if (piece) inv.spendMats(mat, BUILD.cost);
@@ -1040,6 +1151,7 @@ export class HostSession {
     const a = this.remotes.get(c.id);
     if (!a) return;
     const g = this.game;
+    a.leftMatch = true; // Box Fights: no respawn next round; a team with nobody left forfeits
     if (this.started && a.alive) {
       a.inBus = false; // so the drop lands where they were
       g.combat.applyDamage(a, 1e6, { source: null, storm: true, left: true });

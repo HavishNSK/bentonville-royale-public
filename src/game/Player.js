@@ -21,6 +21,9 @@ import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIAL
 import { sameTeam } from './Teams.js';
 import { placeOnShoulder } from './Combat.js';
 
+// building: after a click, holding the button repeats only after this long (s), then every 0.07 s
+const HOLD_REPEAT_DELAY = 0.22;
+
 const PIECE_ACTIONS = { buildWall: 'wall', buildFloor: 'floor', buildRamp: 'ramp', buildCone: 'cone' };
 export const FREEFALL_SPEED = 38;
 const EDIT_REACH = 7; // m from the aim origin to a piece you can start editing
@@ -1315,7 +1318,12 @@ export class Player {
     this._autoMaterial(g);
     this.placement = st.plan(this.buildPiece, this.pos, this.heading, this.pitch);
     st.setGhost(this.placement, this.buildMat);
-    if ((lmbClick || (lmb && this.placeCooldown <= 0)) && this.placement) this.tryPlace(g);
+    if (lmbClick && this.placement) {
+      this.tryPlace(g);
+      // a tap places one piece: holding only starts repeating after a short delay (like key
+      // repeat), so a slightly long click while walking no longer drops a second piece
+      this.placeCooldown = Math.max(this.placeCooldown, HOLD_REPEAT_DELAY);
+    } else if (lmb && this.placeCooldown <= 0 && this.placement) this.tryPlace(g);
   }
 
   /** Places the current ghost if valid and affordable. Returns the piece or null. */

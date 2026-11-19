@@ -54,6 +54,8 @@ import * as BotsMod from './Bots.js';
 import { createFpsMeter } from '../ui/fpsMeter.js';
 import { graphicsQuality } from '../ui/settings.js';
 import { planBusRoute, makeRoute, routeWire, busPosAt, planBotTargets, DropBusMesh } from './DropBus.js';
+import { BOX_FIGHT, arenaLayout, spawnLayout, boxLoadout, boxMode, boxSizeForMode, normalizeBoxSize, createBoxFightState, stepBoxFight, roundBanner, boxResultCopy, sideOfTeam } from './BoxFights.js';
+import { buildArenaMeshes } from '../render/BoxArena.js';
 
 const BUS_CAM_DIST = 34; // third-person distance behind the Drop Bus
 const DEATH_SCREEN_DELAY = 3.5;
@@ -418,12 +420,11 @@ export class Game {
 
   startMatch(seed = (Math.random() * 1e9) | 0, opts = {}) {
     if (!this.loaded) throw new Error('load() first');
+    this._exitBoxFight();
     this._applySkin();
     // free build is a solo sandbox; a multiplayer host never gets it
     const freeBuild = !!opts.freeBuild && !(this.net && this.net.isHost);
     this.freeBuild = freeBuild;
-    // Museum Mode: a free-build session that starts in the Crystal Bridges lobby (no bots, no storm)
-    this.museumMode = freeBuild && !!opts.museum && !!(this.cbGallery || (this.view && this.view.crystalBridges));
     // bot difficulty this match was played on; only 'hard' matches count toward the ranks
     this.matchDifficulty = freeBuild ? null : this.settings.difficulty;
     this.seed = seed;
@@ -443,7 +444,17 @@ export class Game {
     this._deathPlacement = 0;
     this._winPending = false;
     const net0 = this.net && this.net.isHost ? this.net : null;
-    this._setMode(freeBuild ? 'solo' : net0 ? net0.mode : opts.mode);
+    // Box Fights: local ({ boxFight: { size } }) or hosted (HostSession.matchType 'boxfights')
+    const boxSize = freeBuild
+      ? 0
+      : net0
+        ? net0.matchType === 'boxfights'
+          ? boxSizeForMode(net0.mode) || 1
+          : 0
+        : opts.boxFight
+          ? normalizeBoxSize(opts.boxFight.size)
+          : 0;
+    this._setMode(freeBuild ? 'solo' : boxSize ? boxMode(boxSize) : net0 ? net0.mode : opts.mode);
 
     // world back to pristine
     this.combat.restoreWorld();
@@ -454,6 +465,11 @@ export class Game {
     this.fx.clear();
     this.hud.clearTransient();
     if (this.pings) this.pings.reset();
+
+    if (boxSize) {
+      this._startBoxFight(rng, boxSize, net0);
+      return;
+    }
 
     // storm, centred toward a random POI (the opening storm is dormant and covers the map;
     // nobody picks a drop spot any more, the Drop Bus decides where people can land)
@@ -580,25 +596,6 @@ export class Game {
     if (this.dropBus) this.dropBus.root.visible = false;
     let x = lm.x;
     let z = lm.z;
-    if (this.museumMode) {
-      // the Garrison Lobby, facing the Early American galleries
-      p.pos.set(26, this.world.groundHeight(26, -258, -6.5), -258);
-      p.heading = 0;
-      p.vel.set(0, 0, 0);
-      p.mode = 'ground';
-      p.grounded = true;
-      if (p.character) p.character.root.visible = true;
-      this.state = 'play';
-      this.hud.setVisible(true);
-      this.hud.showFullMap(false);
-      this._setFullMapInteractive(false);
-      this.menus.hideAll();
-      this.menus.showDropBanner(false);
-      this.hud.announce('CRYSTAL BRIDGES', 'Museum mode: [E] views a painting, walk into a portal painting to travel. Esc > Leave to exit', 5000);
-      sfx.stopMusic();
-      this.input.lock();
-      return;
-    }
     for (let i = 0; i < 40; i++) {
       const pt = this.world.randomOpenPoint(this.rng, lm.x, lm.z, 40, 6);
       if (!this.world.polyAt(pt.x, pt.z) && !this.world.blockedAt(pt.x, pt.z, 6)) {
@@ -621,6 +618,427 @@ export class Game {
     this.hud.announce('SANDBOX', `[${this.input.label('creativeMap') || 'N'}] opens the sandbox map — click Weapons for guns, or a POI to travel.`, 4500);
     sfx.stopMusic();
     this.input.lock();
+  }
+
+  // ---------------------------------------------------------------- Box Fights
+
+  /** Eliminated: LMB / RMB (or A/D, 1/2) cycle who you watch from their POV. */
+  _spectateInput(input) {
+    if (input.actionHit('fire') || input.actionHit('moveRight') || input.hit('Digit2')) this._cycleSpectate(1);
+    else if (input.actionHit('aim') || input.actionHit('moveLeft') || input.hit('Digit1')) this._cycleSpectate(-1);
+    this._ensureSpectating();
+  }
+
+  /** Host / solo: a Box Fights match (no bus, storm or loot; rounds in a sealed arena). */
+  _startBoxFight(rng, size, net) {
+    const p = this.player;
+    const layout = arenaLayout(size);
+    this.matchDifficulty = null; // Box Fights never count toward the ranks
+    this.storm.reset(rng, { x: layout.center.x, z: layout.center.z });
+    this.dropZone = DROP_ZONES[0];
+    this.hud.setStormVisible(false);
+    if (this.loot) this.loot.clear();
+    p.reset();
+    p.team = p.id;
+    p.god = p.invulnerable = false;
+    this.combat.register(p);
+    this.busRoute = null;
+    p.inBus = false;
+    p.mode = 'ground';
+    if (this.dropBus) this.dropBus.root.visible = false;
+
+    this._enterBoxFight(size, {});
+    // two teams of `size`: humans first (host: the lobby / party plan), bots fill the rest
+    let botTeams;
+    let botCount;
+    let idBase;
+    if (net) {
+      const plan = net.prepareMatch(this, null);
+      botCount = plan.botCount;
+      idBase = plan.idBase;
+      botTeams = plan.botTeams || [];
+      if (plan.playerTeam != null) p.team = plan.playerTeam;
+    } else {
+      const plan = assignTeams(boxMode(size), [{ ids: [p.id], allowBots: true }], { slots: 2 * size, bots: true });
+      p.team = plan.humanTeam.get(p.id);
+      botTeams = plan.botTeams;
+      botCount = botTeams.length;
+    }
+    this.bots.clear();
+    const c = layout.center;
+    // everyone is moved to their spawn by the first round start below
+    const positions = Array.from({ length: botCount }, () => ({ x: c.x, y: layout.floorY, z: layout.rect.minZ + 2, heading: 0 }));
+    try {
+      this.bots.spawn(botCount, rng, { names: botNames(botCount, rng), difficulty: this.settings.difficulty, positions, teams: botTeams, loadout: boxLoadout(), idBase });
+    } catch (err) {
+      this._error('bots.spawn', err);
+    }
+    this.totalActors = 1 + (net ? net.remotes.size : 0) + this.bots.list.length;
+    this._setupTeam();
+    // our team is side 0 (north end); the other team is side 1
+    const other = this.combat.actors.find((a) => a.team !== p.team);
+    this.boxFight.sides = [p.team, other ? other.team : -1];
+    this._boxGoLive();
+    if (net) net.matchStarted(this);
+    this._boxRoundStart();
+  }
+
+  /** Arena colliders + meshes, void visuals and Box Fights rules on (host, solo and client). */
+  _enterBoxFight(size, { client = false, sides = null, winRounds } = {}) {
+    const layout = arenaLayout(size);
+    if (!this._arenaColliders) this._arenaColliders = {};
+    const cols = this._arenaColliders[size];
+    if (!cols) this._arenaColliders[size] = layout.colliders.map((d) => this.world.addBox(d));
+    else for (const col of cols) this.world.restore(col);
+    // the middle wall: its own collider, raised every round start and removed at FIGHT
+    if (!this._arenaDividers) this._arenaDividers = {};
+    if (!this._arenaDividers[size]) this._arenaDividers[size] = this.world.addBox(layout.divider);
+    if (this.structures) this.structures.buildArea = layout.buildArea;
+    this.combat.noKnock = true;
+    if (this.bots.setArena) this.bots.setArena(layout);
+    this.boxArena = buildArenaMeshes(layout);
+    this.scene.add(this.boxArena.group);
+    const state = createBoxFightState(winRounds ? { winRounds } : {});
+    this.boxFight = {
+      size,
+      layout,
+      client,
+      sides: sides || [this.player.team, -1],
+      state,
+      round: 1,
+      score: [0, 0],
+      frozen: true,
+      spawnOf: new Map(),
+      botStorm: makeBotStorm(layout),
+      // client: phase + timers driven by the host's rs / rf / re / end events
+      phase: 'warmup',
+      t: state.t,
+      won: null,
+      dividerUp: false,
+    };
+    this._setVoid(true);
+    this._setDivider(true); // teams start apart; it lifts at FIGHT
+    this.hud.setStormVisible(false);
+    if (this.onBoxFightChange) this.onBoxFightChange(true);
+  }
+
+  /** Box Fights off again: arena gone, city and sky back, normal rules. Safe to call any time. */
+  _exitBoxFight() {
+    const bf = this.boxFight;
+    if (!bf) return;
+    const cols = this._arenaColliders && this._arenaColliders[bf.size];
+    if (cols) for (const col of cols) this.world.remove(col);
+    const wall = this._arenaDividers && this._arenaDividers[bf.size];
+    if (wall) this.world.remove(wall);
+    if (this.boxArena) {
+      this.scene.remove(this.boxArena.group);
+      this.boxArena.dispose();
+      this.boxArena = null;
+    }
+    // pieces built in the arena would otherwise float (and collide) 300 m up during the next match
+    if (this.structures) {
+      this.structures.clear();
+      this.structures.buildArea = null;
+      this.structures.buildBlock = null;
+    }
+    this.combat.noKnock = false;
+    if (this.bots.setArena) this.bots.setArena(null);
+    this.boxFight = null;
+    this._setVoid(false);
+    if (this.hud.setRounds) this.hud.setRounds(null);
+    this.menus.showDropBanner(false);
+    if (this.onBoxFightChange) this.onBoxFightChange(false);
+  }
+
+  /** The abstract void: hide the city, gallery, vans and loot (Atmosphere supplies the ink sky). */
+  _setVoid(on) {
+    if (this.view && this.view.root) this.view.root.visible = !on;
+    const gallery = this.scene.getObjectByName('cb-gallery');
+    if (gallery) gallery.visible = !on;
+    if (this.reboot && this.reboot.vans) for (const v of this.reboot.vans) if (v.mesh) v.mesh.visible = !on;
+    if (this.loot && this.loot.group) this.loot.group.visible = !on;
+    if (this.atmosphere && this.atmosphere.setVoid) this.atmosphere.setVoid(on);
+  }
+
+  /** Into the arena: HUD up, menus away, pointer locked. */
+  _boxGoLive() {
+    const p = this.player;
+    if (p.character) p.character.root.visible = true;
+    p.grounded = true;
+    this.state = 'play';
+    this.fullMapOpen = false;
+    this.hud.setVisible(true);
+    this.hud.showFullMap(false);
+    this._setFullMapInteractive(false);
+    this.menus.hideAll();
+    sfx.stopMusic();
+    this._boxHud();
+    this.input.lock();
+  }
+
+  /** Which side (0 | 1) the local player is on. */
+  _boxMySide() {
+    const bf = this.boxFight;
+    const s = bf ? sideOfTeam(bf.sides, this.player.team) : 0;
+    return s === 1 ? 1 : 0;
+  }
+
+  _boxHud() {
+    const bf = this.boxFight;
+    if (!bf || !this.hud.setRounds) return;
+    const me = this._boxMySide();
+    this.hud.setRounds({ round: bf.round, us: bf.score[me], them: bf.score[1 - me], target: bf.state.winRounds });
+  }
+
+  _boxBanner(secs) {
+    const bf = this.boxFight;
+    if (!bf) return;
+    const title = roundBanner({ round: bf.round, score: bf.score }, this._boxMySide());
+    this.menus.showDropBanner(true, Math.max(0, secs), null, { title, sub: 'Fight starts in' });
+  }
+
+
+  /**
+   * The middle wall between the two teams: up (round start, countdown) or lifted (FIGHT).
+   * Collision, the no-build strip on its line and the mesh all follow; host, solo and clients alike.
+   */
+  _setDivider(up, animate = false) {
+    const bf = this.boxFight;
+    if (!bf) return;
+    const wall = this._arenaDividers && this._arenaDividers[bf.size];
+    if (wall) {
+      if (up) this.world.restore(wall);
+      else this.world.remove(wall);
+    }
+    if (this.structures) this.structures.buildBlock = up ? bf.layout.dividerBlock : null;
+    if (this.boxArena && this.boxArena.setDivider) this.boxArena.setDivider(up, { animate });
+    bf.dividerUp = !!up;
+  }
+
+  /** Spawn slot per actor: each side's members (by id) take that side's spawn points in order. */
+  _boxSpawns() {
+    const bf = this.boxFight;
+    const spawns = spawnLayout(bf.layout, bf.size);
+    const out = new Map();
+    for (let side = 0; side < 2; side++) {
+      const slots = spawns.filter((sp) => sp.side === side);
+      const members = this.combat.actors.filter((a) => a.team === bf.sides[side] && !a.leftMatch).sort((a, b) => a.id - b.id);
+      members.forEach((a, i) => slots[i] && out.set(a.id, slots[i]));
+    }
+    return out;
+  }
+
+  /** Host / solo: wipe the arena, everyone back in a fresh box at full health with the loadout. */
+  _boxRoundStart() {
+    const bf = this.boxFight;
+    const net = this.net && this.net.isHost ? this.net : null;
+    const reset = () => {
+      if (this.structures) this.structures.clear();
+      this.grenades.clear();
+      this.combat.resetRound();
+      this.fx.clear();
+      if (this.loot) this.loot.clear();
+      if (this.pings) this.pings.reset();
+      bf.spawnOf = this._boxSpawns();
+      for (const a of this.combat.actors) {
+        const sp = bf.spawnOf.get(a.id);
+        if (sp) this._boxResetActor(a, sp);
+      }
+      // no spawn boxes: the middle wall hides each team's side until FIGHT
+      this._setDivider(true);
+    };
+    // the reset itself is silent on the wire: clients get one 'rs' event with the result
+    if (net && net.muted) net.muted(reset);
+    else reset();
+    this.hud.clearTransient();
+    bf.frozen = true;
+    bf.round = bf.state.round;
+    bf.score = bf.state.score.slice();
+    this._boxHud();
+    this._boxBanner(bf.state.t);
+    if (net && net.boxRoundStart) net.boxRoundStart(this, { round: bf.round, score: bf.score, freeze: bf.state.t, spawnOf: bf.spawnOf });
+  }
+
+  /** One actor (alive or not) back at a spawn with full health, shield and a fresh loadout. */
+  _boxResetActor(a, sp) {
+    const vitals = { health: BOX_FIGHT.health, shield: BOX_FIGHT.shield };
+    const loadout = boxLoadout(); // one kit for everyone
+    if (a._bot && this.bots.placeActor) {
+      this.bots.placeActor(a, sp, loadout, vitals);
+      return;
+    }
+    reviveFields(a, sp.x, sp.y, sp.z, sp.heading, { ...vitals, loadout });
+    if (a.isRemote) {
+      a.allowJump = true; // its next state comes from the new spawn
+      a.lastStateT = 0;
+    }
+    if (a === this.player) this._boxResetLocal();
+  }
+
+  _boxResetLocal() {
+    const p = this.player;
+    p.mode = 'ground';
+    p.pitch = 0;
+    p.cooldown = p.reloadT = p.useT = 0;
+    p.reloadItem = p.useItem = null;
+    p.lastEquipped = null;
+    p.buildPiece = null;
+    p.editing = null;
+    this.spectating = null;
+    this._specH = this._specP = null;
+    this._specDist = null;
+    this._deathPlacement = 0;
+    this._endTimer = 0;
+    if (this.hud.setDowned) this.hud.setDowned(null);
+    if (this.hud.setRevive) this.hud.setRevive(null);
+  }
+
+  /** Per frame while a Box Fight is in play. Host / solo run the round machine; clients follow events. */
+  _boxFightTick(dt, input, client) {
+    const bf = this.boxFight;
+    const p = this.player;
+    if (!p.alive && !this.paused) this._spectateInput(input);
+    if (client) {
+      this._boxClientTick(dt);
+      return;
+    }
+    // below the arena floor (a glitch or a cheat): out for this round
+    for (const a of this.combat.actors.slice()) {
+      if (a.alive && a.pos.y < bf.layout.killY) this.combat.applyDamage(a, 1e6, { source: null, fall: true });
+    }
+    const present = [0, 0];
+    const alive = [0, 0];
+    for (const a of this.combat.actors) {
+      const side = sideOfTeam(bf.sides, a.team);
+      if (side < 0) continue;
+      if (!a.leftMatch) present[side]++;
+      if (a.alive) alive[side]++;
+    }
+    let st = bf.state;
+    let events;
+    if (st.phase !== 'matchEnd' && (present[0] === 0 || present[1] === 0)) {
+      // a whole team left the match: the other team wins by forfeit
+      const w = present[0] === 0 ? 1 : 0;
+      st = { ...st, phase: 'matchEnd', winner: w, t: BOX_FIGHT.matchEndDelay };
+      events = [{ type: 'matchEnd', winnerSide: w, score: st.score.slice(), forfeit: true }];
+    } else ({ state: st, events } = stepBoxFight(st, dt, alive));
+    bf.state = st;
+    bf.round = st.round;
+    bf.score = st.score.slice();
+    for (const e of events) this._boxEvent(e);
+    if (this.boxFight && st.phase === 'warmup') this._boxBanner(st.t);
+  }
+
+  _boxEvent(e) {
+    const bf = this.boxFight;
+    const net = this.net && this.net.isHost ? this.net : null;
+    const me = this._boxMySide();
+    if (e.type === 'fight') {
+      bf.frozen = false;
+      this._setDivider(false, true);
+      this.menus.showDropBanner(false);
+      this.hud.announce('FIGHT!', `Round ${bf.round} · first to ${bf.state.winRounds}`, 1400);
+      sfx.play('zone_enter', { volume: 0.6 });
+      if (net && net.boxFight) net.boxFight({ e: 'rf', rn: bf.round });
+    } else if (e.type === 'roundEnd') {
+      bf.frozen = true; // as on clients: nobody acts between rounds
+      this._boxHud();
+      this._boxRoundAnnounce(e.winnerSide, me, e.score);
+      if (net && net.boxFight) net.boxFight({ e: 're', rn: e.round, w: e.winnerSide == null ? -1 : e.winnerSide, sc: e.score });
+    } else if (e.type === 'roundStart') {
+      this._boxRoundStart();
+    } else if (e.type === 'matchEnd') {
+      bf.frozen = true;
+      const won = e.winnerSide === me;
+      bf.won = won;
+      this._boxHud();
+      if (e.forfeit) this.hud.announce(won ? 'BOX FIGHT WON' : 'BOX FIGHT LOST', 'The other team left the match', 2600);
+      if (won && p0Alive(this.player) && this.player.character) this.player.character.emote(true, (this.emotes || []).find(Boolean));
+      if (net && net.boxFightEnd) net.boxFightEnd({ w: e.winnerSide, sc: e.score, team: bf.sides[e.winnerSide], forfeit: !!e.forfeit });
+    } else if (e.type === 'matchOver') {
+      this._endMatch(bf.won === true);
+    }
+  }
+
+  _boxRoundAnnounce(winnerSide, me, score) {
+    const us = score[me] | 0;
+    const them = score[1 - me] | 0;
+    const line = `${us}–${them} · first to ${this.boxFight.state.winRounds}`;
+    if (winnerSide == null || winnerSide < 0) this.hud.announce('DRAW', `${line} · round replays`, 2200);
+    else if (winnerSide === me) this.hud.announce('ROUND WON', line, 2200);
+    else this.hud.announce('ROUND LOST', line, 2200);
+  }
+
+  /** Client: count the freeze down locally; the host is authoritative for everything else. */
+  _boxClientTick(dt) {
+    const bf = this.boxFight;
+    if (bf.phase === 'warmup') {
+      bf.t -= dt;
+      this._boxBanner(bf.t);
+      // stay frozen until the host's FIGHT ('rf', see netFight); a lost / late one can't hold us forever
+      if (bf.t <= -1.5) this.netFight();
+    } else if (bf.phase === 'over') {
+      bf.t -= dt;
+      if (bf.t <= 0) this._endMatch(bf.won === true);
+    }
+  }
+
+  /** Client: the host started a round ('rs'). Spawns of other actors are applied by ClientSession. */
+  netRoundStart({ round, score, freeze, me }) {
+    const bf = this.boxFight;
+    if (!bf || bf.phase === 'over') return;
+    bf.round = round;
+    bf.score = score.slice();
+    bf.phase = 'warmup';
+    bf.t = freeze;
+    bf.frozen = true;
+    this.grenades.clear();
+    this.combat.resetRound();
+    this.fx.clear();
+    if (this.pings) this.pings.reset();
+    this.hud.clearTransient();
+    if (me) this._boxResetActor(this.player, me);
+    this._setDivider(true);
+    this._boxHud();
+    this._boxBanner(freeze);
+  }
+
+  /** Client: the host says FIGHT ('rf'): the countdown is over for everyone. */
+  netFight() {
+    const bf = this.boxFight;
+    if (!bf || bf.phase !== 'warmup') return;
+    bf.phase = 'fight';
+    bf.t = 0;
+    bf.frozen = false;
+    this._setDivider(false, true);
+    this.menus.showDropBanner(false);
+    this.hud.announce('FIGHT!', `Round ${bf.round} · first to ${bf.state.winRounds}`, 1400);
+    sfx.play('zone_enter', { volume: 0.6 });
+  }
+
+  /** Client: the host ended a round ('re'). */
+  netRoundEnd({ winnerSide, score }) {
+    const bf = this.boxFight;
+    if (!bf || bf.phase === 'over') return;
+    bf.score = score.slice();
+    bf.phase = 'roundEnd';
+    bf.frozen = true;
+    this._boxHud();
+    this._boxRoundAnnounce(winnerSide, this._boxMySide(), score);
+  }
+
+  /** Client: the host ended the match; the result screen follows after a beat. */
+  netBoxEnd({ winnerSide, score, forfeit }) {
+    const bf = this.boxFight;
+    if (!bf || bf.phase === 'over') return;
+    bf.score = score.slice();
+    bf.phase = 'over';
+    bf.t = BOX_FIGHT.matchEndDelay;
+    bf.frozen = true;
+    bf.won = winnerSide === this._boxMySide();
+    this._boxHud();
+    if (forfeit) this.hud.announce(bf.won ? 'BOX FIGHT WON' : 'BOX FIGHT LOST', 'The other team left the match', 2600);
+    if (bf.won && p0Alive(this.player) && this.player.character) this.player.character.emote(true, (this.emotes || []).find(Boolean));
   }
 
   _refillMats() {
@@ -646,6 +1064,7 @@ export class Game {
    */
   startClientMatch(start) {
     if (!this.loaded) throw new Error('load() first');
+    this._exitBoxFight();
     this._applySkin();
     const net = this.net;
     // the host's bots set the difficulty (sent in the start message)
@@ -665,7 +1084,8 @@ export class Game {
     this._specDist = null;
     this._deathPlacement = 0;
     this._winPending = false;
-    this._setMode(start.mode);
+    const box = start.game === 'boxfights' ? sanitizeBoxStart(start) : null;
+    this._setMode(box ? boxMode(box.size) : start.mode);
 
     this.combat.restoreWorld();
     this.combat.clear();
@@ -687,7 +1107,7 @@ export class Game {
 
     if (this.loot) {
       this.loot.clear();
-      for (const [id, kind, x, y, z, yaw, opened, item] of start.loot) {
+      for (const [id, kind, x, y, z, yaw, opened, item] of box ? [] : start.loot || []) {
         const rec = this.loot._add(kind, x, y, z, yaw, item || null, id);
         if (opened) {
           rec.opened = true;
@@ -702,6 +1122,22 @@ export class Game {
     const me = (start.roster || []).find((r) => r.id === start.you);
     p.team = me && me.tm != null ? me.tm : start.you;
     this.combat.register(p);
+    if (box) {
+      // Box Fights: no bus; the arena appears now, the host's first 'rs' event places everyone
+      this.busRoute = null;
+      p.inBus = false;
+      p.mode = 'ground';
+      if (this.dropBus) this.dropBus.root.visible = false;
+      this._enterBoxFight(box.size, { client: true, sides: box.teams, winRounds: box.wins });
+      // off the midline (the middle wall is up) until the host's first 'rs' places us
+      const L0 = this.boxFight.layout;
+      p.pos.set(L0.center.x, L0.floorY, L0.rect.minZ + 2);
+      net.begin(this, start);
+      this.totalActors = start.total;
+      this._setupTeam();
+      this._boxGoLive();
+      return;
+    }
     // the host's route when it sent one, else the same route derived from the shared seed
     this._boardBus(start.bus ? makeRoute(start.bus) : planBusRoute(start.seed, this.world.bounds));
 
@@ -732,7 +1168,7 @@ export class Game {
     const members = this.teamMode ? actors.filter((a) => a === p || sameTeam(a, p)).sort((a, b) => a.id - b.id) : [p];
     members.forEach((a, i) => (a.teamSlot = i));
     this.mates = members.filter((a) => a !== p);
-    if (this.reboot) this.reboot.reset({ teamMode: this.teamMode, authoritative: !(this.net && this.net.isClient), myTeam: this.teamMode ? p.team : null });
+    if (this.reboot) this.reboot.reset({ teamMode: this.teamMode && !this.boxFight, authoritative: !(this.net && this.net.isClient), myTeam: this.teamMode ? p.team : null });
   }
 
   /**
@@ -983,7 +1419,8 @@ export class Game {
   /** Back to the main menu. */
   leave() {
     // Leaving while dead / after a win still counts the match (rewards + leaderboard).
-    if (this.state === 'play' && this.player && (!this.player.alive || this._winPending)) {
+    // Box Fights only count once the match is over (a death mid-match is just a lost round).
+    if (!this.boxFight && this.state === 'play' && this.player && (!this.player.alive || this._winPending)) {
       this._postMatchEnd(!!this._winPending);
     }
     if (this.net) {
@@ -994,6 +1431,7 @@ export class Game {
     this.closeInventory(false);
     if (this.emoteWheel) this.emoteWheel.hide();
     if (this.player) this.player._wheel = null;
+    this._exitBoxFight();
     this.state = 'menu';
     this.paused = false;
     this.input.unlock();
@@ -1026,6 +1464,14 @@ export class Game {
       difficulty: this.matchDifficulty || null,
       ranked: isRankedDifficulty(this.matchDifficulty),
     };
+    if (this.boxFight) {
+      // Box Fights: unranked, scored in rounds (placement 1 = won, 2 = lost)
+      const bf = this.boxFight;
+      const me = this._boxMySide();
+      const score = [bf.score[me] | 0, bf.score[1 - me] | 0];
+      const copy = boxResultCopy({ victory, size: bf.size, score });
+      Object.assign(this.result, { placement: victory ? 1 : 2, teams: 2, difficulty: null, ranked: false, boxFight: { size: bf.size, score, ...copy } });
+    }
     if (this.net) {
       this.result.mp = true;
       // the host keeps simulating for everyone until it leaves
@@ -1080,15 +1526,15 @@ export class Game {
     const p = this.player;
     if (this.net && this.net.isHost) this.net.onEliminate(victim, killer, info);
     // team modes: a reboot card for a teammate to bring to a reboot van
-    if (this.reboot && this.teamMode && !info.left && !(this.net && this.net.isClient)) {
+    if (this.reboot && this.teamMode && !this.boxFight && !info.left && !(this.net && this.net.isClient)) {
       try {
         this.reboot.dropCard(victim, this.combat.actors);
       } catch (err) {
         this._error('reboot.dropCard', err);
       }
     }
-    // death loot
-    if (this.loot && victim.inventory && victim.inventory.dropAll) {
+    // death loot (Box Fights: everyone gets a fresh loadout every round instead)
+    if (this.loot && !this.boxFight && victim.inventory && victim.inventory.dropAll) {
       const items = victim.inventory.dropAll();
       items.forEach((it, i) => {
         const a = (i / Math.max(1, items.length)) * TAU;
@@ -1124,7 +1570,9 @@ export class Game {
       this._endTimer = DEATH_SCREEN_DELAY;
       this.hud.announce(
         'ELIMINATED',
-        killer
+        this.boxFight
+          ? `${killer ? `by ${killer.name} · ` : ''}spectating until the round ends`
+          : killer
           ? `by ${killer.name} · [LMB]/[RMB] switch player`
           : info.storm
             ? 'by the storm · [LMB]/[RMB] switch player'
@@ -1242,7 +1690,7 @@ export class Game {
     }
     if (input.hit('Escape') && !input.locked && (this.state === 'play' || this.state === 'drop')) this.pause(!this.paused);
     if (input.actionHit('creativeMap') && canCreativeMap(this)) this.toggleFullMap(!this.fullMapOpen);
-    if (input.actionHit('map') && (this.state === 'play' || this.state === 'drop') && !this.paused) this.toggleFullMap(!this.fullMapOpen);
+    if (input.actionHit('map') && (this.state === 'play' || this.state === 'drop') && !this.paused && !this.boxFight) this.toggleFullMap(!this.fullMapOpen);
     if (input.actionHit('ping') && this.state === 'play' && !this.paused && !this.inventoryOpen && !this.fullMapOpen) this.pingAim();
 
     // a multiplayer match keeps running under the pause menu
@@ -1352,7 +1800,7 @@ export class Game {
       } else if (input.actionHit('jump') && !this.paused) leftBus = this.jump();
     } else {
       this.matchTime += dt;
-      if (!client && !this.freeBuild) this.storm.update(dt); // free build: storm stays dormant
+      if (!client && !this.freeBuild && !this.boxFight) this.storm.update(dt); // free build / Box Fights: storm stays dormant
       if (this.freeBuild) this._refillMats();
     }
 
@@ -1360,12 +1808,14 @@ export class Game {
       if (p.alive) {
         const wasDrop = p.airborneDrop;
         // the frame we leave the bus, the same jump press must not also open the glider
-        p.update(dt, this.state === 'play' && !leftBus ? input : NO_INPUT, this);
+        const live = this.state === 'play' && !leftBus;
+        // Box Fights countdown: build, edit and move inside your box, but no shooting before FIGHT
+        p.update(dt, live ? input : NO_INPUT, this);
         if (wasDrop && !p.airborneDrop) sfx.stopLoop('glide_wind');
       } else {
         p.update(dt, NO_INPUT, this);
       }
-      if (!client && !this.freeBuild) this._stormDamage(dt);
+      if (!client && !this.freeBuild && !this.boxFight) this._stormDamage(dt);
       if (!client && this.teamMode) this.combat.tickTeams(dt);
     }
     // sniper rounds in flight (host / solo: damage; client: effects only)
@@ -1373,7 +1823,8 @@ export class Game {
 
     if (!client) {
       try {
-        this.bots.update(dt, { player: p, storm: this.storm, time: this.time, busTime: this.busT, viewer: this._focusActor().pos });
+        const bf = this.boxFight;
+        this.bots.update(dt, { player: p, storm: bf ? bf.botStorm : this.storm, hold: !!(bf && bf.frozen), time: this.time, busTime: this.busT, viewer: this._focusActor().pos });
       } catch (err) {
         this._error('bots.update', err);
       }
@@ -1389,7 +1840,13 @@ export class Game {
     if (!client) this._syncStats(dt);
     if (this.structures) this.structures.update(dt);
     this.grenades.update(dt);
-    if (this.reboot && (this.state === 'play' || this.state === 'over')) this.reboot.update(dt, this.combat.actors);
+    if (this.reboot && !this.boxFight && (this.state === 'play' || this.state === 'over')) this.reboot.update(dt, this.combat.actors);
+    if (this.boxArena) this.boxArena.update(dt);
+
+    if (this.boxFight) {
+      if (this.state === 'play') this._boxFightTick(dt, input, client);
+      return;
+    }
 
     // match end (team modes: a team is out once nobody on it is alive; dead members wait)
     if (this.state === 'play') {
@@ -1399,12 +1856,7 @@ export class Game {
         : this.teamMode
           ? this.totalTeams > 1 && this.combat.aliveTeams <= 1
           : this.totalActors > 1 && this.combat.aliveCount <= 1;
-      if (!p.alive && !this.paused) {
-        // LMB / RMB (or A/D) cycle who you're watching from their POV
-        if (input.actionHit('fire') || input.actionHit('moveRight') || input.hit('Digit2')) this._cycleSpectate(1);
-        else if (input.actionHit('aim') || input.actionHit('moveLeft') || input.hit('Digit1')) this._cycleSpectate(-1);
-        this._ensureSpectating();
-      }
+      if (!p.alive && !this.paused) this._spectateInput(input);
       if (!p.alive && !mate) {
         this._endTimer -= dt;
         if (this._endTimer <= 0) this._endMatch(false);
@@ -1491,12 +1943,14 @@ export class Game {
     if (this.dropBus) this.dropBus.update(this.busRoute, this.busT, dt, inMatch && !this.freeBuild && !!this.busRoute);
 
     // bespoke landmark animation (Crystal Bridges water, gallery lighting) every frame
-    if (this.view && this.view.frame) this.view.frame(dt, { camera: cam, player: p, game: this });
-    if (this.cbGallery) this.cbGallery.update(dt);
+    if (!this.boxFight) {
+      if (this.view && this.view.frame) this.view.frame(dt, { camera: cam, player: p, game: this });
+      if (this.cbGallery) this.cbGallery.update(dt);
+    }
 
     // world culling a few times a second
     this._cullT = (this._cullT || 0) - dt;
-    if (this._cullT <= 0 && this.view) {
+    if (this._cullT <= 0 && this.view && !this.boxFight) {
       this._cullT = 0.25;
       this.view.update(cam.position, QUALITY[graphicsQuality(this.settings)] || QUALITY.medium);
     }
@@ -1506,14 +1960,14 @@ export class Game {
     const stormOn = inMatch && this.state !== 'drop';
     const intensity = stormOn ? s.intensityAt(focus.x, focus.z) : 0;
     // no wall while the opening storm is dormant (harmless, up to STORM.openMaxRadius wide) or in free build
-    this.atmosphere.setStorm(inMatch && !s.dormant && !this.freeBuild ? s : null);
+    this.atmosphere.setStorm(inMatch && !s.dormant && !this.freeBuild && !this.boxFight ? s : null);
     this.atmosphere.update(dt, { focus, stormIntensity01: intensity });
     this.fx.update(dt);
 
     // audio
     cam.getWorldDirection(_v2);
     sfx.setListener(cam.position.x, cam.position.y, cam.position.z, _v2.x, _v2.z);
-    if (stormOn && this.state === 'play') {
+    if (stormOn && this.state === 'play' && !this.boxFight) {
       sfx.startLoop('storm_wind');
       sfx.setLoopGain('storm_wind', intensity);
     }
@@ -1584,7 +2038,7 @@ export class Game {
     const heading = watching ? watching.heading || 0 : p.heading;
     hud.setCompass(((heading * 180) / Math.PI + 360) % 360);
     const s = this.storm;
-    if (!this.freeBuild) {
+    if (!this.freeBuild && !this.boxFight) {
       // also during the drop: the storm is frozen at phase 1's full wait there, and without
       // this the panel kept its initial 0:00
       const hs = s.hudState(f.pos.x, f.pos.z);
@@ -1594,7 +2048,7 @@ export class Game {
 
     // location: nearest landmark we are inside
     this._locT = (this._locT || 0) - dt;
-    if (this._locT <= 0) {
+    if (this._locT <= 0 && !this.boxFight) {
       this._locT = 0.5;
       let best = null;
       let bd = Infinity;
@@ -2474,10 +2928,10 @@ export class Game {
 }
 
 /** Shared by respawnActor / netRespawn: alive and standing at (x, y, z) with REBOOT.loadout. */
-function reviveFields(a, x, y, z, heading) {
+function reviveFields(a, x, y, z, heading, { health = REBOOT.health, shield = 0, loadout = null } = {}) {
   a.alive = true;
-  a.health = REBOOT.health;
-  a.shield = 0;
+  a.health = health;
+  a.shield = shield;
   a.downed = false;
   a.downHp = 0;
   a.knockedBy = null;
@@ -2495,7 +2949,7 @@ function reviveFields(a, x, y, z, heading) {
   a.pos.set(x, y, z);
   if (a.vel) a.vel.set(0, 0, 0);
   a.heading = heading;
-  if (a.inventory && a.inventory.reset) a.inventory.reset(rebootLoadout());
+  if (a.inventory && a.inventory.reset) a.inventory.reset(loadout || rebootLoadout());
   if (a.character) {
     a.character.reset();
     a.character.root.visible = true;
@@ -2531,6 +2985,29 @@ const NO_INPUT = {
   actionHit: () => false,
   label: () => '',
 };
+
+
+const p0Alive = (p) => !!(p && p.alive && !p.downed);
+
+/** Bots' storm while in the arena: a harmless circle covering it (nobody needs to rotate). */
+function makeBotStorm(layout) {
+  const c = layout.center;
+  const r = layout.cells * 4;
+  return { cx: c.x, cz: c.z, r, nextCx: c.x, nextCz: c.z, nextR: r, phase: 1, phaseIndex: 0, mode: 'waiting', secondsLeft: 999, dps: 0, dormant: true, isOutside: () => false, intensityAt: () => 0 };
+}
+
+/**
+ * Box Fights fields of a host's start message, clamped (the host is another player's browser).
+ * Returns { size, wins, teams: [a, b] }.
+ */
+export function sanitizeBoxStart(start) {
+  const bf = start && typeof start.bf === 'object' && start.bf ? start.bf : {};
+  const size = normalizeBoxSize(bf.size);
+  const wins = Number.isInteger(bf.wins) && bf.wins >= 1 && bf.wins <= 5 ? bf.wins : BOX_FIGHT.winRounds;
+  const t = Array.isArray(bf.teams) ? bf.teams : [];
+  const teams = [Number.isInteger(t[0]) ? t[0] : -1, Number.isInteger(t[1]) ? t[1] : -2];
+  return { size, wins, teams };
+}
 
 /**
  * Team modes: one landing spot per bot team (consecutive bots sharing a team id), repeated for

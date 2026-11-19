@@ -60,6 +60,14 @@ import * as THREE from 'three';
 
 const _intTmp = new THREE.Color();
 
+const VOID_SUN_DIM = 0.6; // indoor room: the sun is dimmed while the void is on
+// Box Fights void (see setVoid): ink fog, clear across the arena, things past ~150 m melt away
+// (exp2 fog 1 - exp(-(d * 0.006)^2): ~16% at 70 m, ~55% at 150 m, ~78% at 250 m).
+const VOID_INK = 0x15103a;
+const VOID_FOG_DENSITY = 0.006;
+const VOID_HEMI_SKY = 0xb79cff;
+const VOID_HEMI_GROUND = 0x4a3a8c;
+const VOID_HEMI_INTENSITY = 2.2;
 const TAU = Math.PI * 2;
 
 const QUALITY = {
@@ -739,6 +747,7 @@ export class Atmosphere {
     if (Math.abs(target - this._storm) < 1e-4) this._storm = target;
     this._applyMood(this._storm);
     this._applyInterior();
+    if (this._void) this._applyVoid();
 
     // time-based animation (clamped so a background-tab hitch does not teleport things)
     const adt = dt > 0.25 ? 0.25 : dt;
@@ -763,6 +772,47 @@ export class Atmosphere {
 
     if (focus) this._focus.copy(focus);
     this._placeShadowBox();
+  }
+
+  /**
+   * Box Fights void: no sky dome, clouds or storm wall; ink fog (also the scene background, which
+   * shares the fog colour) and a violet fill. Re-applied every update() after the mood / interior
+   * passes, so turning it off simply lets those recompute the normal look next frame.
+   */
+  setVoid(on) {
+    if (this._disposed) return;
+    on = !!on;
+    if (on === !!this._void) return;
+    this._void = on;
+    if (on) {
+      this._applyMood(this._storm); // absolute values, so the sun dim below never compounds
+      this._applyVoid();
+    } else {
+      this._sky.visible = true;
+      const q = QUALITY[this._quality];
+      this._clouds.visible = !q || q.clouds > 0;
+      this._wall.visible = false; // the game re-arms it with setStorm()
+      this._applyMood(this._storm);
+      this._applyInterior();
+    }
+  }
+
+  get isVoid() {
+    return !!this._void;
+  }
+
+  _applyVoid() {
+    // setStorm() / setQuality() may flip these while void: keep them hidden
+    this._sky.visible = false;
+    this._clouds.visible = false;
+    this._wall.visible = false;
+    this._fog.color.setHex(VOID_INK);
+    this._fog.density = VOID_FOG_DENSITY;
+    this._uniforms.uFogDensity.value = VOID_FOG_DENSITY;
+    this._hemi.color.setHex(VOID_HEMI_SKY);
+    this._hemi.groundColor.setHex(VOID_HEMI_GROUND);
+    this._hemi.intensity = VOID_HEMI_INTENSITY;
+    this._sun.intensity *= VOID_SUN_DIM; // _applyMood() just set it absolutely; it restores on setVoid(false)
   }
 
   /**

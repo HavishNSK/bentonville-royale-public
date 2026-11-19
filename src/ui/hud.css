@@ -2640,3 +2640,78 @@
 .br-hud.is-spec-noinv .br-mats {
   display: none;
 }
+
+/* ---- Box Fights: round score pill under the compass ------------------------- */
+.br-rounds {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--u) * 76);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 10);
+  padding: calc(var(--u) * 4) calc(var(--u) * 12);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: calc(var(--u) * 14);
+  background: var(--br-panel);
+  box-shadow: 0 calc(var(--u) * 3) 0 rgba(21, 16, 58, 0.55);
+  font-family: var(--br-display);
+  color: var(--br-cream);
+  pointer-events: none;
+}
+.br-rounds[hidden] {
+  display: none;
+}
+.br-rounds-side {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 6);
+}
+.br-rounds-side b {
+  font-size: calc(var(--u) * 26);
+  line-height: 1;
+}
+.br-rounds-side.is-us b {
+  color: var(--br-sun);
+}
+.br-rounds-side.is-them b {
+  color: var(--br-coral);
+}
+.br-rounds-mid {
+  display: grid;
+  justify-items: center;
+  line-height: 1;
+}
+.br-rounds-mid small {
+  font-size: calc(var(--u) * 10);
+  letter-spacing: 0.12em;
+  opacity: 0.8;
+}
+.br-rounds-mid b {
+  font-size: calc(var(--u) * 18);
+  font-weight: 400;
+}
+.br-rounds-pips {
+  display: flex;
+  gap: calc(var(--u) * 3);
+  font-style: normal;
+}
+.br-rounds-pips em {
+  width: calc(var(--u) * 9);
+  height: calc(var(--u) * 9);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: 50%;
+  background: rgba(255, 246, 220, 0.18);
+}
+.is-us .br-rounds-pips em.is-won {
+  background: var(--br-sun);
+}
+.is-them .br-rounds-pips em.is-won {
+  background: var(--br-coral);
+}
+/* no map, storm or landmark tag in the void arena */
+.br-hud.is-boxfight .br-minimap,
+.br-hud.is-boxfight .br-storm,
+.br-hud.is-boxfight .br-loc {
+  display: none !important;
+}

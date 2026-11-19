@@ -94,6 +94,15 @@ Place a personal track at `local-music/menu.mp3`. The dev/preview middleware ser
 ## User Flow and Controls
 
 1. Select **PLAY** for solo, or **WITH FRIENDS** to host/join using a room code and display name. **SANDBOX** has no bots or storm; **N** opens the sandbox map (also remappable). Click **WEAPONS** on that map to pick a gun or grenades from pictures, or click a named POI to travel there. Frag grenades and the rocket launcher shatter museum windows and their frames, break benches, and blow chests apart so the loot spills and the chest is gone. Smoke grenades pop a thick opaque cloud, about three times the original area, that hides whatever is behind it.
+   **BOX FIGHTS:** pick **BOX FIGHTS** in the party panel's BATTLE ROYALE | BOX FIGHTS switch, which replaced the old MUSEUM button. The team buttons then read **1V1 / 2V2 / 3V3 / 4V4**, and **PLAY** starts it: against bots offline, or through matchmaking online. Each team spawns on its own half of a small, solid indoor arena that floats in the void, so the city, minimap and storm are hidden. Building is capped at **two storeys**: the walls, floor and ceiling can't be broken or built past. Rooms are 24 m across for 1v1, 32 m for 2v2 and 40 m for 3v3/4v4.
+
+   **Kit.** Everyone, bots included, gets the same kit every round: pump shotgun, assault rifle, SMG, 2 shield tonics, 2 medkits and 500 of each material.
+
+   **Rounds.** Each round you get full health and shield and a fresh kit. A solid wall across the middle hides the other team during the 5-second countdown. You can move, build and shoot on your side meanwhile; the wall stops shots and nothing can be built on its line. At FIGHT it slides up into the ceiling. There are no knocks, loot drops or reboot cards. The first team to win 3 rounds wins the match, and a double wipe replays the round. Box Fights are unranked and pay no coins. **PLAY AGAIN** replays the same size.
+
+   **With friends.** Use the party panel as above, or pick BOX FIGHTS in the private-match lobby. Parties hold up to 4. A private Box Fights room holds two teams of the chosen size; extra joiners are turned away and START waits until it fits.
+
+   **Key hints.** The title screen no longer shows the key hints; **SETTINGS → Controls** lists and rebinds every key.
 2. The host shares the code and starts the friend match when players have joined.
 3. Drop/glide, loot, fight, build, and remain inside the storm circle.
 4. Use the result screen to play again or return to the menu. In friend matches, the host starts the next round.
@@ -193,7 +202,16 @@ Friend matches use the WebSocket relay in `party/`. Its address is the `?party=h
 
 The online list and matchmaking run on the Cloudflare Worker in `party/` (`npm run party:dev` locally, `npm run party:deploy` to publish). Every title screen connects to one `Presence` Durable Object (`party/presence.js`, client `src/net/Presence.js`). It reports a display name and a status (in the lobby, searching in a mode, or in a match), and receives the counts plus up to 60 names. Tab tokens are never sent to other clients, and names and statuses are self-reported, unverified display data. The **ONLINE** button on the title screen lists these players, and the party status line shows how many others are searching in your mode. When party leaders press PLAY in the same mode, the matchmaker (`party/matchmaker.js`) batches everyone who queued within 8 seconds, up to 8 humans, into one match, and bots fill the remaining spots.
 
-Sniper rifles (any weapon with `ballistic` in `src/core/config.js`) fire projectiles with travel time and light bullet drop instead of hitscan rays. `Combat.tickProjectiles` steps them each frame. The host resolves damage; clients fly copies for visuals only. A guest's own round that reaches someone sends a hit claim, and the host accepts it only if its own round passed within the existing 1.6 m lag allowance. This is a favor-the-shooter convenience, not anti-cheat. Bots lead targets by a difficulty-scaled amount. The multiplayer protocol version is 3, so older builds can't join newer hosts.
+Sniper rifles (any weapon with `ballistic` in `src/core/config.js`) fire projectiles with travel time and light bullet drop instead of hitscan rays. `Combat.tickProjectiles` steps them each frame. The host resolves damage; clients fly copies for visuals only. A guest's own round that reaches someone sends a hit claim, and the host accepts it only if its own round passed within the existing 1.6 m lag allowance. This is a favor-the-shooter convenience, not anti-cheat. Bots lead targets by a difficulty-scaled amount. The multiplayer protocol version is 4, so older builds can't join newer hosts.
+
+Box Fights (`src/game/BoxFights.js` for layout, spawns, the middle wall, the kit and the round state machine; `src/render/BoxArena.js` for the arena meshes; `src/game/GameModes.js` for the shared `game: 'br' | 'boxfights'` helpers) run on the same host-authoritative model. The arena is six static `world.addBox` colliders about 300 m above the map, with the ceiling two build levels (6 m) above the floor. They are removed whenever Box Fights end, so they can't block the Drop Bus. `Structures.buildArea` keeps building inside it, and bots use an arena mode (`Bots.setArena`) instead of the city's cover, harvesting and pathfinding.
+
+Box Fights network messages:
+- **start message:** carries `game: 'boxfights'` and `bf: { size, wins, teams }`.
+- **round events:** `rs` is round start, carrying spawns, the score, the countdown and the full structure list; `rf` is FIGHT; `re` is round end. `end` is sent once, at match end.
+- **validation:** clients clamp every field to the arena. The middle wall is a world collider on host and clients, raised at `rs` and removed at `rf`. The host checks positions against the arena bounds, and drops stale pre-reset packets.
+
+Party matchmaking keeps separate Box Fights queues (`bf-solo`, `bf-duo`, `bf-trio`, `bf-squad`) packed by `party/matchPack.js` into exactly two teams. A party that waits 30 s with no opponents plays a bot team. Online party Box Fights need the updated Worker deployed (`npm run party:deploy`). Until then, the old Worker ignores the game choice and parties queue for battle royale. Private-match Box Fights need no Worker change.
 
 The **CROSSHAIR** settings tab changes only the regular gun crosshair: style, a fixed color palette, capped size and thickness, and the outline. Scope, shotgun, build and pickaxe reticles stay the same for everyone, and spread-based styles still open up with bloom.
 
@@ -261,7 +279,6 @@ These sit in a ravine of three ponds that step down northward over two weirs. Th
 - **Focus mode:** **E** near a painting opens it, with the info panel; **E** again, moving, or taking damage closes it, and recent combat blocks it.
 - **Portals:** walking into Kindred Spirits, The Backwoods of America or Indian Encampment plays musewalk's brush-stroke dissolve and white veil, then moves you to a paired spot. Each player has a 10 s cooldown; bots can't use portals, and they don't work from inside the storm. In multiplayer the host validates range, cooldown, storm and the exact destination.
 - **Ambience:** a synthesized ambience, ported from musewalk, plays on the music bus and ducks under nearby gunfire or the storm.
-- **Museum Mode:** **VISIT THE MUSEUM** on the title screen starts a no-bot, no-storm session in the lobby.
 
 **Art.** `node scripts/fetch-cb-art.mjs` (Commons) or `node scripts/fetch-cb-art.mjs --source museum` (crystalbridges.org collection records) fetches public-domain paintings in the museum's collection into `public/art/crystal-bridges/`, with provenance in `public/art/sources.json`. Both sources are paced, and only Public Domain / CC0 / CC BY works are accepted. Copyrighted works are never reproduced: they appear as empty frames or plinths with their real labels. See [ASSET_CREDITS.md](ASSET_CREDITS.md).
 

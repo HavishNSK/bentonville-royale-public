@@ -28,6 +28,8 @@
 
 import { PROTO_VERSION, MAX_HUMANS, randomCode, normalizeCode, validCode, makeReassembler } from './protocol.js';
 import { nameIsClean } from './chatFilter.js';
+import { normalizeGame, validGameMode, boxFightSlots } from '../game/GameModes.js';
+import { normalizeMode } from '../game/Teams.js';
 
 const OPEN_MS = 12000;
 const CHUNK = 256 * 1024; // chars per text frame; PartyKit's frame limit is 1 MB
@@ -195,6 +197,7 @@ class HostRoom {
     this.name = name;
     this.fill = true;
     this.mode = 'solo';
+    this.game = 'br'; // 'br' | 'boxfights' (see src/game/GameModes.js)
     this._seq = 0;
     this._started = false;
     this.closed = false;
@@ -240,8 +243,13 @@ class HostRoom {
     return true;
   }
 
+  /** Most humans the chosen game takes (Box Fights: two teams of the mode's size). */
+  get capacity() {
+    return this.game === 'boxfights' ? boxFightSlots(this.mode) || 2 : MAX_HUMANS;
+  }
+
   lobbyInfo() {
-    return { code: this.code, link: this.link, players: this.players, fill: this.fill, mode: this.mode, max: MAX_HUMANS, started: this.started };
+    return { code: this.code, link: this.link, players: this.players, fill: this.fill, mode: this.mode, game: this.game, max: this.capacity, started: this.started };
   }
 
   onLobby(fn) {
@@ -251,7 +259,7 @@ class HostRoom {
   _lobbyChanged() {
     const info = this.lobbyInfo();
     for (const fn of this._lobbyFns) fn(info);
-    this.broadcast({ t: 'lobby', players: info.players, fill: info.fill, mode: info.mode, max: info.max });
+    this.broadcast({ t: 'lobby', players: info.players, fill: info.fill, mode: info.mode, game: info.game, max: info.max });
   }
 
   setFill(on) {
@@ -260,8 +268,17 @@ class HostRoom {
   }
 
   setMode(mode) {
-    if (typeof mode !== 'string' || mode === this.mode) return;
+    if (typeof mode !== 'string' || mode === this.mode || !validGameMode(this.game, mode)) return;
     this.mode = mode;
+    this._lobbyChanged();
+  }
+
+  /** 'br' or 'boxfights'; both games have every mode; keep the mode, else fall back to the smallest valid one. */
+  setGame(game) {
+    const g = normalizeGame(game);
+    if (g === this.game) return;
+    this.game = g;
+    if (!validGameMode(g, this.mode)) this.mode = 'solo';
     this._lobbyChanged();
   }
 
@@ -314,7 +331,7 @@ class HostRoom {
 
   _join(id, name, token) {
     if (this.started) return this._ctl({ t: 'kick', id, reason: 'started' });
-    if (this.clients.size >= MAX_HUMANS - 1) return this._ctl({ t: 'kick', id, reason: 'full' });
+    if (this.clients.size >= Math.min(MAX_HUMANS, this.capacity) - 1) return this._ctl({ t: 'kick', id, reason: 'full' });
     const c = { id, name: cleanName(name), token: token || null, ready: false, seq: ++this._seq, bytesOut: 0, bytesIn: 0, reasm: makeReassembler() };
     this.clients.set(id, c);
     this.sendTo(id, { t: 'welcome', id, code: this.code });
@@ -503,8 +520,9 @@ class ClientConn {
     if (msg.t === 'lobby') {
       this.players = msg.players || [];
       this.fill = !!msg.fill;
-      if (msg.mode) this.mode = msg.mode;
-      this.max = msg.max || MAX_HUMANS;
+      if (msg.mode) this.mode = normalizeMode(msg.mode);
+      this.game = normalizeGame(msg.game);
+      this.max = Number.isInteger(msg.max) && msg.max >= 1 && msg.max <= MAX_HUMANS ? msg.max : MAX_HUMANS;
       if (this.onLobby) this.onLobby(this.lobbyInfo());
     } else if (msg.t === 'start') {
       if (this.onStart) this.onStart(msg);
@@ -516,7 +534,7 @@ class ClientConn {
   }
 
   lobbyInfo() {
-    return { code: this.code, link: shareLink(this.code), players: this.players, fill: this.fill, mode: this.mode, max: this.max, you: this.id };
+    return { code: this.code, link: shareLink(this.code), players: this.players, fill: this.fill, mode: this.mode, game: this.game || 'br', max: this.max, you: this.id };
   }
 
   /** Private-match lobby: tell the host this player is ready (or not). */

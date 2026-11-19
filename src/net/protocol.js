@@ -29,7 +29,7 @@
 
 import { WEAPONS, TAU } from '../core/config.js';
 
-export const PROTO_VERSION = 3; // 2: teams (roster tm, start mode, snapshot xflags, knock / revive events); 3: ballistic sniper rounds ('sh' b/d, 'ph' claims)
+export const PROTO_VERSION = 4; // 2: teams (roster tm, start mode, snapshot xflags, knock / revive events); 3: ballistic sniper rounds ('sh' b/d, 'ph' claims); 4: Box Fights (start game/bf, rs / rf / re events, end bw/sc)
 export const MAX_HUMANS = 16;
 export const SNAP_HZ = 20;
 export const STATE_HZ = 30;

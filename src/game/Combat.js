@@ -151,6 +151,7 @@ export class Combat {
     this.onAssist = null; // (assister, victim) when someone helped with an elimination
     this.onStats = null; // (actor) when kills / assists / damage changed (net sync) // (killer, { hp, shield }) after an elimination heals the killer // (carrier, victim | null) when someone picks up / puts down a teammate
     this.teamMode = false;
+    this.noKnock = false; // Box Fights: a downing is an elimination
     this._burstEpoch = 0;
     this.authoritative = true;
     this.lastDirs = [];
@@ -173,6 +174,12 @@ export class Combat {
   clear() {
     this.actors.length = 0;
     this._burstEpoch++; // cancels pending burst rounds
+    this.clearProjectiles();
+  }
+
+  /** Between Box Fights rounds: drops rounds in flight and pending burst shots, keeps the actors. */
+  resetRound() {
+    this._burstEpoch++;
     this.clearProjectiles();
   }
 
@@ -773,7 +780,7 @@ export class Combat {
 
   /** Team mode, not leaving, and someone else on the team is still on their feet. */
   _canKnock(target, info) {
-    return this.teamMode && !info.left && !target.inBus && teamStanding(this.actors, target.team, target);
+    return !this.noKnock && this.teamMode && !info.left && !target.inBus && teamStanding(this.actors, target.team, target);
   }
 
   _knock(victim, info) {

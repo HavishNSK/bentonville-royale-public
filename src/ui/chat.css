@@ -233,11 +233,6 @@
   }
 }
 
-/* lobby: the open chat sits where the controls hints are (they hide while it is open) */
-body:has(.br-chat:not(.is-match):not(.is-collapsed)) .mn-controls {
-  visibility: hidden;
-}
-
 /* ---- full screen (lobby): the chat fills the window over a dimmed backdrop; Esc exits */
 .br-chat.is-full {
   inset: 0;

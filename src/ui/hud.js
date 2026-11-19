@@ -118,6 +118,11 @@ function hudHTML() {
 </div>
 <div class="br-vig br-vig-storm"></div>
 <div class="br-vig br-vig-dmg"></div>
+<div class="br-rounds" data-ref="rounds" hidden role="status" aria-live="polite">
+  <span class="br-rounds-side is-us"><i class="br-rounds-pips" data-ref="roundsUsPips"></i><b class="br-ol" data-ref="roundsUs">0</b></span>
+  <span class="br-rounds-mid"><small>ROUND</small><b data-ref="roundsNum">1</b></span>
+  <span class="br-rounds-side is-them"><b class="br-ol" data-ref="roundsThem">0</b><i class="br-rounds-pips" data-ref="roundsThemPips"></i></span>
+</div>
 
 <div class="br-tl">
   <div class="br-counts">
@@ -1067,6 +1072,28 @@ export function buildHud(root) {
     r.emote.classList.toggle('is-on', v);
   }
 
+  // ---- Box Fights round score (top centre, under the compass) -----------------------
+  let lastRounds = '';
+  /** { round, us, them, target } shows the pill; null hides it. Also tags the HUD for Box Fights CSS. */
+  function setRounds(v) {
+    const key = v ? `${int(v.round)}|${int(v.us)}|${int(v.them)}|${int(v.target)}` : '';
+    if (key === lastRounds) return;
+    lastRounds = key;
+    r.rounds.hidden = !v;
+    hud.classList.toggle('is-boxfight', !!v);
+    if (!v) return;
+    const target = Math.max(1, Math.min(9, int(v.target) || 3));
+    const pips = (n) => Array.from({ length: target }, (_, i) => `<em class="${i < n ? 'is-won' : ''}"></em>`).join('');
+    const us = Math.max(0, int(v.us));
+    const them = Math.max(0, int(v.them));
+    r.roundsNum.textContent = String(Math.max(1, int(v.round)));
+    r.roundsUs.textContent = String(us);
+    r.roundsThem.textContent = String(them);
+    r.roundsUsPips.innerHTML = pips(us); // numbers only: no untrusted text
+    r.roundsThemPips.innerHTML = pips(them);
+    r.rounds.setAttribute('aria-label', `Round ${Math.max(1, int(v.round))}. Your team ${us}, opponents ${them}. First to ${target}.`);
+  }
+
   let lastLocation = DEFAULT_LOCATION;
   /** Text of the small location tag under the storm panel (e.g. a landmark name). null/'' restores the default. */
   function setLocation(text) {
@@ -1257,6 +1284,7 @@ export function buildHud(root) {
     setBuildMode,
     setStorm,
     setStormVisible,
+    setRounds,
     setCounts,
     setCompass,
     setCrosshair,

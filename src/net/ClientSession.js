@@ -195,6 +195,8 @@ export class ClientSession {
   /** Called by Game.startClientMatch once the scene is reset. */
   begin(game, start) {
     this.id = start.you;
+    // Box Fights: round events (rs / rf / re) and a rounds-aware `end`; ignored otherwise
+    this.boxFights = start.game === 'boxfights' && !!game.boxFight;
     const kits = game.kits;
     for (const info of start.roster) {
       if (info.id === this.id) {
@@ -639,12 +641,82 @@ export class ClientSession {
         return this._panelEvent(e);
       case 'left':
         return;
+      case 'rs':
+        if (this.boxFights) this._roundStart(e);
+        return;
+      case 'rf':
+        // the host's FIGHT: if our countdown is still running, end it now
+        if (this.boxFights && g.netFight) g.netFight();
+        return;
+      case 're':
+        if (this.boxFights && g.netRoundEnd) g.netRoundEnd({ winnerSide: e.w === 0 || e.w === 1 ? e.w : null, score: cleanScore(e.sc) });
+        return;
       case 'end':
         this.ended = true;
+        if (this.boxFights) {
+          // a malformed winner still ends the match (as a loss) rather than leaving us stuck in it
+          if (g.netBoxEnd) g.netBoxEnd({ winnerSide: e.bw === 0 || e.bw === 1 ? e.bw : -1, score: cleanScore(e.sc), forfeit: e.ff === 1 });
+          return;
+        }
         if (e.w === this.id || (g.teamMode && e.tm != null && e.tm >= 0 && e.tm === g.player.team)) g.netWin();
         return;
       default:
     }
+  }
+
+  /**
+   * Box Fights round start: the host's structure list, everyone's spawn, a fresh countdown.
+   * Values are clamped into the arena (the host is another player's browser, not a server).
+   */
+  _roundStart(e) {
+    const g = this.game;
+    const bf = g.boxFight;
+    if (!bf) return;
+    const L = bf.layout;
+    const R = L.rect;
+    const spawns = new Map();
+    for (const row of Array.isArray(e.sp) ? e.sp.slice(0, 16) : []) {
+      if (!Array.isArray(row)) continue;
+      const [id, x, y, z, h] = row;
+      if (!Number.isInteger(id) || ![x, y, z, h].every(Number.isFinite)) continue;
+      if (id !== this.id && !this.puppets.has(id)) continue;
+      spawns.set(id, { x: clampN(x, R.minX, R.maxX), y: clampN(y, L.floorY, L.ceilY), z: clampN(z, R.minZ, R.maxZ), heading: h });
+    }
+    const st = g.structures;
+    if (st) {
+      // [kind, mat, x, y, z, rot100, hp, key, ...]: finite numbers, inside the arena, string key
+      const inArena = (r) =>
+        [r[2], r[3], r[4], r[5], r[6]].every(Number.isFinite) &&
+        typeof r[7] === 'string' &&
+        r[2] >= R.minX - 1 && r[2] <= R.maxX + 1 && r[4] >= R.minZ - 1 && r[4] <= R.maxZ + 1 &&
+        r[3] >= L.floorY - 1 && r[3] <= L.ceilY;
+      const rows = (Array.isArray(e.bx) ? e.bx.slice(0, 400) : []).filter((r) => Array.isArray(r) && r.length >= 8 && inArena(r));
+      st.importNet(rows);
+      this._predicted.clear();
+    }
+    if (g.loot) g.loot.clear();
+    this.snaps.length = 0;
+    this.pendingInv = null;
+    this._specAsk = -1;
+    for (const [id, sp] of spawns) {
+      if (id === this.id) continue;
+      const pup = this.puppets.get(id);
+      pup.revive();
+      pup.downed = false;
+      pup.carrying = pup.carriedBy = null;
+      pup.inBus = false;
+      pup.pos.set(sp.x, sp.y, sp.z);
+      pup._prev.copy(pup.pos);
+      pup.heading = sp.heading;
+      pup.seen = false; // snap to the next snapshot, no glide across the arena
+      if (pup.character) {
+        pup.character.root.visible = true;
+        pup.character.root.position.copy(pup.pos);
+      }
+    }
+    const rn = Number.isInteger(e.rn) ? Math.max(1, Math.min(99, e.rn)) : 1;
+    const fz = Number.isFinite(e.fz) ? clampN(e.fz, 0, 10) : 3;
+    g.netRoundStart({ round: rn, score: cleanScore(e.sc), freeze: fz, me: spawns.get(this.id) || null });
   }
 
   _shot(e) {
@@ -947,3 +1019,14 @@ export class ClientSession {
 }
 
 export { DEV };
+
+function clampN(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+/** A Box Fights score from the host: two small non-negative integers. */
+function cleanScore(sc) {
+  const a = Array.isArray(sc) ? sc : [];
+  const n = (v) => (Number.isInteger(v) ? Math.max(0, Math.min(9, v)) : 0);
+  return [n(a[0]), n(a[1])];
+}

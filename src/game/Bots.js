@@ -185,6 +185,27 @@ export class Bots {
     this.navStats = { doorRoutes: 0, indoorLoot: 0, plans: 0, cover: 0, lootLos: 0 };
     this._shellGrid = null; // Map: SHELL_CELL hash -> enterable building colliders (lazy)
     this._shellSrc = null; // the world.buildingInteriors() list _shellGrid was built from
+    this.arena = null; // Box Fights: { rect, floorY, ceilY } (setArena); bots then ignore the city below
+  }
+
+  /**
+   * Box Fights: confine bots to an enclosed arena { rect:{minX,maxX,minZ,maxZ}, floorY, ceilY }, or
+   * null for the normal map. In arena mode there is no cover / door routing, harvesting, looting,
+   * rebooting or storm rotation; goals are sampled inside the rect and enemies are always hunted.
+   */
+  setArena(layout) {
+    this.arena = layout && layout.rect ? layout : null;
+  }
+
+  /** Random point inside the arena rect (inset by `inset` m) at floor height. */
+  _arenaPoint(rng = this.rng, inset = 2, out = { x: 0, y: 0, z: 0 }) {
+    const r = this.arena.rect;
+    const w = Math.max(0, r.maxX - r.minX - inset * 2);
+    const d = Math.max(0, r.maxZ - r.minZ - inset * 2);
+    out.x = r.minX + inset + rng() * w;
+    out.z = r.minZ + inset + rng() * d;
+    out.y = this.arena.floorY;
+    return out;
   }
 
   get list() {
@@ -219,7 +240,8 @@ export class Bots {
     const names = shuffled(opts.names || BOT_NAMES, rng);
     // fallback drop area centre: opts.center {x,z} or opts.storm (its first circle), else the origin
     const sc = opts.center || opts.storm || ctxStorm(this._storm);
-    const points = this._dropTargets(count, rng, opts.dropPoints, sc);
+    const spots = Array.isArray(opts.positions) ? opts.positions : null;
+    const points = spots ? [] : this._dropTargets(count, rng, opts.dropPoints, sc);
     const idBase = opts.idBase ?? 1;
     this.time = 0;
     // opts.launchWindow (s): bots wait in the "bus" and jump one by one, staggered
@@ -228,21 +250,22 @@ export class Bots {
     const order = shuffled(Array.from({ length: count }, (_, k) => k), rng);
 
     for (let i = 0; i < count; i++) {
-      const t = points[i];
+      const spot = spots ? spots[i] : null;
+      const t = spot || points[i];
       // start in the sky, up to ~120 m from the target, with staggered heights
       const a = rng() * Math.PI * 2;
       const off = 30 + rng() * 90;
-      const sx = clamp(t.x + Math.cos(a) * off, world.bounds.minX + 5, world.bounds.maxX - 5);
-      const sz = clamp(t.z + Math.sin(a) * off, world.bounds.minZ + 5, world.bounds.maxZ - 5);
+      const sx = spot ? spot.x : clamp(t.x + Math.cos(a) * off, world.bounds.minX + 5, world.bounds.maxX - 5);
+      const sz = spot ? spot.z : clamp(t.z + Math.sin(a) * off, world.bounds.minZ + 5, world.bounds.maxZ - 5);
       const actor = {
         id: idBase + i,
         name: names[i % names.length] + (i >= names.length ? ' ' + (1 + Math.floor(i / names.length)) : ''),
         isPlayer: false,
         isBot: true,
         team: opts.teams && opts.teams[i] != null ? opts.teams[i] : idBase + i,
-        pos: new THREE.Vector3(sx, PLAYER.dropHeight + rng() * 30, sz),
+        pos: new THREE.Vector3(sx, spot ? (Number.isFinite(spot.y) ? spot.y : 0) : PLAYER.dropHeight + rng() * 30, sz),
         vel: new THREE.Vector3(),
-        heading: Math.atan2(t.x - sx, -(t.z - sz)),
+        heading: spot ? spot.heading || 0 : Math.atan2(t.x - sx, -(t.z - sz)),
         pitch: 0,
         radius: PLAYER.radius,
         height: PLAYER.height,
@@ -252,10 +275,10 @@ export class Bots {
         kills: 0,
         inventory: new Inventory(opts.loadout),
         character: null,
-        gliding: true,
-        grounded: false,
+        gliding: !spot,
+        grounded: !!spot,
         damageScale: this.diff.damageScale,
-        botState: 'drop',
+        botState: spot ? 'wander' : 'drop',
       };
       if (this.kits.length) {
         const kit = this.kits[i % this.kits.length];
@@ -266,7 +289,15 @@ export class Bots {
         if (this.scene) this.scene.add(ch.root);
       }
       const b = newBrain(actor, t, rng);
-      if (opts.bus) {
+      if (spot) {
+        // fixed start (Box Fights): already on the ground, thinking right away
+        b.state = 'wander';
+        b.launchAt = 0;
+        b.thinkIn = 0;
+        b.stuckX = sx;
+        b.stuckZ = sz;
+        actor.inBus = false;
+      } else if (opts.bus) {
         // Drop Bus: jump where the flight passes closest to the landing spot (+-0.6 s)
         const r = opts.bus;
         b.busRoute = r;
@@ -694,6 +725,23 @@ export class Bots {
   _hearFight(b, all) {
     const a = b.actor;
     const t = this.time;
+    if (this.arena) {
+      // arena: no fights to overhear, just hunt the nearest living enemy
+      let near = null;
+      let nd = Infinity;
+      for (let i = 0; i < all.length; i++) {
+        const o = all[i];
+        if (o === a || !o.alive || sameTeam(o, a)) continue;
+        const d2 = dist2(a.pos, o.pos);
+        if (d2 < nd) {
+          nd = d2;
+          near = o;
+        }
+      }
+      b.hunt = near;
+      b.huntUntil = t + 2;
+      return near;
+    }
     if (!this.diff.thirdParty) return null;
     if (b.hunt && b.hunt.alive && t < b.huntUntil) return b.hunt;
     b.hunt = null;
@@ -801,6 +849,17 @@ export class Bots {
       // knocked: crawl toward help, nothing else
       if (a.downed) {
         this._downedStep(b, dt);
+        this._present(b, dt, viewer, cd2);
+        continue;
+      }
+      if (ctx.hold) {
+        // warm-up countdown: stand in place, presentation only
+        a.vel.set(0, 0, 0);
+        b.speed = 0;
+        b.mx = 0;
+        b.mz = 0;
+        b.lastHp = a.health + a.shield;
+        b.stuckAt = this.time + STUCK_WINDOW;
         this._present(b, dt, viewer, cd2);
         continue;
       }
@@ -916,7 +975,7 @@ export class Bots {
     const inv = a.inventory;
 
     this._perceive(b, all);
-    b.inB = this._shellAt(a.pos.x, a.pos.z, a.pos.y);
+    b.inB = this.arena ? null : this._shellAt(a.pos.x, a.pos.z, a.pos.y);
     if (b.inB) b.wasInside = true;
 
     const outside = storm ? storm.isOutside(a.pos.x, a.pos.z) : false;
@@ -1241,7 +1300,8 @@ export class Bots {
       default: {
         // wander toward somewhere inside the next safe circle (or around here)
         if (!b.wanderGoal || Math.hypot(b.goalX - a.pos.x, b.goalZ - a.pos.z) < 4 || t > b.wanderUntil) {
-          if (storm) world_pointIn(this.world, this.rng, storm.nextCx, storm.nextCz, Math.max(4, storm.nextR * 0.75), _pt);
+          if (this.arena) this._arenaPoint(this.rng, 2, _pt);
+          else if (storm) world_pointIn(this.world, this.rng, storm.nextCx, storm.nextCz, Math.max(4, storm.nextR * 0.75), _pt);
           else world_pointIn(this.world, this.rng, a.pos.x, a.pos.z, 120, _pt);
           // do not wander across the whole map: cap the leg to ~150 m
           const dx = _pt.x - a.pos.x;
@@ -1255,7 +1315,7 @@ export class Bots {
             b.goalZ = _pt.z;
           }
           // now and then explore a building on the way instead
-          if (this.rng() < INDOOR_WANDER) {
+          if (!this.arena && this.rng() < INDOOR_WANDER) {
             const cx = (b.goalX + a.pos.x) / 2;
             const cz = (b.goalZ + a.pos.z) / 2;
             const c = this._nearShell(cx, cz, 70, b.inB);
@@ -1561,6 +1621,7 @@ export class Bots {
       const s = inv.slots[i];
       if (!s || s.type !== 'weapon') continue;
       const w = WEAPONS[s.id];
+      if (w.projectile) continue; // bots never fire launchers (self-wreck; see loot pickup)
       if (s.mag <= 0 && inv.ammo[w.ammo] <= 0) continue;
       let score = Math.abs(Math.log(Math.max(1, dist) / w.botRange));
       if (dist > w.range * 0.9) score += 4;
@@ -1571,7 +1632,7 @@ export class Bots {
         best = i;
       }
     }
-    if (best !== inv.selected && b.reloading <= 0 && this.time > b.switchAt) this._equip(b, best);
+    if (best >= 0 && best !== inv.selected && b.reloading <= 0 && this.time > b.switchAt) this._equip(b, best);
   }
 
   _equip(b, slot) {
@@ -1646,7 +1707,7 @@ export class Bots {
     const rb = this.reboot;
     b.rbCard = null;
     b.rbVan = null;
-    if (!rb || !rb.teamMode || !this.combat || !this.combat.teamMode) return false;
+    if (this.arena || !rb || !rb.teamMode || !this.combat || !this.combat.teamMode) return false;
     const a = b.actor;
     if (b.target && b.targetVisible) return false;
     const storm = this._storm;
@@ -1683,12 +1744,22 @@ export class Bots {
    * `loadout` and a fresh brain; kills / team / character are kept.
    */
   respawn(a, x, y, z, heading = 0, loadout = null) {
+    return this.placeActor(a, { x, y, z, heading }, loadout);
+  }
+
+  /**
+   * Puts a bot (alive or dead) standing at pos {x, y, z, heading} with `loadout`, a fresh brain and
+   * clean downed / carry state. opts.health (default REBOOT.health) and opts.shield (default 0).
+   * Kills / team / character are kept. False when the actor is not one of ours.
+   */
+  placeActor(a, pos, loadout = null, { health = REBOOT.health, shield = 0 } = {}) {
     const old = a._bot;
     const i = old ? this.brains.indexOf(old) : -1;
     if (i < 0) return false;
+    const { x, y, z, heading = 0 } = pos;
     a.alive = true;
-    a.health = REBOOT.health;
-    a.shield = 0;
+    a.health = health;
+    a.shield = shield;
     a.downed = false;
     a.downHp = 0;
     a.knockedBy = null;
@@ -1726,7 +1797,7 @@ export class Bots {
   }
 
   _needRotate(b, storm) {
-    if (!storm || storm.mode === 'done') return false;
+    if (this.arena || !storm || storm.mode === 'done') return false;
     const a = b.actor;
     // Phase 1 closes from a map-wide dormant circle over a long shrink: running for the far
     // target straight away would skip looting entirely. Move only once the live edge gets close.
@@ -1769,7 +1840,7 @@ export class Bots {
 
   _pickLoot(b) {
     const loot = this.loot;
-    if (!loot) return false;
+    if (!loot || this.arena) return false;
     const a = b.actor;
     const inv = a.inventory;
     const t = this.time;
@@ -1899,6 +1970,7 @@ export class Bots {
   }
 
   _pickHarvest(b) {
+    if (this.arena) return false; // bots live off the mats they were given
     const a = b.actor;
     const m = a.inventory.mats;
     if (m.wood + m.brick + m.metal >= 300 || !this.combat) return false;
@@ -1954,14 +2026,16 @@ export class Bots {
     const high = tgt.pos.y - py > 1.5;
     let n = 0;
     let mode;
+    // arena: the ceiling caps the climb to the levels left below it (a ramp's top is y + LEVEL)
+    const room = this.arena ? Math.floor((this.arena.ceilY - py) / BUILD.level + 1e-6) : Infinity;
     if (maxN >= 5 && hurt && d < 40) {
       // 1x1 box around the bot's own cell: front wall first, then sides, back, roof
       mode = 'box';
       n = this._queueBox(b, n, hs);
-    } else if (maxN >= 3 && (high || (d > 18 && this.rng() < 0.45) || (diff.highGround && d > 8 && d < 45 && this.rng() < diff.highGround))) {
+    } else if (maxN >= 3 && room >= 1 && (high || (d > 18 && this.rng() < 0.45) || (diff.highGround && d > 8 && d < 45 && this.rng() < diff.highGround))) {
       // ramp rush: a chain of rising ramps toward the target, run up while it is built
       mode = 'rush';
-      const ramps = Math.min(maxN, high ? 2 + Math.ceil((tgt.pos.y - py) / BUILD.level) : 3);
+      const ramps = Math.min(maxN, room, high ? 2 + Math.ceil((tgt.pos.y - py) / BUILD.level) : 3);
       // with pieces to spare, each ramp gets a wall in front (ramp-wall: climb behind cover);
       // hard bots also roof each ramp with a floor (ramp-wall-floor: no shots from above)
       const floors = !!diff.rushFloors && maxN >= ramps * 3;
@@ -1978,7 +2052,7 @@ export class Bots {
           n = queueStep(b, n, 'wall', pl.x, pl.y, pl.z, hs, 0);
         }
         n = queueStep(b, n, 'ramp', rx, ry, rz, hs, 0);
-        if (floors) n = queueStep(b, n, 'floor', rx, ry, rz, hs, 0.6); // over the ramp's high end
+        if (floors && (!this.arena || ry + BUILD.level < this.arena.ceilY - 1e-6)) n = queueStep(b, n, 'floor', rx, ry, rz, hs, 0.6); // over the ramp's high end
       }
     } else if (maxN >= 2 && (d > 25 || this.rng() < (maxN >= 3 ? 0.75 : 0.4))) {
       // wall + ramp: the wall goes on the far edge of the ramp's cell, so it covers the climb
@@ -2112,6 +2186,7 @@ export class Bots {
    * No-op when nothing needs a door, or a straight walk is clear (a broken wall panel).
    */
   _doorRoute(b, gx, gz, ig = undefined, gy = null) {
+    if (this.arena) return false;
     const a = b.actor;
     const ib = b.inB;
     if (ig === undefined) ig = this._shellAt(gx, gz, gy);
@@ -2172,6 +2247,7 @@ export class Bots {
    * through one of its entrances. No-op when the landmark is absent or no route is needed.
    */
   _siteRoute(b, gx, gz, gy = null) {
+    if (this.arena) return false;
     const nav = this.world.siteNav;
     if (!nav) return false;
     const a = b.actor;
@@ -2372,6 +2448,7 @@ export class Bots {
 
   /** A random enterable building whose door is within r of (x, z) (not `skip`), or null. */
   _nearShell(x, z, r, skip = null) {
+    if (this.arena) return null;
     const grid = this._shells();
     if (!grid.size) return null;
     const i0 = Math.floor((x - r) / SHELL_CELL);
@@ -2459,7 +2536,7 @@ export class Bots {
   _pickCover(b, fromX, fromZ) {
     const a = b.actor;
     b.coverC = null;
-    if (b.inB) return false;
+    if (this.arena || b.inB) return false;
     const c = this._nearShell(a.pos.x, a.pos.z, COVER_RANGE);
     if (!c) return false;
     // do not run toward the shooter (through the door the bot would use)
@@ -2493,7 +2570,10 @@ export class Bots {
         if (b.stuck >= 2) this._escapeBuild(b);
       }
       b.avoidSide = -b.avoidSide;
-      if (b.stuck >= 2 && b.state !== 'engage' && b.pathN === 0 && b.lod < 2) {
+      if (this.arena) {
+        // the path grid samples ground level, not the arena floor: just pick another goal
+        if (b.stuck >= 2 && b.state !== 'engage') this._regoal(b);
+      } else if (b.stuck >= 2 && b.state !== 'engage' && b.pathN === 0 && b.lod < 2) {
         // plan a way around on a coarse grid toward the current goal (delivered in a later
         // frame; bots near a human jump the queue). Far bots skip A* and just re-goal below.
         this.planner.request(b, a.pos.x, a.pos.z, b.navX, b.navZ, b.lod === 0);
@@ -2506,7 +2586,7 @@ export class Bots {
         b.routeHold = t + 6;
         this.planner.request(b, a.pos.x, a.pos.z, b.navX, b.navZ, b.lod === 0);
       }
-      if (b.stuck >= 5) this._regoal(b);
+      if (!this.arena && b.stuck >= 5) this._regoal(b);
     } else if (moved > 1.5) b.stuck = 0;
     // long-horizon progress: moving but oscillating in place also counts as stuck
     if (t > b.progAt) {
@@ -2514,7 +2594,8 @@ export class Bots {
       const travelling = b.speed > 0 && b.state !== 'engage' && b.state !== 'harvest' && d > 4;
       if (travelling && b.progD - d < 3 && b.pathN === 0) {
         b.stuck = Math.max(b.stuck, 2);
-        if (b.lod < 2) this.planner.request(b, a.pos.x, a.pos.z, b.navX, b.navZ, b.lod === 0);
+        if (this.arena) this._regoal(b);
+        else if (b.lod < 2) this.planner.request(b, a.pos.x, a.pos.z, b.navX, b.navZ, b.lod === 0);
         else this._regoal(b); // far from every human: no A*, just pick another goal
       }
       b.progD = d;
@@ -2576,7 +2657,8 @@ export class Bots {
       b.lootId = null;
     }
     b.harvest = null;
-    world_pointIn(this.world, this.rng, a.pos.x, a.pos.z, 40, _pt);
+    if (this.arena) this._arenaPoint(this.rng, 2, _pt);
+    else world_pointIn(this.world, this.rng, a.pos.x, a.pos.z, 40, _pt);
     b.goalX = _pt.x;
     b.goalZ = _pt.z;
     b.wanderGoal = true;
@@ -2879,6 +2961,15 @@ export class Bots {
   }
 
   _clampBounds(pos) {
+    const ar = this.arena;
+    if (ar) {
+      const r = ar.rect;
+      const m = PLAYER.radius;
+      pos.x = clamp(pos.x, r.minX + m, r.maxX - m);
+      pos.z = clamp(pos.z, r.minZ + m, r.maxZ - m);
+      if (pos.y < ar.floorY) pos.y = ar.floorY;
+      return;
+    }
     const bd = this.world.bounds;
     if (pos.x < bd.minX + 1) pos.x = bd.minX + 1;
     else if (pos.x > bd.maxX - 1) pos.x = bd.maxX - 1;

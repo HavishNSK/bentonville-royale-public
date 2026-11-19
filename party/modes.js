@@ -19,3 +19,10 @@ export function modeFor(n, mode = 'solo') {
   if (modeSize(mode) >= n) return mode;
   return MODE_IDS.find((m) => MODE_SIZE[m] >= n) || 'squad';
 }
+
+// Game kinds (br / boxfights). modeSize is already defined above, so it is not re-exported.
+export {
+  GAMES, BOX_MODES, BR_MODES, BOXFIGHT_WINS,
+  normalizeGame, validGame, validGameMode, partyCap, boxFightSlots,
+  fitMode, queueName, parseQueue, lobbyStartCheck, boxTeams,
+} from '../src/game/GameModes.js';

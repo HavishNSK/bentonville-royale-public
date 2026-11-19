@@ -650,6 +650,11 @@ export class Structures {
     this._grid = new Map(); // "ci,cj" -> Set of pieces whose bounds touch that build cell
     this.collapsed = 0; // pieces destroyed by losing support (stats / QA)
     this._doorsMoving = new Set();
+    // Box Fights: { minX, maxX, minZ, maxZ, minY, maxY } or null. Pieces must have their centre
+    // strictly inside the rect (never on the barrier lines) and sit between minY and maxY.
+    this.buildArea = null;
+    // Box Fights: { minX, maxX, minZ, maxZ } where nothing may be placed (the middle wall's line until it lifts)
+    this.buildBlock = null;
 
     this.group = new THREE.Group();
     this.group.name = 'structures';
@@ -779,6 +784,7 @@ export class Structures {
     const kFeet = Math.floor((pos.y - phase) / LEVEL + 0.34);
     let dk = 0;
     let x;
+    let blocked = false; // floor / ramp / cone kept in our own cell by a wall in between
     let z;
     let rot = 0;
 
@@ -810,11 +816,19 @@ export class Structures {
       if (!own) {
         ti = Math.floor((pos.x + fx * CELL * 0.8) / CELL);
         tj = Math.floor((pos.z + fz * CELL * 0.8) / CELL);
+        // feet in the back of the cell: the lookahead fell short of the next cell. "Ahead" is
+        // always a neighbour (a ramp here went under our own feet, lifted us onto it, and the
+        // held click then stacked a second ramp right over our head)
+        if (ti === ci && tj === cj) {
+          if (Math.abs(fx) >= Math.abs(fz)) ti = ci + (fx > 0 ? 1 : -1);
+          else tj = cj + (fz > 0 ? 1 : -1);
+        }
         if (ti !== ci && tj !== cj) {
           if (Math.abs(fx) >= Math.abs(fz)) tj = cj;
           else ti = ci;
         }
         if (this._blockedBetween(pos, ci, cj, ti, tj)) {
+          blocked = true;
           ti = ci;
           tj = cj;
         }
@@ -836,10 +850,11 @@ export class Structures {
     let k = (onGround ? this._groundLevel(x, z) : kFeet) + dk;
     rot = ((rot % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
     // standing on a ramp in a box and ramping again: that spot is taken by the ramp we are on,
-    // so the new one goes up a level (keeps climbing, like a ramp rush in a box)
-    if (kind === 'ramp' && dk >= 0) {
+    // so the new one goes up a level (keeps climbing, like a ramp rush in a box). Only boxed in
+    // (a wall kept the ramp in our own cell) and only for the ramp under our feet
+    if (kind === 'ramp' && dk >= 0 && blocked) {
       const here = this.slots.get(slotKey('ramp', x, phase + k * LEVEL, z, rot));
-      if (here && here.alive && pos.y > phase + k * LEVEL + 0.4) k += 1;
+      if (here && here.alive && here === standOn && pos.y > phase + k * LEVEL + 0.4) k += 1;
     }
 
     out.kind = kind;
@@ -899,6 +914,40 @@ export class Structures {
       const oy = pos.y + 1.2;
       const hit = d > 0.01 ? world.raycast(pos.x, oy, pos.z, dx / d, 0, dz / d, d, null) : null;
       if (hit && hit.collider && hit.collider.type === 'poly') return true; // a building / vehicle side
+    }
+    // an arena barrier (the Box Fights middle wall before it lifts): nothing goes through it, even
+    // when a nearer piece (our own ramp) would stop a ray first
+    if (this._arenaBetween(pos.x, pos.z, tx, tz, lo, hi)) return true;
+    return false;
+  }
+
+  /** Does the segment (x0, z0) -> (x1, z1) cross a live arena wall that spans the body band lo..hi? */
+  _arenaBetween(x0, z0, x1, z1, lo, hi) {
+    const boxes = this.world && this.world._boxes;
+    if (!boxes) return false;
+    for (const b of boxes) {
+      // walls only: a barrier standing across the whole body band (not the arena floor / ceiling slabs)
+      if (!b || b.kind !== 'arena' || b.alive === false || b.y0 > lo || b.y1 < hi) continue;
+      // slab test against the box footprint (arena boxes are axis-aligned)
+      let t0 = 0;
+      let t1 = 1;
+      const dx = x1 - x0;
+      const dz = z1 - z0;
+      for (const [o, d, mn, mx] of [[x0, dx, b.minX, b.maxX], [z0, dz, b.minZ, b.maxZ]]) {
+        if (Math.abs(d) < 1e-9) {
+          if (o < mn || o > mx) {
+            t0 = 2;
+            break;
+          }
+          continue;
+        }
+        let a = (mn - o) / d;
+        let c = (mx - o) / d;
+        if (a > c) [a, c] = [c, a];
+        t0 = Math.max(t0, a);
+        t1 = Math.min(t1, c);
+      }
+      if (t0 <= t1) return true;
     }
     return false;
   }
@@ -989,12 +1038,24 @@ export class Structures {
     if (!w) return true;
     if (!pl || !Number.isFinite(pl.x) || !Number.isFinite(pl.y) || !Number.isFinite(pl.z)) return false;
     if (!w.inBounds(pl.x, pl.z, 2)) return false;
+    if (this.buildArea && !this._inBuildArea(pl)) return false;
+    const bb = this.buildBlock;
+    if (bb && pl.x >= bb.minX && pl.x <= bb.maxX && pl.z >= bb.minZ && pl.z <= bb.maxZ) return false;
     if (this._buried(pl)) return false;
     const c = w.polyAt(pl.x, pl.z);
     if (!(c && c.h > pl.y + ROOF_CLIP)) return true;
     const s = c.shell;
     if (!s || pl.y >= s.ceil) return false; // solid prism, or the solid upper floors of a tall building
     return this._fitsInside(c, pl);
+  }
+
+  /** Box Fights arena rule (see buildArea): centre strictly inside, base and top within the vertical range. */
+  _inBuildArea(pl) {
+    const a = this.buildArea;
+    if (!(pl.x > a.minX && pl.x < a.maxX && pl.z > a.minZ && pl.z < a.maxZ)) return false;
+    const top = pl.y + (pl.kind === 'floor' ? 0 : pl.kind === 'cone' ? CONE_PEAK : LEVEL);
+    if (pl.kind === 'floor' && pl.y >= a.maxY - 1e-6) return false; // flush with the ceiling: nobody can stand on it
+    return pl.y >= a.minY - 1e-6 && top <= a.maxY + 1e-6;
   }
 
   /** Does placement pl fit inside hollow building c (under the ceiling, within the outline)? */
@@ -1088,10 +1149,8 @@ export class Structures {
       keep.add(key);
       let have = this.slots.get(key);
       if (!have) {
-        have = this.place({ kind, x, y, z, rot: rot100 / 100, key, level: Math.round(y / 3), valid: true }, mat, null);
+        have = this.placeBuilt({ kind, x, y, z, rot: rot100 / 100, key, level: Math.round(y / 3), valid: true }, mat, null, { quiet: false });
         if (!have) continue;
-        have.growing = false;
-        have.age = 99;
       }
       have.hp = Math.max(1, Math.min(have.maxHp, hp));
       if (kind === 'ramp') {
@@ -1105,8 +1164,21 @@ export class Structures {
     }
   }
 
+  /**
+   * Place a finished piece: full hp, already grown (no build-up). `quiet` (default) suppresses the
+   * build sound and fx. Returns the piece or null (slot taken / cap / bad kind).
+   */
+  placeBuilt(placement, mat, owner = null, { quiet = true } = {}) {
+    const p = this.place(placement, mat, owner, quiet);
+    if (!p) return null;
+    p.hp = p.maxHp;
+    p.growing = false;
+    p.age = 99;
+    return p;
+  }
+
   /** Build it. Caller has already checked and spent BUILD.cost mats. */
-  place(placement, mat, owner = null) {
+  place(placement, mat, owner = null, quiet = false) {
     if (!placement || !BUILD.pieces.includes(placement.kind)) return null;
     if (!MATERIALS.includes(mat)) mat = 'wood';
     const key = placement.key || slotKey(placement.kind, placement.x, placement.y, placement.z, placement.rot);
@@ -1154,8 +1226,10 @@ export class Structures {
     this._addInstance(piece);
 
     const c = this._center(piece, _p);
-    if (this.fx) this.fx.buildPlace(c, this._size(piece, _s), mat);
-    if (this.sfx) this.sfx.play(SOUND[mat], { x: c.x, y: c.y, z: c.z });
+    if (!quiet) {
+      if (this.fx) this.fx.buildPlace(c, this._size(piece, _s), mat);
+      if (this.sfx) this.sfx.play(SOUND[mat], { x: c.x, y: c.y, z: c.z });
+    }
     return piece;
   }
 

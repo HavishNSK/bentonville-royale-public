@@ -182,21 +182,6 @@
   margin-top: calc(var(--u) * 8);
 }
 
-.mn-controls {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: calc(var(--u) * 8) calc(var(--u) * 16);
-  max-width: calc(var(--u) * 720);
-  font-size: calc(var(--u) * 13);
-  text-transform: uppercase;
-  opacity: 0.92;
-}
-.mn-controls span {
-  display: inline-flex;
-  align-items: center;
-  gap: calc(var(--u) * 6);
-}
 .mn-foot {
   position: absolute;
   bottom: calc(var(--u) * 14);
@@ -1112,7 +1097,7 @@
   gap: calc(var(--u) * 16);
 }
 .mn-title-side .mn-stack-row {
-  /* a tidy 2 x 2 block: never one button per row, so the column stays short */
+  /* PRIVATE MATCH across the top, SANDBOX + SETTINGS under it: a short, even block */
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   width: min(calc(var(--u) * 470), 100%);
@@ -1129,6 +1114,9 @@
      never spills out of its button however tall the window is */
   font-size: clamp(12px, calc(4.3cqi - 3px), calc(var(--u) * 18));
 }
+.mn-title-side .mn-stack-row .mn-btn-wide {
+  grid-column: 1 / -1;
+}
 .mn-title-side .mn-stack-row .mn-btn-small .br-ico,
 .mn-title-side .mn-stack-row .mn-btn-small svg {
   width: 1.3em;
@@ -1137,9 +1125,6 @@
 .mn-title-side .mn-stack-row .mn-btn-small span {
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.mn-title-side .mn-controls {
-  max-width: calc(var(--u) * 470);
 }
 @media (max-aspect-ratio: 7/5), (max-width: 1023px) {
   .mn-title {
@@ -1350,6 +1335,16 @@
   padding: calc(var(--u) * 8) calc(var(--u) * 12);
   font-size: calc(var(--u) * 15);
 }
+.mn-party-opts .mn-seg-game {
+  flex-basis: 100%;
+  display: flex;
+}
+.mn-party-opts .mn-seg-game button {
+  flex: 1;
+}
+.mn-seg button[hidden] {
+  display: none;
+}
 .mn-seg button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -1416,7 +1411,6 @@
 .mn-private .mn-join .mn-btn {
   min-height: calc(var(--u) * 46);
 }
-
 /* visible keyboard focus on the new controls */
 .mn-chip:focus-visible,
 .mn-slot:focus-visible,
