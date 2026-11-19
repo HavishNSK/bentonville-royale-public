@@ -16,6 +16,7 @@
 //   {
 //     kind: 'scene', file: 'bb-van.jpg',
 //     mode: 'sandbox' | 'museum',           // default 'sandbox' (title-screen SANDBOX / MUSEUM)
+//     ui: true,                             // keep menus/HUD (for a result or RANKS shot)
 //     size: [1100, 618],                     // default SCENE_SIZE
 //     quality: 82,                           // JPEG quality 40..95, default 82
 //     player: { x, z, y?, heading?, pitch? } | '<ref>',  // where the player stands (y: ground)
@@ -76,7 +77,7 @@ export const PIECES = ['wall', 'floor', 'ramp', 'cone'];
 export const REF_RE = /^(landmark|van|pavilion|door):[a-z0-9_-]+$|^player$/;
 export const FILE_RE = /^[a-z0-9-]+\.(png|jpg)$/;
 
-const SCENE_KEYS = new Set(['kind', 'file', 'mode', 'size', 'quality', 'player', 'camera', 'distance', 'hidePlayer', 'settle', 'setup', 'fresh', 'note']);
+const SCENE_KEYS = new Set(['kind', 'file', 'mode', 'size', 'quality', 'player', 'camera', 'distance', 'hidePlayer', 'settle', 'setup', 'fresh', 'note', 'ui']);
 const ITEM_KEYS = new Set(['kind', 'file', 'item', 'size', 'yaw', 'elev', 'rotate', 'fill', 'glow', 'rarity', 'skin', 'note']);
 
 const num = (v) => typeof v === 'number' && Number.isFinite(v);

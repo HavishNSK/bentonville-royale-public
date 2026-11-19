@@ -60,6 +60,9 @@ export const FLYER = {
       id: 'elo',
       tag: 'RANKED',
       title: 'Climb the Box Fights ranks',
+      images: [
+        { src: '/ui/news/v20-box-ranks.jpg', alt: 'A Box Fights victory screen showing Ozark Legend, 1542 Elo, and a plus-24 rating change' },
+      ],
       bullets: [
         'Box Fights has its own Elo rating, like chess. Everyone starts at 1000',
         'Bots count too: Easy 800, Normal 1200, Hard 1600',

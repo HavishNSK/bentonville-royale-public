@@ -82,5 +82,29 @@ export default {
       settle: 800,
       setup: [{ do: 'eval', js: fightFor(2, 5000) }],
     },
+    {
+      kind: 'scene',
+      file: 'v20-box-ranks.jpg',
+      ui: true,
+      note: 'Box Fights result: BOX FIGHT WON, Ozark Legend 1542 Elo (+24)',
+      camera: { pos: { x: 0, y: 40, z: 80 }, lookAt: { x: 0, y: 8, z: 0 }, fov: 60 },
+      settle: 400,
+      setup: [
+        {
+          do: 'eval',
+          js: `
+            const flyer = document.querySelector('.ufl');
+            if (flyer) { flyer.hidden = true; flyer.classList.remove('is-open'); }
+            game.menus.showResult({
+              victory: true, placement: 1, total: 4, kills: 4, time: 142,
+              boxFight: { size: 2, score: [5, 3], title: 'BOX FIGHT WON', sub: 'You won 5–3 in 2V2 Box Fights.', tile: '5–3' },
+            });
+            game.menus.showBoxElo({ elo: 1542, delta: 24 });
+            return { elo: true };
+          `,
+        },
+        { do: 'wait', ms: 700 },
+      ],
+    },
   ],
 };

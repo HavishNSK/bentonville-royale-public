@@ -108,6 +108,10 @@ async function main() {
       await sleep(s.settle ?? 2500);
       const acts = await page.evaluate((a) => window.__flyerStudio.runActions(a), s.setup || []);
       for (const a of acts) if (a.result != null) log(`  [${a.do}] ${JSON.stringify(a.result)}`);
+      if (s.ui) {
+        await page.evaluate(() => window.__flyerStudio.hideUi(false));
+        await sleep(200);
+      }
       const png = await page.screenshot({ type: 'png' });
       // a dev-server reload (someone saved a source file) would have put us back on the title screen
       if (cur.loads !== loads || !(await alive(page))) throw new Error('the page reloaded during the shot (a source file changed?)');
