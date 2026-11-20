@@ -9,7 +9,9 @@
 // Server -> client (JSON):  {t:'online', count, searching:{solo,duo,trio,squad}, inMatch,
 //                            players:[{name, status, mode}]}   (tokens are never sent out)
 //
-// Global chat (everyone connected, in a lobby or in a match):
+// Global chat (everyone connected, in a lobby or in a match). Currently off:
+// CHAT_ENABLED in src/net/chatFilter.js. When it is false the panel is not mounted,
+// history is not sent, and {t:'chat'} is refused. DEV tools stay on the DEV panel.
 //   client -> server  {t:'chat', text}
 //                     {t:'chatBlocked', c}   the client's filter stopped a message (category only, never the text)
 //   server -> client  {t:'chat', m:{id, name, text, at, dev, announce}}
@@ -33,7 +35,7 @@
 
 import { Server } from 'partyserver';
 import { validMode } from './modes.js';
-import { cleanChat, nameIsClean } from '../src/net/chatFilter.js';
+import { cleanChat, nameIsClean, CHAT_ENABLED, chatOffReason } from '../src/net/chatFilter.js';
 import { parseDevChat, parseModCommand, accountGrants } from '../src/net/devs.js';
 import { originAllowed } from './authLimits.js';
 
@@ -172,7 +174,7 @@ export class Presence extends Server {
     this._markDev(this.players.get(conn.id));
     try {
       conn.send(JSON.stringify(snapshot(this.players.values())));
-      if (this.chat.length) conn.send(JSON.stringify({ t: 'chatHistory', list: this.chat }));
+      if (CHAT_ENABLED && this.chat.length) conn.send(JSON.stringify({ t: 'chatHistory', list: this.chat }));
     } catch {
       /* gone */
     }
@@ -341,6 +343,8 @@ export class Presence extends Server {
         /* gone */
       }
     };
+    const off = chatOffReason();
+    if (off) return fail(off);
     if (now < lim.mutedUntil) {
       const s = Math.ceil((lim.mutedUntil - now) / 1000);
       const wait = s >= 60 ? `${Math.ceil(s / 60)} min` : `${s} s`;
@@ -398,7 +402,7 @@ export class Presence extends Server {
       return;
     }
     if (msg && msg.t === 'chatBlocked') {
-      this._strike(sender, p, String(msg.c || ''));
+      if (CHAT_ENABLED) this._strike(sender, p, String(msg.c || ''));
       return;
     }
     if (msg && msg.acct != null) {

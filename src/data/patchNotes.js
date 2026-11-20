@@ -102,6 +102,7 @@ export const PATCH_NOTES = [
         items: [
           'Cleaner title screen: the MUSEUM button and the key hints are gone. Your controls are in Settings.',
           'Bentonville High School, rebuilt, is the star of this update\'s splash: go see the North Building entrance, the Arend Arts Center and Tiger Arena.',
+          'Global chat is off for now, in the lobby and in matches.',
         ],
       },
     ],
