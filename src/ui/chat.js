@@ -62,6 +62,9 @@ export function createChat({ onSend = () => false, onBlocked = () => {}, onTypin
   box.append(head, list, form, err);
   root.append(box, hint);
   document.body.appendChild(root);
+  // Emergency kill switch: hide global chat UI while server chat is off.
+  root.hidden = true;
+  root.setAttribute('aria-hidden', 'true');
 
   let mode = 'lobby';
   let me = '';
