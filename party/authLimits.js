@@ -13,7 +13,9 @@
 export const LOGIN_FAILS = 5; // failures per key inside the window before a wait is enforced
 export const LOGIN_WINDOW_MS = 15 * 60e3;
 export const LOGIN_BASE_WAIT_MS = 30e3; // first wait; doubles with each further failure
-export const SIGNUP_PER_HOUR = 3; // new accounts per IP per hour
+// Shared school / campus Wi‑Fi often NATs many students behind one IP, so keep this
+// high enough for a class period while still capping alt farms on a single network.
+export const SIGNUP_PER_HOUR = 30; // new accounts per IP per hour
 export const MOD_AUTH_MS = 12 * 3600e3; // a dev must have signed in this recently to use dev commands
 
 /** In-memory throttles. `maxKeys` bounds memory (oldest keys are dropped first). */
