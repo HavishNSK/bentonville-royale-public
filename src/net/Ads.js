@@ -103,7 +103,9 @@ async function adsenseProvider({ client, test }) {
   const push = (o) => w.adsbygoogle.push(o);
   const attrs = { crossorigin: 'anonymous', 'data-ad-client': client, 'data-tag-for-age-treatment': '1' };
   if (test) attrs['data-adbreak-test'] = 'on';
-  await loadScript(`${ADSENSE_JS}?client=${encodeURIComponent(client)}`, attrs);
+  // the website build already has the tag in <head> (vite.config.js adsenseTag): reuse it
+  const inHead = !test && document.querySelector(`script[src^="${ADSENSE_JS}"]`);
+  if (!inHead) await loadScript(`${ADSENSE_JS}?client=${encodeURIComponent(client)}`, attrs);
   w.adsbygoogle.requestNonPersonalizedAds = 1; // and again on the loaded object
   push({ preloadAdBreaks: 'on', sound: 'on' }); // adConfig
   return {

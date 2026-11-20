@@ -7,6 +7,20 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.20.1',
+    date: '2026-11-20',
+    title: 'Ads on the website',
+    sections: [
+      {
+        heading: 'Website',
+        items: [
+          'The website now shows Google ads to help keep the game free. They are child-safe and never based on your interests or browsing (see the privacy page).',
+          'The CrazyGames version is unchanged: CrazyGames runs its own ads there.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.20.0',
     date: '2026-11-20',
     title: 'The real Downtown Square',

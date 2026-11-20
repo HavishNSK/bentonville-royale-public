@@ -45,6 +45,39 @@ function localMusic() {
   };
 }
 
+// AdSense publisher id for the website (public by design: it is in every ad tag). An env
+// VITE_ADSENSE_CLIENT overrides it; the CrazyGames portal build never uses AdSense.
+const DEFAULT_ADSENSE_CLIENT = 'ca-pub-5854166867877139';
+
+/**
+ * The AdSense tag in <head> (site verification + Auto ads need it in the page itself), website
+ * builds only. public/ads-init.js runs first so the kid-safe flags are set before the tag
+ * reads them; src/net/Ads.js sees this tag and does not load a second copy.
+ */
+function adsenseTag(env) {
+  return {
+    name: 'adsense-tag',
+    apply: 'build',
+    transformIndexHtml() {
+      const client = String(env.VITE_ADSENSE_CLIENT || '');
+      if (!/^ca-pub-\d+$/.test(client) || env.VITE_PLATFORM === 'crazygames') return [];
+      return [
+        { tag: 'script', attrs: { src: '/ads-init.js' }, injectTo: 'head' },
+        {
+          tag: 'script',
+          attrs: {
+            async: true,
+            src: `https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${client}`,
+            crossorigin: 'anonymous',
+            'data-tag-for-age-treatment': '1',
+          },
+          injectTo: 'head',
+        },
+      ];
+    },
+  };
+}
+
 // AdSense: ads.txt at the site root lists who may sell ads on it. Emitted only when the build
 // has a real publisher id (VITE_ADSENSE_CLIENT=ca-pub-1234...), never with a placeholder, and
 // never in the CrazyGames portal build (CrazyGames runs its own ads).
@@ -63,8 +96,11 @@ function adsTxt(env) {
 export default defineConfig(({ mode }) => {
   // .env / .env.local VITE_* values plus the shell's (the shell wins, like Vite itself)
   const env = { ...loadEnv(mode, process.cwd(), 'VITE_'), ...process.env };
+  if (!env.VITE_ADSENSE_CLIENT && env.VITE_PLATFORM !== 'crazygames') env.VITE_ADSENSE_CLIENT = DEFAULT_ADSENSE_CLIENT;
+  const adsClient = env.VITE_PLATFORM === 'crazygames' ? '' : String(env.VITE_ADSENSE_CLIENT || '');
   return {
-    plugins: [localMusic(), adsTxt(env)],
+    plugins: [localMusic(), adsTxt(env), adsenseTag(env)],
+    define: { 'import.meta.env.VITE_ADSENSE_CLIENT': JSON.stringify(adsClient) },
     server: { port: 5173, host: true },
     build: { target: 'es2022', chunkSizeWarningLimit: 2500 },
   };
