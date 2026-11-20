@@ -18,6 +18,7 @@ import { createAds, pickPlatform } from './net/Ads.js';
 import { createReportForm } from './ui/reportForm.js';
 import { createBoxLobbyFlow } from './ui/boxLobbyFlow.js';
 import { keyLabel } from './ui/settings.js';
+import { CHAT_ENABLED } from './net/chatFilter.js';
 
 // Ads (src/net/Ads.js): CrazyGames SDK in the portal build, AdSense H5 when VITE_ADSENSE_CLIENT is
 // set, else none. While an ad plays the game is muted and ignores input.
@@ -504,18 +505,26 @@ function othersSearching() {
 
 async function startPresence() {
   try {
-    const [{ partyToken }, { openPresence }, { createChat }] = await Promise.all([import('./net/Party.js'), import('./net/Presence.js'), import('./ui/chat.js')]);
-    chat = createChat({
-      onSend: (text) => presence && presence.sendChat(text),
-      onBlocked: (category) => presence && presence.reportBlocked && presence.reportBlocked(category),
-      onTypingChange: (on) => game && game.setChatTyping && game.setChatTyping(on),
-    });
+    const [{ partyToken }, { openPresence }, chatMod] = await Promise.all([
+      import('./net/Party.js'),
+      import('./net/Presence.js'),
+      CHAT_ENABLED ? import('./ui/chat.js') : Promise.resolve(null),
+    ]);
+    if (CHAT_ENABLED && chatMod) {
+      chat = chatMod.createChat({
+        onSend: (text) => presence && presence.sendChat(text),
+        onBlocked: (category) => presence && presence.reportBlocked && presence.reportBlocked(category),
+        onTypingChange: (on) => game && game.setChatTyping && game.setChatTyping(on),
+      });
+    }
     presence = openPresence({ token: partyToken(), accountToken: account.sessionToken, name: menus.playerName(), status: presenceStatus(), mode: partyMode() });
-    chat.setMe(menus.playerName());
-    chat.setMode(presenceInMatch ? 'match' : 'lobby');
-    presence.onChat = (m) => chat.add(m);
-    presence.onChatError = (reason) => chat.error(reason);
-    presence.onModResult = (r) => chat.mod(r.lines, r.ok);
+    if (chat) {
+      chat.setMe(menus.playerName());
+      chat.setMode(presenceInMatch ? 'match' : 'lobby');
+      presence.onChat = (m) => chat.add(m);
+      presence.onChatError = (reason) => chat.error(reason);
+      presence.onModResult = (r) => chat.mod(r.lines, r.ok);
+    }
     presence.onUpdate = (snap) => {
       if (meta) meta.setOnline(snap);
       if (chat) chat.setOnline(!!snap);

@@ -15,6 +15,7 @@
 
 import { partyUrl, cleanName } from './Net.js';
 import { cleanTitle } from './devs.js';
+import { CHAT_ENABLED } from './chatFilter.js';
 
 const ROOM = 'global';
 const RETRY_MIN = 2000;
@@ -60,11 +61,13 @@ export function openPresence({ token, accountToken = '', name, status = 'lobby',
     onModResult: null,
     online: false,
     sendChat(text) {
+      if (!CHAT_ENABLED) return false;
       if (!ws || ws.readyState !== 1) return false;
       ws.send(JSON.stringify({ t: 'chat', text: String(text).slice(0, 300) }));
       return true;
     },
     reportBlocked(category) {
+      if (!CHAT_ENABLED) return;
       if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'chatBlocked', c: String(category || '').slice(0, 16) }));
     },
     set(next) {

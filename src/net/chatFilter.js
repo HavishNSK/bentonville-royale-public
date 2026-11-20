@@ -21,6 +21,13 @@
 // message. Extend the lists as evasions show up, with a test in tests/chat-filter.test.mjs.
 
 export const CHAT_MAX = 120;
+/** Lobby and in-match global chat. Flip this on to bring the panel back. */
+export const CHAT_ENABLED = false;
+
+/** Why a chat send is refused, or null when chat is on. */
+export function chatOffReason() {
+  return CHAT_ENABLED ? null : 'Chat is currently turned off.';
+}
 
 const REASONS = {
   slur: 'Slurs and hate speech are not allowed. Your message was not sent.',
