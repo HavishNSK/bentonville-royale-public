@@ -343,8 +343,17 @@ export class Presence extends Server {
         /* gone */
       }
     };
-    const off = chatOffReason();
-    if (off) return fail(off);
+    // Chat off: block public chat; still allow signed-in dev /mod commands.
+    if (!CHAT_ENABLED) {
+      await this._markDev(p);
+      const mod = parseModCommand(raw);
+      if (mod) {
+        if (!p.dev) return fail('Only developers can use that.');
+        lim.last = now;
+        return this._modCommand(conn, p, mod);
+      }
+      return fail(chatOffReason() || 'Chat is currently turned off.');
+    }
     if (now < lim.mutedUntil) {
       const s = Math.ceil((lim.mutedUntil - now) / 1000);
       const wait = s >= 60 ? `${Math.ceil(s / 60)} min` : `${s} s`;
