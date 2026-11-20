@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { createCrystalBridges, hasCrystalBridges } from './crystal-bridges/index.js';
 import { TILE as CB_TILE } from './crystal-bridges/site.js';
+import { createSquare, hasSquare } from './bentonville-square/index.js';
 import { makeRng } from '../core/config.js';
 import { flattenModel } from '../core/assets.js';
 import { pointInPoly } from './World.js';
@@ -933,6 +934,9 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   // reserves its site (src/world/crystal-bridges/)
   const cb = hasCrystalBridges(data) ? createCrystalBridges(world, data) : null;
   const skipFlat = (pts, k) => !!cb && cb.skipFlat(pts, k);
+  // ---- Bentonville City Square (surveyed park: fountain, brick walks, mapped trees, own loot;
+  // src/world/bentonville-square/). Reserves the park before any scatter is placed.
+  const sq = hasSquare(data) ? createSquare(world, data) : null;
 
   // ---- ground
   progress(0.02, 'Laying out the ground');
@@ -984,9 +988,10 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   for (const r of roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2 + 1.7, yGround, 0xb7b3a8);
   for (const r of roads) {
     if (!PATHS.has(r.k)) continue;
-    const hex = r.k === 'path' || r.k === 'track' ? 0xb7a27a : r.k === 'pedestrian' ? 0xd9d1bd : r.k === 'cycleway' ? 0xc4bda8 : 0xcdc5b0;
+    const hex = (sq && sq.pathHex(r)) || (r.k === 'path' || r.k === 'track' ? 0xb7a27a : r.k === 'pedestrian' ? 0xd9d1bd : r.k === 'cycleway' ? 0xc4bda8 : 0xcdc5b0);
     addRibbon(flat, r.p, r.w / 2, yGround, hex);
   }
+  if (sq) sq.addFlat(flat, addPolygon); // brick plaza around the fountain
   for (const r of roads) if (r.k === 'service') addRibbon(flat, r.p, r.w / 2, yGround, 0x64686d);
   for (const r of roads) if (MOTOR.has(r.k)) addRibbon(flat, r.p, r.w / 2, yGround, MAJOR.has(r.k) ? 0x484c52 : 0x53575c);
   for (const r of roads) if (MAJOR.has(r.k)) addRibbon(flat, r.p, 0.14, yGround, 0xe3c545);
@@ -1322,7 +1327,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   await tick();
 
   // trees: mapped ones, then woods and parks, then yards everywhere
-  const addTree = (x, z, pine, force = false) => {
+  const addTree = (x, z, pine, force = false, scale = 0) => {
     if (force ? !world.inBounds(x, z, 4) || world.blockedAt(x, z, 1.1) : !isOpen(x, z, 1.1)) return false;
     const k = world.areaAt(x, z);
     if (k === 'water' || k === 'parking' || k === 'busloop' || k === 'pitch') return false;
@@ -1330,7 +1335,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     let name = TREE_NAMES[pool];
     if (!trees.has(name)) name = TREE_NAMES.find((t) => trees.has(t));
     if (!name) return false;
-    const s = 0.8 + rng() * 0.55;
+    const s = scale || 0.8 + rng() * 0.55;
     const rec = trees.add(name, x, z, rng() * 6.28, s, null, world.surfaceHeight(x, z)); // same ground as its collider (addCircle), not the raw DEM
     const h = TREE_H[name] * s;
     world.addCircle(x, z, 0.32 + h * 0.022, h * 0.8, 'tree', 'wood', 200, [rec]);
@@ -1341,6 +1346,7 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
   const treesBy = { mapped: 0, wood: 0, park: 0, garden: 0, yard: 0 };
   const plant = (src, x, z, pine) => addTree(x, z, pine) && treesBy[src]++;
   for (const t of data.trees) plant('mapped', t[0], t[1], false);
+  if (sq) for (const t of sq.treeSpots()) if (addTree(t.x, t.z, false, true, t.scale)) treesBy.mapped++;
   if (cb) for (const t of cb.treeSpots()) if (addTree(t.x, t.z, t.pine, true)) treesBy.wood++;
   for (const info of areaInfo) {
     const k = info.a.k;
@@ -1489,6 +1495,15 @@ export async function buildWorldMeshes({ world, scene, models, manifests, onProg
     view.hideCollider = (col) => (col && col.type === 'box' ? cbView.hideCollider(col) : hide(col));
     view.showCollider = (col) => (col && col.type === 'box' ? cbView.showCollider(col) : show(col));
     view.frame = (dt, ctx) => cbView.update(dt, ctx); // every frame (water, gallery, lighting)
+  }
+  if (sq) {
+    const sqView = await sq.buildMeshes(root);
+    view.square = { layout: sq, view: sqView };
+    const prev = view.frame;
+    view.frame = (dt, ctx) => {
+      if (prev) prev(dt, ctx);
+      sqView.update(dt);
+    };
   }
   progress(0.85, 'World ready');
   return view;

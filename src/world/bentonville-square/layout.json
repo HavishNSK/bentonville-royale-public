@@ -1,0 +1,233 @@
+{
+  "about": "Bentonville City Square (1 E Central Ave, Bentonville AR) surveyed layout. Source of truth for src/world/bentonville-square/. Game metres in the composed map: x EAST, z SOUTH, y up, 1 m = 1 m (the Square tile is an unrotated real-map cut-out moved by tileOffset). Evidence and confidence: docs/square/source-index.md, docs/square/survey.csv, docs/square/accuracy-report.md.",
+  "snapshot": "2026-11-19",
+  "anchor": {
+    "note": "Fountain centre. lat/lon derived from the game position through scripts/fetch-map-data.mjs projection (origin 36.3729, -94.2088; MX = 111320 cos(lat0), MZ = 110574) and the compose-map tile offset.",
+    "game": {
+      "x": -20.2,
+      "z": 17.8
+    },
+    "lat": 36.372649,
+    "lon": -94.208468,
+    "tileOffset": {
+      "dx": -50,
+      "dz": -10
+    }
+  },
+  "park": {
+    "osmWay": 493572832,
+    "name": "Bentonville City Square",
+    "note": "Park polygon and every path inside it come from OpenStreetMap (already in public/data/bentonville-osm.json). Verified against Esri World Imagery (Vantor GE01, 2025-09-27, 0.46 m)."
+  },
+  "fountain": {
+    "id": "F01",
+    "x": -20.2,
+    "z": 17.8,
+    "rimR": 5.1,
+    "rimW": 0.55,
+    "rimH": 0.55,
+    "waterY": 0.38,
+    "planterR": 2.4,
+    "planterH": 0.75,
+    "plazaR": 7.8,
+    "conf": "position verified (OSM ring way + Esri 2025 water ring); radii estimated from 0.46-0.6 m imagery; heights estimated (no measurements)"
+  },
+  "pathColor": "brick",
+  "trees": {
+    "note": "Crown centres read from USDA NAIP (0.6 m) and corrected to the OSM / Esri frame (NAIP sits up to ~4 m south-east of both here: x += 0.1 (z + 2), z += 0.22 (z + 2)). Crown = radius in m. Species not identified. Trunks within 2 m of a park path are nudged off it at build time.",
+    "list": [
+      {
+        "id": "T01",
+        "x": -41.1,
+        "z": 2.2,
+        "crown": 4.5,
+        "conf": "estimated"
+      },
+      {
+        "id": "T02",
+        "x": -30.9,
+        "z": 3.9,
+        "crown": 4.5,
+        "conf": "estimated"
+      },
+      {
+        "id": "T03",
+        "x": -33.7,
+        "z": 14.4,
+        "crown": 5,
+        "conf": "estimated"
+      },
+      {
+        "id": "T04",
+        "x": -41.1,
+        "z": 19.6,
+        "crown": 4.5,
+        "conf": "estimated"
+      },
+      {
+        "id": "T05",
+        "x": -39,
+        "z": 27.5,
+        "crown": 4.5,
+        "conf": "estimated"
+      },
+      {
+        "id": "T06",
+        "x": -27.4,
+        "z": 30.1,
+        "crown": 4,
+        "conf": "estimated"
+      },
+      {
+        "id": "T07",
+        "x": -16.9,
+        "z": 27.5,
+        "crown": 4.5,
+        "conf": "estimated"
+      },
+      {
+        "id": "T08",
+        "x": -14.7,
+        "z": 2.2,
+        "crown": 5,
+        "conf": "estimated"
+      },
+      {
+        "id": "T09",
+        "x": 4.9,
+        "z": -3,
+        "crown": 3.5,
+        "conf": "estimated"
+      },
+      {
+        "id": "T10",
+        "x": -4.7,
+        "z": 10.9,
+        "crown": 5,
+        "conf": "estimated"
+      },
+      {
+        "id": "T11",
+        "x": 2.4,
+        "z": 18.7,
+        "crown": 6,
+        "conf": "estimated"
+      },
+      {
+        "id": "T12",
+        "x": 8.9,
+        "z": 10.9,
+        "crown": 4,
+        "conf": "estimated"
+      },
+      {
+        "id": "T13",
+        "x": -6.6,
+        "z": 30.9,
+        "crown": 6,
+        "conf": "estimated"
+      },
+      {
+        "id": "T14",
+        "x": 6,
+        "z": 27.5,
+        "crown": 5,
+        "conf": "estimated"
+      },
+      {
+        "id": "T15",
+        "x": 1.6,
+        "z": 34.4,
+        "crown": 4,
+        "conf": "estimated"
+      }
+    ]
+  },
+  "loot": {
+    "note": "Game-only spawns (not geography). The park is reserved, so generic loot stays out; these replace it.",
+    "list": [
+      {
+        "id": "L01",
+        "kind": "chest",
+        "x": -26.5,
+        "z": 11.5,
+        "yaw": 0.785
+      },
+      {
+        "id": "L02",
+        "kind": "chest",
+        "x": -13.9,
+        "z": 24.1,
+        "yaw": 3.927
+      },
+      {
+        "id": "L03",
+        "kind": "item",
+        "x": -20.2,
+        "z": 7.0,
+        "yaw": 0
+      },
+      {
+        "id": "L04",
+        "kind": "item",
+        "x": -20.2,
+        "z": 28.6,
+        "yaw": 0
+      },
+      {
+        "id": "L05",
+        "kind": "item",
+        "x": -44.0,
+        "z": 9.0,
+        "yaw": 0
+      },
+      {
+        "id": "L06",
+        "kind": "item",
+        "x": 8.0,
+        "z": 35.0,
+        "yaw": 0
+      }
+    ]
+  },
+  "missing": [
+    "north block (NE 2nd St) 2026 status: shown standing per the latest dated imagery (2025-09-27); needs a dated 2026 photo",
+    "benches (City lists six; positions not resolvable in 0.46-0.6 m imagery)",
+    "lamps, trash cans, planters, bike racks inside the park",
+    "fountain water jets / exact basin profile",
+    "all four street-wall facades (buildings are still OSM/Overture extrusions)"
+  ],
+  "buildings": {
+    "note": "Buildings the surveyed evidence shows but the OpenStreetMap extract lacks. Added to the map data by createSquare before buildings are raised (same builder, colliders and interiors as every other building).",
+    "list": [
+      {
+        "id": -9101,
+        "ref": "N-BLOCK-01",
+        "t": "commercial",
+        "h": 8,
+        "lv": 2,
+        "mat": "brick",
+        "roof": "flat",
+        "p": [
+          [
+            -42.5,
+            -66
+          ],
+          [
+            -42.5,
+            -26.5
+          ],
+          [
+            4,
+            -26.5
+          ],
+          [
+            4,
+            -66
+          ]
+        ],
+        "conf": "estimated: present in USDA NAIP and Esri World Imagery 2025-09-27 (large flat roof, ~2 storeys from shadow); not in OpenStreetMap (2026-11-19). South wall z -26.5 matches both; north wall -61 (NAIP) vs -72 (Esri), mean used. Hart on Main redevelopment site (announced 2026-02): status on 2026-11-19 NOT verified - replace if dated 2026 imagery shows demolition."
+      }
+    ]
+  }
+}

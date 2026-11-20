@@ -1,0 +1,12 @@
+{
+  "note": "Reference cameras for tools/qa/square-shots.mjs. Game metres: x east, z SOUTH, y up. With eye, y values are metres above the ground at the camera. Fountain centre is the layout anchor (see layout.json).",
+  "cameras": [
+    { "id": "A01", "note": "north-up top-down of the whole square", "pos": [-15, 260, 20.01], "look": [-15, 0, 20], "fov": 40 },
+    { "id": "A02", "note": "aerial from the south-west looking north-east", "pos": [-110, 70, 110], "look": [-10, 0, 10], "fov": 50 },
+    { "id": "A03", "note": "aerial from the north-east looking south-west", "pos": [90, 70, -80], "look": [-20, 0, 20], "fov": 50 },
+    { "id": "W01", "note": "fountain, looking west to the Walmart Museum", "eye": true, "pos": [-12, 1.7, 18], "look": [-80, 4, 18], "fov": 70 },
+    { "id": "E01", "note": "fountain, looking east to the courthouse", "eye": true, "pos": [-28, 1.7, 18], "look": [60, 4, 18], "fov": 70 },
+    { "id": "N01", "note": "fountain, looking north to NE 2nd St", "eye": true, "pos": [-20, 1.7, 26], "look": [-20, 4, -40], "fov": 70 },
+    { "id": "S01", "note": "fountain, looking south to Central Ave", "eye": true, "pos": [-20, 1.7, 10], "look": [-20, 4, 80], "fov": 70 }
+  ]
+}

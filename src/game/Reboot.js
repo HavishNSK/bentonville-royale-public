@@ -129,6 +129,7 @@ export class Reboot {
       if (world.blockedAt && world.blockedAt(x, z, clear)) continue;
       if (world.areaAt && world.areaAt(x, z) === 'water') continue;
       if (world.interiorAt && world.interiorAt(x, z)) continue;
+      if (world.reservedAt && world.reservedAt(x, z)) continue; // bespoke landmark grounds (the Square's park)
       return { x, z };
     }
     const p = world.randomOpenPoint ? world.randomOpenPoint(rng, cx, cz, radius * 2, clear, { x: cx, z: cz }) : { x: cx, z: cz };

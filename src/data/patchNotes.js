@@ -7,6 +7,24 @@
 
 export const PATCH_NOTES = [
   {
+    version: '0.20.0',
+    date: '2026-11-20',
+    title: 'The real Downtown Square',
+    sections: [
+      {
+        heading: 'Downtown Square',
+        items: [
+          'The Square now has its real fountain in the middle: a stone basin with water, spray and a planted centre. You can hop up on the rim, and it cannot be destroyed.',
+          'The walks around the fountain are brick, laid out like the real park, and the shade trees stand where the real ones do (mapped from aerial photos).',
+          'The building across NE 2nd Street, north of the park, is back.',
+          'The park has its own loot now: two chests and a few floor items, instead of random stalls and benches.',
+          'Reboot vans no longer park inside the Square or the Crystal Bridges grounds.',
+          'Multiplayer: everyone needs to refresh for this update.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.19.4',
     date: '2026-11-19',
     title: 'Fullscreen setting',

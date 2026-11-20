@@ -1,0 +1,18 @@
+feature_id,side,kind,source,source_date,x_game,z_game,dims,confidence
+F01,park,fountain,OSM way ring + Esri 2025 + NAIP,2025-09-27,-20.2,17.8,rimR 5.1 rimH 0.55 planterR 2.4 plazaR 7.8,position verified; dims estimated
+T01,park,tree,NAIP (offset-corrected),unknown,-40.5,2.6,crown r 4.5 trunk moved 1.1 m,estimated
+T02,park,tree,NAIP (offset-corrected),unknown,-29.7,2.2,crown r 4.5 trunk moved 2 m,estimated
+T03,park,tree,NAIP (offset-corrected),unknown,-33.7,14.2,crown r 5 trunk moved 0.2 m,estimated
+T04,park,tree,NAIP (offset-corrected),unknown,-40.6,20.8,crown r 4.5 trunk moved 1.6 m,estimated
+T05,park,tree,NAIP (offset-corrected),unknown,-39,27.5,crown r 4.5,estimated
+T06,park,tree,NAIP (offset-corrected),unknown,-27.4,30.1,crown r 4,estimated
+T07,park,tree,NAIP (offset-corrected),unknown,-16.6,28.3,crown r 4.5 trunk moved 0.8 m,estimated
+T08,park,tree,NAIP (offset-corrected),unknown,-14.7,2.2,crown r 5,estimated
+T09,park,tree,NAIP (offset-corrected),unknown,4.9,-5.5,crown r 3.5 trunk moved 2.5 m,estimated
+T10,park,tree,NAIP (offset-corrected),unknown,-4.3,11.2,crown r 5 trunk moved 0.5 m,estimated
+T11,park,tree,NAIP (offset-corrected),unknown,2.3,21.2,crown r 6 trunk moved 2.4 m,estimated
+T12,park,tree,NAIP (offset-corrected),unknown,8.9,10.9,crown r 4,estimated
+T13,park,tree,NAIP (offset-corrected),unknown,-5.6,28.6,crown r 6 trunk moved 2.5 m,estimated
+T14,park,tree,NAIP (offset-corrected),unknown,6,27.5,crown r 5,estimated
+T15,park,tree,NAIP (offset-corrected),unknown,1.7,34.3,crown r 4 trunk moved 0.1 m,estimated
+N-BLOCK-01,north,building,Esri 2025 + NAIP,2025-09-27,-19.3,-46.3,46.5 x 39.5 x 8 m,estimated
