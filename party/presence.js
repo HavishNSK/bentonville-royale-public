@@ -45,6 +45,8 @@ const MIN_MSG_MS = 250; // status updates faster than this are dropped
 const STATUSES = new Set(['lobby', 'queued', 'match']);
 const ORDER = { queued: 0, lobby: 1, match: 2 };
 const CHAT_KEEP = 30; // recent messages sent to new connections
+// Emergency kill switch: reject player chat and stop history (dev /mod commands still work).
+const CHAT_DISABLED = true;
 const CHAT_GAP_MS = 1500; // at least this between one player's messages
 const CHAT_BURST = 6; // ...and at most this many per CHAT_WINDOW_MS
 const CHAT_WINDOW_MS = 30000;
@@ -172,7 +174,7 @@ export class Presence extends Server {
     this._markDev(this.players.get(conn.id));
     try {
       conn.send(JSON.stringify(snapshot(this.players.values())));
-      if (this.chat.length) conn.send(JSON.stringify({ t: 'chatHistory', list: this.chat }));
+      if (!CHAT_DISABLED && this.chat.length) conn.send(JSON.stringify({ t: 'chatHistory', list: this.chat }));
     } catch {
       /* gone */
     }
@@ -341,6 +343,17 @@ export class Presence extends Server {
         /* gone */
       }
     };
+    // Kill switch: block public chat; still allow signed-in dev /mod commands.
+    if (CHAT_DISABLED) {
+      await this._markDev(p);
+      const mod = parseModCommand(raw);
+      if (mod) {
+        if (!p.dev) return fail('Only developers can use that.');
+        lim.last = now;
+        return this._modCommand(conn, p, mod);
+      }
+      return fail('Chat is temporarily turned off.');
+    }
     if (now < lim.mutedUntil) {
       const s = Math.ceil((lim.mutedUntil - now) / 1000);
       const wait = s >= 60 ? `${Math.ceil(s / 60)} min` : `${s} s`;
