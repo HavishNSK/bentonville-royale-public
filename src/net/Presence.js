@@ -60,9 +60,8 @@ export function openPresence({ token, accountToken = '', name, status = 'lobby',
     onModResult: null,
     online: false,
     sendChat(text) {
-      if (!ws || ws.readyState !== 1) return false;
-      ws.send(JSON.stringify({ t: 'chat', text: String(text).slice(0, 300) }));
-      return true;
+      // Emergency kill switch: do not send chat while global chat is off.
+      return false;
     },
     reportBlocked(category) {
       if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'chatBlocked', c: String(category || '').slice(0, 16) }));
