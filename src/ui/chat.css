@@ -77,6 +77,10 @@
 .br-chat-msg.is-me .br-chat-name {
   color: #8fd4ff;
 }
+.br-chat-msg.has-title .br-chat-name,
+.br-chat-msg.has-title.is-me .br-chat-name {
+  color: var(--br-title-color, #facece);
+}
 .br-chat-msg.is-dev .br-chat-name,
 .br-chat-msg.is-dev.is-me .br-chat-name {
   color: #ff3b3b;
@@ -247,11 +251,6 @@ body:has(.mn-title.is-on .mn-private:not([hidden])) .br-chat:not(.is-match) {
   .br-chat.is-match .br-chat-msg {
     transition: none;
   }
-}
-
-/* lobby: the open chat sits where the controls hints are (they hide while it is open) */
-body:has(.br-chat:not(.is-match):not(.is-collapsed)) .mn-controls {
-  visibility: hidden;
 }
 
 /* ---- full screen (lobby): the chat fills the window over a dimmed backdrop; Esc exits */

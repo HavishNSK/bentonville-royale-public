@@ -9,7 +9,7 @@
 // breaks; a broken pane is an opening you can shoot (and be shot) through.
 
 export const CAR = {
-  count: 32, // drivable cars per match (parking lots + curbs)
+  count: 40, // drivable cars per match (parking lots + curbs, spread across the map)
   enterRange: 3.5, // m from the car's side to get in
   windowHp: 60,
   explodeDamage: 75, // to everyone inside when the car blows up

@@ -1,6 +1,6 @@
 // BENTONVILLE ROYALE — out-of-match meta screens on the title: account bar, sign in / create
-// account, item shop, locker (outfit + emote wheel), friends, party invites, and the 3D
-// line-up (Showcase) with lobby emotes.
+// account, item shop, locker (outfit + emote wheel), friends, party invites, patch notes,
+// suggest / report-a-bug, and the 3D line-up (Showcase) with lobby emotes.
 //
 //   const meta = createMeta(menus, account, {
 //     partyCode: () => 'ABCD' | null,       // current party (invites)
@@ -19,10 +19,12 @@
 // User text always goes through textContent.
 
 import './meta.css';
-import { SKINS, EMOTES, PICKAXES, BACKBLINGS, EMOTE_SLOTS, PRICES, featuredToday, emoteDef, cosmeticDef } from '../game/Cosmetics.js';
+import { SKINS, EMOTES, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, EMOTE_SLOTS, PRICES, priceFor, featuredToday, emoteDef, cosmeticDef } from '../game/Cosmetics.js';
 import { createShowcase } from './Showcase.js';
-import { PATCH_NOTES, LATEST_VERSION } from '../data/patchNotes.js';
+import { LATEST_VERSION, PUBLIC_LATEST_VERSION, visibleNotes } from '../data/patchNotes.js';
 import { RANKED_NOTE } from '../core/config.js';
+import { TIERS, clampElo, tierOf } from '../game/BoxElo.js';
+import { boardPosts } from '../net/feedbackBoard.js';
 
 const SEEN_KEY = 'bentonville-royale.seenPatch';
 const seenPatch = () => {
@@ -35,7 +37,7 @@ const seenPatch = () => {
 
 import { partyHost, isLocal } from '../net/Net.js';
 import { nameIsClean } from '../net/chatFilter.js';
-import { isDevName, customTitleProblem } from '../net/devs.js';
+import { isDevName, isJrDevTitle, customTitleProblem } from '../net/devs.js';
 import { createUpdateFlyer } from './updateFlyer.js';
 
 // Google (GIS) button in renderAuth(); Account.loginWithGoogle.
@@ -63,6 +65,14 @@ function loadGoogleGis() {
   return gisLoad;
 }
 
+/** Box Fights tier pill (menus.css .br-tier); the tier always follows the shown Elo. */
+function tierPill(elo) {
+  const t = tierOf(elo);
+  const pill = h('span', 'br-tier', t.name);
+  pill.dataset.tier = t.id;
+  return pill;
+}
+
 function h(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -77,7 +87,7 @@ function btn(label, cls = 'mn-btn mn-btn-small', act) {
   return b;
 }
 const RARITY_CSS = { common: 'var(--br-common)', uncommon: 'var(--br-uncommon)', rare: 'var(--br-rare)', epic: 'var(--br-epic)', legendary: 'var(--br-legendary)' };
-const KIND_LABEL = { skin: 'Outfit', pickaxe: 'Pickaxe', backbling: 'Back Bling', emote: 'Emote' };
+const KIND_LABEL = { skin: 'Outfit', pickaxe: 'Pickaxe', backbling: 'Back Bling', glider: 'Glider', bundle: 'Bundle', emote: 'Emote' };
 
 export function createMeta(menus, account, opts = {}) {
   const titleEl = menus.el.querySelector('.mn-title');
@@ -113,7 +123,7 @@ export function createMeta(menus, account, opts = {}) {
 
   function lineUp() {
     const eq = account.profile.equipped;
-    const me = { name: account.profile.guest ? '' : account.profile.name, skin: eq.skin, pickaxe: eq.pickaxe, backbling: eq.backbling, you: true };
+    const me = { name: account.profile.guest ? '' : account.profile.name, skin: eq.skin, pickaxe: eq.pickaxe, backbling: eq.backbling, glider: eq.glider, you: true };
     const others = (opts.partyMembers ? opts.partyMembers() : [])
       .filter((m) => !m.you)
       .map((m) => ({ name: m.name, skin: m.skin || 'skin_rogue', pickaxe: m.pickaxe, backbling: m.backbling, ready: m.ready }));
@@ -143,10 +153,17 @@ export function createMeta(menus, account, opts = {}) {
   const bShop = tab('ITEM SHOP', 'shop');
   const bBoard = tab('RANKS', 'leaderboard');
   const bNews = tab('PATCH NOTES', 'news');
+  const bFeedback = tab('FEEDBACK', 'feedback'); // suggestions and bug reports, one board
   const newBadge = h('em', 'mt-badge mt-badge-new', 'NEW');
-  newBadge.hidden = seenPatch() === LATEST_VERSION;
+  // staff-only patch notes (staffOnly): devs and jr devs (a dev-given JR DEV title) see them
+  const canSeeStaffNotes = () => {
+    const p = account.profile || {};
+    return !!account.signedIn && (isDevName(p.name) || isJrDevTitle(p.title && p.title.title));
+  };
+  const latestNotes = () => (canSeeStaffNotes() ? LATEST_VERSION : PUBLIC_LATEST_VERSION);
+  newBadge.hidden = seenPatch() === latestNotes();
   bNews.appendChild(newBadge);
-  tabs.append(bPlay, bLocker, bShop, bBoard, bNews);
+  tabs.append(bPlay, bLocker, bShop, bBoard, bNews, bFeedback);
   const bFriends = btn('FRIENDS', 'mn-chip mt-chip', 'friends');
   const badge = h('em', 'mt-badge');
   bFriends.appendChild(badge);
@@ -159,7 +176,8 @@ export function createMeta(menus, account, opts = {}) {
   // DEV panel (titles, bans, reports): shown to dev accounts only; the server checks every action
   const bDev = btn('DEV', 'mn-chip mt-chip mt-chip-dev', 'dev');
   bDev.hidden = true;
-  right.append(bDev, bOnline, bFriends, coins, who, bAuth);
+  // DEV sits after SIGN OUT so it never crowds the FEEDBACK tab on the left
+  right.append(bOnline, bFriends, coins, who, bAuth, bDev);
   bar.append(tabs, right);
   // portal builds (opts.guestOnly, CrazyGames): no outside sign-in, so no accounts, coins,
   // friends or buying; the locker keeps the free items
@@ -255,6 +273,25 @@ export function createMeta(menus, account, opts = {}) {
     }
   });
 
+  // Party rank card sits outside the top bar but opens the same RANKS panel
+  titleEl.addEventListener('click', (e) => {
+    const b = e.target.closest('button.mn-box-rank[data-act]');
+    if (!b || b.hidden) return;
+    e.preventDefault();
+    click();
+    if (permaBanned()) {
+      openPanel('banned');
+      return;
+    }
+    if (mustRename()) {
+      openPanel('rename');
+      return;
+    }
+    const act = b.dataset.act;
+    if (open === act) closePanel();
+    else openPanel(act);
+  });
+
   bar.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-act]');
     if (!b) return;
@@ -288,6 +325,7 @@ export function createMeta(menus, account, opts = {}) {
     panelBody.replaceChildren();
     close.hidden = (open === 'rename' && mustRename()) || (open === 'banned' && permaBanned()); // no way around these
     if (open === 'news') renderNews();
+    else if (open === 'feedback') renderFeedback();
     else if (open === 'auth') renderAuth();
     else if (open === 'signout') renderSignOut();
     else if (open === 'rename') renderRename();
@@ -370,76 +408,94 @@ export function createMeta(menus, account, opts = {}) {
   renderOnlineChip();
 
   // ---------------------------------------------------------------- patch notes + board
-  let newsTab = 'notes';
+  // One shared list from the server (both kinds) in one FEEDBACK tab: post a suggestion or a bug
+  // report, and list all / ideas / bugs. Posts saved without a kind count as ideas.
   let board = null; // last loaded posts
-  let boardKind = 'idea';
   function renderNews() {
-    panelTitle.textContent = newsTab === 'notes' ? 'PATCH NOTES' : 'IDEAS & BUGS';
+    panelTitle.textContent = 'PATCH NOTES';
     try {
-      localStorage.setItem(SEEN_KEY, LATEST_VERSION);
+      localStorage.setItem(SEEN_KEY, latestNotes());
     } catch {
       /* private mode */
     }
     newBadge.hidden = true;
-    const tabs = h('div', 'mn-seg');
-    for (const [id, label] of [
-      ['notes', 'PATCH NOTES'],
-      ['board', 'SUGGEST / REPORT A BUG'],
-    ]) {
-      const t = h('button', newsTab === id ? 'is-on' : '', label);
-      t.type = 'button';
-      t.setAttribute('aria-pressed', String(newsTab === id));
-      t.addEventListener('click', () => {
-        click();
-        newsTab = id;
-        say('');
-        render();
-      });
-      tabs.appendChild(t);
-    }
-    panelBody.appendChild(tabs);
-    if (newsTab === 'notes') {
-      for (const n of PATCH_NOTES) {
-        const sec = h('section', 'mt-note' + (n.version === LATEST_VERSION ? ' is-latest' : ''));
-        const head = h('div', 'mt-note-head');
-        head.append(h('b', 'mt-note-ver', 'v' + n.version), h('span', 'mt-note-title', n.title), h('small', 'mt-note-date', n.date));
-        sec.appendChild(head);
-        for (const g of n.sections) {
-          sec.appendChild(h('div', 'mt-note-h', g.heading));
-          const ul = h('ul', 'mt-note-list');
-          for (const it of g.items) ul.appendChild(h('li', null, it));
-          sec.appendChild(ul);
-        }
-        panelBody.appendChild(sec);
+    for (const n of visibleNotes(canSeeStaffNotes())) {
+      const sec = h('section', 'mt-note' + (n.version === latestNotes() ? ' is-latest' : '') + (n.staffOnly ? ' is-staff' : ''));
+      const head = h('div', 'mt-note-head');
+      head.append(h('b', 'mt-note-ver', 'v' + n.version), h('span', 'mt-note-title', n.title), h('small', 'mt-note-date', n.date));
+      if (n.staffOnly) head.appendChild(h('small', 'mt-note-staff', 'STAFF ONLY'));
+      sec.appendChild(head);
+      for (const g of n.sections) {
+        sec.appendChild(h('div', 'mt-note-h', g.heading));
+        const ul = h('ul', 'mt-note-list');
+        for (const it of g.items) ul.appendChild(h('li', null, it));
+        sec.appendChild(ul);
       }
-      return;
+      panelBody.appendChild(sec);
     }
-    // board: post form + recent posts
-    const form = h('form', 'mt-form mt-board-form');
-    const kinds = h('div', 'mn-seg');
-    for (const [id, label] of [
-      ['idea', 'SUGGESTION'],
-      ['bug', 'BUG REPORT'],
-    ]) {
-      const t = h('button', boardKind === id ? 'is-on' : '', label);
-      t.type = 'button';
-      t.setAttribute('aria-pressed', String(boardKind === id));
-      t.addEventListener('click', () => {
+  }
+
+  let postKind = 'idea'; // what POST sends (the form's SUGGESTION / BUG switch)
+  let listFilter = 'all'; // what the list shows: all / idea / bug
+  const BOARD_COPY = {
+    idea: {
+      title: 'SUGGEST',
+      placeholder: 'What should we add or change?',
+      label: 'Your suggestion',
+      sub: 'SUGGESTIONS FROM PLAYERS (UPVOTE WHAT YOU WANT MOST)',
+      empty: 'No suggestions yet. Be the first!',
+      posted: 'Posted. Thanks for helping make the game better!',
+    },
+    bug: {
+      title: 'REPORT A BUG',
+      placeholder: 'What went wrong, and what were you doing when it happened?',
+      label: 'Your bug report',
+      sub: 'BUG REPORTS FROM PLAYERS (UPVOTE IF IT HAPPENS TO YOU TOO)',
+      empty: 'No bug reports yet. Nice!',
+      posted: 'Bug reported. Thanks for helping us fix it!',
+    },
+  };
+
+  /** A row of two or three pressed / unpressed chips; `on` = current value, pick(value). */
+  function segmented(label, options, on, pick) {
+    const row = h('div', 'mt-seg');
+    row.setAttribute('role', 'group');
+    row.setAttribute('aria-label', label);
+    for (const [value, text] of options) {
+      const b = btn(text, 'mn-chip mt-seg-chip' + (value === on ? ' is-on' : ''));
+      b.setAttribute('aria-pressed', value === on ? 'true' : 'false');
+      b.dataset.value = value;
+      b.addEventListener('click', () => {
         click();
-        boardKind = id;
-        kinds.querySelectorAll('button').forEach((b) => {
-          b.classList.toggle('is-on', b === t);
-          b.setAttribute('aria-pressed', String(b === t));
-        });
-        text.placeholder = id === 'bug' ? 'What went wrong, and what were you doing when it happened?' : 'What should we add or change?';
+        pick(value);
       });
-      kinds.appendChild(t);
+      row.appendChild(b);
     }
+    return row;
+  }
+
+  function renderFeedback() {
+    panelTitle.textContent = 'FEEDBACK';
+    const form = h('form', 'mt-form mt-board-form');
     const text = h('textarea', 'mn-field mt-board-text');
     text.maxLength = 500;
     text.rows = 3;
-    text.placeholder = boardKind === 'bug' ? 'What went wrong, and what were you doing when it happened?' : 'What should we add or change?';
-    text.setAttribute('aria-label', 'Your suggestion or bug report');
+    const applyKind = () => {
+      const copy = BOARD_COPY[postKind];
+      text.placeholder = copy.placeholder;
+      text.setAttribute('aria-label', copy.label);
+    };
+    applyKind();
+    const kinds = segmented('What are you posting?', [['idea', 'SUGGESTION'], ['bug', 'BUG REPORT']], postKind, (v) => {
+      postKind = v;
+      for (const c of kinds.children) {
+        const on = c.dataset.value === v;
+        c.classList.toggle('is-on', on);
+        c.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+      applyKind();
+      text.focus();
+    });
     const send = btn('POST', 'mn-btn');
     send.type = 'submit';
     form.append(kinds, text, send);
@@ -447,11 +503,12 @@ export function createMeta(menus, account, opts = {}) {
       e.preventDefault();
       click();
       send.disabled = true;
+      const kind = postKind;
       try {
-        const item = await account.feedback(boardKind, text.value);
+        const item = await account.feedback(kind, text.value);
         text.value = '';
         board = [item, ...(board || []).filter((x) => x.id !== item.id)];
-        say('Posted. Thanks for helping make the game better!');
+        say(BOARD_COPY[kind].posted);
         renderBoard(list);
       } catch (err) {
         say(err.offline ? 'Could not reach the server. Try again in a moment.' : err.message, true);
@@ -459,7 +516,18 @@ export function createMeta(menus, account, opts = {}) {
       send.disabled = false;
     });
     panelBody.appendChild(form);
-    panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'FROM PLAYERS (UPVOTE WHAT YOU WANT MOST)'));
+    const filters = segmented('Show', [['all', 'ALL'], ['idea', 'IDEAS'], ['bug', 'BUGS']], listFilter, (v) => {
+      listFilter = v;
+      for (const c of filters.children) {
+        const on = c.dataset.value === v;
+        c.classList.toggle('is-on', on);
+        c.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+      renderBoard(list);
+    });
+    filters.classList.add('mt-seg-filter');
+    panelBody.appendChild(h('div', 'mn-party-label mt-sub', 'FROM PLAYERS (UPVOTE WHAT MATTERS TO YOU)'));
+    panelBody.appendChild(filters);
     const list = h('div', 'mt-posts');
     panelBody.appendChild(list);
     renderBoard(list);
@@ -467,7 +535,7 @@ export function createMeta(menus, account, opts = {}) {
       .feedbackList()
       .then((items) => {
         board = items;
-        if (open === 'news' && newsTab === 'board') renderBoard(list);
+        if (open === 'feedback') renderBoard(list);
       })
       .catch(() => {
         if (!board) {
@@ -482,11 +550,12 @@ export function createMeta(menus, account, opts = {}) {
       list.appendChild(h('p', 'mt-hint', 'Loading…'));
       return;
     }
-    if (!board.length) {
-      list.appendChild(h('p', 'mt-hint', 'No posts yet. Be the first!'));
+    const items = boardPosts(board, listFilter);
+    if (!items.length) {
+      list.appendChild(h('p', 'mt-hint', listFilter === 'all' ? 'Nothing posted yet. Be the first!' : BOARD_COPY[listFilter].empty));
       return;
     }
-    const items = board.slice().sort((a, b) => b.votes - a.votes || b.at - a.at);
+    const canMod = account.signedIn && isDevName(account.profile.name);
     for (const it of items) {
       const row = h('div', 'mt-post');
       row.dataset.kind = it.kind;
@@ -503,7 +572,74 @@ export function createMeta(menus, account, opts = {}) {
         }
       });
       const body = h('div', 'mt-post-body');
-      body.append(h('span', 'mt-post-kind', it.kind === 'bug' ? 'BUG' : 'IDEA'), h('p', 'mt-post-text', it.text), h('small', null, `${it.by} · ${new Date(it.at).toLocaleDateString()}`));
+      const head = h('div', 'mt-post-head');
+      head.append(h('span', 'mt-post-kind', it.kind === 'bug' ? 'BUG' : 'IDEA'));
+      if (canMod) {
+        const del = btn('DELETE', 'mn-chip mt-chip-danger mt-del');
+        del.addEventListener('click', async () => {
+          click();
+          try {
+            await account.feedbackDelete(it.id);
+            board = board.filter((x) => x.id !== it.id);
+            say('Deleted.');
+            renderBoard(list);
+          } catch (err) {
+            say(err.message, true);
+          }
+        });
+        head.appendChild(del);
+      }
+      body.append(head, h('p', 'mt-post-text', it.text), h('small', null, `${it.by} · ${new Date(it.at).toLocaleDateString()}`));
+      const replies = Array.isArray(it.replies) ? it.replies : [];
+      if (replies.length) {
+        const thread = h('div', 'mt-replies');
+        for (const rp of replies) {
+          const line = h('div', 'mt-reply');
+          line.append(h('p', 'mt-post-text', rp.text), h('small', null, `${rp.by} · ${new Date(rp.at).toLocaleDateString()}`));
+          if (canMod) {
+            const delR = btn('DELETE', 'mn-chip mt-chip-danger mt-del');
+            delR.addEventListener('click', async () => {
+              click();
+              try {
+                const up = await account.feedbackDelete(it.id, rp.id);
+                board = board.map((x) => (x.id === up.id ? up : x));
+                say('Deleted.');
+                renderBoard(list);
+              } catch (err) {
+                say(err.message, true);
+              }
+            });
+            line.appendChild(delR);
+          }
+          thread.appendChild(line);
+        }
+        body.appendChild(thread);
+      }
+      const replyForm = h('form', 'mt-reply-form');
+      const replyIn = h('input', 'mn-field');
+      replyIn.type = 'text';
+      replyIn.maxLength = 500;
+      replyIn.placeholder = 'Reply to this…';
+      replyIn.setAttribute('aria-label', 'Reply');
+      const replyBtn = btn('REPLY', 'mn-chip');
+      replyBtn.type = 'submit';
+      replyForm.append(replyIn, replyBtn);
+      replyForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        click();
+        replyBtn.disabled = true;
+        try {
+          const up = await account.feedbackReply(it.id, replyIn.value);
+          board = board.map((x) => (x.id === up.id ? up : x));
+          replyIn.value = '';
+          say('Reply posted.');
+          renderBoard(list);
+        } catch (err) {
+          say(err.offline ? 'Could not reach the server. Try again in a moment.' : err.message, true);
+        }
+        replyBtn.disabled = false;
+      });
+      body.appendChild(replyForm);
       row.append(vote, body);
       list.appendChild(row);
     }
@@ -524,6 +660,14 @@ export function createMeta(menus, account, opts = {}) {
       const wrap = h('div', 'mt-boards');
       wrap.appendChild(boardColumn('MOST WINS', data.wins || [], 'wins'));
       wrap.appendChild(boardColumn('MOST ELIMS', data.kills || [], 'kills'));
+      // Box Fights Elo ladder: full width under the two battle royale boards
+      const box = boardColumn('BOX FIGHTS', Array.isArray(data.box) ? data.box : [], 'elo', {
+        tier: true,
+        empty: 'No rated Box Fighters yet.',
+      });
+      box.classList.add('mt-board-wide');
+      box.insertBefore(h('p', 'mt-hint', '10+ Box Fights to appear. Results are reported by players’ browsers, so this ladder is not verified.'), box.children[1] || null);
+      wrap.appendChild(box);
       const old = panelBody.querySelector('.mt-boards');
       if (old) old.replaceWith(wrap);
       else panelBody.appendChild(wrap);
@@ -542,21 +686,20 @@ export function createMeta(menus, account, opts = {}) {
     }
   }
 
-  function boardColumn(title, rows, key) {
+  function boardColumn(title, rows, key, { tier = false, empty = 'No ranked players yet. Sign in and play matches.' } = {}) {
     const col = h('div', 'mt-board');
     col.appendChild(h('div', 'mn-party-label mt-sub', title));
     if (!rows.length) {
-      col.appendChild(h('p', 'mt-hint', 'No ranked players yet. Sign in and play matches.'));
+      col.appendChild(h('p', 'mt-hint', empty));
       return col;
     }
     const list = h('ol', 'mt-board-list');
     rows.forEach((row, i) => {
-      const li = h('li', 'mt-board-row');
-      li.append(
-        h('span', 'mt-board-rank', String(i + 1)),
-        h('span', 'mt-board-name', row.name),
-        h('span', 'mt-board-stat', String(row[key] | 0))
-      );
+      if (!row || typeof row !== 'object') return;
+      const li = h('li', tier ? 'mt-board-row mt-board-row-tier' : 'mt-board-row');
+      li.append(h('span', 'mt-board-rank', String(i + 1)), h('span', 'mt-board-name', String(row.name || '').slice(0, 24)));
+      if (tier) li.appendChild(tierPill(row[key]));
+      li.appendChild(h('span', 'mt-board-stat', String(row[key] | 0)));
       if (account.signedIn && account.profile.name === row.name) li.classList.add('is-you');
       list.appendChild(li);
     });
@@ -1025,7 +1168,7 @@ export function createMeta(menus, account, opts = {}) {
   function itemCard(id, { owned, equipped, onClick, action, selected }) {
     const c = cosmeticDef(id);
     const d = c.def;
-    const card = h('button', 'mt-item');
+    const card = h('button', 'mt-item' + (c.kind === 'bundle' ? ' is-bundle' : ''));
     card.type = 'button';
     card.dataset.rarity = d.rarity;
     card.dataset.id = id;
@@ -1047,16 +1190,17 @@ export function createMeta(menus, account, opts = {}) {
     const info = h('span', 'mt-item-info');
     info.append(h('b', 'mt-item-name', d.name), h('small', 'mt-item-kind', `${d.rarity} ${KIND_LABEL[c.kind]}`));
     const foot = h('span', 'mt-item-foot');
+    const price = priceFor(id, account.profile.owned);
     if (equipped) foot.textContent = 'EQUIPPED';
     else if (owned) foot.textContent = action || 'OWNED';
     else {
       foot.appendChild(h('i', 'mt-coin'));
-      foot.appendChild(document.createTextNode(PRICES[id].toLocaleString()));
+      foot.appendChild(document.createTextNode(price.toLocaleString()));
     }
     card.classList.toggle('is-owned', !!owned);
     card.classList.toggle('is-equipped', !!equipped);
     card.classList.toggle('is-sel', !!selected);
-    card.setAttribute('aria-label', `${d.name}, ${d.rarity} ${KIND_LABEL[c.kind]}${equipped ? ', equipped' : owned ? ', owned' : `, ${PRICES[id]} coins`}`);
+    card.setAttribute('aria-label', `${d.name}, ${d.rarity} ${KIND_LABEL[c.kind]}${equipped ? ', equipped' : owned ? ', owned' : `, ${price} coins`}`);
     card.append(art, info, foot);
     card.addEventListener('click', () => {
       click();
@@ -1079,17 +1223,23 @@ export function createMeta(menus, account, opts = {}) {
   }
 
   let pending = null; // shop item awaiting BUY confirm
+  // a bundle counts as owned once every item in it is (bought one by one or as the bundle)
+  const ownsAll = (p, id) => p.owned.includes(id) || (!!BUNDLES[id] && BUNDLES[id].items.every((it) => p.owned.includes(it)));
   const forSale = (table) => Object.keys(table).filter((k) => PRICES[k]);
   function renderShop() {
     panelTitle.textContent = 'ITEM SHOP';
     const p = account.profile;
     const eq = p.equipped;
     const sections = [
+      // spotlight: each bundle across the top, then every piece of it sold on its own
+      ['FEATURED', forSale(BUNDLES).flatMap((b) => [b, ...BUNDLES[b].items.filter((it) => PRICES[it])]), 'is-spotlight'],
       ['FEATURED TODAY', featuredToday(4), 'is-featured'],
       ['OUTFITS', forSale(SKINS)],
       ['PICKAXES', forSale(PICKAXES)],
       ['BACK BLINGS', forSale(BACKBLINGS)],
+      ['GLIDERS', forSale(GLIDERS)],
       ['EMOTES', forSale(EMOTES)],
+      ['BUNDLES', forSale(BUNDLES), 'is-featured'],
     ];
     for (const [label, ids, cls] of sections) {
       panelBody.appendChild(h('div', 'mt-sub', label));
@@ -1097,12 +1247,12 @@ export function createMeta(menus, account, opts = {}) {
       for (const id of ids) {
         grid.appendChild(
           itemCard(id, {
-            owned: p.owned.includes(id),
-            equipped: eq.skin === id || eq.pickaxe === id || eq.backbling === id,
+            owned: ownsAll(p, id),
+            equipped: eq.skin === id || eq.pickaxe === id || eq.backbling === id || eq.glider === id,
             selected: pending === id,
             onClick: () => {
               tryOn(id);
-              pending = p.owned.includes(id) ? null : id;
+              pending = ownsAll(p, id) ? null : id;
               for (const el of panelBody.querySelectorAll('.mt-item.is-sel')) el.classList.remove('is-sel');
               for (const el of panelBody.querySelectorAll(`.mt-item[data-id="${id}"]`)) el.classList.add('is-sel');
               renderBuy();
@@ -1136,7 +1286,7 @@ export function createMeta(menus, account, opts = {}) {
       bar.appendChild(h('span', 'mt-hint', 'Pick an item to try it on. Earn coins in matches: placing well, eliminations and wins.'));
       // rewarded ad: +coins (opts.adCoins: { can() -> bool, watch() -> Promise<string> })
       if (opts.adCoins && opts.adCoins.can()) {
-        const ad = btn('WATCH AD +100', 'mn-btn mt-buy-ad');
+        const ad = btn('WATCH AD +50', 'mn-btn mt-buy-ad'); // party/accounts.js AD_REWARD_COINS
         ad.firstChild.prepend(h('i', 'mt-coin'), ' ');
         ad.addEventListener('click', async () => {
           click();
@@ -1151,7 +1301,7 @@ export function createMeta(menus, account, opts = {}) {
       return;
     }
     const c = cosmeticDef(pending);
-    const price = PRICES[pending];
+    const price = priceFor(pending, account.profile.owned);
     const can = account.profile.coins >= price;
     const name = h('span', 'mt-buy-name');
     name.append(h('b', null, c.def.name), h('small', 'mt-item-kind', `${c.def.rarity} ${KIND_LABEL[c.kind]}`));
@@ -1186,6 +1336,7 @@ export function createMeta(menus, account, opts = {}) {
     ['skin', 'OUTFIT', SKINS],
     ['backbling', 'BACK BLING', BACKBLINGS],
     ['pickaxe', 'PICKAXE', PICKAXES],
+    ['glider', 'GLIDER', GLIDERS],
     ['emotes', 'EMOTES', EMOTES],
   ];
   function renderLocker() {
@@ -1475,15 +1626,71 @@ export function createMeta(menus, account, opts = {}) {
   function renderBar() {
     const p = account.profile;
     whoName.textContent = p.guest ? 'GUEST' : p.name;
-    whoSub.textContent = p.guest ? 'Sign in for coins & skins' : p.banned ? 'Banned' : `${p.stats.wins} wins · ${p.stats.kills} elims`;
+    // Box Fights Elo lives in the party rank card now — keep the top bar to BR stats
+    const full = `${p.stats.wins} wins · ${p.stats.kills} elims`;
+    whoSub.textContent = p.guest ? 'Sign in for coins & skins' : p.banned ? 'Banned' : full;
+    who.title = p.guest || p.banned ? '' : full;
     coinsNum.textContent = p.coins.toLocaleString();
     bAuth.querySelector('span').textContent = account.signedIn ? 'SIGN OUT' : 'SIGN IN';
     bAuth.classList.toggle('mt-chip-sun', !account.signedIn);
     bDev.hidden = !isDev();
+    if (open !== 'news') newBadge.hidden = seenPatch() === latestNotes(); // signing in can reveal staff notes
     if (open === 'dev' && !isDev()) closePanel();
     const n = account.friends.incoming.length;
     badge.textContent = n ? String(n) : '';
     badge.hidden = !n;
+    renderBoxRank();
+  }
+
+  /** Big Box Fights ladder card above the party panel (menus.js .mn-box-rank). */
+  function renderBoxRank() {
+    const card = titleEl.querySelector('[data-ref="boxRank"]');
+    if (!card) return;
+    const tierEl = card.querySelector('[data-ref="boxRankTier"]');
+    const eloEl = card.querySelector('[data-ref="boxRankElo"]');
+    const metaEl = card.querySelector('[data-ref="boxRankMeta"]');
+    const fillEl = card.querySelector('[data-ref="boxRankFill"]');
+    const nextEl = card.querySelector('[data-ref="boxRankNext"]');
+    const p = account.profile;
+    const elo = p.box && Number.isFinite(p.box.elo) ? clampElo(p.box.elo) : null;
+    const trackEl = card.querySelector('.mn-box-rank-track');
+    if (p.guest || elo == null) {
+      card.hidden = false;
+      card.dataset.tier = '';
+      if (tierEl) {
+        tierEl.textContent = 'UNRANKED';
+        tierEl.dataset.tier = 'bronze';
+      }
+      if (eloEl) eloEl.textContent = '—';
+      if (metaEl) metaEl.textContent = p.guest ? 'Sign in to climb the ladder' : 'Play Box Fights to earn a rank';
+      if (fillEl) fillEl.style.width = '0%';
+      if (nextEl) nextEl.textContent = '';
+      if (trackEl) trackEl.hidden = true;
+      return;
+    }
+    const t = tierOf(elo);
+    const idx = TIERS.findIndex((x) => x.id === t.id);
+    const next = idx >= 0 && idx < TIERS.length - 1 ? TIERS[idx + 1] : null;
+    const floor = TIERS[idx] ? TIERS[idx].min : 0;
+    const ceil = next ? next.min : floor + 300;
+    const pct = next ? Math.max(0, Math.min(1, (elo - floor) / Math.max(1, ceil - floor))) : 1;
+    const games = Number.isFinite(p.box.games) ? p.box.games | 0 : 0;
+    const wins = Number.isFinite(p.box.wins) ? p.box.wins | 0 : 0;
+    card.hidden = false;
+    card.dataset.tier = t.id;
+    if (tierEl) {
+      tierEl.textContent = t.name;
+      tierEl.dataset.tier = t.id;
+    }
+    if (eloEl) eloEl.textContent = `${elo | 0}`;
+    if (metaEl) {
+      metaEl.textContent = games
+        ? `${wins}W · ${Math.max(0, games - wins)}L · peak ${Number.isFinite(p.box.peak) ? (p.box.peak | 0) : elo}`
+        : 'No ranked games yet — hit PLAY';
+    }
+    if (fillEl) fillEl.style.width = `${Math.round(pct * 100)}%`;
+    if (trackEl) trackEl.hidden = false;
+    if (nextEl) nextEl.textContent = next ? `${ceil - elo} Elo to ${next.name}` : 'Top of the ladder';
   }
 
   function checkRename() {
@@ -1523,7 +1730,6 @@ export function createMeta(menus, account, opts = {}) {
   const flyer = createUpdateFlyer(document.body, {
     onClick: click,
     onNotes: () => {
-      newsTab = 'notes';
       openPanel('news');
     },
   });

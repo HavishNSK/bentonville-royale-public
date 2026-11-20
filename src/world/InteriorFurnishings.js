@@ -717,6 +717,23 @@ function postTable(S,c,x) {
   B(w*0.22,d*0.22,w*0.78,d*0.78,0,0.04,shade(c,0.45),TP|FR|BK);
 }
 
+// A single reserved footprint keeps the chairs paired with their table even in clipped rooms.
+function commonsTable({ w, d, H, oct, B }) {
+  const u = w / 2, v = d / 2;
+  const metal = 0x898d8c, seat = 0x303335;
+  oct(u, v, 0.58, 0.58, 0.34, 0.70, 0.75, 0xae977d);
+  B(u - 0.055, v - 0.055, u + 0.055, v + 0.055, 0.04, 0.70, metal, SIDES);
+  B(u - 0.27, v - 0.27, u + 0.27, v + 0.27, 0, 0.04, seat);
+  for (const side of [-1, 1]) {
+    const center = v + side * 0.78, back = center + side * 0.19;
+    B(u - 0.22, center - 0.20, u + 0.22, center + 0.20, 0.42, 0.46, seat);
+    B(u - 0.21, back - 0.025, u + 0.21, back + 0.025, 0.46, H, seat);
+    for (const offset of [-0.17, 0.17]) {
+      B(u + offset - 0.015, center - 0.12, u + offset + 0.015, center + 0.12, 0, 0.42, metal, SIDES);
+    }
+  }
+}
+
 function tank(S,c,x) {
   const {w,d,H,oct,cone,B,legs} = S;
   const cu = w/2, cv = d/2, ru = w/2-0.04, rv = d/2-0.04, k = Math.min(ru,rv)*0.6;
@@ -1088,7 +1105,7 @@ const SHAPES = {
   locker_bank: lockerBank, seat_row: seatRow, stage, bleachers, hoop, court_lines: courtLines,
   long_table: longTable, serving_line: servingLine, pew, judge_bench: judgeBench,
   witness_stand: witnessStand, jury_box: juryBox, railing, bar_counter: barCounter,
-  high_top: postTable, cafe_table: postTable, tank, food_stall: foodStall, record_bin: recordBin,
+  high_top: postTable, cafe_table: postTable, commons_table: commonsTable, tank, food_stall: foodStall, record_bin: recordBin,
   easel, banquet_table: banquetTable, podium, installation, gallery_bench: galleryBench,
   painting: (S,c,x,R,p) => hasArt(p) ? artwork(S,R,p,false) : painting(S,c,x,R,false),
   painting_large: (S,c,x,R,p) => hasArt(p) ? artwork(S,R,p,true) : painting(S,c,x,R,true),
@@ -1150,7 +1167,14 @@ export function addFurnishingGeometry(chunk,shell,h,{quad,floorAt}) {
   if (!plan) return;
   const ctx = {chunk,F:plan.frame,h,quad,floorAt,n:0};
   for (const p of plan.furniture || []) prop(ctx,shell,p);
-  for (const s of plan.signs || []) plaque(chunk,shell,s,h,quad);
+  for (const s of plan.signs || []) {
+    const i0 = chunk.buf ? chunk.buf.idx.length : 0;
+    plaque(chunk,shell,s,h,quad);
+    // a room sign hangs on its door's lintel: it goes when the lintel breaks
+    const lintel = (plan.panels || []).find(pn => pn.kind === 'lintel' && pn.level === s.level && pn.e === undefined &&
+      Math.hypot(pn.x - s.x, pn.z - s.z) < 0.3 && s.y > pn.y0 && s.y < pn.y1 + 0.2);
+    if (lintel && chunk.panelRanges && chunk.buf) chunk.panelRanges.push(lintel, i0, chunk.buf.idx.length - i0);
+  }
 }
 
 const UP = Object.freeze([0,1,0]);
@@ -1164,12 +1188,17 @@ export function addLightGeometry(chunk,shell,h,{quad,floorAt}) {
   if (!plan || !plan.lights) return;
   const F = plan.frame;
   const P = (a,b,y) => { const [x,z] = toWorld(F,a,b); return [x,y,z]; };
-  for (const L of plan.lights) {
+  for (let li = 0; li < plan.lights.length; li++) {
+    const L = plan.lights[li];
     if (!L || !(L.a1 > L.a0) || !(L.b1 > L.b0) || !Number.isFinite(L.y)) continue;
     const {a0,b0,a1,b1} = L, y = L.y - shell.floor;
     const ins = Math.min(0.06,(a1-a0)/4,(b1-b0)/4);
+    const i0 = chunk.buf ? chunk.buf.idx.length : 0;
     quad(chunk,P(a0,b0,y-0.02),P(a1,b0,y-0.02),P(a1,b1,y-0.02),P(a0,b1,y-0.02),0,-1,0,...rgb(LIGHT_RIM),null,h);
     quad(chunk,P(a0+ins,b0+ins,y-0.03),P(a1-ins,b0+ins,y-0.03),P(a1-ins,b1-ins,y-0.03),P(a0+ins,b1-ins,y-0.03),0,-1,0,...rgb(LIGHT_PANEL),null,h,UP);
+    // a light hanging under a breakable roof tile goes with the tile (interiors/shellPanels.js)
+    const tile = plan.roofLights ? plan.roofLights[li] : -1;
+    if (tile >= 0 && chunk.panelRanges && chunk.buf && plan.panels[tile]) chunk.panelRanges.push(plan.panels[tile], i0, chunk.buf.idx.length - i0);
     const lv = (plan.levels || []).find(l => l.i === L.level);
     if (!lv || !Number.isFinite(lv.y)) continue;
     const floor = floorAt ? floorAt(L.level,(a0+a1)/2,(b0+b1)/2) : null;

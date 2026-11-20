@@ -7,9 +7,17 @@
 // (trusted within a speed bound); its actions arrive as reliable messages and
 // are validated and applied here.
 //
-//   const s = new HostSession(room, game, { fill, mode, humanTeams });
-//   (mode 'solo'|'duo'|'trio'|'squad'; humanTeams [{ ids, allowBots }] groups room slot ids,
-//   host = 0, into teams; see src/game/Teams.js packHumans / assignTeams)
+//   const s = new HostSession(room, game, { fill, mode, humanTeams, game: 'br'|'boxfights', boxFight?, slots? });
+//   (mode 'solo'|'duo'|'trio'|'squad' (BR) or 'solo'|'duo'|'trio'|'ffa' (Box Fights); humanTeams
+//   [{ ids, allowBots }] groups room slot ids, host = 0, into teams; see src/game/Teams.js packHumans /
+//   assignTeams)
+//   Box Fights extras: boxFight { mode?, ffaPlayers? (2..6), winRounds? (1..9), botDifficulty? } (validated
+//   by BoxFights.boxMatchConfig; mode defaults to `mode`); slots: the lobby's slot list as sent in its
+//   matchStart [{ kind: 'human'|'bot'|'open', name?, team?: 0|1|null, token?, clientId?, host? }] (humans
+//   are matched by room client id when given, else by join token; hostToken (or host: true) marks the
+//   host's slot; see BoxFights.boxSlotPlan). Without slots, team modes
+//   pack humanTeams as before and FFA seats humans in id order. A guest who leaves mid-match is
+//   replaced by a bot (Game.boxReplaceLeaver; event {e:'rb', a, n}).
 //   game.net = s; game.startMatch(seed)   // Game calls the hooks below
 //
 // Hooks Game calls: prepareMatch(game, lm) -> { botCount, idBase }, matchStarted(game),
@@ -23,18 +31,42 @@
 //   loot add/remove/open, structure place/damage/destroy, harvested props
 //   destroyed, disconnects, match end
 // - per-client inventory when it changes (with the last action seq it reflects)
+// - Box Fights (matchType 'boxfights'): the start message carries `game` + `bf` {size, mode, wins,
+//   teams (team id per side: 2, or 2..6 in FFA)}; rounds travel as events: rs (round start: number,
+//   score, el = elims per side, freeze seconds, spawns, the whole structure list), rf (fight), re
+//   (round end: winning side, score, el), rb (a bot replaced a leaver: a = actor id, n = bot name)
+//   and `end` once at match end (bw winning side or -1, sc, el, ff forfeit, ps = stats rows
+//   [id, side, elims, damage, builds, isBot 0|1, name, replacedName|'']). Round resets are applied silently on the host (muted) and replicated
+//   by `rs` alone.
+// - Box Fights HOST MIGRATION (lobby matches; see src/net/hostTakeover.js and Game.takeOverAsHost):
+//   a promoted guest builds this session on its own socket (Net.hostRoomFromGuest), then
+//   adoptMatch(game, { remotes }) instead of prepareMatch / matchStarted (no start message: the guests
+//   are mid-match), then takeoverSync(game, { state, left }) sends one event batch: left + rb per
+//   human a bot replaced (the old host first), then hm {rn, sc, el, ph, t, bx (structure list)}.
+//   Guests answer newHost with action {k:'mig', s, ammo, mats} (their own inventory, accepted once
+//   within MIGRATION_INV_WINDOW s and clamped to the round kit by sanitizeReportedInventory).
+// - Box Fights Elo (proto 7): `bf.botElo` (the host's bot rating) in the start message; each guest
+//   sends action {k:'elo', v} once, the host clamps it and relays {e:'elo', a, v} to everyone (its
+//   own value too). These are reported numbers from browsers, not verified ratings.
 
 import * as THREE from 'three';
 import { PLAYER, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, MATCH, REBOOT, TAU, weaponStats, weaponShotInterval } from '../core/config.js';
 import { CAR } from '../game/vehicles/cars.js';
+import { PUMP_NET_SLACK } from '../game/GasPumps.js';
 import { Character } from '../game/Character.js';
 import { heldSlot } from '../game/Inventory.js';
-import { SKINS, EMOTES, PICKAXES, BACKBLINGS } from '../game/Cosmetics.js';
+import { SKINS, EMOTES, PICKAXES, BACKBLINGS, GLIDERS } from '../game/Cosmetics.js';
 import {
   SNAP_HZ, FLAG, XFLAG, EQUIP, SURF, encodeSnapshot, decodeState, seqNewer, rnd,
 } from './protocol.js';
 import { busPosAt, routeWire } from '../game/DropBus.js';
 import { normalizeMode, packHumans, assignTeams, sameTeam, teamAlive } from '../game/Teams.js';
+import { normalizeGame, boxTeams, modeSize } from '../game/GameModes.js';
+import { BOX_FIGHT, boxModeId, boxMatchConfig, boxSlotPlan, boxLoadout } from '../game/BoxFights.js';
+import { reportedElo } from '../game/boxEloMatch.js';
+import { ELO_START } from '../game/BoxElo.js';
+import { MIGRATION_INV_WINDOW, sanitizeReportedInventory } from './hostTakeover.js';
+
 
 // Bots.js colours its canopies with this palette by spawn index (kept in sync by hand).
 const BOT_CANOPY = [0x4fc3f7, 0xff7a45, 0x9ccc65, 0xba68c8, 0xffd54f, 0xf06292, 0x4db6ac, 0xa1887f];
@@ -138,14 +170,22 @@ export class RemoteActor {
 }
 
 export class HostSession {
-  constructor(room, game, { fill = true, mode = 'solo', humanTeams = null } = {}) {
+  constructor(room, game, { fill = true, mode = 'solo', humanTeams = null, game: matchType = 'br', boxFight = null, slots = null, hostToken = null } = {}) {
     this.room = room;
     this.game = game;
+    // which game is hosted: 'br' (battle royale) or 'boxfights' (two teams, rounds); never `game`,
+    // which is the Game instance
+    this.matchType = normalizeGame(matchType);
     this.isHost = true;
     this.isClient = false;
     this.fill = fill;
     this.mode = normalizeMode(mode);
     this.humanTeams = humanTeams;
+    // Box Fights options (validated again by boxConfig) and the lobby's slot list (untrusted shape)
+    const bo = boxFight && typeof boxFight === 'object' ? boxFight : {};
+    this.boxOpts = { mode: boxModeId(bo.mode) || boxModeId(mode) || 'solo', ffaPlayers: bo.ffaPlayers, winRounds: bo.winRounds, botDifficulty: bo.botDifficulty };
+    this.slots = Array.isArray(slots) ? slots.slice(0, 12) : null;
+    this.hostToken = typeof hostToken === 'string' ? hostToken : null; // matches the host's lobby slot
     this.remotes = new Map(); // client id -> RemoteActor
     this.events = [];
     this.seq = 0;
@@ -171,6 +211,11 @@ export class HostSession {
     return null; // Game uses combat.aliveCount on the host
   }
 
+  /** Box Fights: the validated match config (boxMatchConfig) Game starts from. */
+  boxConfig() {
+    return boxMatchConfig({ ...this.boxOpts, fill: this.fill });
+  }
+
   // ---------------------------------------------------------------- match setup (called by Game.startMatch)
 
   /** Creates remote actors; returns how many bots to spawn and their first id. */
@@ -178,7 +223,9 @@ export class HostSession {
     this._wrap(game);
     this._spawning = true;
     this._clearRemotes(game);
-    const humans = [...this.room.clients.values()].sort((a, b) => a.id - b.id);
+    let humans = [...this.room.clients.values()].sort((a, b) => a.id - b.id);
+    const box = this.matchType === 'boxfights' ? this._boxPlan(humans) : null;
+    if (box) humans = humans.filter((c) => box.team.has(c.id));
     const Inventory = game.player.inventory.constructor;
     const kit = game.kits.player;
     for (const c of humans) {
@@ -188,8 +235,16 @@ export class HostSession {
         game.scene.add(ch.root);
       }
       const a = new RemoteActor(c.id, c.name, ch, new Inventory());
-      // aboard the Drop Bus (Game boards the route before this runs)
-      if (game.busRoute) busPosAt(game.busRoute, 0, a.pos);
+      // aboard the Drop Bus (Game boards the route before this runs); Box Fights: on the
+      // arena floor (Game moves everyone into a spawn box right after)
+      if (box) {
+        const L = game.boxFight ? game.boxFight.layout : null;
+        // off the midline (the middle wall is up); the first round start moves them to their spawn
+        a.pos.set(L ? L.center.x : 0, L ? L.floorY : PLAYER.dropHeight, L ? L.rect.minZ + 2 : 0);
+        a.mode = 'ground';
+        a.inBus = false;
+        a.team = box.team.get(c.id);
+      } else if (game.busRoute) busPosAt(game.busRoute, 0, a.pos);
       else a.pos.set(lm.x, PLAYER.dropHeight, lm.z);
       a.drawPos.copy(a.pos);
       this.remotes.set(c.id, a);
@@ -199,12 +254,204 @@ export class HostSession {
     const slots = MATCH.bots + 1;
     const maxId = humans.length ? humans[humans.length - 1].id : 0;
     const mode = normalizeMode(this.mode);
+    if (box) {
+      const idBase = maxId + 1;
+      // FFA: side order is the plan's (humans by id, bots by spawn order = idBase + i)
+      const sides = box.sideOf ? box.sideOrder(idBase) : null;
+      return { botCount: box.botCount, idBase, botTeams: box.botTeams, botNames: box.botNames, playerTeam: box.team.get(0), sides };
+    }
     if (mode === 'solo') return { botCount: this.fill ? Math.max(0, slots - 1 - humans.length) : 0, idBase: maxId + 1 };
     // teams: listed parties first, everyone else packed in id order; bots fill the rest
     const groups = packHumans(mode, [0, ...humans.map((c) => c.id)], this.humanTeams);
     const plan = assignTeams(mode, groups, { slots, bots: this.fill });
     for (const a of this.remotes.values()) a.team = plan.humanTeam.get(a.id);
     return { botCount: plan.botTeams.length, idBase: maxId + 1, botTeams: plan.botTeams, playerTeam: plan.humanTeam.get(0) };
+  }
+
+  /**
+   * Box Fights seating. With the lobby's `slots`: boxSlotPlan (humans first, bots fill so teams are
+   * equal; FFA one side per slot). Without: team modes keep party / lobby groups together in exactly
+   * two teams (0 and 1; humans who don't fit are sent away, bots fill teams that allow them), FFA
+   * seats humans in id order. Returns { team: Map(id -> team), botTeams|null, botNames|null, botCount,
+   * sideOf?, sideOrder?(idBase) } (FFA: team = own id).
+   */
+  _boxPlan(humans) {
+    const cfg = this.boxConfig();
+    const ids = [0, ...humans.map((c) => c.id)];
+    if (cfg.ffa || this.slots) {
+      const plan = boxSlotPlan(cfg, this.slots, [{ id: 0, token: this.hostToken }, ...humans.map((c) => ({ id: c.id, token: c.token || null }))]);
+      for (const id of plan.kick) if (id !== 0) this.room.kick(id, 'full');
+      const team = new Map();
+      if (cfg.ffa) {
+        for (const id of plan.humans.keys()) team.set(id, id);
+        const sideOf = plan.humans;
+        return {
+          team,
+          botTeams: null,
+          botNames: plan.bots.map((b) => b.name || null),
+          botCount: plan.bots.length,
+          sideOf,
+          sideOrder: (idBase) => {
+            const order = Array(plan.sides).fill(-1);
+            for (const [id, side] of sideOf) order[side] = id;
+            plan.bots.forEach((b, i) => (order[b.side] = idBase + i));
+            return order;
+          },
+        };
+      }
+      for (const [id, side] of plan.humans) team.set(id, side);
+      return { team, botTeams: plan.bots.map((b) => b.side), botNames: plan.bots.map((b) => b.name || null), botCount: plan.bots.length };
+    }
+    const mode = normalizeMode(this.mode);
+    const size = Math.max(1, modeSize(mode) || 1);
+    const groups = packHumans(mode, ids, this.humanTeams);
+    const split = boxTeams(mode, groups.map((g) => g.ids), this.fill);
+    const team = new Map();
+    split.teams.forEach((members, i) => members.forEach((id) => team.set(id, i)));
+    for (const id of split.overflow) if (id !== 0) this.room.kick(id, 'full');
+    const botTeams = [];
+    split.teams.forEach((members, i) => {
+      // a No Fill group keeps its team human-only; an empty team always gets bots
+      const sealed = groups.some((g) => !g.allowBots && g.ids.some((id) => members.includes(id)));
+      const bots = !members.length || (this.fill && !sealed) ? size - members.length : 0;
+      for (let k = 0; k < bots; k++) botTeams.push(i);
+    });
+    return { team, botTeams, botNames: null, botCount: botTeams.length };
+  }
+
+  /** Runs `fn` without replicating what it does (Box Fights round resets: `rs` carries the result). */
+  muted(fn) {
+    const was = this._spawning;
+    this._spawning = true;
+    try {
+      fn();
+    } finally {
+      this._spawning = was;
+    }
+  }
+
+  /** Box Fights: a round starts. Everyone gets the spawns and the full structure list at once. */
+  boxRoundStart(game, { round, score, elims = null, freeze, spawnOf }) {
+    if (!this.started) return;
+    const sp = [];
+    for (const [id, s] of spawnOf) sp.push([id, rnd(s.x), rnd(s.y), rnd(s.z), rnd(s.heading, 3)]);
+    this.events.push({ e: 'rs', rn: round, sc: score.slice(0, 6), el: elims ? elims.slice(0, 6) : undefined, fz: rnd(freeze, 2), hp: BOX_FIGHT.health, sh: BOX_FIGHT.shield, sp, bx: game.structures ? game.structures.exportNet() : [] });
+    // straight out, ahead of the next snapshot (which already has everyone at their spawn)
+    this._flushEvents();
+    for (const a of this.remotes.values()) {
+      const s = spawnOf.get(a.id);
+      if (!s) continue;
+      a.spawnLock = { x: s.x, y: s.y, z: s.z, until: this.time + freeze + 1 };
+      a.mode = 'ground';
+      a.inBus = false;
+      a.carriedBy = null;
+      this._invSent.delete(a.id);
+      this._syncInventory(a);
+    }
+    this._specSent.clear();
+  }
+
+  /**
+   * Host migration: take over a running Box Fight on a promoted socket (no start message; the
+   * guests already play it). remotes: [{ id, name, team, character, x, y, z, heading, alive,
+   * health, shield, kills, assists, damage, builds, boxElo, skin }] (hostTakeover.takeoverPlan
+   * remotes + their reused puppet characters); only guests the room lists are adopted.
+   */
+  adoptMatch(game, { remotes = [] } = {}) {
+    this._wrap(game);
+    this._clearRemotes(game);
+    const Inventory = game.player.inventory.constructor;
+    for (const r of remotes) {
+      if (!this.room.clients.has(r.id)) {
+        if (r.character) {
+          r.character.root.removeFromParent();
+          r.character.dispose();
+        }
+        continue;
+      }
+      // inventory: the round kit until the guest reports its own ('mig')
+      const a = new RemoteActor(r.id, r.name, r.character || null, new Inventory(boxLoadout()));
+      a.team = r.team;
+      a.pos.set(r.x, r.y, r.z);
+      a.drawPos.copy(a.pos);
+      a.heading = r.heading || 0;
+      a.mode = 'ground';
+      a.inBus = false;
+      a.grounded = true;
+      a.alive = !!r.alive;
+      a.health = a.alive ? Math.max(1, r.health) : 0;
+      a.shield = a.alive ? r.shield : 0;
+      a.kills = r.kills | 0;
+      a.assists = r.assists | 0;
+      a.damageDealt = r.damage || 0;
+      a.buildsPlaced = r.builds | 0;
+      if (r.boxElo != null) a.boxElo = r.boxElo;
+      if (r.skin) a.skin = r.skin;
+      a.allowJump = true; // its first state may be meters from the puppet we interpolated
+      a.migrateUntil = MIGRATION_INV_WINDOW; // session time; see _migInventory
+      this.remotes.set(a.id, a);
+      game.combat.register(a);
+    }
+    this._pendingLoot.length = 0;
+    this.events.length = 0;
+    this._invSent.clear();
+    this._specSent.clear();
+    this.seq = 0;
+    this.time = 0;
+    this.ended = false;
+    this.started = true;
+    this.room.started = true;
+    this.room.quietClose = true;
+    this.stats = { t0: performance.now(), snapBytes: 0, snaps: 0, evBytes: 0, invBytes: 0, startBytes: 0 };
+  }
+
+  /**
+   * Host migration: tell the guests what changed and where the match stands. left: [{ id, name }]
+   * humans a bot replaced just now; state: the round machine; ended: the match was already decided.
+   */
+  takeoverSync(game, { state, left = [], ended = false }) {
+    for (const l of left) {
+      this.events.push({ e: 'left', a: l.id });
+      this.events.push({ e: 'rb', a: l.id, n: String(l.name).slice(0, 16) });
+    }
+    this.events.push({
+      e: 'hm',
+      rn: state.round,
+      sc: state.score.slice(0, 6),
+      el: state.elims.slice(0, 6),
+      ph: state.phase,
+      t: rnd(state.t, 2),
+      bx: game.structures ? game.structures.exportNet() : [],
+    });
+    if (ended) this.ended = true; // the old host already sent 'end'
+    this._flushEvents();
+  }
+
+  /** Host migration: a guest's one report of its own inventory (clamped to the round kit). */
+  _migInventory(a, m) {
+    if (this.matchType !== 'boxfights' || !(a.migrateUntil > this.time)) return;
+    a.migrateUntil = 0;
+    const inv = sanitizeReportedInventory(m, boxLoadout());
+    if (!inv) return;
+    const I = a.inventory;
+    for (let i = 0; i < I.slots.length; i++) I.slots[i] = inv.slots[i] || null;
+    for (const k of Object.keys(I.ammo)) I.ammo[k] = inv.ammo[k] || 0;
+    Object.assign(I.mats, inv.mats);
+    if (I.version != null) I.version++;
+    this._invSent.delete(a.id);
+  }
+
+  /** Box Fights: fight / round-end events. */
+  boxFight(evt) {
+    if (this.started) this.events.push(evt);
+  }
+
+  /** Box Fights: the match is decided (first to N, FFA rounds / elims, or a forfeit). w = -1: a draw. */
+  boxFightEnd({ w, sc, el = null, team, forfeit = false, players = null }) {
+    if (!this.started || this.ended) return;
+    this.ended = true;
+    const ps = (Array.isArray(players) ? players : []).slice(0, 12).map((r) => [r.id, r.side, r.elims | 0, r.damage | 0, r.builds | 0, r.isBot ? 1 : 0, String(r.name || '').slice(0, 16), String(r.replaced || '').slice(0, 16)]);
+    this.events.push({ e: 'end', w: -1, tm: Number.isInteger(team) ? team : -1, bw: w, sc: sc.slice(0, 6), el: el ? el.slice(0, 6) : undefined, ff: forfeit ? 1 : 0, ps });
   }
 
   /** After bots and loot exist: tell everyone. */
@@ -216,12 +463,13 @@ export class HostSession {
     this.ended = false;
     this.started = true;
     this.room.started = true;
+    this.room.quietClose = this.matchType === 'boxfights'; // leaving lets the relay migrate the match
     this.time = 0;
     this.stats = { t0: 0, snapBytes: 0, snaps: 0, evBytes: 0, invBytes: 0, startBytes: 0 };
     this._invSent.clear();
     this._specSent.clear();
-    const roster = [{ id: 0, n: game.player.name, k: 'player', c: HUMAN_CANOPY[0], h: 1, tm: game.player.team, sk: game.skin, px: game.pickaxe, bb: game.backbling }];
-    for (const a of this.remotes.values()) roster.push({ id: a.id, n: a.name, k: 'player', c: HUMAN_CANOPY[a.id % HUMAN_CANOPY.length], h: 1, tm: a.team, sk: a.skin || null, px: a.pickaxeCos || null, bb: a.backbling || null });
+    const roster = [{ id: 0, n: game.player.name, k: 'player', c: HUMAN_CANOPY[0], h: 1, tm: game.player.team, sk: game.skin, px: game.pickaxe, bb: game.backbling, gl: game.glider }];
+    for (const a of this.remotes.values()) roster.push({ id: a.id, n: a.name, k: 'player', c: HUMAN_CANOPY[a.id % HUMAN_CANOPY.length], h: 1, tm: a.team, sk: a.skin || null, px: a.pickaxeCos || null, bb: a.backbling || null, gl: a.glider || null });
     const idBase = game.bots.list.length ? game.bots.list[0].id : 0;
     for (const b of game.bots.list) {
       const i = b.id - idBase;
@@ -230,9 +478,12 @@ export class HostSession {
     const s = game.storm;
     const loot = [];
     for (const r of game.loot ? game.loot.records : []) loot.push([r.id, r.kind, rnd(r.x), rnd(r.y), rnd(r.z), rnd(r.yaw, 3), r.opened ? 1 : 0, r.item || 0]);
+    const bf = this.matchType === 'boxfights' && game.boxFight ? game.boxFight : null;
     const msg = {
       t: 'start',
       seed: game.seed,
+      game: bf ? 'boxfights' : 'br',
+      bf: bf ? { size: bf.size, mode: bf.mode, wins: bf.state.winRounds, teams: bf.sides.slice(0, 6), botElo: bf.botElo } : undefined,
       mode: this.mode,
       diff: game.matchDifficulty || null, // bot difficulty: only hard matches with bots count toward the ranks
       bots: game.bots ? game.bots.list.length : 0,
@@ -243,10 +494,17 @@ export class HostSession {
       map: game.mapId, // clients on a different map file refuse to play (stale cache / deploy)
       storm: { cx: s.cx, cz: s.cz, r: s.r, nextCx: s.nextCx, nextCz: s.nextCz, nextR: s.nextR, phase: s.phase, mode: s.mode, secondsLeft: s.secondsLeft, dps: s.dps },
       loot,
+      pumps: game.pumps ? game.pumps.snapshot() : [], // gas pumps already hurt / burning / blown up
     };
     for (const c of this.room.clients.values()) {
       if (!this.remotes.has(c.id)) continue;
       this.stats.startBytes += this.room.sendTo(c.id, { ...msg, you: c.id });
+    }
+    if (bf) {
+      // Box Fights Elo: forget last match's reported values; tell everyone ours (guests answer with 'elo')
+      for (const a of this.remotes.values()) a.boxElo = undefined;
+      const own = reportedElo(game.boxEloSelf);
+      this.events.push({ e: 'elo', a: 0, v: own == null ? ELO_START : own });
     }
     // per-client byte counters measure the match from here on (the start message is reported separately)
     for (const c of this.room.clients.values()) c.bytesOut = 0;
@@ -362,8 +620,8 @@ export class HostSession {
     const st = game.structures;
     if (st) {
       const place = st.place.bind(st);
-      st.place = (pl, mat, owner) => {
-        const piece = place(pl, mat, owner);
+      st.place = (pl, mat, owner, ...rest) => {
+        const piece = place(pl, mat, owner, ...rest);
         if (piece) ev({ e: 'sp', kind: piece.kind, m: piece.mat, x: piece.x, y: piece.y, z: piece.z, rot: piece.rot, key: piece.key, lv: piece.level, a: owner ? owner.id : -1 });
         return piece;
       };
@@ -431,7 +689,7 @@ export class HostSession {
 
     // match end: last one (team) standing (the host's own victory/defeat screens are Game's)
     const over = g.teamMode ? g.totalTeams > 1 && g.combat.aliveTeams <= 1 : g.totalActors > 1 && g.combat.aliveCount <= 1;
-    if (!this.ended && (g.state === 'play' || g.state === 'over') && over) {
+    if (!this.ended && this.matchType !== 'boxfights' && (g.state === 'play' || g.state === 'over') && over) {
       this.ended = true;
       const w = g.combat.actors.find((a) => a.alive);
       this.events.push({ e: 'end', w: w ? w.id : -1, tm: w && w.team != null ? w.team : -1 });
@@ -661,6 +919,14 @@ export class HostSession {
     const s = decodeState(buf);
     if (!s) return;
     if (a.lastSeq >= 0 && !seqNewer(s.seq, a.lastSeq)) return;
+    // Box Fights round start: drop packets from before the reset (they are far from the new
+    // spawn) until the client reports from its box; never-arriving clients fall back to 'cor'
+    const lock = a.spawnLock;
+    if (lock) {
+      const off = Math.hypot(s.x - lock.x, s.y - lock.y, s.z - lock.z);
+      if (off > 3 && this.time < lock.until + 4) return;
+      a.spawnLock = null; // reported from its box (or the grace ran out): normal checks from here
+    }
     a.lastSeq = s.seq;
     const now = this.time;
     const dt = Math.max(0.03, now - (a.lastStateT || now));
@@ -687,8 +953,11 @@ export class HostSession {
       s.y = a.pos.y;
       s.z = a.pos.z;
     }
-    const b = this.game.world.bounds;
-    const inBounds = s.x > b.minX - 5 && s.x < b.maxX + 5 && s.z > b.minZ - 5 && s.z < b.maxZ + 5;
+    const bfl = this.matchType === 'boxfights' && this.game.boxFight ? this.game.boxFight.layout : null;
+    const b = bfl ? bfl.bounds : this.game.world.bounds;
+    const inBounds = bfl
+      ? s.x > b.minX && s.x < b.maxX && s.z > b.minZ && s.z < b.maxZ && s.y > bfl.floorY - 2 && s.y < bfl.ceilY + 1
+      : s.x > b.minX - 5 && s.x < b.maxX + 5 && s.z > b.minZ - 5 && s.z < b.maxZ + 5;
     const route = this.game.busRoute;
     if (s.mode === 'bus' && route) {
       busPosAt(route, Math.min(this.time, route.tClose), a.pos); // riding: wherever the bus is
@@ -742,7 +1011,11 @@ export class HostSession {
     const a = this.remotes.get(c.id);
     if (!a || !this.started) return;
     if (msg.seq > a.ack) a.ack = msg.seq;
+    if (msg.k === 'elo') return this._boxEloAction(a, msg);
+    if (msg.k === 'mig') return this._migInventory(a, msg);
     if (!a.alive) return;
+    // Box Fights countdown: everything is allowed; the middle wall (a world collider) keeps the
+    // teams apart and stops shots, and Structures.buildBlock refuses builds on its line
     // knocked: crawling only (QA helpers and fall damage still go through)
     if (a.downed && msg.k !== 'tp' && msg.k !== 'dbg' && msg.k !== 'fall') return;
     try {
@@ -750,6 +1023,15 @@ export class HostSession {
     } catch (err) {
       this.game._error('net action ' + msg.k, err);
     }
+  }
+
+  /** Box Fights: a guest's reported Box Elo (once per match; clamped; relayed to everyone). */
+  _boxEloAction(a, m) {
+    if (this.matchType !== 'boxfights' || !this.game.boxFight || a.boxElo != null) return;
+    const v = reportedElo(m.v);
+    if (v == null) return;
+    a.boxElo = v;
+    this.events.push({ e: 'elo', a: a.id, v });
   }
 
   _action(a, m) {
@@ -818,6 +1100,12 @@ export class HostSession {
         if (!st || st.at({ ...p })) return;
         const pl = { kind: p.kind, x: +p.x, y: +p.y, z: +p.z, rot: +p.rot, key: p.key, level: p.level, valid: true };
         if (st.fits && !st.fits(pl)) return; // same world rule as the client's ghost (refunded by the inventory sync)
+        // Box Fights: while the middle wall is down, only on your own side of it
+        const bfw = g.boxFight;
+        if (bfw && bfw.dividerUp) {
+          const midZ = bfw.layout.rect.minZ + bfw.layout.cells * 2;
+          if (Math.sign(pl.z - midZ) !== Math.sign(a.pos.z - midZ)) return;
+        }
         if (st.supported && !st.supported(pl)) return; // nothing holding it up: refused (and refunded) like the ghost says
         const piece = st.place(pl, mat, a);
         if (piece) inv.spendMats(mat, BUILD.cost);
@@ -957,6 +1245,21 @@ export class HostSession {
         } else if (m.op === 'lean') V.setLean(a, !!m.on);
         return;
       }
+      case 'pmp': {
+        // gas pump nozzle (GasPumps.js): grab (p = pump id) / hang up / fuel a car (c = car id, -1 stops).
+        // Everything is checked again here and every frame after (PUMP_NET_SLACK of lag allowance).
+        const P = g.pumps;
+        if (!P || a.inBus || a.airborneDrop) return;
+        if (m.op === 'grab') {
+          const pump = P.byId.get(m.p);
+          if (pump) P.grab(a, pump, PUMP_NET_SLACK);
+        } else if (m.op === 'hang') P.hangUp(a, !!m.snap);
+        else if (m.op === 'fuel') {
+          const car = m.c >= 0 && g.vehicles ? g.vehicles.byId.get(m.c) : null;
+          P.setFueling(a, car || null);
+        }
+        return;
+      }
       case 'drv': {
         // the driver's own car pose (they simulate it; we check it is not a teleport)
         const V = g.vehicles;
@@ -994,13 +1297,14 @@ export class HostSession {
         return;
       }
       case 'sk': {
-        // the guest's outfit, pickaxe and back bling (sent once at match start)
+        // the guest's outfit, pickaxe, back bling and glider (sent once at match start)
         const id = typeof m.id === 'string' && SKINS[m.id] ? m.id : null;
         const px = typeof m.px === 'string' && PICKAXES[m.px] ? m.px : null;
         const bb = typeof m.bb === 'string' && BACKBLINGS[m.bb] ? m.bb : null;
-        if (!id && !px && !bb) return;
-        g.reskinActor(a, id, px, bb);
-        this.events.push({ e: 'sk', a: a.id, id, px, bb });
+        const gl = typeof m.gl === 'string' && GLIDERS[m.gl] ? m.gl : null;
+        if (!id && !px && !bb && !gl) return;
+        g.reskinActor(a, id, px, bb, gl);
+        this.events.push({ e: 'sk', a: a.id, id, px, bb, gl });
         return;
       }
       case 'em': {
@@ -1087,6 +1391,21 @@ export class HostSession {
     const a = this.remotes.get(c.id);
     if (!a) return;
     const g = this.game;
+    a.leftMatch = true; // Box Fights: no respawn next round; a team with nobody left forfeits
+    // Box Fights: a bot takes over at once (same id, team / side and stats row); the puppet stays
+    const bot = this.started && this.matchType === 'boxfights' && g.boxFight && g.boxReplaceLeaver ? g.boxReplaceLeaver(a) : null;
+    if (bot) {
+      this.remotes.delete(c.id);
+      this._invSent.delete(c.id);
+      this._specSent.delete(c.id);
+      if (a.character) {
+        a.character.root.removeFromParent();
+        a.character.dispose();
+      }
+      this.events.push({ e: 'left', a: c.id });
+      this.events.push({ e: 'rb', a: bot.id, n: String(bot.name).slice(0, 16) });
+      return;
+    }
     if (this.started && a.alive) {
       a.inBus = false; // so the drop lands where they were
       g.combat.applyDamage(a, 1e6, { source: null, storm: true, left: true });

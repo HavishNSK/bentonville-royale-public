@@ -1,4 +1,5 @@
-// Grenades and rockets must shatter museum glass and break benches.
+// Grenades and rockets must shatter museum glass and break benches. Museum walls are breakable
+// panels now (build.js archPanel): a blast breaks the panels in its reach and leaves the rest.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -31,34 +32,37 @@ function lootWorld() {
   return { world, loot };
 }
 
+/** A wall panel well out of reach of every given blast point (it must survive them). */
+const farWall = (out, pts) => out.parts.find((p) => p.wall && p.collider && p.collider.alive && pts.every((q) => Math.hypot(p.cx - q.cx, p.cz - q.cz) > 20));
+
 function paneAndBench(out) {
   const pane = out.glass.find((g) => !g.visOnly && g.collider && g.collider.alive);
   const bench = out.props.find((p) => p.type === 'bench' && p.collider && p.collider.alive);
-  const wall = out.parts.find((p) => p.wall && p.collider && p.collider.alive && p.collider.hp > 1e6);
+  const wall = pane && bench && farWall(out, [pane, bench]);
   assert.ok(pane, 'need a solid museum window');
   assert.ok(bench, 'need a bench');
-  assert.ok(wall, 'need a museum wall');
+  assert.ok(wall, 'need a museum wall out of reach');
   return { pane, bench, wall };
 }
 
-test('a grenade blast shatters museum glass and breaks a bench, not the walls', () => {
+test('a grenade blast shatters museum glass and breaks a bench, not the walls out of reach', () => {
   const { world, out } = site();
   const { pane, bench, wall } = paneAndBench(out);
   explodeAt(world, pane.cx, (pane.y0 + pane.y1) / 2, pane.cz, false);
   explodeAt(world, bench.cx, (bench.y0 + bench.y1) / 2, bench.cz, false);
   assert.equal(pane.collider.alive, false, 'window should shatter');
   assert.equal(bench.collider.alive, false, 'bench should break');
-  assert.equal(wall.collider.alive, true, 'concrete walls stay up');
+  assert.equal(wall.collider.alive, true, 'concrete walls out of reach stay up');
 });
 
-test('a rocket blast shatters museum glass and breaks a bench, not the walls', () => {
+test('a rocket blast shatters museum glass and breaks a bench, not the walls out of reach', () => {
   const { world, out } = site();
   const { pane, bench, wall } = paneAndBench(out);
   explodeAt(world, pane.cx, (pane.y0 + pane.y1) / 2, pane.cz, true);
   explodeAt(world, bench.cx, (bench.y0 + bench.y1) / 2, bench.cz, true);
   assert.equal(pane.collider.alive, false, 'window should shatter');
   assert.equal(bench.collider.alive, false, 'bench should break');
-  assert.equal(wall.collider.alive, true, 'concrete walls stay up');
+  assert.equal(wall.collider.alive, true, 'concrete walls out of reach stay up');
 });
 
 test('a grenade blast opens a chest, spills its loot, and destroys the chest', () => {
@@ -91,17 +95,17 @@ test('an already-open chest is destroyed without spilling again', () => {
   assert.equal(loot.byId.has(chest.id), false, 'opened chest should still be destroyed');
 });
 
-test('a grenade blast destroys window frames around a pane, not the walls', () => {
+test('a grenade blast destroys window frames around a pane, not the walls out of reach', () => {
   const { world, out } = site();
   const pane = out.glass.find((g) => !g.visOnly && g.collider && g.collider.alive);
   assert.ok(pane, 'need a solid museum window');
   const frames = out.parts.filter((p) => (p.frame || p.mullion) && p.collider && p.collider.alive
     && Math.hypot(p.cx - pane.cx, p.cz - pane.cz) < 2.2);
   assert.ok(frames.length >= 1, `need window frames near the pane, got ${frames.length}`);
-  const wall = out.parts.find((p) => p.wall && p.collider && p.collider.alive && p.collider.hp > 1e6);
+  const wall = farWall(out, [pane]);
   explodeAt(world, pane.cx, (pane.y0 + pane.y1) / 2, pane.cz, false);
   for (const f of frames) {
     assert.equal(f.collider.alive, false, `frame at ${f.cx.toFixed(1)},${f.cz.toFixed(1)} should be destroyed`);
   }
-  assert.equal(wall.collider.alive, true, 'concrete walls stay up');
+  assert.equal(wall.collider.alive, true, 'concrete walls out of reach stay up');
 });

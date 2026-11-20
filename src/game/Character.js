@@ -8,8 +8,12 @@ import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { damp, clamp, WEAPONS, SWIM } from '../core/config.js';
 import { toToon } from '../render/Toon.js';
-import { emoteClips, emoteDef, pickaxeDef, backblingDef, swingClips } from './Cosmetics.js';
+import { emoteClips, emoteDef, pickaxeDef, backblingDef, gliderDef, swingClips, skinDef } from './Cosmetics.js';
+import { normalizeSkin, paintKey, recolorPixels, KIT_PARTS, PART_SLOTS, RECIPE_KITS, RIGID_SLOT_BONE, ADDON_BONES } from './skinRecipe.js';
+import { addonGeometries, addonMaterial } from '../render/SkinAddons.js';
 import { buildPaddle } from '../render/Paddle.js';
+import { buildPawPickaxe, buildGecko } from '../render/PupGear.js';
+import { attachFurGear } from '../render/FurGear.js';
 import { grenadeModel } from './Grenades.js';
 
 // Characters and their weapons are cel-shaded; colours get a small saturation lift.
@@ -22,6 +26,9 @@ const LOCO_CLIP = { idle: 'Idle', walk: 'Walking_A', run: 'Running_A', back: 'Wa
 const UPPER_CLIP = {
   aim2: '2H_Ranged_Aiming', aim1: '1H_Ranged_Aiming', shoot2: '2H_Ranged_Shoot', shoot1: '1H_Ranged_Shoot', swing: '2H_Melee_Attack_Chop', use: 'Use_Item',
   reload: '2H_Ranged_Reload', reload1: '1H_Ranged_Reload', hit: 'Hit_A', throw: 'Throw', pickup: 'PickUp',
+  paws: 'Blocking', // 'Paws Up' glider (Cosmetics.GLIDERS.gl_paws): both fists held up in front of the chest
+  // holding a pickaxe / sword: Idle hangs the arms and the blade clips the torso; Melee_Idle keeps it clear
+  meleeIdle: '2H_Melee_Idle',
 };
 // Ground speed (m/s) each gait clip looks right at: the cycle is played faster / slower around
 // it, and forward motion cross-fades walk -> run between WALK_TO_RUN speeds (no foot sliding
@@ -98,6 +105,149 @@ function tinted(mat, tint) {
   return m;
 }
 
+// ---- skin recipes (Cosmetics.SKINS parts / colors / addons, see src/game/skinRecipe.js)
+
+// normalized recipe per skin def object (catalog defs live forever; lab recipes are few)
+const _recipes = new WeakMap();
+/** A skin id or def object -> normalizeSkin() result (cached per def object). */
+export function skinRecipe(skin) {
+  const def = typeof skin === 'string' ? skinDef(skin) : skin;
+  if (!def || typeof def !== 'object') return null;
+  let r = _recipes.get(def);
+  if (!r) _recipes.set(def, (r = normalizeSkin(def)));
+  return r;
+}
+
+const RECOLOR_SIZE = 512; // recoloured atlases: 8 x 4 flat gradients lose nothing at half size
+const _recolored = new Map(); // kit|paintKey -> toon material with a recoloured copy of the atlas
+/** Toon material `mat` (kit `kitKey`'s atlas) with atlas cells repainted; cached, shared by clones. */
+function recolored(mat, kitKey, map) {
+  if (Array.isArray(mat)) return mat.map((m) => recolored(m, kitKey, map));
+  const img = mat.map && mat.map.image;
+  if (!img || typeof document === 'undefined') return mat; // no canvas (tests): keep the original
+  const key = kitKey + '|' + mat.uuid + '|' + paintKey(map);
+  let m = _recolored.get(key);
+  if (!m) {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = RECOLOR_SIZE;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, RECOLOR_SIZE, RECOLOR_SIZE);
+    const px = ctx.getImageData(0, 0, RECOLOR_SIZE, RECOLOR_SIZE);
+    recolorPixels(px.data, RECOLOR_SIZE, RECOLOR_SIZE, map);
+    ctx.putImageData(px, 0, 0);
+    const src = mat.map;
+    const t = new THREE.CanvasTexture(cv);
+    t.flipY = src.flipY;
+    t.colorSpace = src.colorSpace;
+    t.wrapS = src.wrapS;
+    t.wrapT = src.wrapT;
+    t.magFilter = src.magFilter;
+    t.minFilter = src.minFilter;
+    t.anisotropy = src.anisotropy;
+    m = mat.clone();
+    m.map = t;
+    _recolored.set(key, m);
+  }
+  return m;
+}
+
+const _addonGeo = new Map(); // JSON of normalized addons -> Map(bone -> geometry)
+function addonGeometryFor(addons) {
+  const key = JSON.stringify(addons);
+  let g = _addonGeo.get(key);
+  if (!g) _addonGeo.set(key, (g = addonGeometries(addons)));
+  return g;
+}
+
+/** Which kit a cloned model was built from (by its head mesh), or null. */
+function baseKitOf(model) {
+  return RECIPE_KITS.find((k) => KIT_PARTS[k].head.some((n) => model.getObjectByName(n))) || null;
+}
+
+/**
+ * Swaps body parts in a freshly cloned model for other kits' parts (shared skeleton) and
+ * marks meshes whose atlas cells are recoloured (userData.skinPaint, applied with the toon
+ * material). Runs before materials are converted. Slots whose kit is not loaded keep the base part.
+ */
+function dressParts(model, bones, recipe) {
+  const base = baseKitOf(model);
+  if (!base) return;
+  const byName = {};
+  model.traverse((o) => {
+    if (o.isMesh) byName[o.name] = o;
+  });
+  const skinParent = (byName[KIT_PARTS[base].body[0]] || {}).parent || model;
+  for (const slot of PART_SLOTS) {
+    const want = recipe.parts[slot];
+    const paint = want ? recipe.paint[want] && recipe.paint[want][slot] : null;
+    if (want === base || (want && !KITS[want])) {
+      if (want === base && paint) for (const n of KIT_PARTS[base][slot]) if (byName[n]) byName[n].userData.skinPaint = { kit: base, map: paint };
+      continue;
+    }
+    for (const n of KIT_PARTS[base][slot]) {
+      const m = byName[n];
+      if (!m) continue;
+      m.removeFromParent();
+      if (m.isSkinnedMesh && m.skeleton) m.skeleton.dispose();
+    }
+    if (!want) continue;
+    const scene = KITS[want].scene;
+    for (const n of KIT_PARTS[want][slot]) {
+      const src = scene.getObjectByName(n);
+      if (!src) continue;
+      let m;
+      if (src.isSkinnedMesh) {
+        const sb = src.skeleton.bones.map((b) => bones[b.name]);
+        if (sb.some((b) => !b)) continue;
+        m = new THREE.SkinnedMesh(src.geometry, src.material);
+        m.name = src.name;
+        m.position.copy(src.position);
+        m.quaternion.copy(src.quaternion);
+        m.scale.copy(src.scale);
+        m.bindMode = src.bindMode;
+        skinParent.add(m);
+        m.bind(new THREE.Skeleton(sb, src.skeleton.boneInverses.map((x) => x.clone())), src.bindMatrix);
+      } else {
+        const bone = bones[RIGID_SLOT_BONE[slot]];
+        if (!bone) continue;
+        m = src.clone(true);
+        bone.add(m);
+      }
+      m.visible = true;
+      if (paint) m.traverse((o) => o.isMesh && (o.userData.skinPaint = { kit: want, map: paint }));
+    }
+  }
+}
+
+/**
+ * Recipe addons on their bones: one merged, vertex-coloured mesh per bone. The addon frame is
+ * the character's own at rest (+Y up, +Z the way it faces, +X its left), in metres, centred
+ * on the bone, so a recipe reads the same on every kit.
+ */
+function attachAddons(model, bones, addons) {
+  if (!addons.length) return;
+  const geos = addonGeometryFor(addons);
+  const mat = addonMaterial();
+  const want = new THREE.Matrix4();
+  const p = new THREE.Vector3();
+  for (const [boneKey, geo] of geos) {
+    const bone = bones[ADDON_BONES[boneKey]];
+    if (!bone) continue;
+    bone.updateWorldMatrix(true, false);
+    model.updateWorldMatrix(true, false);
+    // the bone's rest frame relative to the model's parent (the character root at rest)
+    const rel = new THREE.Matrix4().copy(model.parent ? model.parent.matrixWorld : new THREE.Matrix4()).invert().multiply(bone.matrixWorld);
+    p.setFromMatrixPosition(rel);
+    want.makeTranslation(p.x, p.y, p.z);
+    const local = rel.clone().invert().multiply(want);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = 'skin_addon_' + boneKey;
+    mesh.castShadow = true;
+    local.decompose(mesh.position, mesh.quaternion, mesh.scale);
+    bone.add(mesh);
+  }
+}
+
 const _v = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 
@@ -136,6 +286,7 @@ export function cosmeticMesh(id, pickSrc) {
   if (!def) return null;
   if (def.src) return accessory(def.src[0], def.src[1], def.tint);
   if (pk && pk.proc) return proceduralPickaxe(pk.proc);
+  if (bb && bb.proc) return proceduralBackbling(bb.proc);
   if (pk && pickSrc) {
     const g = pickSrc.clone(true);
     g.traverse((o) => {
@@ -151,10 +302,22 @@ export function cosmeticMesh(id, pickSrc) {
 const PICKAXES_ID = /^pick_/;
 
 /** Pickaxes built in code (Cosmetics PICKAXES[id].proc), toon-shaded like the kit meshes. */
+const procMat = (color) => toToon(new THREE.MeshStandardMaterial({ color, roughness: 0.6 }), TOON_CHAR);
 function proceduralPickaxe(kind) {
-  if (kind !== 'paddle') return null;
-  return buildPaddle((color) => toToon(new THREE.MeshStandardMaterial({ color, roughness: 0.6 }), TOON_CHAR));
+  if (kind === 'paddle') return buildPaddle(procMat);
+  if (kind === 'paw') return buildPawPickaxe(procMat);
+  return null;
 }
+
+/** Back blings built in code (Cosmetics BACKBLINGS[id].proc), in their own frame. */
+function proceduralBackbling(kind) {
+  if (kind === 'gecko') return buildGecko(procMat);
+  return null;
+}
+// where a procedural back bling sits on the chest bone (same frame as BACK_POSE)
+const PROC_BACK_POSE = {
+  gecko: { p: [0, 0.12, -0.36], r: [0, Math.PI, 0], s: 0.95 },
+};
 
 // a hand item moved onto the back (chest bone frame: +Y up the spine, +Z forward)
 const BACK_POSE = {
@@ -181,6 +344,8 @@ export class Character {
    * @param {{ weapons: Object<string, THREE.Object3D>, canopyColor?: number, tint?: number }} opts
    *        weapons: source scenes keyed by weapon id (+ 'pickaxe'); cloned here.
    *        tint: outfit colour multiplied into the body texture (Cosmetics.SKINS).
+   *        skin: Cosmetics.SKINS id or a skin def / recipe object (parts, colors, addons;
+   *        src/game/skinRecipe.js). Its tint is used when opts.tint is not given.
    */
   constructor(kit, opts = {}) {
     this.kit = kit;
@@ -196,14 +361,26 @@ export class Character {
     this.bones = {};
     this.model.traverse((o) => {
       if (o.isBone) this.bones[o.name] = o;
+    });
+    const recipe = opts.skin ? skinRecipe(opts.skin) : null;
+    // an outfit's own standing-still pose (SKINS[id].idle): 'paws' = both paws held up in front
+    this.idlePose = opts.skin && opts.skin.idle === 'paws' ? 'paws' : null;
+    const tint = opts.tint != null ? opts.tint : recipe ? recipe.tint : null;
+    if (recipe && recipe.custom) dressParts(this.model, this.bones, recipe);
+    this.model.traverse((o) => {
       if (o.isMesh) {
         o.castShadow = true;
         o.material = toToon(o.material, TOON_CHAR); // cached per source: all clones share it
-        if (opts.tint != null) o.material = tinted(o.material, opts.tint);
+        const paint = o.userData.skinPaint;
+        if (paint) o.material = recolored(o.material, paint.kit, paint.map);
+        if (tint != null) o.material = tinted(o.material, tint);
         o.frustumCulled = false; // skinned bounds are unreliable; the Group is culled by distance instead
         if (kit.hide.has(o.name)) o.visible = false;
       }
     });
+    if (recipe && recipe.addons.length) attachAddons(this.model, this.bones, recipe.addons);
+    // realistic shell-fur paw boots and gloves (SKINS[id].gear === 'furPaws', render/FurGear.js)
+    if (opts.skin && opts.skin.gear === 'furPaws') attachFurGear(this.bones);
 
     this.mixer = new THREE.AnimationMixer(this.model);
     this.lo = {};
@@ -286,6 +463,9 @@ export class Character {
     canopy.visible = false;
     this.root.add(canopy);
     this.canopy = canopy;
+    this.gliderId = null;
+    this.gliderPose = null;
+    this.setLoadout({ glider: opts.glider || 'gl_default' });
 
     // knocked (team modes): a pulsing red ring on the ground under the crawling body (its own
     // material: the toon materials above are shared by every clone and must not be tinted)
@@ -301,13 +481,14 @@ export class Character {
     this.downRing = ring;
     this.downed = false;
     this._down = 0; // 0..1 blend into the prone pose
-    this.swimming = false; // setSwim(): sunk to the chest, hands (and what they hold) hidden
+    this.swimming = false; // setSwim(): sunk to the chest; the held item stays in hand
     this._swim = 0;
     this._downClock = 0;
 
     this.heading = 0;
     this.pitch = 0;
     this.aim = 0; // 0..1 how much the upper body is in the aim pose
+    this.melee = 0; // 0..1 holding a pickaxe / blade in Melee_Idle (so long weapons do not clip the torso)
     this.shot = null; // one-shot upper action in progress
     this.shotW = 0;
     this.mode = 'alive'; // 'alive' | 'dead' | 'emote'
@@ -322,8 +503,8 @@ export class Character {
     // several guns share one mesh (WEAPONS[id].model), e.g. burst rifle -> rifle
     this.gunKey = WEAPONS[id] && this.guns[WEAPONS[id].model] ? WEAPONS[id].model : id;
     for (const k in this.guns) this.guns[k].visible = k === this.gunKey;
-    if (this.pickaxe) this.pickaxe.visible = id === 'pickaxe' && this._swim < 0.5;
-    this.grenade.visible = (id === 'grenade' || id === 'smoke') && this._swim < 0.5;
+    if (this.pickaxe) this.pickaxe.visible = id === 'pickaxe';
+    this.grenade.visible = id === 'grenade' || id === 'smoke';
   }
 
   _oneShot(key, speed = 1) {
@@ -449,7 +630,7 @@ export class Character {
     if (on) this.cancelOneShot();
   }
 
-  /** Swimming: the body sinks to the chest and the held item is hidden. Idempotent. */
+  /** Swimming: the body sinks to the chest (the held item stays visible). Idempotent. */
   setSwim(on) {
     this.swimming = !!on;
   }
@@ -485,7 +666,13 @@ export class Character {
    * Pickaxe (Cosmetics.PICKAXES id) in the right hand and back bling (BACKBLINGS id) on the
    * chest; swapped in place (no rebuild), keeping whether the pickaxe is currently shown.
    */
-  setLoadout({ pickaxe, backbling } = {}) {
+  setLoadout({ pickaxe, backbling, glider } = {}) {
+    if (glider && glider !== this.gliderId) {
+      const def = gliderDef(glider);
+      this.gliderPose = def.pose || null;
+      if (def.canopy != null) this.canopy.material.color.setHex(def.canopy);
+      this.gliderId = glider;
+    }
     if (pickaxe && pickaxe !== this.pickaxeId) {
       const def = pickaxeDef(pickaxe);
       let g = null;
@@ -517,7 +704,7 @@ export class Character {
       if (this._backItem && this._backItem.parent) this._backItem.parent.remove(this._backItem);
       this._backItem = null;
       // the outfit's own cape shows only with 'bb_outfit'
-      const own = !def.src && !def.none;
+      const own = !def.src && !def.none && !def.proc;
       this.model.traverse((o) => {
         if (o.isMesh && !o.isSkinnedMesh && (/_Cape/.test(o.name) || (o.parent && /_Cape/.test(o.parent.name)))) o.visible = own;
       });
@@ -527,6 +714,19 @@ export class Character {
         const chest = this.bones.chest;
         if (g && chest) {
           const pose = slot === 'back' && BACK_POSE[name];
+          if (pose) {
+            g.position.set(...pose.p);
+            g.rotation.set(...pose.r);
+            g.scale.setScalar(pose.s);
+          }
+          chest.add(g);
+          this._backItem = g;
+        }
+      } else if (def.proc) {
+        const g = proceduralBackbling(def.proc);
+        const chest = this.bones.chest;
+        const pose = PROC_BACK_POSE[def.proc];
+        if (g && chest) {
           if (pose) {
             g.position.set(...pose.p);
             g.rotation.set(...pose.r);
@@ -622,6 +822,8 @@ export class Character {
     this.model.rotation.z = 0;
     this.downRing.visible = false;
     this.model.rotation.x = 0;
+    this.model.rotation.y = 0;
+    this._paws = this._kick = this._spin = this._beg = this._arms = 0;
     this.model.position.copy(this._modelPos);
     const eq = this.equipped;
     this.equipped = null;
@@ -642,7 +844,25 @@ export class Character {
     // body yaw eases toward the heading (shortest way round): no snapping when a bot or a
     // remote player's heading arrives in steps
     this.turn(dt, s.heading);
-    this.canopy.visible = !!s.gliding && this.mode !== 'dead';
+    const gliding = !!s.gliding && this.mode !== 'dead';
+    this.canopy.visible = gliding && !this.gliderPose;
+    // glider poses (Cosmetics.GLIDERS[id].pose), no canopy for any of them:
+    //   'paws' Paws Up: belly-down, both paws held up in front
+    //   'kick' Puppy Kick: belly-down, paws up, legs kicking back and forth behind
+    //   'spin' Tail Spin: upright, paws up, one knee up, twirling slowly on the way down
+    const pose = gliding && !this.downed ? this.gliderPose : null;
+    const blend = (cur, on, rate) => {
+      const v = damp(cur || 0, on ? 1 : 0, rate, dt);
+      return v < 0.002 && !on ? 0 : v;
+    };
+    this._paws = blend(this._paws, pose === 'paws', 6);
+    this._kick = blend(this._kick, pose === 'kick', 6);
+    this._spin = blend(this._spin, pose === 'spin', 6);
+    // outfit idle: paws up while standing still with nothing but the pickaxe in hand
+    const begT =
+      this.idlePose === 'paws' && this.mode === 'alive' && s.grounded && !gliding && (s.speed || 0) < 0.3 && !this.downed && !this.seated && !this.swimming && !this.shot && (!this.equipped || this.equipped === 'pickaxe');
+    this._beg = blend(this._beg, begT, 5);
+    this._arms = Math.max(this._paws, this._kick, this._spin, this._beg); // weight of the paws arm layer
     // prone blend (runs even when the skeleton is not animated this frame)
     const downT = this.downed ? 1 : 0;
     if (this._down !== downT || this.downed) {
@@ -660,11 +880,8 @@ export class Character {
     if (this._swim !== swimT) {
       this._swim = damp(this._swim, swimT, 7, dt);
       if (Math.abs(this._swim - swimT) < 0.002) this._swim = swimT;
+      // the held item stays in hand: players shoot, swing and build in the water
       this.model.position.y = this._modelPos.y + this._down * 0.22 - this._swim * SWIM.sink;
-      const dry = this._swim < 0.5;
-      this.gunPivot.visible = dry;
-      if (this.pickaxe) this.pickaxe.visible = dry && this.equipped === 'pickaxe' && this.mode !== 'emote';
-      if (this.grenade) this.grenade.visible = dry && this.equipped === 'grenade';
     }
     // landing dip: a damped spring kicked by land(); crouch: hips down
     if (this._landV || this._landY) {
@@ -733,6 +950,11 @@ export class Character {
     const sprinting = s.grounded && s.speed > SPRINT_LOWERS_GUN && !(this.shot && this.shotLeft > 0);
     const wantAim = !full && !this.downed && !sprinting && this.equipped && this.equipped !== 'pickaxe' ? 1 : 0;
     this.aim = damp(this.aim, wantAim, 14, dt);
+    // pickaxe / sword out: hold Melee_Idle so the blade is not jammed through the body at rest
+    const wantMelee =
+      !full && !this.downed && !this.seated && !gliding && this.equipped === 'pickaxe' && this.pickaxe && this.pickaxe.visible ? 1 : 0;
+    this.melee = damp(this.melee || 0, wantMelee, 10, dt);
+    if (this.melee < 0.002 && !wantMelee) this.melee = 0;
     let shotTarget = 0;
     if (this.shot) {
       this.shotLeft -= dt;
@@ -764,13 +986,16 @@ export class Character {
         this._emFade = null;
       }
     }
-    const over = Math.max(this.aim, this.shotW);
+    const over = Math.max(this.aim, this.shotW, this._arms, this.melee);
     const aimKey = this.twoHanded ? 'aim2' : 'aim1';
     for (const key in this.ov) {
       const a = this.ov[key];
       if (a === this.shot) a.setEffectiveWeight(this.shotW * fullW);
       else if (a === this._shotOld) a.setEffectiveWeight(this._oldW * (1 - this.shotW) * fullW);
-      else if (key === aimKey) a.setEffectiveWeight(this.aim * (1 - this.shotW) * fullW);
+      else if (key === aimKey) a.setEffectiveWeight(this.aim * (1 - this.shotW) * (1 - this._arms) * fullW);
+      else if (key === 'paws') a.setEffectiveWeight(this._arms * (1 - this.shotW) * fullW);
+      else if (key === 'meleeIdle')
+        a.setEffectiveWeight(this.melee * (1 - this.shotW) * (1 - this._arms) * (1 - this.aim) * fullW);
       else a.setEffectiveWeight(0);
     }
     // Walk / run / backpedal / strafes share one gait phase so blending between them never
@@ -822,6 +1047,37 @@ export class Character {
     } else if (this._lean) {
       this._lean = 0;
       this.model.rotation.z = 0;
+    }
+
+    // glide poses on top of the clips (see the pose blends above)
+    const posing = this._paws > 0 || this._kick > 0 || this._spin > 0;
+    if (!this.downed && (posing || this._pawsTilt)) {
+      const t = this._clock;
+      const P = this._paws;
+      const K = this._kick;
+      const S = this._spin;
+      // belly-down tilt (Paws Up, Puppy Kick) with a slow side-to-side drift; Tail Spin leans back a touch
+      this.model.rotation.x = P * (0.95 + 0.06 * Math.sin(t * 2.1)) + K * (0.85 + 0.05 * Math.sin(t * 2.6)) - S * 0.12;
+      this.model.rotation.z = (this._lean || 0) + P * 0.12 * Math.sin(t * 1.3) + K * 0.07 * Math.sin(t * 1.7);
+      // Tail Spin: a slow twirl (it settles back when the glide ends)
+      if (S > 0) this._spinAng = ((this._spinAng || 0) + dt * 3.0 * S) % (Math.PI * 2);
+      else this._spinAng = 0;
+      this.model.rotation.y = this._spinAng;
+      const b = this.bones;
+      if (b.head) b.head.rotateX(-(P * (0.55 + 0.08 * Math.sin(t * 4.2)) + K * (0.5 + 0.06 * Math.sin(t * 5))) + S * 0.15 * Math.sin(t * 3));
+      // Puppy Kick: knees bent, feet kicking up behind, left and right in turn
+      if (K > 0) {
+        for (const [side, ph] of [['l', 0], ['r', Math.PI]]) {
+          if (b['upperleg' + side]) b['upperleg' + side].rotateX(K * 0.3);
+          if (b['lowerleg' + side]) b['lowerleg' + side].rotateX(K * (1.1 + 0.45 * Math.sin(t * 7 + ph)));
+        }
+      }
+      // Tail Spin: one knee up, the other leg straight
+      if (S > 0) {
+        if (b.upperlegl) b.upperlegl.rotateX(S * 0.9);
+        if (b.lowerlegl) b.lowerlegl.rotateX(-S * 1.3);
+      }
+      this._pawsTilt = posing;
     }
 
     if (!dead && this.aim > 0.02) {

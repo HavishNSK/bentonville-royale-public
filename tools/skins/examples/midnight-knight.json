@@ -1,0 +1,21 @@
+{
+  "name": "Vanta Knight",
+  "model": "bot_a",
+  "rarity": "legendary",
+  "price": 7500,
+  "colors": {
+    "armor": "#0b0c10",
+    "helmet": "#0b0c10",
+    "chainmail": "#121318",
+    "cape": "#07070a",
+    "leather": "#0e0f13",
+    "belt": "#0e0f13",
+    "pants": "#0a0b0e",
+    "badge": "#16171d",
+    "trim": "#2b2f3a",
+    "metal": "#2b2f3a",
+    "skin": "#14151b",
+    "hair": "#07070a",
+    "eyes": "#bfd0ff"
+  }
+}

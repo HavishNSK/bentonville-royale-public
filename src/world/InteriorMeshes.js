@@ -74,6 +74,34 @@ const BEAM_TOP_GAP = 0.005; // beams hang just under the ceiling plane
 // shell's up-lit ceiling, and 1 cm stays depth-separable (near 0.3 m, 24-bit) out to ~200 m;
 // beam tops (BEAM_TOP_GAP) end 5 mm above it, hidden. Light panels hang 2-3 cm down, below it.
 const STYLED_CEIL_GAP = 0.01;
+
+// An original cut-paper panorama. World-space phase joins the coloured ridges across
+// neighbouring breakable panels. Each panel owns its own strip of the composition.
+function addRidgeMural(chunk, quad, A, B, side, nx, nz, base, height, colors, h) {
+  const low = base + height * 0.22;
+  const start = A(side, low), end = B(side, low);
+  const length = Math.hypot(end[0] - start[0], end[2] - start[2]);
+  const count = Math.max(1, Math.ceil(length / 1.2));
+  const section = i => {
+    const t = i / count;
+    const x = start[0] + (end[0] - start[0]) * t, z = start[2] + (end[2] - start[2]) * t;
+    const s = x * 0.59 + z * 0.81;
+    return [0, 1, 2, 3].map(layer => {
+      if (!layer) return [x, low, z];
+      const wave = 0.06 * Math.sin(s * 0.42 + layer * 1.9) + 0.04 * Math.cos(s * 0.76 + layer);
+      return [x, low + height * (layer * 0.15 + wave), z];
+    });
+  };
+  let left = section(0);
+  for (let i = 1; i <= count; i++) {
+    const right = section(i);
+    for (let layer = 0; layer < colors.length; layer++) {
+      quad(chunk, left[layer], right[layer], right[layer + 1], left[layer + 1],
+        nx, 0, nz, ...rgb(colors[layer]), null, h);
+    }
+    left = right;
+  }
+}
 // Light normal for styled ceilings and beam undersides. An up normal takes the full hemisphere
 // SKY colour (#c6e0ff), which turns a cream ceiling blue-grey. This one tilts slightly down
 // (n.y = -0.25: ~38% sky / 62% warm ground fill, so cream stays cream), and its horizontal part
@@ -309,6 +337,145 @@ function addFloorTile(chunk, quad, F, plan, shell, styles, L, below, t, g, floor
 }
 
 /**
+ * The roof slab of a building with a roof tile grid (plan.roof, interiors/shellPanels.js): its
+ * top (at h) and the top storey's ceiling (underside) over the solid rim and the non-tile cells,
+ * then each breakable roof tile in its own panel range: top, underside (that room's styled
+ * ceiling when it has one) and side faces toward neighbouring tiles. Where a tile borders solid
+ * roof, an always-drawn face looks into the tile (the clean cut edge once it breaks).
+ * api.roof = { outer: footprint [[x, z], ...], hex: roof colour, ceiling: plain ceiling colour }.
+ * WorldMeshes calls it on the building's shell chunk (always drawn), not the near-only room chunk.
+ */
+export function addRoofGeometry(chunk, shell, h, api, styles = LANDMARK_STYLE) {
+  if (!shell.plan || !shell.plan.roof || !api.roof) return;
+  const plan = shell.plan;
+  const { quad, hcapFlat } = api;
+  const { outer, hex, ceiling } = api.roof;
+  const F = plan.frame;
+  const g = plan.roof;
+  const yT = h;
+  const yU = shell.ceil - shell.floor;
+  const top = plan.levels[plan.levels.length - 1];
+  const local = (pts) => {
+    const out = [];
+    for (let i = 0; i < pts.length; i += 2) out.push(...toLocal(F, pts[i], pts[i + 1]));
+    return out;
+  };
+  const O = local(outer.flat());
+  const I = local(shell.inner);
+  const cell = (i, j) => ({
+    a0: q(g.a0 + ((g.a1 - g.a0) * i) / g.na), a1: q(g.a0 + ((g.a1 - g.a0) * (i + 1)) / g.na),
+    b0: q(g.b0 + ((g.b1 - g.b0) * j) / g.nb), b1: q(g.b0 + ((g.b1 - g.b0) * (j + 1)) / g.nb),
+  });
+  const cap = (P, R, y, color, facing, litDir) => {
+    const poly = clipRect(P, R.a0, R.b0, R.a1, R.b1);
+    if (poly.length < 6) return;
+    const pts = [];
+    for (let i = 0; i < poly.length; i += 2) pts.push(...toWorld(F, poly[i], poly[i + 1]));
+    hcapFlat(chunk, pts, y, color, h, facing, litDir);
+  };
+  // solid roof: the frame outside the grid (generous: clipped to the polygons) and non-tile cells
+  const M = 1;
+  const solid = [
+    { a0: -M, b0: -M, a1: g.a0, b1: F.W + M }, { a0: g.a1, b0: -M, a1: F.L + M, b1: F.W + M },
+    { a0: g.a0, b0: -M, a1: g.a1, b1: g.b0 }, { a0: g.a0, b0: g.b1, a1: g.a1, b1: F.W + M },
+  ];
+  for (let i = 0; i < g.na; i++) for (let j = 0; j < g.nb; j++) if (g.ids[i * g.nb + j] < 0) solid.push(cell(i, j));
+  for (const R of solid) {
+    if (R.a1 - R.a0 < 1e-3 || R.b1 - R.b0 < 1e-3) continue;
+    cap(O, R, yT, hex, 1, 1);
+    cap(I, R, yU, ceiling, -1, 1); // wound down, lit as up: a bright painted ceiling
+  }
+  const W = (a, b, y) => { const [x, z] = toWorld(F, a, b); return [x, y, z]; };
+  const isTile = (i, j) => i >= 0 && j >= 0 && i < g.na && j < g.nb && g.ids[i * g.nb + j] >= 0;
+  const edge = rgb(SLAB_EDGE_HEX);
+  const [rr, rg, rb] = rgb(hex);
+  for (let i = 0; i < g.na; i++) for (let j = 0; j < g.nb; j++) {
+    const id = g.ids[i * g.nb + j];
+    if (id < 0) continue;
+    const pn = plan.panels[id];
+    const C = cell(i, j);
+    if (pn.clip || Math.abs(C.a0 - pn.a0) > 1e-4 || Math.abs(C.b0 - pn.b0) > 1e-4) {
+      addClippedRoofCell(chunk, quad, cap, W, g, i, j, C, pn, O, I, yT, yU, hex, ceiling, edge, F, h);
+      continue;
+    }
+    const { a0, b0, a1, b1 } = pn;
+    const i0 = chunk.buf.idx.length;
+    quad(chunk, W(a0, b0, yT), W(a1, b0, yT), W(a1, b1, yT), W(a0, b1, yT), 0, 1, 0, rr, rg, rb, null, h);
+    // underside: per top-storey room, its styled ceiling plane or the plain ceiling
+    let covered = 0;
+    for (const lr of top.rooms) {
+      const c0 = Math.max(a0, lr.a0), c1 = Math.min(a1, lr.a1), d0 = Math.max(b0, lr.b0), d1 = Math.min(b1, lr.b1);
+      if (c1 - c0 < 0.01 || d1 - d0 < 0.01) continue;
+      covered += (c1 - c0) * (d1 - d0);
+      const lst = styleFor(plan.id, lr, styles);
+      const styled = lst && lst.ceiling !== undefined;
+      const y = styled ? yU - STYLED_CEIL_GAP : yU;
+      quad(chunk, W(c0, d0, y), W(c1, d0, y), W(c1, d1, y), W(c0, d1, y), 0, -1, 0,
+        ...rgb(styled ? lst.ceiling : ceiling), null, h, styled ? NEUTRAL_LIT : UP_LIT);
+    }
+    if (covered < (a1 - a0) * (b1 - b0) - 0.05) {
+      // rooms don't cover the whole tile: the plain ceiling just above any room planes
+      quad(chunk, W(a0, b0, yU + 0.002), W(a1, b0, yU + 0.002), W(a1, b1, yU + 0.002), W(a0, b1, yU + 0.002), 0, -1, 0, ...rgb(ceiling), null, h, UP_LIT);
+    }
+    const sides = [
+      [i - 1, j, [a0, b0], [a0, b1], [F.ux, F.uz], -1],
+      [i + 1, j, [a1, b0], [a1, b1], [F.ux, F.uz], 1],
+      [i, j - 1, [a0, b0], [a1, b0], [F.vx, F.vz], -1],
+      [i, j + 1, [a0, b1], [a1, b1], [F.vx, F.vz], 1],
+    ];
+    const solidSides = [];
+    for (const [ni, nj, A, B, n, sg] of sides) {
+      if (!isTile(ni, nj)) { solidSides.push([A, B, n, -sg]); continue; }
+      quad(chunk, W(A[0], A[1], yU), W(B[0], B[1], yU), W(B[0], B[1], yT), W(A[0], A[1], yT), n[0] * sg, 0, n[1] * sg, ...edge, null, h);
+    }
+    chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
+    for (const [A, B, n, sg] of solidSides) {
+      quad(chunk, W(A[0], A[1], yU), W(B[0], B[1], yU), W(B[0], B[1], yT), W(A[0], A[1], yT), n[0] * sg, 0, n[1] * sg, ...edge, null, h);
+    }
+  }
+}
+
+/**
+ * One roof grid cell the footprint only partly covers (a clipped roof tile, or a sliver joined to
+ * a neighbouring tile; interiors/shellPanels.js), in its tile's panel range: the roof top over the
+ * cell clipped to the footprint, the ceiling under it (clipped to the inner face) and the cut
+ * faces toward neighbouring tiles. The rim's outer face along the footprint edges is drawn by
+ * WorldMeshes.addShell, in the same tile's range. A cut face toward a cell with no tile is drawn
+ * outside the range (it shows once this tile breaks).
+ */
+function addClippedRoofCell(chunk, quad, cap, W, g, i, j, C, pn, O, I, yT, yU, hex, ceiling, edge, F, h) {
+  const id = pn.id;
+  const idAt = (ii, jj) => (ii >= 0 && jj >= 0 && ii < g.na && jj < g.nb ? g.ids[ii * g.nb + jj] : -1);
+  const i0 = chunk.buf.idx.length;
+  cap(O, C, yT, hex, 1, 1);
+  cap(I, C, yU, ceiling, -1, 1); // wound down, lit as up: a bright painted ceiling
+  const cp = clipRect(O, C.a0, C.b0, C.a1, C.b1);
+  const m = cp.length >> 1;
+  const later = [];
+  const eps = 1e-4;
+  for (let k = 0; k < m; k++) {
+    const l = (k + 1) % m;
+    const pa = cp[k * 2], pb = cp[k * 2 + 1], qa = cp[l * 2], qb = cp[l * 2 + 1];
+    if (Math.abs(pa - qa) < eps && Math.abs(pb - qb) < eps) continue;
+    // which cell side the edge lies on (a cut face toward that neighbour), or none (footprint edge)
+    let side = null;
+    if (Math.abs(pa - C.a0) < eps && Math.abs(qa - C.a0) < eps) side = [i - 1, j, F.ux, F.uz, -1];
+    else if (Math.abs(pa - C.a1) < eps && Math.abs(qa - C.a1) < eps) side = [i + 1, j, F.ux, F.uz, 1];
+    else if (Math.abs(pb - C.b0) < eps && Math.abs(qb - C.b0) < eps) side = [i, j - 1, F.vx, F.vz, -1];
+    else if (Math.abs(pb - C.b1) < eps && Math.abs(qb - C.b1) < eps) side = [i, j + 1, F.vx, F.vz, 1];
+    if (!side) continue;
+    const [ni, nj, nx, nz, sg] = side;
+    const nid = idAt(ni, nj);
+    if (nid === id) continue; // the same tile on both sides (a joined sliver)
+    const face = [W(pa, pb, yU), W(qa, qb, yU), W(qa, qb, yT), W(pa, pb, yT)];
+    if (nid >= 0) quad(chunk, ...face, nx * sg, 0, nz * sg, ...edge, null, h);
+    else later.push([face, -nx * sg, -nz * sg]);
+  }
+  chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
+  for (const [face, nx, nz] of later) quad(chunk, ...face, nx, 0, nz, ...edge, null, h);
+}
+
+/**
  * shell: World collider.shell with .plan; h: building height (aH attribute);
  * api: { quad, hcapFlat } from WorldMeshes.
  */
@@ -333,8 +500,11 @@ export function addInteriorGeometry(chunk, shell, h, api, styles = LANDMARK_STYL
     const above = plan.levels.find((l) => l.i === L.i + 1);
     const styledBelow = below ? below.rooms.filter((q) => styleFor(plan.id, q, styles)?.ceiling !== undefined) : [];
 
-    // breakable floor tiles of the storey above (its slab is this storey's ceiling)
-    const aboveTiles = above ? plan.panels.filter((p) => p.kind === 'floor' && p.level === above.i) : [];
+    // breakable floor tiles of the storey above (its slab is this storey's ceiling), or on the top
+    // storey the breakable roof tiles (interiors/shellPanels.js)
+    const aboveTiles = above
+      ? plan.panels.filter((p) => p.kind === 'floor' && p.level === above.i)
+      : plan.panels.filter((p) => p.kind === 'roof');
 
     // ---- room floors (+0.02 over the interior floor); breakable tiles drawn on their own
     for (const r of L.rooms) {
@@ -358,6 +528,21 @@ export function addInteriorGeometry(chunk, shell, h, api, styles = LANDMARK_STYL
             const cpts=[];
             for(let i=0;i<cp.length;i+=2)cpts.push(...toWorld(F,cp[i],cp[i+1]));
             hcapFlat(chunk,cpts,base-FLOOR_THICKNESS,CEILING_HEX,h,-1,1); // lit as up: bright ceiling
+          }
+        }
+      }
+      // Inlaid ribbons are cut to the same footprint as the ground-floor finish.
+      if (L.i === 0 && st?.inlay !== undefined) {
+        for (let a = r.a0 + 2; a + 0.9 < r.a1; a += 6.8) {
+          for (const [start, end] of [[a, a + 0.54], [a + 0.68, a + 0.79]]) {
+            const strips = cutHoles([{ a0: start, b0: r.b0, a1: end, b1: r.b1 }], L.holes);
+            for (const strip of strips) {
+              const poly = clipRect(P, strip.a0, strip.b0, strip.a1, strip.b1);
+              if (poly.length < 6) continue;
+              const pts = [];
+              for (let i = 0; i < poly.length; i += 2) pts.push(...toWorld(F, poly[i], poly[i + 1]));
+              hcapFlat(chunk, pts, base + 0.052, st.inlay, h);
+            }
           }
         }
       }
@@ -455,13 +640,24 @@ export function addInteriorGeometry(chunk, shell, h, api, styles = LANDMARK_STYL
             const [lr, lg, lb] = rgb(tone(hex, 1, 0xfff8ec, 0.35));
             quad(chunk, A(s * tb, y1 - TOP_BAND), B(s * tb, y1 - TOP_BAND), B(s * tb, y1), A(s * tb, y1), nx, 0, nz, lr, lg, lb, null, h);
           }
+          // Broad, edge-to-edge maple courses read at the game's lower render resolutions.
+          if (ts?.panelWood !== undefined) {
+            const bottom = y0 + 1.5, pitch = (y1 - TOP_BAND - bottom) / 3;
+            for (let i = 0; pitch > 0.08 && i < 3; i++) {
+              const low = bottom + i * pitch, high = bottom + (i + 1) * pitch;
+              const wood = tone(ts.panelWood, i % 2 === 0 ? 1 : 0.90);
+              quad(chunk, A(s * tb, low), B(s * tb, low), B(s * tb, high), A(s * tb, high), nx, 0, nz, ...rgb(wood), null, h);
+            }
+            if (ts.mural) addRidgeMural(chunk, quad, A, B, s * sk, nx, nz, y0, y1 - y0, ts.mural, h);
+          }
         }
-        const pn = meta.panel >= 0 ? plan.panels[meta.panel] : null;
-        if (pn) chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
       } else {
         // lintel underside
         quad(chunk, A(-1, y0), B(-1, y0), B(1, y0), A(1, y0), 0, -1, 0, mr, mg, mb, null, h);
       }
+      // a solid run or a lintel (both breakable panels): its quads blank together
+      const pn = meta.panel >= 0 ? plan.panels[meta.panel] : null;
+      if (pn) chunk.panelRanges.push(pn, i0, chunk.buf.idx.length - i0);
     }
   }
   addStairGeometry(chunk,shell,h,api);

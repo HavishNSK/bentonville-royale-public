@@ -1,29 +1,34 @@
 // BENTONVILLE ROYALE — party server (PartyServer Durable Object). One room per 4-letter party code.
 //
-// The party is server-authoritative: the leader picks the mode and Fill, members
-// ready up, and the leader's PLAY sends a ticket to the matchmaker party
-// (party/matchmaker.js, one room per mode). When the matchmaker has a match it
-// POSTs the plan back here and every member gets {t:'match', ...}.
+// The party is server-authoritative: the leader picks the game (battle royale or
+// Box Fights), the mode (team size) and Fill, members ready up, and the leader's
+// PLAY sends a ticket to the matchmaker party (party/matchmaker.js, one room per
+// queue: queueName(game, mode), e.g. 'duo' or 'bf-duo'). When the matchmaker has
+// a match it POSTs the plan back here and every member gets {t:'match', ...}.
 //
-// Connect:  /parties/party/<CODE>?name=&token=&create=1&mode=&fill=
+// Connect:  /parties/party/<CODE>?name=&token=&create=1&game=&mode=&fill=
 //   create=1 makes a new party (rejected with 'taken' if the code is in use);
-//   without it the party must already exist ('notFound').
+//   without it the party must already exist ('notFound'). game defaults to 'br';
+//   a mode the game does not have is coerced (both games accept all four modes).
+//   Party cap: partyCap(game) (4 for br -> 'full', 4 for boxfights -> 'fullBox').
 //   token is a stable random id per player tab; the match plan refers to members
 //   by token and game guests join the game room with it.
 //
 // Client -> server (JSON):
 //   anyone:       {t:'ready', on} {t:'name', name} {t:'skin', skin} {t:'leave'}
-//   leader only:  {t:'setMode', mode} {t:'setFill', on} {t:'kick', id} {t:'promote', id}
-//                 {t:'play'} {t:'cancel'}
+//   leader only:  {t:'setGame', game} {t:'setMode', mode} {t:'setFill', on} {t:'kick', id}
+//                 {t:'promote', id} {t:'play'} {t:'cancel'}
+//                 (setGame/setMode/setFill only while idle)
 // Server -> client:
-//   {t:'state', you, party:{code, leaderId, mode, fill, state, queuedFor, members:[{id,name,ready,leader,skin}]}}
-//   {t:'match', code, hostToken, teams:[{tokens, allowBots}], mode}
+//   {t:'state', you, party:{code, leaderId, game, mode, fill, state, queuedFor, members:[{id,name,ready,leader,skin}]}}
+//   {t:'match', code, hostToken, teams:[{tokens, allowBots}], mode, game}   (game is this party's own)
 //   {t:'notice', text}   {t:'error', text}   {t:'reject', reason} then close
 //   {t:'kicked'} then close (4002)
 
 import { Server, getServerByName } from 'partyserver';
-import { MODE_SIZE, PARTY_MAX, modeSize, validMode, modeFor } from './modes.js';
+import { MODE_SIZE, queueName } from './modes.js';
 import { nameIsClean } from '../src/net/chatFilter.js';
+import { cleanToken, createSettings, joinReject, joinMode, modeLabel, setGameDecision, setModeDecision } from './partyRules.js';
 import { originAllowed } from './authLimits.js';
 
 const POLL_MS = 2000;
@@ -41,16 +46,10 @@ function cleanName(name) {
   return s && nameIsClean(s) ? s : 'Player'; // names with swear words show as Player
 }
 
-/** Look shown in the lobby line-up: "skin|pickaxe|backbling" (Cosmetics.lookString; unchecked, cosmetic only). */
+/** Look shown in the lobby line-up: "skin|pickaxe|backbling|glider" (Cosmetics.lookString; unchecked, cosmetic only). */
 function cleanSkin(s) {
   const v = String(s || '').replace(/[^a-z0-9_|]/g, '').slice(0, 96);
   return v.startsWith('skin_') ? v : null;
-}
-
-function cleanToken(t) {
-  return String(t || '')
-    .replace(/[^A-Za-z0-9_-]/g, '')
-    .slice(0, 40);
 }
 
 export class Party extends Server {
@@ -62,7 +61,9 @@ export class Party extends Server {
   _reset() {
     this.members = []; // [{id, name, token, ready, seq}]
     this.leaderId = null;
+    this.game = 'br'; // 'br' | 'boxfights'
     this.mode = 'solo';
+    this.queue = null; // matchmaker room of the current ticket
     this.fill = true;
     this.state = 'idle'; // idle | queued | matched
     this.queuedAt = 0;
@@ -109,6 +110,7 @@ export class Party extends Server {
     return {
       code: this.name,
       leaderId: this.leaderId,
+      game: this.game,
       mode: this.mode,
       fill: this.fill,
       state: this.state,
@@ -135,13 +137,18 @@ export class Party extends Server {
     }
   }
 
+  /** Matchmaker room of the current ticket (set by _queue, so cancel/poll reach the same room). */
+  get _queueName() {
+    return this.queue || queueName(this.game, this.mode) || 'solo';
+  }
+
   async _matchmaker() {
-    return getServerByName(this.env.Matchmaker, this.mode);
+    return getServerByName(this.env.Matchmaker, this._queueName);
   }
 
   async _mm(body) {
     const mm = await this._matchmaker();
-    const res = await mm.fetch(new Request('https://matchmaker/' + this.mode, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
+    const res = await mm.fetch(new Request('https://matchmaker/' + this._queueName, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
     if (!res.ok) throw new Error('matchmaker ' + res.status);
     return res.json().catch(() => ({}));
   }
@@ -202,25 +209,24 @@ export class Party extends Server {
       return;
     }
 
-    if (create && this.members.length) return this._reject(conn, 'taken', 4001);
-    if (!create && !this.members.length) return this._reject(conn, 'notFound');
-    if (this.members.length >= PARTY_MAX) return this._reject(conn, 'full');
-    if (this.state !== 'idle') return this._reject(conn, 'busy');
+    const refused = joinReject({ create, members: this.members.length, state: this.state, game: this.game });
+    if (refused) return this._reject(conn, refused, refused === 'taken' ? 4001 : 4000);
 
     if (!this.members.length) {
       this._reset();
-      const mode = url.searchParams.get('mode');
-      if (validMode(mode)) this.mode = mode;
-      this.fill = url.searchParams.get('fill') !== '0';
+      const s = createSettings(url.searchParams);
+      this.game = s.game;
+      this.mode = s.mode;
+      this.fill = s.fill;
       this.leaderId = conn.id;
     }
     this.members.push({ id: conn.id, name, token, skin, ready: false, seq: this.seq++ });
     conn.setState({ token });
-    // a party bigger than its mode moves up (solo + a friend -> duos)
-    const fit = modeFor(this.members.length, this.mode);
+    // a party bigger than its mode moves up (solo + a friend -> duos), within the game's modes
+    const fit = joinMode(this.game, this.mode, this.members.length);
     if (fit !== this.mode) {
       this.mode = fit;
-      this._notice(`Mode changed to ${fit === 'duo' ? 'Duos' : fit === 'trio' ? 'Trios' : 'Squads'} so everyone fits.`);
+      this._notice(`Mode changed to ${modeLabel(fit)} so everyone fits.`);
     }
     this._sync();
   }
@@ -311,11 +317,24 @@ export class Party extends Server {
     if (!isLeader) return err('Only the party leader can do that.');
 
     switch (msg.t) {
+      case 'setGame': {
+        if (this.state !== 'idle') return err('Cancel matchmaking first.');
+        const d = setGameDecision({ game: this.game, mode: this.mode, members: this.members.length, next: msg.game });
+        if (!d) return;
+        if (d.error) return err(d.error);
+        this.game = d.game;
+        this.mode = d.mode;
+        if (this.mode === 'solo') this.fill = true;
+        if (d.modeChanged) this._notice(`Mode changed to ${modeLabel(d.mode)} for ${d.game === 'boxfights' ? 'Box Fights' : 'Battle Royale'}.`);
+        this._sync();
+        return;
+      }
       case 'setMode': {
         if (this.state !== 'idle') return err('Cancel matchmaking first.');
-        if (!validMode(msg.mode)) return;
-        if (modeSize(msg.mode) < this.members.length) return err(`Your party has ${this.members.length} players. That mode fits ${modeSize(msg.mode)}.`);
-        this.mode = msg.mode;
+        const d = setModeDecision({ game: this.game, members: this.members.length, next: msg.mode });
+        if (!d) return;
+        if (d.error) return err(d.error);
+        this.mode = d.mode;
         if (this.mode === 'solo') this.fill = true;
         this._sync();
         return;
@@ -378,12 +397,14 @@ export class Party extends Server {
     this.state = 'queued';
     this.queuedAt = Date.now();
     this.ticketId = ticketId;
+    this.queue = queueName(this.game, this.mode) || 'solo';
     this._sync();
     const ticket = {
       t: 'ticket',
       partyId: this.name,
       ticketId,
       fill: this.mode === 'solo' ? true : this.fill,
+      at: this.queuedAt,
       members: this.members.map((m) => ({ token: m.token, name: m.name, leader: m.id === this.leaderId })),
     };
     this._mm(ticket).catch(() => {
@@ -426,7 +447,7 @@ export class Party extends Server {
     this.ticketId = null;
     this._stopPoll();
     for (const m of this.members) if (m.id !== this.leaderId) m.ready = false;
-    const match = { t: 'match', code: msg.code, hostToken: msg.hostToken, teams: msg.teams, mode: msg.mode };
+    const match = { t: 'match', code: msg.code, hostToken: msg.hostToken, teams: msg.teams, mode: msg.mode, game: this.game };
     this._lastMatch = { msg: match, at: Date.now() };
     this._broadcast(match);
     this._sync();

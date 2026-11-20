@@ -13,7 +13,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { PAVILIONS, LEVEL, TILE, WALKER_LANDING, SLABS } from './site.js';
-import { roofUnder, roofTileLines } from './build.js';
+import { roofUnder, roofTileLines, roofNeighborSides } from './build.js';
 import { STATUE_MODELS } from './statues.js';
 
 const ROOF_T = 0.45;
@@ -370,18 +370,21 @@ function addRoof(pv, roofBufs, soffitBuf, tiles = [], quadsOf = null) {
   const { xs: tx, zs: tz } = roofTileLines(pv);
   const exX0 = longX ? endEave : spanEave;
   const exZ0 = longX ? spanEave : endEave;
-  /** grid lines: eave edge, the tile lines split to <= 1 m, eave edge */
-  const gridLines = (lines, eave) => {
-    const out = [lines[0] - eave];
+  // no overhang where another pavilion butts on: it would poke through that room's joint wall
+  const nbr = roofNeighborSides(pv);
+  /** grid lines: eave edge, the tile lines split to <= 1 m, eave edge (an eave of 0 adds no line) */
+  const gridLines = (lines, eaveLo, eaveHi) => {
+    const out = eaveLo > 0 ? [lines[0] - eaveLo] : [];
     for (let i = 0; i + 1 < lines.length; i++) {
       const n = Math.max(1, Math.ceil(lines[i + 1] - lines[i]));
       for (let s = 0; s < n; s++) out.push(lines[i] + ((lines[i + 1] - lines[i]) * s) / n);
     }
-    out.push(lines[lines.length - 1], lines[lines.length - 1] + eave);
+    out.push(lines[lines.length - 1]);
+    if (eaveHi > 0) out.push(lines[lines.length - 1] + eaveHi);
     return out;
   };
-  const gx = gridLines(tx, exX0);
-  const gz = gridLines(tz, exZ0);
+  const gx = gridLines(tx, nbr.w ? 0 : exX0, nbr.e ? 0 : exX0);
+  const gz = gridLines(tz, nbr.n ? 0 : exZ0, nbr.s ? 0 : exZ0);
   const nx = gx.length - 1;
   const nz = gz.length - 1;
   const P = (i, k, top) => {
@@ -558,7 +561,7 @@ function waterMaterial(uniforms) {
 
 /**
  * Build every mesh into `root`. site = buildSite() output. Returns { update(dt), hideCollider(c),
- * showCollider(c), meshes } — the hide/show pair hides a broken pane / prop instance.
+ * showCollider(c), meshes } — the hide/show pair hides a broken pane / prop instance, roof tile or wall panel.
  */
 export function buildSiteMeshes({ root, world, site }) {
   const M = makeMaterials();
@@ -605,6 +608,9 @@ export function buildSiteMeshes({ root, world, site }) {
   // architecture: merged per material (roof boxes are drawn as smooth roofs instead)
   const bufs = {};
   const bufOf = (k) => bufs[k] || (bufs[k] = new GeoBuf());
+  // breakable wall panels (build.js archPanel) stay in the merged per-material meshes; their
+  // vertex range is recorded so a break collapses it (like a roof tile) without extra draw calls
+  const panelVerts = new Map(); // collider -> { buf, start, n }
   for (const p of site.parts) {
     if (p.roofOf || p.hidden || p.doorLeaf || p.frame || p.mullion) continue; // hidden: statue figure. doorLeaf: animated. frame/mullion: instanced so a blast can hide them.
     let mat = p.mat;
@@ -618,7 +624,10 @@ export function buildSiteMeshes({ root, world, site }) {
     }
     if (mat === 'stone' || mat === 'oak' || mat === 'quartzite') mat = FLOOR_MAT[mat];
     if (!M[mat]) mat = 'concrete';
-    addBox(bufOf(mat), p, { bottom: true });
+    const buf = bufOf(mat);
+    const start = buf.pos.length / 3;
+    addBox(buf, p, { bottom: true });
+    if (p.archPanel && p.collider) panelVerts.set(p.collider, { buf, start, n: buf.pos.length / 3 - start });
   }
   const roofBufs = { copper: new GeoBuf(), steel: new GeoBuf(), concrete: new GeoBuf(), green: new GeoBuf(), glass: new GeoBuf() };
   const soffit = new GeoBuf();
@@ -641,8 +650,8 @@ export function buildSiteMeshes({ root, world, site }) {
     meshes.push(m);
     return m;
   };
-  for (const k in bufs) add(bufs[k], M[k] || M.concrete, 'cb-' + k);
   const meshOfBuf = new Map();
+  for (const k in bufs) meshOfBuf.set(bufs[k], add(bufs[k], M[k] || M.concrete, 'cb-' + k));
   meshOfBuf.set(roofBufs.copper, add(roofBufs.copper, M.copper, 'cb-roof-copper'));
   meshOfBuf.set(roofBufs.steel, add(roofBufs.steel, M.steel, 'cb-roof-steel'));
   meshOfBuf.set(roofBufs.concrete, add(roofBufs.concrete, M.concrete, 'cb-roof-concrete'));
@@ -668,6 +677,21 @@ export function buildSiteMeshes({ root, world, site }) {
       dirty.add(attr);
     }
     for (const attr of dirty) attr.needsUpdate = true;
+    return true;
+  };
+  /** A broken wall panel: collapse its box's vertices onto its first one; restore puts them back. */
+  const setWallPanel = (c, broken) => {
+    const rec = panelVerts.get(c);
+    const mesh = rec && meshOfBuf.get(rec.buf);
+    if (!mesh) return false;
+    const attr = mesh.geometry.attributes.position;
+    if (!roofOriginal.has(mesh)) roofOriginal.set(mesh, attr.array.slice());
+    const orig = roofOriginal.get(mesh);
+    for (let v = 0; v < rec.n; v++) {
+      const src = broken ? rec.start : rec.start + v;
+      attr.setXYZ(rec.start + v, orig[src * 3], orig[src * 3 + 1], orig[src * 3 + 2]);
+    }
+    attr.needsUpdate = true;
     return true;
   };
   add(ribs, M.rib, 'cb-ribs');
@@ -786,7 +810,22 @@ export function buildSiteMeshes({ root, world, site }) {
     group.add(back);
   }
 
-  if (site.statues && site.statues.length) loadStatues(group, site.statues);
+  // statue figures: statue id -> { im, i, mtx } once loaded; broken holds ids broken before then
+  const statueSlots = { slots: new Map(), broken: new Set() };
+  if (site.statues && site.statues.length) loadStatues(group, site.statues, statueSlots);
+  /** A broken statue figure (build.js: its hidden collider): hide or restore its instance. */
+  const setStatue = (c, broken) => {
+    const id = c.part && c.part.hidden ? c.part.statue : null;
+    if (!id) return false;
+    if (broken) statueSlots.broken.add(id);
+    else statueSlots.broken.delete(id);
+    const s = statueSlots.slots.get(id);
+    if (s) {
+      s.im.setMatrixAt(s.i, broken ? zero : s.mtx);
+      s.im.instanceMatrix.needsUpdate = true;
+    }
+    return true;
+  };
 
   // sliding entrance leaves (south / library): separate meshes so they can open
   const doorLeaves = [];
@@ -848,7 +887,9 @@ export function buildSiteMeshes({ root, world, site }) {
     },
     /** A broken pane / prop: hide its instance. Returns true when the collider belongs to the site. */
     hideCollider(c) {
+      if (setStatue(c, true)) return true;
       if (roofQuads.has(c)) return setRoofTile(c, true);
+      if (panelVerts.has(c)) return setWallPanel(c, true);
       if (paneIndex.has(c)) {
         glassMesh.setMatrixAt(paneIndex.get(c), zero);
         glassMesh.instanceMatrix.needsUpdate = true;
@@ -868,7 +909,9 @@ export function buildSiteMeshes({ root, world, site }) {
       return false;
     },
     showCollider(c) {
+      if (setStatue(c, false)) return true;
       if (roofQuads.has(c)) return setRoofTile(c, false);
+      if (panelVerts.has(c)) return setWallPanel(c, false);
       if (paneIndex.has(c)) {
         glassMesh.setMatrixAt(paneIndex.get(c), paneMatrix(c.part, mtx));
         glassMesh.instanceMatrix.needsUpdate = true;
@@ -963,7 +1006,7 @@ export { WALKER_LANDING };
  * Statues (statues.js): one InstancedMesh per GLB, loaded after the site is up (the plinths are
  * already drawn; the figures pop in). A model that fails to load just leaves its plinths bare.
  */
-async function loadStatues(group, statues) {
+async function loadStatues(group, statues, statueSlots) {
   const { loadGLB, flattenModel } = await import('../../core/assets.js');
   const byModel = new Map();
   for (const s of statues) {
@@ -984,9 +1027,12 @@ async function loadStatues(group, statues) {
       im.name = 'cb-statue-' + key;
       im.castShadow = true;
       im.receiveShadow = true;
+      const zero = new THREE.Matrix4().makeScale(0, 0, 0);
       list.forEach((s, i) => {
         q.setFromAxisAngle(up, s.yaw);
-        im.setMatrixAt(i, mtx.compose(po.set(s.x, s.y, s.z), q, sc.setScalar(s.s)));
+        const m = mtx.compose(po.set(s.x, s.y, s.z), q, sc.setScalar(s.s)).clone();
+        if (statueSlots) statueSlots.slots.set(s.id, { im, i, mtx: m });
+        im.setMatrixAt(i, statueSlots && statueSlots.broken.has(s.id) ? zero : m);
       });
       im.instanceMatrix.needsUpdate = true;
       im.computeBoundingSphere();

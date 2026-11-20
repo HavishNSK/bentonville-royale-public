@@ -182,21 +182,6 @@
   margin-top: calc(var(--u) * 8);
 }
 
-.mn-controls {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: calc(var(--u) * 8) calc(var(--u) * 16);
-  max-width: calc(var(--u) * 720);
-  font-size: calc(var(--u) * 13);
-  text-transform: uppercase;
-  opacity: 0.92;
-}
-.mn-controls span {
-  display: inline-flex;
-  align-items: center;
-  gap: calc(var(--u) * 6);
-}
 .mn-foot {
   position: absolute;
   bottom: calc(var(--u) * 14);
@@ -363,6 +348,9 @@
   border: calc(var(--u) * 2) solid var(--br-ink);
   border-radius: calc(var(--u) * 10);
   overflow: hidden;
+}
+.mn-seg[hidden] {
+  display: none;
 }
 .mn-seg button {
   padding: calc(var(--u) * 6) calc(var(--u) * 12);
@@ -563,6 +551,65 @@
 .mn-result-sub {
   font-size: calc(var(--u) * 17);
   max-width: calc(var(--u) * 520);
+}
+.mn-box-elo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--u) * 10);
+  margin-top: calc(var(--u) * 6);
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 22);
+  font-variant-numeric: tabular-nums;
+}
+.mn-box-elo[hidden] {
+  display: none;
+}
+.mn-box-elo-delta {
+  font-size: calc(var(--u) * 18);
+}
+.mn-box-elo-delta.is-up {
+  color: var(--br-leaf);
+}
+.mn-box-elo-delta.is-down {
+  color: var(--br-coral);
+}
+/* Box Fights tier pill (result screen, account bar, RANKS): the name is always the text, colour only adds to it */
+.br-tier {
+  display: inline-block;
+  padding: calc(var(--u) * 2) calc(var(--u) * 8);
+  border-radius: 999px;
+  background: var(--br-common);
+  color: var(--br-ink);
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 12);
+  letter-spacing: 0.04em;
+  line-height: 1.3;
+  text-transform: uppercase;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.br-tier[hidden] {
+  display: none;
+}
+.br-tier[data-tier='bronze'] {
+  background: var(--br-coral);
+}
+.br-tier[data-tier='silver'] {
+  background: var(--br-common);
+}
+.br-tier[data-tier='gold'] {
+  background: var(--br-sun);
+}
+.br-tier[data-tier='platinum'] {
+  background: var(--br-sky-hi);
+}
+.br-tier[data-tier='diamond'] {
+  background: var(--br-sky);
+}
+.br-tier[data-tier='champion'] {
+  background: var(--br-storm);
+  color: var(--br-cream);
 }
 .mn-stats {
   display: flex;
@@ -1113,8 +1160,15 @@
   align-items: center;
   gap: calc(var(--u) * 16);
 }
+/* the global chat docks bottom-left over this column: keep the buttons clear of it */
+body:has(.br-chat:not(.is-match):not(.is-collapsed)) .mn-title-side {
+  margin-bottom: 224px;
+}
+body:has(.br-chat.is-collapsed:not(.is-match)) .mn-title-side {
+  margin-bottom: 72px;
+}
 .mn-title-side .mn-stack-row {
-  /* a tidy 2 x 2 block: never one button per row, so the column stays short */
+  /* PRIVATE MATCH across the top, SANDBOX + SETTINGS under it: a short, even block */
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   width: min(calc(var(--u) * 470), 100%);
@@ -1131,6 +1185,9 @@
      never spills out of its button however tall the window is */
   font-size: clamp(12px, calc(4.3cqi - 3px), calc(var(--u) * 18));
 }
+.mn-title-side .mn-stack-row .mn-btn-wide {
+  grid-column: 1 / -1;
+}
 .mn-title-side .mn-stack-row .mn-btn-small .br-ico,
 .mn-title-side .mn-stack-row .mn-btn-small svg {
   width: 1.3em;
@@ -1139,9 +1196,6 @@
 .mn-title-side .mn-stack-row .mn-btn-small span {
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.mn-title-side .mn-controls {
-  max-width: calc(var(--u) * 470);
 }
 @media (max-aspect-ratio: 7/5), (max-width: 1023px) {
   .mn-title {
@@ -1164,6 +1218,126 @@
 .mn-party {
   width: min(calc(var(--u) * 600), 100%);
   gap: calc(var(--u) * 12);
+  /* nearly solid: the town's lit windows behind it read as stray bars through the blur */
+  background: rgba(21, 16, 58, 0.93);
+  max-height: calc(100vh - var(--u) * 96);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Compact Box Fights rank strip — sits above party controls without blowing the column */
+.mn-box-rank {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'kicker elo'
+    'tier elo'
+    'meta meta'
+    'track track'
+    'next next';
+  align-items: center;
+  column-gap: calc(var(--u) * 12);
+  row-gap: calc(var(--u) * 2);
+  width: 100%;
+  margin: 0;
+  padding: calc(var(--u) * 10) calc(var(--u) * 12);
+  border: calc(var(--u) * 3) solid var(--br-ink);
+  border-radius: calc(var(--u) * 14);
+  background: linear-gradient(135deg, rgba(255, 196, 61, 0.2), rgba(91, 143, 255, 0.12) 60%, rgba(21, 16, 58, 0.35));
+  box-shadow: 0 calc(var(--u) * 3) 0 var(--br-ink);
+  color: var(--br-cream);
+  text-align: left;
+  cursor: pointer;
+  flex: none;
+}
+.mn-box-rank[hidden] {
+  display: none;
+}
+.mn-box-rank:hover {
+  filter: brightness(1.05);
+}
+.mn-box-rank:focus-visible {
+  outline: calc(var(--u) * 3) solid var(--br-sky-hi);
+  outline-offset: 2px;
+}
+.mn-box-rank-kicker {
+  grid-area: kicker;
+  font-family: var(--br-body);
+  font-weight: 900;
+  font-size: calc(var(--u) * 11);
+  letter-spacing: 0.12em;
+  color: var(--br-sun-hi);
+}
+.mn-box-rank-tier {
+  grid-area: tier;
+  justify-self: start;
+  font-size: calc(var(--u) * 14);
+  padding: calc(var(--u) * 3) calc(var(--u) * 10);
+}
+.mn-box-rank-elo {
+  grid-area: elo;
+  grid-row: 1 / 3;
+  justify-self: end;
+  align-self: center;
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 28);
+  line-height: 1;
+  letter-spacing: 0.02em;
+  color: var(--br-sun);
+  font-variant-numeric: tabular-nums;
+}
+.mn-box-rank-meta {
+  grid-area: meta;
+  font-family: var(--br-body);
+  font-weight: 700;
+  font-size: calc(var(--u) * 12);
+  opacity: 0.88;
+}
+.mn-box-rank-next {
+  grid-area: next;
+  font-family: var(--br-body);
+  font-weight: 700;
+  font-size: calc(var(--u) * 11);
+  opacity: 0.75;
+}
+.mn-box-rank-next:empty,
+.mn-box-rank-meta:empty {
+  display: none;
+}
+.mn-box-rank-track {
+  grid-area: track;
+  display: block;
+  height: calc(var(--u) * 7);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: 999px;
+  background: rgba(8, 6, 24, 0.55);
+  overflow: hidden;
+}
+.mn-box-rank-track > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--br-sun), var(--br-sun-hi));
+  transition: width 0.35s var(--br-spring);
+}
+.mn-box-rank[data-tier='bronze'] .mn-box-rank-track > i {
+  background: linear-gradient(90deg, var(--br-coral), #ffb089);
+}
+.mn-box-rank[data-tier='silver'] .mn-box-rank-track > i {
+  background: linear-gradient(90deg, var(--br-common), #f4f1ea);
+}
+.mn-box-rank[data-tier='gold'] .mn-box-rank-track > i {
+  background: linear-gradient(90deg, var(--br-sun), var(--br-sun-hi));
+}
+.mn-box-rank[data-tier='platinum'] .mn-box-rank-track > i {
+  background: linear-gradient(90deg, var(--br-sky-hi), #dff6ff);
+}
+.mn-box-rank[data-tier='diamond'] .mn-box-rank-track > i {
+  background: linear-gradient(90deg, var(--br-sky), var(--br-sky-hi));
+}
+.mn-box-rank[data-tier='champion'] .mn-box-rank-track > i {
+  background: linear-gradient(90deg, var(--br-storm), #c9b6ff);
 }
 .mn-party-head {
   display: flex;
@@ -1352,6 +1526,89 @@
   padding: calc(var(--u) * 8) calc(var(--u) * 12);
   font-size: calc(var(--u) * 15);
 }
+.mn-party-opts .mn-seg-game {
+  flex-basis: 100%;
+  display: flex;
+}
+.mn-party-opts .mn-seg-game button {
+  flex: 1;
+}
+/* BOX FIGHTS (new mode): its own coral "fight" colour, a wall icon, a NEW pill and a short
+   shimmer until first picked. Both options are bright, so the picked one also gets a cream
+   ring and a check (never colour alone). */
+.mn-seg-game button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--u) * 6);
+}
+/* not picked: a faded red; picked: a vibrant red (plus the cream ring and check below) */
+.mn-seg-game button[data-game='boxfights'] {
+  position: relative;
+  overflow: hidden;
+  background: #d99a94;
+  color: var(--br-ink);
+  font-size: calc(var(--u) * 17);
+}
+.mn-seg-game button[data-game='boxfights']:not(.is-on):not(:disabled):hover {
+  background: #e98a80;
+}
+.mn-seg-game button[data-game='boxfights'].is-on {
+  background: #ff2e1f;
+  color: var(--br-ink);
+}
+.mn-seg-game button[data-game='boxfights'] .br-ico,
+.mn-seg-game button[data-game='boxfights'] svg {
+  width: 1.2em;
+  height: 1.2em;
+  flex: none;
+}
+.mn-seg-game button.is-on {
+  box-shadow: inset 0 0 0 calc(var(--u) * 3) var(--br-cream);
+}
+.mn-seg-game button.is-on > span::before {
+  content: '\2713\00a0';
+}
+.mn-new {
+  display: none;
+  padding: 0 calc(var(--u) * 6);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: 999px;
+  background: var(--br-sun);
+  color: var(--br-ink);
+  font-family: var(--br-display);
+  font-style: normal;
+  font-size: calc(var(--u) * 11);
+  letter-spacing: 0.06em;
+  line-height: 1.4;
+  transform: rotate(-4deg);
+}
+.mn-seg-game button.is-fresh .mn-new {
+  display: inline-block;
+}
+.mn-seg-game button.is-fresh::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 246, 220, 0.55) 50%, transparent 65%);
+  transform: translateX(-120%);
+  animation: mn-shimmer 1.6s ease-in-out 0.8s 2;
+  pointer-events: none;
+}
+@keyframes mn-shimmer {
+  to {
+    transform: translateX(120%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mn-seg-game button.is-fresh::after {
+    animation: none;
+    display: none;
+  }
+}
+.mn-seg button[hidden] {
+  display: none;
+}
 .mn-seg button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -1364,8 +1621,12 @@
   margin: 0;
   min-height: 1.2em;
   text-align: center;
-  font-weight: 800;
+  font-weight: 700;
   font-size: calc(var(--u) * 15);
+  opacity: 0.85;
+}
+.mn-party-status:empty {
+  display: none;
 }
 .mn-party-status.is-queued {
   color: var(--br-sun);
@@ -1394,8 +1655,11 @@
   /* name on its own row, then code + join: both fields keep a readable width */
   grid-template-columns: minmax(0, 1fr);
   gap: calc(var(--u) * 10);
-  padding-top: calc(var(--u) * 10);
-  border-top: 1px solid rgba(255, 246, 220, 0.12);
+  padding-top: calc(var(--u) * 4);
+}
+/* signed in, the name is the account's (read-only and already in the top bar) */
+.mn-name[hidden] {
+  display: none;
 }
 @media (max-width: 520px) {
   .mn-party-foot {
@@ -1418,7 +1682,6 @@
 .mn-private .mn-join .mn-btn {
   min-height: calc(var(--u) * 46);
 }
-
 /* visible keyboard focus on the new controls */
 .mn-chip:focus-visible,
 .mn-slot:focus-visible,

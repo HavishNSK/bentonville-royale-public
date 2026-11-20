@@ -16,11 +16,16 @@
 // from the host (src/net/ClientSession.js). Solo and host play are unchanged.
 
 import * as THREE from 'three';
-import { rampDragQuarter, validEdit } from './Structures.js';
+import { rampDragQuarter, validEdit, simpleEditMask, PRESETS, PRESET_ORDER } from './Structures.js';
 import { PLAYER, CAMERA, WEAPONS, CONSUMABLES, GRENADE, PICKAXE, BUILD, MATERIALS, KNOCK, REBOOT, SWIM, clamp, damp, TAU, weaponStats } from '../core/config.js';
 import { sameTeam } from './Teams.js';
 import { placeOnShoulder } from './Combat.js';
 import { CAR } from './vehicles/cars.js';
+import { distToCar } from './vehicles/carHit.js';
+import { STATION } from './vehicles/gasStations.js';
+
+// building: after a click, holding the button repeats only after this long (s), then every 0.07 s
+const HOLD_REPEAT_DELAY = 0.22;
 
 const PIECE_ACTIONS = { buildWall: 'wall', buildFloor: 'floor', buildRamp: 'ramp', buildCone: 'cone' };
 export const FREEFALL_SPEED = 38;
@@ -43,6 +48,27 @@ const FLOOR_UNDER = 0.22; // a built floor's thickness: its underside sits this 
 const clientNet = (g) => (g && g.net && g.net.isClient ? g.net : null);
 
 /**
+ * Edit tiles crossed going from tile `a` to tile `b` of a piece's grid (walls 3 x 3, floors and
+ * cones 2 x 2; index = row * cols + col), both included, in order.
+ */
+export function editPath(kind, a, b) {
+  const cols = kind === 'wall' ? 3 : 2;
+  if (a < 0 || a === b) return [b];
+  const [ac, ar] = [a % cols, Math.floor(a / cols)];
+  const [bc, br] = [b % cols, Math.floor(b / cols)];
+  const n = Math.max(Math.abs(bc - ac), Math.abs(br - ar));
+  const out = [];
+  for (let i = 0; i <= n; i++) {
+    const t = out.length ? i / n : 0;
+    const c = Math.round(ac + (bc - ac) * t);
+    const r = Math.round(ar + (br - ar) * t);
+    const idx = r * cols + c;
+    if (out[out.length - 1] !== idx) out.push(idx);
+  }
+  return out;
+}
+
+/**
  * Positions `camera` behind `pivot` on an orbit (heading/pitch), pulled in
  * when world geometry is in the way. Shared by the player and spectating.
  */
@@ -50,8 +76,18 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
   const cp = Math.cos(pitch);
   _fwd.set(Math.sin(heading) * cp, Math.sin(pitch), -Math.cos(heading) * cp);
   _right.set(Math.cos(heading), 0, Math.sin(heading));
-  _cam.copy(pivot).addScaledVector(_right, shoulder);
-  _cam.y += rise;
+  // the shoulder offset and the rise are cast too: next to a wall on the right, the old fixed
+  // offset put the boom's start inside (or past) the wall and the view showed its insides
+  _cam.copy(pivot);
+  if (world && rise > 0) {
+    const up = world.raycast(_cam.x, _cam.y, _cam.z, 0, 1, 0, rise + CAM_PAD, null);
+    _cam.y += up ? Math.max(0, up.t - CAM_PAD) : rise;
+  } else _cam.y += rise;
+  if (world && shoulder !== 0) {
+    const sg = Math.sign(shoulder);
+    const side = world.raycast(_cam.x, _cam.y, _cam.z, _right.x * sg, 0, _right.z * sg, Math.abs(shoulder) + CAM_PAD, null);
+    _cam.addScaledVector(_right, side ? sg * Math.max(0, side.t - CAM_PAD) : shoulder);
+  } else _cam.addScaledVector(_right, shoulder);
   // pull in when something is between the pivot and the camera
   _v.copy(_fwd).multiplyScalar(-1);
   // a "thick" boom: the centre ray plus two a little to each side, so an edge (a ramp's side, a
@@ -123,9 +159,37 @@ export function placeOrbitCamera(camera, world, pivot, heading, pitch, dist, sho
     const overHead = capAt(pivot.x, pivot.z) - FLOOR_UNDER - 0.35;
     if (_cam.y > overHead) _cam.y = Math.max(overHead, feetY + 0.3);
   }
+  if (world) keepOffWalls(world, _cam, _right);
   camera.position.copy(_cam);
   _v.copy(_cam).add(_fwd);
   camera.lookAt(_v);
+}
+
+// the camera keeps this far from any surface: more than the near plane's half-width at the
+// widest FOV, so turning beside a wall never slices the near plane into it
+const CAM_PAD = 0.42;
+const _probe = [[1, 0], [-1, 0], [0, 1], [0, -1], [0.7071, 0.7071], [-0.7071, 0.7071], [0.7071, -0.7071], [-0.7071, -0.7071]];
+
+/** Nudge the camera out of walls it sits too close to (a horizontal ring of short probes). */
+function keepOffWalls(world, cam, right) {
+  for (let pass = 0; pass < 2; pass++) {
+    let px = 0;
+    let pz = 0;
+    for (const [a, b] of _probe) {
+      // probe in the camera's own frame (right / back) so the result doesn't depend on heading
+      const dx = right.x * a - right.z * b;
+      const dz = right.z * a + right.x * b;
+      const h = world.raycast(cam.x, cam.y, cam.z, dx, 0, dz, CAM_PAD, null);
+      if (h && h.kind !== 'ground') {
+        const push = CAM_PAD - h.t;
+        px -= dx * push;
+        pz -= dz * push;
+      }
+    }
+    if (px === 0 && pz === 0) return;
+    cam.x += px;
+    cam.z += pz;
+  }
 }
 
 export class Player {
@@ -155,6 +219,7 @@ export class Player {
     this.sprinting = false;
     this.ads = false;
     this.buildPiece = null;
+    this.presetIndex = 0; // Simple Build: PRESET_ORDER index
     this.buildMat = 'wood';
     this.editing = null; // { piece, mask, hover, drag } while editing a built piece
     this.cooldown = 0;
@@ -342,7 +407,7 @@ export class Player {
     const swim = this.swimming; // last frame's (set after the ground resolve below)
     this.crouching = this.mode === 'ground' && !down && !swim && (input.action('crouch') || input.action('crouchAlt'));
     this.sprinting = this.mode === 'ground' && !down && !swim && input.action('sprint') && mf > 0 && !this.ads && !this.crouching && this.useT <= 0;
-    this.ads = this.mode === 'ground' && !down && !swim && !this.carrying && input.action('aim') && !this.buildPiece && !this.editing && !!this._gun();
+    this.ads = this.mode === 'ground' && !down && !this.carrying && input.action('aim') && !this.buildPiece && !this.editing && !!this._gun();
     // scoped guns: a short raise-to-eye, then the view snaps into the scope; lowering is instant
     const scoping = this.ads && !!WEAPONS[this._gun().id].scope;
     this.scopeT = scoping ? Math.min(1, this.scopeT + dt / 0.16) : 0;
@@ -570,7 +635,11 @@ export class Player {
       this._carHintT = 6;
     }
     this._carHintT = Math.max(0, (this._carHintT || 0) - dt);
-    if (this.useT <= 0 && this._carHintT <= 0) g.hud.prompt(null);
+    // at a gas pump: the nozzle is grabbed on foot (GasPumps.js)
+    const pump = car && g.pumps && car.fuel < CAR.fuelMax - 0.5 ? g.pumps.pumpFor({ id: -1, pos: { x: car.x, y: car.y, z: car.z } }, 4.5) : null;
+    if (this.useT <= 0 && pump) {
+      g.hud.prompt(`Gas pump: get out and grab the nozzle to refuel  ${Math.floor(car.fuel)}/${CAR.fuelMax}`);
+    } else if (this.useT <= 0 && this._carHintT <= 0) g.hud.prompt(null);
     else if (this.useT <= 0) {
       g.hud.prompt(
         driver
@@ -628,6 +697,11 @@ export class Player {
     p.x += v.x * dt;
     p.z += v.z * dt;
     world.resolveCircle(p, this.radius, this.height);
+    // never let a push carry the body through a wall (beside stairs, berms): stay put instead
+    if (world.crossesSolid && world.crossesSolid(ox, oz, p.x, p.z, oy, this.height)) {
+      p.x = ox;
+      p.z = oz;
+    }
     const b = world.bounds;
     p.x = clamp(p.x, b.minX + 2, b.maxX - 2);
     p.z = clamp(p.z, b.minZ + 2, b.maxZ - 2);
@@ -716,7 +790,18 @@ export class Player {
     const az = p.z + fz * reach;
     const top = world.groundHeight(ax, az, p.y, MANTLE.max);
     const rise = top - p.y;
-    if (!(rise > MANTLE.min && rise <= MANTLE.max)) return null;
+    if (!(rise > MANTLE.min && rise <= MANTLE.max)) {
+      // nothing to climb at the probe point: a THIN obstacle (fence, rail) may sit between us and it
+      for (let s = this.radius + 0.05; s <= reach + 0.05; s += 0.05) {
+        const t = world.groundHeight(p.x + fx * s, p.z + fz * s, p.y, MANTLE.max);
+        const r = t - p.y;
+        if (r > MANTLE.min && r <= MANTLE.max) {
+          if (world.ceilingAbove(p.x, p.z, p.y, 0.05) <= t + 0.05 + this.height) return null;
+          return this._findVault(world, fx, fz, s, t, r);
+        }
+      }
+      return null;
+    }
     // a floor over our own head is a ceiling, not a ledge in front of us: never climb through it
     // (checked at the body centre and its front edge)
     const ex = p.x + fx * this.radius;
@@ -731,12 +816,41 @@ export class Player {
     const lx = p.x + fx * (reach + 0.35);
     const lz = p.z + fz * (reach + 0.35);
     const land = world.groundHeight(lx, lz, top + 0.05);
+    if (land < top - 0.4) return this._findVault(world, fx, fz, reach, top, rise);
     if (Math.abs(land - top) > 0.4) return null;
     if (world.ceilingAbove(lx, lz, land) - land < this.height * 0.9) return null;
     _mv.set(lx, land + 0.02, lz);
     world.resolveCircle(_mv, this.radius, this.height);
     if (Math.hypot(_mv.x - lx, _mv.z - lz) > 0.25) return null; // a wall above the ledge
     return { t: 0, dur: 0.22 + rise * 0.12, x0: p.x, y0: p.y, z0: p.z, x1: _mv.x, y1: land + 0.05, z1: _mv.z };
+  }
+
+  /**
+   * Vault: the ledge ahead is THIN (a fence, a railing, a low wall: nothing to stand on just past
+   * its face) and the far side is open. The body lifts to clear its top and carries over to a
+   * spot past it, in the air; gravity finishes the drop (same mantle plan / animation path).
+   */
+  _findVault(world, fx, fz, reach, top, rise) {
+    const p = this.pos;
+    const over = reach + 1.0;
+    const vx = p.x + fx * over;
+    const vz = p.z + fz * over;
+    // far side: walkable ground no higher than where we stand + a step, and no lid over the arc
+    const far = world.groundHeight(vx, vz, p.y + 0.6);
+    if (!(far > p.y - 6 && far <= p.y + 0.6)) return null;
+    const y1 = top + 0.1;
+    if (world.ceilingAbove(vx, vz, far) < y1 + this.height) return null;
+    // the whole carry over the top must be clear at that height (closed glass, a wall behind...)
+    for (let k = 0; k <= 8; k++) {
+      const t = k / 8;
+      const x = p.x + (vx - p.x) * t;
+      const z = p.z + (vz - p.z) * t;
+      _mv.set(x, y1, z);
+      world.resolveCircle(_mv, this.radius, this.height);
+      if (Math.hypot(_mv.x - x, _mv.z - z) > 0.03) return null;
+    }
+    _mv.set(vx, y1, vz);
+    return { t: 0, dur: 0.3 + rise * 0.12, x0: p.x, y0: p.y, z0: p.z, x1: _mv.x, y1, z1: _mv.z, vault: true };
   }
 
   _land(vy, g) {
@@ -791,6 +905,15 @@ export class Player {
         this._endEdit(g);
         this.setBuildPiece(PIECE_ACTIONS[a]);
       }
+    }
+    // Simple Build (setting): the preset key picks a preset structure, pressed again the next one
+    if (input.actionHit('buildPreset')) {
+      if (g.settings && g.settings.simpleBuild) {
+        this._endEdit(g);
+        if (this.buildPiece === 'preset') this.presetIndex = (this.presetIndex + 1) % PRESET_ORDER.length;
+        this.setBuildPiece('preset');
+        if (g.hud && g.hud.toast) g.hud.toast(PRESETS[PRESET_ORDER[this.presetIndex]].label);
+      } else if (g.hud && g.hud.toast) g.hud.toast('Turn on Simple Build in Settings', 'warn');
     }
     if (input.actionHit('cycleMaterial')) this.cycleMaterial();
     if (input.actionHit('emote') && this.character && this.grounded && !this._wheel) {
@@ -851,7 +974,7 @@ export class Player {
   }
 
   setBuildPiece(kind) {
-    this.buildPiece = BUILD.pieces.includes(kind) ? kind : null;
+    this.buildPiece = BUILD.pieces.includes(kind) || kind === 'preset' ? kind : null;
     this._cancelUse();
     this._cancelReload();
   }
@@ -900,7 +1023,8 @@ export class Player {
     this.placeCooldown -= dt;
 
     // equipped model on the character
-    const eqId = this.buildPiece ? 'pickaxe' : cur ? (cur.type === 'weapon' ? cur.id : CONSUMABLES[cur.id] && CONSUMABLES[cur.id].throwable ? cur.id : 'none') : 'pickaxe';
+    const nozzle = g.pumps && !this.vehicle ? g.pumps.heldPump(this) : null; // gas pump nozzle in hand
+    const eqId = nozzle ? 'none' : this.buildPiece ? 'pickaxe' : cur ? (cur.type === 'weapon' ? cur.id : CONSUMABLES[cur.id] && CONSUMABLES[cur.id].throwable ? cur.id : 'none') : 'pickaxe';
     if (eqId !== this.lastEquipped) {
       if (this.lastEquipped !== null) g.sfx.play('weapon_switch', { volume: 0.5 });
       this.lastEquipped = eqId;
@@ -946,6 +1070,14 @@ export class Player {
       }
     }
 
+    // ---- a gas pump nozzle in hand (GasPumps.js): no weapon, no building; fire pumps fuel
+    if (nozzle) {
+      this._nozzleInput(input, g, nozzle, lmb);
+      this.triggerHeld = lmb;
+      return;
+    }
+    if (this._nzPump) this._nozzleGone(g);
+
     // ---- interact (revive a knocked teammate first); in a car E gets you out instead
     const rv = this.vehicle ? 0 : this._reviveInput(input, g, dt);
     if (rv === 2) {
@@ -971,13 +1103,9 @@ export class Player {
       else this._startEdit(g);
     }
 
-    if (this.swimming) {
-      // in the water: hands are busy swimming (no shots, swings, builds or heals)
-      if (g.structures) g.structures.setGhost(null);
-      this.placement = null;
-      this.buildPiece = null;
-      if (this.editing) this._endEdit(g);
-    } else if (this.vehicle) {
+    // wading / swimming in a pond does not tie up the hands: shooting, swinging, building,
+    // editing and healing all work in the water (only sprint / jump / crouch are off, above)
+    if (this.vehicle) {
       // in a car: no building or swinging; the driver's hands are on the wheel; passengers shoot
       // or throw only while leaning out of their window, and anyone can heal or refuel
       if (g.structures) g.structures.setGhost(null);
@@ -1179,6 +1307,79 @@ export class Player {
     return 1;
   }
 
+  /**
+   * One frame holding a gas pump's nozzle (GasPumps.js). Interact, a slot switch or a build piece
+   * hangs it up; walking more than STATION.hoseLen from the pump snaps it back. Within
+   * STATION.fuelRange of a car, holding fire pumps fuel into it (solo / host directly, a client asks
+   * the host with 'pmp' actions; the fuel comes back as the car's 'vf' events).
+   */
+  _nozzleInput(input, g, pump, lmb) {
+    const hud = g.hud;
+    const net = clientNet(g);
+    const L = (a, d) => '[' + (input.label ? input.label(a) : d) + ']';
+    if (this._nzPump !== pump) {
+      this._nzPump = pump;
+      this._nzSel = this.inventory.selected;
+      this._nzHang = -1;
+      this._nzCar = null;
+    }
+    if (g.structures) g.structures.setGhost(null);
+    this.placement = null;
+    this.throwAim = false;
+    if (this.editing) this._endEdit(g);
+    // a client waits for the host to confirm the hang-up (asks again after a second)
+    const now = g.time || 0;
+    if (this._nzHang >= 0 && now - this._nzHang < 1) return;
+    const d = Math.hypot(this.pos.x - pump.x, this.pos.z - pump.z);
+    const snap = d > STATION.hoseLen;
+    if (snap || input.actionHit('interact') || this.buildPiece || this.inventory.selected !== this._nzSel) {
+      this._nozzleFuel(g, null);
+      if (hud.setRevive) hud.setRevive(null);
+      hud.prompt(null);
+      if (snap) hud.toast('Too far: the hose snapped back to the pump', 'warn');
+      if (net) {
+        this._nzHang = now;
+        net.action({ k: 'pmp', op: 'hang', snap: snap ? 1 : 0 });
+      } else g.pumps.hangUp(this, snap);
+      return;
+    }
+    const car = g.pumps.fuelTarget(this);
+    const hang = `${L('interact', 'E')} Hang up`;
+    if (!car) {
+      this._nozzleFuel(g, null);
+      if (hud.setRevive) hud.setRevive(null);
+      hud.prompt(`Take the nozzle to a car (${Math.max(0, Math.floor(STATION.hoseLen - d))} m of hose left)  ·  ${hang}`);
+      return;
+    }
+    const full = !(car.fuel < CAR.fuelMax - 0.01);
+    const pumping = lmb && !full;
+    this._nozzleFuel(g, pumping ? car : null);
+    if (pumping) {
+      if (hud.setRevive) hud.setRevive({ pct: car.fuel / CAR.fuelMax, name: `${car.spec.name} ${Math.floor(car.fuel)}/${CAR.fuelMax}`, verb: 'FUELLING' });
+      hud.prompt(null); // the progress ring sits where the prompt goes
+    } else {
+      if (hud.setRevive) hud.setRevive(null);
+      hud.prompt(full ? `Tank full  ·  ${hang}` : `${L('fire', 'LMB')} Hold to fuel the ${car.spec.name}  ${Math.floor(car.fuel)}/${CAR.fuelMax}  ·  ${hang}`);
+    }
+  }
+
+  /** Start / stop pumping into `car` (null): solo / host directly, a client tells the host. */
+  _nozzleFuel(g, car) {
+    if (this._nzCar === car) return;
+    this._nzCar = car;
+    const net = clientNet(g);
+    if (net) net.action({ k: 'pmp', op: 'fuel', c: car ? car.id : -1 });
+    else if (g.pumps) g.pumps.setFueling(this, car);
+  }
+
+  /** The nozzle left our hand (hung up, snapped back, the pump blew up): tidy the HUD. */
+  _nozzleGone(g) {
+    this._nzPump = null;
+    this._nzCar = null;
+    this._nzHang = -1;
+    if (g.hud && g.hud.setRevive) g.hud.setRevive(null);
+  }
+
   _stopReboot(g) {
     if (!this.rebootVan) return;
     const net = clientNet(g);
@@ -1221,13 +1422,28 @@ export class Player {
     if (rec) {
       const swap = rec.kind === 'item' && rec.item && this.inventory.wouldSwap && this.inventory.wouldSwap(rec.item);
       const verb = rec.kind === 'item' ? (swap ? 'Swap for' : 'Pick up') : 'Open';
-      g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] ' + verb + ' ' + (rec.label || ''));
+      // chest / ammo box labels already carry the verb ("Open Chest"): don't say "Open Open Chest"
+      const label = rec.label || '';
+      g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] ' + (label.startsWith(verb + ' ') ? label : verb + ' ' + label));
       if (input.actionHit('interact')) this.interactWith(rec, g);
       return;
     }
     // drivable cars: get in (the driver's seat when it is free)
     const veh = g.vehicles;
     const car = veh && !this.airborneDrop && !this.carrying ? veh.nearest(this) : null;
+    // a gas pump in reach (closer than the car): grab its nozzle (GasPumps.js)
+    const pump = g.pumps && !this.airborneDrop && !this.carrying && this.mode === 'ground' ? g.pumps.pumpFor(this) : null;
+    if (pump && (!car || Math.hypot(pump.x - this.pos.x, pump.z - this.pos.z) <= distToCar(car, this.pos.x, this.pos.z))) {
+      g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] Grab the nozzle  ·  ' + (pump.st.label || STATION.label));
+      if (input.actionHit('interact')) {
+        this._cancelReload();
+        this._cancelUse();
+        const net = clientNet(g);
+        if (net) net.action({ k: 'pmp', op: 'grab', p: pump.id });
+        else g.pumps.grab(this, pump);
+      }
+      return;
+    }
     if (car) {
       g.hud.prompt('[' + (input.label ? input.label('interact') : 'E') + '] ' + (car.seats[0] ? 'Get in ' : 'Drive ') + car.spec.name);
       if (input.actionHit('interact')) {
@@ -1515,18 +1731,53 @@ export class Player {
     const st = g.structures;
     if (!st || !st.plan) return;
     this._autoMaterial(g);
-    this.placement = st.plan(this.buildPiece, this.pos, this.heading, this.pitch);
+    if (this.buildPiece === 'preset') {
+      // Simple Build: a whole preset structure around you, previewed piece by piece
+      const list = st.planPreset(PRESET_ORDER[this.presetIndex] || PRESET_ORDER[0], this.pos, this.heading, this._presetPlan || (this._presetPlan = []));
+      this.placement = null;
+      st.setPresetGhosts(list, this.buildMat);
+      if (lmbClick && this.placeCooldown <= 0) this.placePreset(g, list);
+      return;
+    }
+    this.placement = st.plan(this.buildPiece, this.pos, this.heading, this.pitch, undefined, true);
     st.setGhost(this.placement, this.buildMat);
-    if ((lmbClick || (lmb && this.placeCooldown <= 0)) && this.placement) this.tryPlace(g);
+    if (lmbClick && this.placement) {
+      this.tryPlace(g);
+      // a tap places one piece: holding only starts repeating after a short delay (like key
+      // repeat), so a slightly long click while walking no longer drops a second piece
+      this.placeCooldown = Math.max(this.placeCooldown, HOLD_REPEAT_DELAY);
+    } else if (lmb && this.placeCooldown <= 0 && this.placement) this.tryPlace(g);
+  }
+
+  /**
+   * Simple Build: place every valid piece of a planned preset, in order, as long as mats last.
+   * Each goes through the normal one-piece path (mats, host check, client prediction).
+   */
+  placePreset(g, list) {
+    let n = 0;
+    for (const pl of list) {
+      if (!pl.valid) continue;
+      if ((this.inventory.mats[this.buildMat] || 0) < BUILD.cost) this._autoMaterial(g);
+      if (this._placeOne(g, pl)) n++;
+      else if ((this.inventory.mats[this.buildMat] || 0) < BUILD.cost) break;
+    }
+    this.placeCooldown = 0.3;
+    if (!n) g.sfx.play('build_denied', { volume: 0.6 });
+    return n;
   }
 
   /** Places the current ghost if valid and affordable. Returns the piece or null. */
   tryPlace(g) {
     const st = g.structures;
-    if (!st || !this.buildPiece) return null;
-    if (!this.placement) this.placement = st.plan(this.buildPiece, this.pos, this.heading, this.pitch);
-    const pl = this.placement;
+    if (!st || !this.buildPiece || this.buildPiece === 'preset') return null;
+    if (!this.placement) this.placement = st.plan(this.buildPiece, this.pos, this.heading, this.pitch, undefined, true);
     this.placeCooldown = 0.07; // hold-to-build: ~14 pieces a second
+    return this._placeOne(g, this.placement);
+  }
+
+  /** One planned piece: placed (or sent to the host) if valid and affordable. */
+  _placeOne(g, pl) {
+    const st = g.structures;
     if (!pl || !pl.valid) return null;
     const mats = this.inventory.mats;
     this._autoMaterial(g);
@@ -1593,6 +1844,13 @@ export class Player {
       return;
     }
     e.hover = st.aimTile(p, this.aimOrigin, this.aimDir);
+    // Simple Edit (setting): one click on a tile makes the common shape for it, right away
+    if (lmbClick && e.hover >= 0 && g.settings && g.settings.simpleEdit) {
+      const m = simpleEditMask(p.kind, e.hover, st.editValue(p), st.resetValue(p));
+      if (m >= 0) this._confirmEdit(g, m);
+      else g.sfx.play('build_denied', { volume: 0.5 });
+      return;
+    }
     if (lmbClick && e.hover >= 0) e.selecting = true;
     if (p.kind === 'ramp') {
       if (lmbClick && e.hover >= 0) e.from = e.hover;
@@ -1603,13 +1861,24 @@ export class Player {
       if (!lmb) e.from = -1;
     } else {
       const all = (1 << st.tileCount(p.kind)) - 1;
-      if (lmbClick && e.hover >= 0) e.drag = e.mask & (1 << e.hover) ? 'deselect' : 'select';
-      if (lmb && e.drag && e.hover >= 0) {
-        const bit = 1 << e.hover;
-        const next = e.drag === 'select' ? e.mask | bit : e.mask & ~bit;
-        if (next !== all) e.mask = next; // a piece keeps at least one tile
+      if (lmbClick && e.hover >= 0) {
+        e.drag = e.mask & (1 << e.hover) ? 'deselect' : 'select';
+        e.last = -1;
       }
-      if (!lmb) e.drag = null;
+      if (lmb && e.drag && e.hover >= 0) {
+        // every tile on the line from the last tile to this one: a quick flick across the
+        // grid (or a slow frame) no longer skips the tiles in between
+        for (const t of editPath(p.kind, e.last >= 0 ? e.last : e.hover, e.hover)) {
+          const bit = 1 << t;
+          const next = e.drag === 'select' ? e.mask | bit : e.mask & ~bit;
+          if (next !== all) e.mask = next; // a piece keeps at least one tile
+        }
+        e.last = e.hover;
+      }
+      if (!lmb) {
+        e.drag = null;
+        e.last = -1;
+      }
     }
     // confirm edit on release (setting): the mouse came up after selecting
     if (!lmb && e.selecting) {
@@ -1635,8 +1904,14 @@ export class Player {
       g.sfx.play('build_denied', { volume: 0.5 });
     } else if (e && st && e.piece.alive && m !== st.editValue(e.piece)) {
       const net = clientNet(g);
-      if (net) net.action({ k: 'e', key: e.piece.key, ed: m });
-      else st.edit(e.piece, m);
+      if (net) {
+        net.action({ k: 'e', key: e.piece.key, ed: m });
+        // show it now, not after the round trip (ClientSession reverts it if the host refuses)
+        if (net.predictEdit) {
+          net.predictEdit(e.piece, st.editValue(e.piece));
+          st.edit(e.piece, m);
+        }
+      } else st.edit(e.piece, m);
     }
     this._endEdit(g);
   }

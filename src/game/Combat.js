@@ -33,10 +33,11 @@
 //   burst gun (a multiplayer client forwards it to the host like a trigger pull).
 //
 // Building wall panels (World.panelHit / breakPanel, src/world/Interiors.js):
-// - a pickaxe swing that hits a panel damages it by PICKAXE.harvest and yields
-//   PICKAXE.yield[panel.mat] exactly like a tree; bullets do BUILDING_WALL.bulletMult x
-//   damage and yield nothing. Only panels break (floors, slabs, stairs, roofs never do),
-//   and the building collider itself is never removed.
+// - a pickaxe swing that hits a panel damages it by PICKAXE.harvest and yields mats of the
+//   panel's material: BUILDING_WALL.yield for a wall or roof panel of an enterable building
+//   (outer, inner, lintel, roof), PICKAXE.yield[mat] for a floor tile or a solid block; bullets
+//   do BUILDING_WALL.bulletMult x damage and yield nothing (nor do explosions). Only panels
+//   break (slabs outside floor tiles and stairs never do); the building collider stays.
 // - `damagePanel` is authoritative-only; `breakPanel(c, panel, point)` hides the panel and
 //   plays the break effect (a multiplayer client calls it for the host's `wx` event).
 // - Hooks: onPanelDamage(c, panel, info) while hp > 0, onPanelBreak(c, panel, info) on
@@ -128,6 +129,11 @@ function panelEnds(c, pn) {
   return { ax: ax + ex * pn.f0, az: az + ez * pn.f0, bx: ax + ex * pn.f1, bz: az + ez * pn.f1 };
 }
 
+/** Build material a smashed breakable (glass, frame, roof tile) gives: glass counts as metal. */
+function breakableMat(c) {
+  return c.mat === 'brick' || c.mat === 'wood' ? c.mat : 'metal';
+}
+
 export class Combat {
   constructor({ world, structures, fx, sfx, view }) {
     this.world = world;
@@ -153,6 +159,7 @@ export class Combat {
     this.onAssist = null; // (assister, victim) when someone helped with an elimination
     this.onStats = null; // (actor) when kills / assists / damage changed (net sync) // (killer, { hp, shield }) after an elimination heals the killer // (carrier, victim | null) when someone picks up / puts down a teammate
     this.teamMode = false;
+    this.noKnock = false; // Box Fights: a downing is an elimination
     this._burstEpoch = 0;
     this.authoritative = true;
     this.lastDirs = [];
@@ -175,6 +182,12 @@ export class Combat {
   clear() {
     this.actors.length = 0;
     this._burstEpoch++; // cancels pending burst rounds
+    this.clearProjectiles();
+  }
+
+  /** Between Box Fights rounds: drops rounds in flight and pending burst shots, keeps the actors. */
+  resetRound() {
+    this._burstEpoch++;
     this.clearProjectiles();
   }
 
@@ -274,8 +287,13 @@ export class Combat {
 
   _destroyCollider(c, point) {
     this.world.remove(c);
+    // loot resting on it falls to what is below (a broken floor tile, press box, shelf); every client
+    // replays the same destroy event, so the records move the same way everywhere
+    if (this.loot && this.loot.dropFrom) this.loot.dropFrom(c);
     if (this.view && this.view.hideCollider) this.view.hideCollider(c);
     this.destroyed.push(c);
+    // what stood on it goes too (a statue on its plinth)
+    if (c.dependents) for (const d of c.dependents) if (d.alive) this._destroyCollider(d, point);
     if (this.onColliderDestroyed) this.onColliderDestroyed(c, point);
     if (this.fx && point) this.fx.debris(point, SURFACE[c.mat] || 'wood', { count: 18, size: 0.4, spread: 2.4 });
     if (this.sfx && point) this.sfx.play(c.kind === 'tree' ? 'tree_fall' : 'building_collapse', { x: point.x, y: point.y, z: point.z, volume: 0.7 });
@@ -396,10 +414,12 @@ export class Combat {
         this.vehicles.damage(res.hit.car, dmg, { source: this._shooter || null, weapon: w.id }, res.hit.part, res.hit.idx);
       } else if (c && res.hit.kind === 'piece' && this.structures) {
         this.structures.damage(c, dmg, _pt);
+      } else if (c && c.pump && this.pumps) {
+        this.pumps.damage(c.pump, dmg, { source: this._shooter || null, weapon: w.id }); // gas pump (GasPumps.js)
       } else if (res.hit.panel) {
         this.damagePanel(c, res.hit.panel, dmg * BUILDING_WALL.bulletMult, _pt); // no mats from bullets
       } else if (this._isHarvestable(c) || this._isBreakable(c)) {
-        c.hp -= dmg;
+        c.hp -= c.archPanel ? dmg * BUILDING_WALL.bulletMult : dmg; // museum wall panels take bullets like map wall panels
         if (c.hp <= 0) this._destroyCollider(c, _pt);
       }
       if (this.sfx && sound) this.sfx.play('bullet_impact', { x: _pt.x, y: _pt.y, z: _pt.z, volume: 0.6, surface: impactSound(res.surface) });
@@ -658,6 +678,14 @@ export class Combat {
 
     let c = hitCopy && hitCopy.collider;
     let point = hitCopy ? _pt.set(hitCopy.x, hitCopy.y, hitCopy.z) : null;
+    // a gas pump: dents it like a car (GasPumps.js), no materials
+    if (c && c.pump && this.pumps) {
+      if (this.authoritative) this.pumps.damage(c.pump, CAR.pickaxeDamage, { source: shooter, weapon: 'pickaxe' });
+      if (this.fx) this.fx.impact(point, _n.set(hitCopy.nx, hitCopy.ny, hitCopy.nz), 'metal');
+      if (this.sfx) this.sfx.play('hit_metal', { x: point.x, y: point.y, z: point.z });
+      out.pump = c.pump;
+      return out;
+    }
     if (c && hitCopy.kind === 'piece' && this.structures) {
       if (this.authoritative) this.structures.damage(c, PICKAXE.harvest, point);
       if (this.fx) this.fx.harvestHit(point, c.mat || 'wood', false);
@@ -667,17 +695,24 @@ export class Combat {
     }
     if (hitCopy && hitCopy.panel) return this._swingPanel(shooter, c, hitCopy.panel, point, out);
     if (this._isBreakable(c)) {
-      // glass: the pickaxe smashes it (no materials)
+      // glass panes and frames, museum roof tiles: the pickaxe smashes them and they give mats
+      // like everything else (glass and its steel frames: metal; roof tiles: their material)
       if (this.fx) this.fx.impact(point, _n.set(hitCopy.nx, hitCopy.ny, hitCopy.nz), 'metal');
       if (this.sfx) this.sfx.play('bullet_impact', { x: point.x, y: point.y, z: point.z, volume: 0.7, surface: 'metal' });
+      const bmat = breakableMat(c);
+      out.harvested = { mat: bmat, count: PICKAXE.yield[bmat] };
       out.collider = c;
       out.point = point.clone();
-      if (!this.authoritative) return out;
+      if (!this.authoritative) {
+        out.predicted = true; // client: feedback only; the host owns hp and mats
+        return out;
+      }
       c.hp -= PICKAXE.harvest;
       if (c.hp <= 0) {
         out.destroyed = true;
         this._destroyCollider(c, point);
       }
+      if (this.onHarvest) this.onHarvest(shooter, c, out);
       return out;
     }
     if (!this._isHarvestable(c)) {
@@ -721,10 +756,12 @@ export class Combat {
     return out;
   }
 
-  /** Pickaxe hit on a building wall panel: harvested like a tree (PICKAXE.harvest hp, PICKAXE.yield mats). */
+  /** Pickaxe hit on a building panel: PICKAXE.harvest hp off it, mats as in the header (BUILDING_WALL.yield for walls / roofs). */
   _swingPanel(shooter, c, pn, point, out) {
     const mat = pn.mat === 'brick' || pn.mat === 'metal' ? pn.mat : 'wood';
-    out.harvested = { mat, count: PICKAXE.yield[mat] };
+    // walls and roofs of enterable buildings give BUILDING_WALL.yield; floor tiles / solid blocks as before
+    const count = pn.kind === 'floor' || pn.kind === 'block' ? PICKAXE.yield[mat] : BUILDING_WALL.yield;
+    out.harvested = { mat, count };
     out.collider = pn; // { hp, maxHp, alive }: what the HUD object bar reads
     out.building = c;
     out.panel = pn;
@@ -797,7 +834,7 @@ export class Combat {
 
   /** Team mode, not leaving, and someone else on the team is still on their feet. */
   _canKnock(target, info) {
-    return this.teamMode && !info.left && !target.inBus && teamStanding(this.actors, target.team, target);
+    return !this.noKnock && this.teamMode && !info.left && !target.inBus && teamStanding(this.actors, target.team, target);
   }
 
   _knock(victim, info) {

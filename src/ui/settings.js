@@ -35,6 +35,7 @@ export const ACTIONS = Object.freeze([
   { id: 'buildCone', label: 'Build cone', group: 'Building', def: 'KeyX' },
   { id: 'cycleMaterial', label: 'Switch material', group: 'Building', def: 'KeyG' },
   { id: 'edit', label: 'Edit piece', group: 'Building', def: 'KeyT' },
+  { id: 'buildPreset', label: 'Preset build (Simple Build)', group: 'Building', def: 'KeyY' },
   { id: 'map', label: 'Full map', group: 'Other', def: 'KeyM' },
   { id: 'creativeMap', label: 'Sandbox map', group: 'Other', def: 'KeyN' },
   { id: 'emote', label: 'Emote', group: 'Other', def: 'KeyB' },
@@ -59,6 +60,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   autoPickupAmmo: true,
   editOnRelease: false, // releasing the mouse after selecting edit tiles confirms the edit
   editWheelReset: false, // the mouse wheel resets the piece being edited
+  simpleEdit: false, // one click on a tile makes the common edit for it (door, window, ...) at once
+  simpleBuild: false, // the preset key places whole structures (box, ramp + wall, tower, cover)
   difficulty: 'normal', // 'easy' | 'normal' | 'hard'
   fullscreen: true, // go fullscreen when a match starts / resumes
   fpsCap: 250, // FPS limit, 30 .. 250; FPS_UNLIMITED (250) = no limit
@@ -128,6 +131,8 @@ export function sanitizeSettings(raw) {
     autoPickupAmmo: bool(s.autoPickupAmmo, d.autoPickupAmmo),
     editOnRelease: bool(s.editOnRelease, d.editOnRelease),
     editWheelReset: bool(s.editWheelReset, d.editWheelReset),
+    simpleEdit: bool(s.simpleEdit, d.simpleEdit),
+    simpleBuild: bool(s.simpleBuild, d.simpleBuild),
     difficulty: DIFFICULTY_OPTIONS.includes(s.difficulty) ? s.difficulty : d.difficulty,
     fullscreen: bool(s.fullscreen, d.fullscreen),
     fpsCap: Math.round(num(s.fpsCap, 30, FPS_UNLIMITED, d.fpsCap)),

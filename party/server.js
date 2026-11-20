@@ -20,17 +20,39 @@
 // Host control ('@'):                 started {on}, kick {id, reason?}
 // To guests:                          {t:'reject', reason} then close; {t:'bye', reason:'host-left'}
 // Reject reasons match Net.js MSG keys: notFound, full, started, version, kicked.
+//
+// HOST MIGRATION (Box Fights lobby matches only; party/relayMigration.js decides):
+//   A lobby room (party/lobbyRoom.js) registers the relay room with an internal POST {t:'lobby'}
+//   at matchStart. Rooms that were never registered (battle royale, friend lobbies) keep the
+//   old rule: host gone -> {t:'bye', reason:'host-left'} to every guest, then close.
+//   In a registered room, when the host's socket closes:
+//     - if the lobby already named a successor (internal POST {t:'promote', token}) and that
+//       guest is connected, it is promoted at once;
+//     - otherwise guests get {t:'hostLost', graceMs} and the room waits HOST_GRACE_MS for the
+//       promote POST; nobody named in time -> the old bye behaviour.
+//   The successor is chosen ONLY by the lobby server (by the party token the guest connected
+//   with); nothing a guest sends can promote it. Promotion upgrades the guest's existing socket:
+//     to the new host  '@:' {t:'promoted', code, max, guests:[{id, name, token}]}
+//                      from now on it speaks the host protocol above ("<to>:<json>" etc.);
+//                      its old guest slot id is gone, the other guests keep their slot ids
+//     to the others    {t:'newHost', id}   id = the relay slot the new host had as a guest
+//   No reconnect is needed. A role=host connect while a room waits for promotion gets 'taken'.
+//   POSTs to /parties/main/ are refused from the internet (default fetch below).
 
 import { Server, routePartykitRequest } from 'partyserver';
 import { MAX_HUMANS } from '../src/net/protocol.js';
 import { nameIsClean } from '../src/net/chatFilter.js';
 import { originAllowed } from './authLimits.js';
+import { HOST_GRACE_MS, cleanRelayToken, hostClosedDecision, promoteDecision, rosterAfterPromotion } from './relayMigration.js';
 
 // The party lobby, matchmaker, accounts and online list run in the same Worker (wrangler.jsonc binds them all).
 export { Party } from './partyRoom.js';
 export { Matchmaker } from './matchmaker.js';
 export { Accounts } from './accounts.js';
 export { Presence } from './presence.js';
+// Box Fights custom lobbies (6-character codes) and their public list.
+export { Lobby } from './lobbyRoom.js';
+export { LobbyIndex } from './lobbyIndex.js';
 
 const BROADCAST = 255;
 
@@ -49,6 +71,10 @@ export class Main extends Server {
     this.version = null;
     this.started = false;
     this.guests = new Map(); // slot id -> connection
+    // host migration (lobby rooms only, see the header)
+    this.lobbyManaged = false;
+    this.pendingToken = '';
+    this.hostWait = null; // grace timer while the room has no host
   }
 
   _reject(conn, reason) {
@@ -89,10 +115,10 @@ export class Main extends Server {
     const role = url.searchParams.get('role');
     const v = url.searchParams.get('v') || '';
     const name = cleanName(url.searchParams.get('name'));
-    const token = String(url.searchParams.get('token') || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
+    const token = cleanRelayToken(url.searchParams.get('token'));
 
     if (role === 'host') {
-      if (this.hostId && this._host()) {
+      if ((this.hostId && this._host()) || this.hostWait) {
         conn.send('@:' + JSON.stringify({ t: 'taken' }));
         conn.close(4001, 'taken');
         return;
@@ -112,7 +138,7 @@ export class Main extends Server {
     const slot = this._freeSlot();
     if (slot < 0) return this._reject(conn, 'full');
     this.guests.set(slot, conn);
-    conn.setState({ role: 'guest', slot });
+    conn.setState({ role: 'guest', slot, name, token });
     this._toHost('@:' + JSON.stringify({ t: 'join', id: slot, name, token }));
   }
 
@@ -177,17 +203,18 @@ export class Main extends Server {
     const st = conn.state || {};
     if (st.role === 'host' && conn.id === this.hostId) {
       this.hostId = null;
-      this.started = false;
-      const bye = JSON.stringify({ t: 'bye', reason: 'host-left' });
-      for (const g of this.guests.values()) {
-        try {
-          g.send(bye);
-          g.close(4003, 'host-left');
-        } catch {
-          /* ignore */
-        }
+      const d = hostClosedDecision({ lobbyManaged: this.lobbyManaged, pendingToken: this.pendingToken, guests: this._guestInfo() });
+      if (d.action === 'promote') return this._promote(d.slot);
+      if (d.action === 'wait') {
+        const lost = JSON.stringify({ t: 'hostLost', graceMs: HOST_GRACE_MS });
+        for (const g of this.guests.values()) this._sendTo(g, lost);
+        this.hostWait = setTimeout(() => {
+          this.hostWait = null;
+          if (!this.hostId) this._bye();
+        }, HOST_GRACE_MS);
+        return;
       }
-      this.guests.clear();
+      this._bye();
       return;
     }
     if (st.role === 'guest' && this.guests.get(st.slot) === conn) {
@@ -196,8 +223,86 @@ export class Main extends Server {
     }
   }
 
+  _sendTo(conn, text) {
+    try {
+      conn.send(text);
+    } catch {
+      /* gone */
+    }
+  }
+
+  /** Map<slot, {token, name}> of the connected guests. */
+  _guestInfo() {
+    const out = new Map();
+    for (const [slot, g] of this.guests) out.set(slot, { token: (g.state && g.state.token) || '', name: (g.state && g.state.name) || 'Player' });
+    return out;
+  }
+
+  /** Guest `slot` becomes the host on its existing socket. */
+  _promote(slot) {
+    const conn = this.guests.get(slot);
+    if (!conn) return this._bye();
+    clearTimeout(this.hostWait);
+    this.hostWait = null;
+    const roster = rosterAfterPromotion(this._guestInfo(), slot);
+    this.guests.delete(slot);
+    this.hostId = conn.id;
+    this.pendingToken = '';
+    conn.setState({ role: 'host' });
+    this._sendTo(conn, '@:' + JSON.stringify({ t: 'promoted', code: this.name, max: MAX_HUMANS, guests: roster }));
+    const note = JSON.stringify({ t: 'newHost', id: slot });
+    for (const g of this.guests.values()) this._sendTo(g, note);
+  }
+
+  /** No host and nobody to take over: close everyone (the original behaviour). */
+  _bye() {
+    this.hostId = null;
+    this.started = false;
+    this.lobbyManaged = false;
+    this.pendingToken = '';
+    clearTimeout(this.hostWait);
+    this.hostWait = null;
+    const bye = JSON.stringify({ t: 'bye', reason: 'host-left' });
+    for (const g of this.guests.values()) {
+      try {
+        g.send(bye);
+        g.close(4003, 'host-left');
+      } catch {
+        /* ignore */
+      }
+    }
+    this.guests.clear();
+  }
+
   onError(conn) {
     this.onClose(conn);
+  }
+
+  /**
+   * Internal only (party/lobbyRoom.js through the Main binding; the Worker refuses these POSTs
+   * from the internet): {t:'lobby'} marks a lobby match room, {t:'promote', token} names the
+   * guest that takes over when the host is gone.
+   */
+  async onRequest(req) {
+    if (req.method !== 'POST') return new Response('Not found', { status: 404 });
+    const text = await req.text();
+    if (text.length > 1024) return new Response('too large', { status: 413 });
+    let msg;
+    try {
+      msg = JSON.parse(text);
+    } catch {
+      return new Response('bad json', { status: 400 });
+    }
+    if (msg && msg.t === 'lobby') {
+      this.lobbyManaged = true;
+      return Response.json({ ok: true });
+    }
+    if (!msg || msg.t !== 'promote') return new Response('unknown', { status: 400 });
+    const token = cleanRelayToken(msg.token);
+    const d = promoteDecision({ hostConnected: !!(this.hostId && this._host()), waiting: !!this.hostWait, token, guests: this._guestInfo() });
+    if (d.action === 'promote') this._promote(d.slot);
+    else if (d.action === 'pending') this.pendingToken = token;
+    return Response.json({ ok: true, action: d.action });
   }
 }
 
@@ -207,7 +312,9 @@ export default {
     // account-update POST are called by other Durable Objects through bindings, never by browsers.
     // Refuse them from the internet.
     const path = new URL(request.url).pathname;
-    const internalPost = path.startsWith('/parties/party/') || path.startsWith('/parties/presence/');
+    // Lobby rooms, the lobby index and relay rooms also take internal POSTs (lobby claims / list
+    // updates / host migration); browsers only GET the lobby list (/parties/lobby-index/index).
+    const internalPost = ['/parties/party/', '/parties/presence/', '/parties/lobby/', '/parties/lobby-index/', '/parties/main/'].some((p) => path.startsWith(p));
     if (path.startsWith('/parties/matchmaker/') || (internalPost && request.method === 'POST')) {
       return new Response('Not found', { status: 404 });
     }

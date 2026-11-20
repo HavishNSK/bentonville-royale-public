@@ -41,7 +41,7 @@ function run(bots, b, secs, dist) {
 test('a hard bot full-boxes a close opponent: 4 walls and a roof on their cell', () => {
   const { st, bots, b, target } = setup();
   assert.equal(bots._maybeTrap(b, target, 8), true, 'starts a trap');
-  run(bots, b, 0.6, 8);
+  run(bots, b, 1.5, 8); // a piece per buildRate (0.2 s): a box takes about a second, not an instant
   const cx = (Math.floor(target.pos.x / BUILD.cell) + 0.5) * BUILD.cell;
   const cz = (Math.floor(target.pos.z / BUILD.cell) + 0.5) * BUILD.cell;
   const walls = st.pieces.filter((p) => p.kind === 'wall' && Math.hypot(p.x - cx, p.z - cz) < BUILD.cell / 2 + 0.1);
@@ -53,7 +53,7 @@ test('a hard bot full-boxes a close opponent: 4 walls and a roof on their cell',
 test('then it edits a window in the wall facing it, shoots, and closes it again, quickly', () => {
   const { st, bots, b, target } = setup();
   bots._maybeTrap(b, target, 8);
-  run(bots, b, 0.6, 8);
+  run(bots, b, 1.5, 8); // a piece per buildRate (0.2 s): a box takes about a second, not an instant
   const facing = st.pieces.find((p) => p.kind === 'wall' && p.z > target.pos.z + 1); // the bot stands to the south (+z)
   assert.ok(facing, 'wall on the side facing the bot');
   let opened = 0;
@@ -74,14 +74,15 @@ test('then it edits a window in the wall facing it, shoots, and closes it again,
 test('the trap ends when the opponent breaks out of the cell', () => {
   const { bots, b, target } = setup();
   bots._maybeTrap(b, target, 8);
-  run(bots, b, 0.6, 8);
+  run(bots, b, 1.5, 8); // a piece per buildRate (0.2 s): a box takes about a second, not an instant
   target.pos.set(9, 0, 2);
   assert.equal(bots._maybeTrap(b, target, 8), false);
   assert.equal(b.trap, null);
 });
 
-test('normal bots do not trap; hard bots scatter shots up close', () => {
-  const { bots, b, target } = setup(DIFFICULTY.normal);
+test('easy bots do not trap (normal: now and then); hard bots scatter shots up close', () => {
+  const { bots, b, target } = setup(DIFFICULTY.easy);
+  bots.diffName = 'easy';
   assert.equal(bots._maybeTrap(b, target, 8), false);
   assert.ok(DIFFICULTY.hard.closeMiss > 0.2, 'hard bots have a close-range miss');
   assert.ok(DIFFICULTY.hard.peekClosed < 0.4 && DIFFICULTY.hard.peekOpen < 0.7, 'quick edits');

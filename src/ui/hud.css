@@ -51,6 +51,23 @@
   --br-spring: cubic-bezier(0.3, 1.6, 0.5, 1);
 }
 
+/* verified account title (devs.js PLAYER_TITLES), e.g. [CHULDE] */
+.br-title-tag {
+  display: inline-block;
+  margin-right: 0.4em;
+  padding: 0 0.38em 0.04em;
+  border: 0.12em solid currentColor;
+  border-radius: 0.28em;
+  font-family: var(--br-display);
+  font-size: 0.72em;
+  font-style: normal;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  vertical-align: 0.12em;
+  color: #facece;
+}
+
 /* ---- root ---------------------------------------------------------------- */
 .br-hud {
   position: fixed;
@@ -1996,6 +2013,14 @@
   background: var(--br-sun-hi);
   outline: none;
 }
+/* BOTS (Sandbox): its own colour, so it doesn't read as a second WEAPONS button */
+.br-map-bots {
+  background: var(--br-leaf);
+}
+.br-map-bots:hover,
+.br-map-bots:focus-visible {
+  background: #7fe393;
+}
 .br-map-weapons-ico {
   display: grid;
   place-items: center;
@@ -2110,6 +2135,105 @@
   font-size: calc(var(--u) * 16);
   font-weight: 400;
   letter-spacing: 0.02em;
+}
+.br-sandbox-bots {
+  flex: none;
+  margin: calc(var(--u) * 14) 0 0;
+  padding: calc(var(--u) * 12) 0 0;
+  border-top: calc(var(--u) * 3) solid var(--br-ink);
+}
+.br-sandbox-bots-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--u) * 10);
+}
+.br-sandbox-bots-h {
+  margin: 0;
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 24);
+  font-weight: 400;
+  letter-spacing: 0.03em;
+  color: var(--br-sun);
+  line-height: 1;
+}
+.br-sandbox-bots-count {
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 18);
+  letter-spacing: 0.03em;
+  color: var(--br-cream);
+}
+.br-sandbox-bots-sub {
+  margin: calc(var(--u) * 4) 0 calc(var(--u) * 10);
+  font-size: calc(var(--u) * 13);
+  font-weight: 800;
+  color: var(--br-cream);
+  opacity: 0.78;
+}
+.br-sandbox-bots-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: calc(var(--u) * 8);
+}
+.br-sandbox-bot {
+  min-height: 44px;
+  margin: 0;
+  padding: calc(var(--u) * 8) calc(var(--u) * 6);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: calc(var(--u) * 12);
+  background: rgba(255, 246, 220, 0.1);
+  color: var(--br-cream);
+  font-family: var(--br-display);
+  font-size: calc(var(--u) * 17);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.br-sandbox-bot.is-hard {
+  background: rgba(255, 194, 31, 0.16);
+  color: var(--br-sun-hi);
+}
+.br-sandbox-bot.is-clear {
+  background: transparent;
+}
+.br-sandbox-bot:hover:not(:disabled),
+.br-sandbox-bot:focus-visible {
+  background: rgba(255, 194, 31, 0.24);
+  color: var(--br-sun-hi);
+}
+.br-sandbox-bot:focus-visible {
+  outline: calc(var(--u) * 3) solid var(--br-sun);
+  outline-offset: calc(var(--u) * 2);
+}
+.br-sandbox-bot:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* bots fight each other (free-for-all) toggle: full width under the spawn row, coral when on */
+.br-sandbox-bots-ffa {
+  display: block;
+  width: 100%;
+  margin-top: calc(var(--u) * 8);
+  font-size: calc(var(--u) * 15);
+}
+.br-sandbox-bots-ffa.is-on {
+  background: var(--br-coral);
+  color: var(--br-ink);
+}
+.br-sandbox-bots-ffa.is-on:hover,
+.br-sandbox-bots-ffa.is-on:focus-visible {
+  background: #ff8070;
+  color: var(--br-ink);
+}
+.br-sandbox-bots-note {
+  margin: calc(var(--u) * 8) 0 0;
+  font-size: calc(var(--u) * 13);
+  font-weight: 800;
+  color: var(--br-sun-hi);
+}
+@media (max-width: 520px) {
+  .br-sandbox-bots-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .br-sandbox-loadout-close {
   display: block;
@@ -2641,6 +2765,123 @@
   display: none;
 }
 
+/* ---- Box Fights: round score pill under the compass ------------------------- */
+.br-rounds {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--u) * 76);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 10);
+  padding: calc(var(--u) * 4) calc(var(--u) * 12);
+  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  border-radius: calc(var(--u) * 14);
+  background: var(--br-panel);
+  box-shadow: 0 calc(var(--u) * 3) 0 rgba(21, 16, 58, 0.55);
+  font-family: var(--br-display);
+  color: var(--br-cream);
+  pointer-events: none;
+}
+.br-rounds[hidden] {
+  display: none;
+}
+.br-rounds-side {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 6);
+}
+.br-rounds-side b {
+  font-size: calc(var(--u) * 26);
+  line-height: 1;
+}
+.br-rounds-side.is-us b {
+  color: var(--br-sun);
+}
+.br-rounds-side.is-them b {
+  color: var(--br-coral);
+}
+.br-rounds-mid {
+  display: grid;
+  justify-items: center;
+  line-height: 1;
+}
+.br-rounds-mid small {
+  font-size: calc(var(--u) * 10);
+  letter-spacing: 0.12em;
+  opacity: 0.8;
+}
+.br-rounds-mid b {
+  font-size: calc(var(--u) * 18);
+  font-weight: 400;
+}
+.br-rounds-pips {
+  display: flex;
+  gap: calc(var(--u) * 3);
+  font-style: normal;
+}
+.br-rounds-pips em {
+  width: calc(var(--u) * 9);
+  height: calc(var(--u) * 9);
+  border: calc(var(--u) * 2) solid var(--br-ink);
+  border-radius: 50%;
+  background: rgba(255, 246, 220, 0.18);
+}
+.is-us .br-rounds-pips em.is-won {
+  background: var(--br-sun);
+}
+.is-them .br-rounds-pips em.is-won {
+  background: var(--br-coral);
+}
+/* Box Fights FFA: a compact leaderboard (place, name, elims) instead of the us / them pips */
+.br-rounds-board {
+  display: none;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: 'Nunito', sans-serif;
+  font-weight: 800;
+  font-size: calc(var(--u) * 12);
+  line-height: 1.25;
+}
+.br-rounds.is-ffa .br-rounds-side {
+  display: none;
+}
+.br-rounds.is-ffa .br-rounds-board {
+  display: grid;
+  gap: calc(var(--u) * 1);
+}
+.br-rounds-board li {
+  display: grid;
+  grid-template-columns: calc(var(--u) * 14) minmax(0, calc(var(--u) * 110)) auto;
+  align-items: center;
+  gap: calc(var(--u) * 6);
+  color: var(--br-cream);
+}
+.br-rounds-board li i {
+  font-style: normal;
+  opacity: 0.75;
+}
+.br-rounds-board li span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.br-rounds-board li b {
+  font-family: 'Lilita One', sans-serif;
+  font-weight: 400;
+  font-size: calc(var(--u) * 15);
+  text-align: right;
+}
+.br-rounds-board li.is-you {
+  color: var(--br-sun);
+}
+/* no map, storm or landmark tag in the void arena */
+.br-hud.is-boxfight .br-minimap,
+.br-hud.is-boxfight .br-storm,
+.br-hud.is-boxfight .br-loc {
+  display: none !important;
+}
 /* ---- cars: the panel while you ride (HP, fuel, speed, seats, boost); HP only for a target ---- */
 .br-car {
   position: absolute;

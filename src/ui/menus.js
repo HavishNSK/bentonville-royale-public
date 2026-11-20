@@ -8,13 +8,14 @@
 //     onHost(name), onJoin(code, name),           // private match (main.js lazy-loads src/net)
 //     onLobbyStart(), onLobbyLeave(), onLobbyFill(on), onLobbyMode(mode), onLobbyReady(on),
 //     onPartyReady(on), onPartyCancel(), onPartyMode(mode), onPartyFill(on),   // party lobby (title)
+//     onPartyGame(game), onLobbyGame(game),       // 'br' | 'boxfights' (party / private lobby)
 //     onPartyKick(id), onPartyPromote(id), onPartyJoin(code), onPartyLeave(), onPartyRetry(),
 //     onNameChange(name),
 //     googleTilesAvailable,          // false -> "Real-world 3D view" toggle shown disabled with a hint
 //   });
 //   menus.showLobby(info)   info = { isHost, code, link, players:[{id,name,host,ready,you}], max, fill,
 //                                   mode, ready (guest's own), status, canStart, error }
-//   menus.setParty(view)    title party panel: { online, connecting, code, link, isLeader, mode, fill,
+//   menus.setParty(view)    title party panel: { online, connecting, code, link, isLeader, game, mode, fill,
 //                                   state: idle|queued|matched, queuedSince (performance.now ms),
 //                                   members:[{id,name,ready,leader,you}], match (hand-off status text),
 //                                   searching (others queued in this mode, from the online list) }
@@ -24,7 +25,9 @@
 //   menus.onNeedRename = fn  called when PLAY is blocked because the signed-in account name breaks the rules
 //   menus.setSettings(settings)       // update the shown settings without firing onSettings
 //   menus.showTitle() / showSettings(from) / showLoading(pct, label) / showPause()
-//   menus.showResult({ victory, placement, kills, total, time, killer, difficulty, ranked })
+//   menus.showResult({ victory, placement, kills, total, time, killer, difficulty, ranked, boxFight? })
+//                    boxFight = { size, score:[us, them], title, sub, tile } (Box Fights copy)
+//   menus.showBoxElo({ elo, delta, tier:{id,name} })  Box Fights result: the Elo row (after the server replies)
 //   menus.showDropBanner(on, secondsLeft, zoneLabel, { title, sub }?)  // Drop Bus banner
 //   menus.hideAll()
 
@@ -39,9 +42,22 @@ import { applyCrosshairStyle } from './hud.js';
 import { createFpsMeter } from './fpsMeter.js';
 import { MATCH, RANKED_NOTE } from '../core/config.js';
 import { nameIsClean } from '../net/chatFilter.js';
+import { nameplate } from '../net/devs.js';
 import { TEAM_MODES, MODE_LABELS, teamSize } from '../game/Teams.js';
+import { partyCap } from '../game/GameModes.js';
+import { tierOf } from '../game/BoxElo.js';
+import { resultRows, BOT_TAG } from './boxLobbyModel.js';
 
 const MODE_IDS = Object.keys(TEAM_MODES);
+// BATTLE ROYALE | BOX FIGHTS; in Box Fights the team-size buttons read 1V1 / 2V2 / 3V3 / 4V4
+const GAME_IDS = ['br', 'boxfights'];
+const GAME_LABELS = { br: 'BATTLE ROYALE', boxfights: 'BOX FIGHTS' };
+const BOX_MODE_LABELS = { solo: '1V1', duo: '2V2', trio: '3V3', ffa: 'FFA' };
+const modeLabel = (game, mode) => (game === 'boxfights' ? BOX_MODE_LABELS[mode] || MODE_LABELS[mode] : MODE_LABELS[mode]);
+// Box Fights is new: a star, gold label and a NEW pill until the player has picked it once
+const BOX_SEEN_KEY = 'bentonville-royale.triedBoxFights';
+const gameLabel = (g) => (g === 'boxfights' ? `${icon('wall')}<span>${GAME_LABELS[g]}</span><em class="mn-new" aria-label="new mode">NEW</em>` : `<span>${GAME_LABELS[g]}</span>`);
+const gameSeg = (ref) => `<div class="mn-seg mn-seg-game" data-ref="${ref}" role="group" aria-label="Game">${GAME_IDS.map((g) => `<button type="button" data-game="${g}"${g === 'boxfights' ? ' class="is-fresh"' : ''}>${gameLabel(g)}</button>`).join('')}</div>`;
 const PARTY_SLOTS = 4;
 
 // Functions get the current key bindings (tips follow rebinds).
@@ -52,7 +68,7 @@ const TIPS = [
   'The storm hurts more every phase. Watch the timer in the top left.',
   'Chests glow and hum. Listen for them inside buildings.',
   (k) => `Hold ${k('aim')} to aim down sights for tighter shots.`,
-  (k) => `Press ${k('inventory')} to open your inventory, then drag guns and heals to reorder your hotbar.`,
+  (k) => `Press ${k('inventory')} to open your inventory, then drag a gun or heal onto another slot (or click one slot, then another) to reorder your hotbar.`,
   'Headshots deal bonus damage with every weapon.',
   'Rocket Launchers hold one rocket. A clean hit deals 100, and the blast hurts you too if you are close.',
   (k) => `Grenades blow up about 2 seconds after you throw them with ${k('fire')}. They bounce, break builds, and hurt you too.`,
@@ -118,6 +134,14 @@ export function createMenus(root, opts = {}) {
        <div class="mn-logo-tag">100 players &middot; one town square &middot; build to survive</div>
      </div>
      <div class="mn-party mn-card" aria-label="Party">
+       <button type="button" class="mn-box-rank" data-ref="boxRank" data-act="leaderboard" hidden aria-label="Box Fights rank">
+         <span class="mn-box-rank-kicker">BOX FIGHTS RANK</span>
+         <span class="br-tier mn-box-rank-tier" data-ref="boxRankTier"></span>
+         <b class="mn-box-rank-elo br-ol" data-ref="boxRankElo"></b>
+         <span class="mn-box-rank-meta" data-ref="boxRankMeta"></span>
+         <span class="mn-box-rank-track" aria-hidden="true"><i data-ref="boxRankFill"></i></span>
+         <span class="mn-box-rank-next" data-ref="boxRankNext"></span>
+       </button>
        <div class="mn-party-head">
          <span class="mn-party-label">PARTY</span>
          <b class="mn-party-code br-ol" data-ref="pcode">····</b>
@@ -133,6 +157,7 @@ export function createMenus(root, opts = {}) {
          <button type="button" class="mn-chip" data-act="party-unselect"><span>CLOSE</span></button>
        </div>
        <div class="mn-party-opts">
+         ${gameSeg('pgame')}
          <div class="mn-seg" data-ref="pmode" role="group" aria-label="Mode">${MODE_IDS.map((m) => `<button type="button" data-mode="${m}">${MODE_LABELS[m]}</button>`).join('')}</div>
          <div class="mn-seg" data-ref="pfill" role="group" aria-label="Fill"><button type="button" data-fill="1">FILL</button><button type="button" data-fill="0">NO FILL</button></div>
        </div>
@@ -149,9 +174,8 @@ export function createMenus(root, opts = {}) {
      </div>
      <div class="mn-title-side">
        <div class="mn-stack mn-stack-row">
+         <button class="mn-btn mn-btn-small mn-btn-wide" data-act="private" aria-expanded="false" data-ref="privBtn">${icon('people')}<span>PRIVATE MATCH</span></button>
          <button class="mn-btn mn-btn-small" data-act="freebuild">${icon('pencil')}<span>SANDBOX</span></button>
-         <button class="mn-btn mn-btn-small" data-act="museum" title="Walk the Crystal Bridges galleries: no bots, no storm">${icon('star')}<span>MUSEUM</span></button>
-         <button class="mn-btn mn-btn-small" data-act="private" aria-expanded="false" data-ref="privBtn">${icon('people')}<span>PRIVATE MATCH</span></button>
          <button class="mn-btn mn-btn-small" data-act="settings">${icon('gear')}<span>SETTINGS</span></button>
        </div>
        <div class="mn-private" data-ref="private" hidden>
@@ -161,12 +185,6 @@ export function createMenus(root, opts = {}) {
            <button class="mn-btn" data-act="join"><span>JOIN</span></button>
          </div>
        </div>
-     <div class="mn-controls">
-       <span><kbd class="br-key" data-bind="moveForward moveLeft moveBack moveRight">WASD</kbd>move</span><span><kbd class="br-key" data-bind="jump">SPACE</kbd>jump</span>
-       <span><kbd class="br-key" data-bind="fire">LMB</kbd>fire</span><span><kbd class="br-key" data-bind="aim">RMB</kbd>aim</span>
-       <span><kbd class="br-key" data-bind="interact">E</kbd>loot</span><span><kbd class="br-key" data-bind="buildWall buildFloor buildRamp buildCone">Q C V X</kbd>build</span>
-       <span><kbd class="br-key" data-bind="pickaxe">F</kbd>pickaxe</span><span><kbd class="br-key" data-bind="map">M</kbd>map</span>
-     </div>
      </div>
      <div class="mn-foot">Map data &copy; OpenStreetMap contributors &middot; An original fan-made game, not affiliated with any other battle royale &middot; <a href="privacy.html" target="_blank" rel="noopener">Privacy</a></div>`
   );
@@ -185,6 +203,7 @@ export function createMenus(root, opts = {}) {
     }
   };
   T.name.value = savedName() || 'Player' + Math.floor(100 + Math.random() * 900);
+
   // A saved name with a swear word or slur must be replaced before playing (see nameBlocked).
   let mustRenameGuest = false;
   if (!nameIsClean(T.name.value)) {
@@ -242,6 +261,7 @@ export function createMenus(root, opts = {}) {
        <div class="mn-link"><input class="mn-field" data-ref="link" readonly aria-label="Share link"><button class="mn-btn mn-btn-small" data-act="copy"><span>COPY LINK</span></button></div>
        <div class="mn-roster-head"><span>Players</span><b data-ref="count">0/16</b></div>
        <ul class="mn-roster" data-ref="roster"></ul>
+       <div class="mn-row"><span>Game<small class="mn-hint" data-ref="gameHint"></small></span>${gameSeg('game')}</div>
        <div class="mn-row"><span>Mode<small class="mn-hint">Players join teams in the order they joined.</small></span><div class="mn-seg" data-ref="mode" role="group" aria-label="Mode">${MODE_IDS.map((m) => `<button type="button" data-mode="${m}">${MODE_LABELS[m]}</button>`).join('')}</div></div>
        <label class="mn-row"><span>Fill empty spots with bots<small class="mn-hint" data-ref="fillHint"></small></span><input type="checkbox" class="mn-toggle" data-ref="fill"></label>
        <p class="mn-status" data-ref="status" role="status"></p>
@@ -255,6 +275,12 @@ export function createMenus(root, opts = {}) {
   const LB = {};
   lobby.querySelectorAll('[data-ref]').forEach((e) => (LB[e.dataset.ref] = e));
   LB.fill.addEventListener('change', () => opts.onLobbyFill && opts.onLobbyFill(LB.fill.checked));
+  LB.game.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-game]');
+    if (!b || !lobbyInfo || !lobbyInfo.isHost) return;
+    if (opts.onClick) opts.onClick();
+    if (opts.onLobbyGame) opts.onLobbyGame(b.dataset.game);
+  });
   LB.mode.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-mode]');
     if (!b || !lobbyInfo || !lobbyInfo.isHost) return;
@@ -331,6 +357,8 @@ export function createMenus(root, opts = {}) {
        <div class="mn-pane" data-pane="controls">
          ${toggle('editOnRelease', 'Confirm edit on release', 'Releasing the mouse after selecting tiles confirms the edit.')}
          ${toggle('editWheelReset', 'Reset edit with mouse wheel', 'Scroll while editing to reset the piece (instead of switching slots).')}
+         ${toggle('simpleEdit', 'Simple Edit', 'One click on a tile makes the common edit: door, window, half wall, arch, a floor or cone corner. Click it again to undo.')}
+         ${toggle('simpleBuild', 'Simple Build', 'The Preset build key places a whole structure at once: Box, Ramp + Wall, Tower or Cover. Press it again to switch preset.')}
          <p class="mn-bind-status" data-ref="bindStatus" role="status">Click a key to change it. Esc cancels. Right mouse resets an edit.</p>
          <div class="mn-binds">${bindRows}</div>
          <button type="button" class="mn-btn mn-btn-small" data-ref="bindReset"><span>RESET TO DEFAULTS</span></button>
@@ -382,16 +410,21 @@ export function createMenus(root, opts = {}) {
        <div class="mn-result-place br-ol-xl" data-ref="place">#1</div>
        <div class="mn-result-title br-ol-xl" data-ref="title"></div>
        <div class="mn-result-sub" data-ref="sub"></div>
+       <div class="mn-box-elo" data-ref="boxElo" role="status" hidden>
+         <span class="br-tier" data-ref="boxTier"></span><b class="br-ol" data-ref="boxEloNum"></b><span class="mn-box-elo-delta br-ol" data-ref="boxDelta"></span>
+       </div>
        <div class="mn-stats">
          <div class="mn-stat">${icon('crown')}<b class="br-ol" data-ref="placement"></b><span>PLACED</span></div>
          <div class="mn-stat">${icon('skull')}<b class="br-ol" data-ref="kills"></b><span>ELIMS</span></div>
          <div class="mn-stat">${icon('clock')}<b class="br-ol" data-ref="time"></b><span>SURVIVED</span></div>
          <div class="mn-stat mn-stat-coins" data-ref="coinStat" hidden><i class="mt-coin" aria-hidden="true"></i><b class="br-ol" data-ref="coins">+0</b><span>COINS</span></div>
        </div>
+       <div class="mn-bf-results" data-ref="bfTable" hidden></div>
        <div class="mn-confetti" data-ref="confetti" aria-hidden="true"></div>
        <div class="mn-stack mn-stack-row">
+         <button class="mn-btn mn-btn-hero" data-act="box-back" data-ref="boxBack" hidden>${icon('back')}<span data-ref="boxBackText">BACK TO LOBBY</span></button>
          <button class="mn-btn mn-btn-hero" data-act="again">${icon('replay')}<span>PLAY AGAIN</span></button>
-         <button class="mn-btn" data-act="menu">${icon('home')}<span>MAIN MENU</span></button>
+         <button class="mn-btn" data-act="menu">${icon('home')}<span data-ref="menuText">MAIN MENU</span></button>
          <button class="mn-btn mn-btn-ad" data-act="adcoins" data-ref="adBtn" hidden><i class="mt-coin" aria-hidden="true"></i><span data-ref="adText">WATCH AD +100</span></button>
        </div>
      </div>`
@@ -399,6 +432,78 @@ export function createMenus(root, opts = {}) {
   wrap.appendChild(result);
   const R = {};
   result.querySelectorAll('[data-ref]').forEach((e) => (R[e.dataset.ref] = e));
+  let boxResultShown = false;
+  let resultLobby = null; // setResultLobby
+  let resultShown = null; // last showResult payload
+
+  function renderResultActions() {
+    const r = resultShown || {};
+    const lb = r.boxFight ? resultLobby : null;
+    R.boxBack.hidden = !lb;
+    R.boxBack.disabled = !!lb && !lb.host && !lb.offline;
+    R.boxBack.classList.toggle('is-disabled', R.boxBack.disabled);
+    R.boxBackText.textContent = !lb || lb.host || lb.offline ? 'BACK TO LOBBY' : 'WAITING FOR HOST';
+    R.menuText.textContent = lb ? 'LEAVE' : 'MAIN MENU';
+    // multiplayer: no instant rematch; a lobby goes back to its room instead
+    result.querySelector('[data-act=again]').hidden = !!r.mp || (!!lb && !lb.offline);
+  }
+
+  /** Box Fights per-player table (names are other players' text: textContent only). */
+  function renderBoxTable(bf) {
+    const meId = resultLobby && resultLobby.meId != null ? resultLobby.meId : 0;
+    const rows = resultRows(bf, meId);
+    R.bfTable.hidden = !rows.length;
+    R.bfTable.replaceChildren();
+    if (!rows.length) return;
+    const table = document.createElement('table');
+    const cap = document.createElement('caption');
+    cap.className = 'mn-bf-sr';
+    cap.textContent = 'Match stats';
+    const head = document.createElement('tr');
+    for (const t of [bf.ffa ? 'PLAYER' : 'TEAM / PLAYER', 'ELIMS', 'DAMAGE', 'BUILDS']) {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = t;
+      head.appendChild(th);
+    }
+    const thead = document.createElement('thead');
+    thead.appendChild(head);
+    const tbody = document.createElement('tbody');
+    for (const row of rows) {
+      const tr = document.createElement('tr');
+      if (row.you) tr.className = 'is-you';
+      if (!bf.ffa) tr.dataset.side = String(row.side);
+      const name = document.createElement('th');
+      name.scope = 'row';
+      if (!bf.ffa) {
+        const t = document.createElement('i');
+        t.className = 'mn-bf-tteam';
+        t.textContent = 'T' + (row.side + 1);
+        name.appendChild(t);
+      }
+      if (row.isBot) {
+        const bot = document.createElement('i');
+        bot.className = 'mn-bf-bot';
+        bot.setAttribute('role', 'img');
+        bot.setAttribute('aria-label', 'Bot');
+        bot.textContent = BOT_TAG;
+        name.appendChild(bot);
+      }
+      const nm = document.createElement('span');
+      nm.textContent = row.name + (row.replaced ? ` (for ${row.replaced})` : '') + (row.you ? ' (you)' : '');
+      nm.title = nm.textContent;
+      name.appendChild(nm);
+      tr.appendChild(name);
+      for (const n of [row.elims, row.damage, row.builds]) {
+        const td = document.createElement('td');
+        td.textContent = String(n);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.append(cap, thead, tbody);
+    R.bfTable.appendChild(table);
+  }
 
   // ---------------------------------------------------------------- drop banner
   const banner = el(
@@ -413,6 +518,7 @@ export function createMenus(root, opts = {}) {
   banner.querySelectorAll('[data-ref]').forEach((e) => (D[e.dataset.ref] = e));
 
   const screens = [title, settingsEl, lobby, loading, pause, result];
+  const external = new Map(); // section -> name (menus.mount: Box Fights lobby screens)
   let settingsFrom = 'title';
   let current = null;
   let screenHook = null;
@@ -673,7 +779,6 @@ export function createMenus(root, opts = {}) {
         } else if (act === 'lobby-ready') {
           if (lobbyInfo && !lobbyInfo.isHost && opts.onLobbyReady) opts.onLobbyReady(!lobbyInfo.ready);
         } else if (act === 'freebuild') opts.onFreeBuild && opts.onFreeBuild(name());
-        else if (act === 'museum') opts.onMuseum && opts.onMuseum(name());
         else if (act === 'host') opts.onHost && opts.onHost(name());
         else if (act === 'join') {
           if (T.code.value.length !== 4) {
@@ -697,6 +802,7 @@ export function createMenus(root, opts = {}) {
         else if (act === 'again') opts.onPlayAgain && opts.onPlayAgain();
         else if (act === 'menu') opts.onLeave && opts.onLeave();
         else if (act === 'adcoins') opts.onAdReward && opts.onAdReward();
+        else if (act === 'box-back') opts.onBoxBack && opts.onBoxBack();
       })
     );
   });
@@ -725,15 +831,14 @@ export function createMenus(root, opts = {}) {
 
   function partyStatus(v) {
     if (v.match) return v.match;
-    if (!v.online) return v.connecting ? 'Connecting to the party server…' : 'Party server offline. PLAY starts a match with bots.';
+    if (!v.online) return v.connecting ? 'Connecting to the party server…' : ''; // offline: PLAY still starts a bot match
     if (v.state === 'matched') return 'Match found!';
     const others = v.searching > 0 ? `${v.searching} other${v.searching === 1 ? '' : 's'} searching` : '';
     if (v.state === 'queued') return `Finding match… ${fmt((performance.now() - (v.queuedSince || performance.now())) / 1000)}` + (others ? ` · ${others}` : '');
     const waiting = v.members.filter((m) => !m.leader && !m.ready).length;
     if (v.isLeader) {
       if (waiting) return `Waiting for ${waiting} to ready up`;
-      if (others) return `${others} in this mode. Press PLAY to join them.`;
-      return v.members.length > 1 ? 'Everyone is ready. Press PLAY.' : 'Invite friends, or press PLAY to find a match.';
+      return v.members.length > 1 ? 'Everyone is ready. Press PLAY.' : '';
     }
     const me = v.members.find((m) => m.you);
     return me && me.ready ? 'Ready. Waiting for the leader…' : 'Ready up when you are set.';
@@ -762,7 +867,10 @@ export function createMenus(root, opts = {}) {
         btn.classList.toggle('is-ready', !!m.ready);
         btn.classList.toggle('is-you', !!m.you);
         btn.classList.toggle('is-leader', !!m.leader);
-        btn.innerHTML = `${m.leader ? `<span class="mn-slot-crown" title="Party leader">${icon('crown')}</span>` : ''}<b class="mn-slot-name">${esc(m.name)}</b><span class="mn-slot-state">${m.away ? 'RECONNECTING…' : m.ready ? '<i aria-hidden="true">&#10003;</i>READY' : 'NOT READY'}</span>${m.you ? '<em>YOU</em>' : ''}`;
+        const plate = m.you ? nameplate(m.name) : { name: m.name, title: '', color: '' };
+        const titleHtml = plate.title ? `<em class="br-title-tag">${esc(plate.title)}</em>` : '';
+        const nameStyle = plate.color ? ` style="color:${plate.color}"` : '';
+        btn.innerHTML = `${m.leader ? `<span class="mn-slot-crown" title="Party leader">${icon('crown')}</span>` : ''}${titleHtml}<b class="mn-slot-name"${nameStyle}>${esc(m.name)}</b><span class="mn-slot-state">${m.away ? 'RECONNECTING…' : m.ready ? '<i aria-hidden="true">&#10003;</i>READY' : 'NOT READY'}</span>${m.you ? '<em>YOU</em>' : ''}`;
         const canManage = v.online && v.isLeader && !m.you;
         btn.disabled = !canManage;
         btn.setAttribute('aria-label', `${m.name}${m.leader ? ', leader' : ''}, ${m.ready ? 'ready' : 'not ready'}${canManage ? '. Kick or make leader' : ''}`);
@@ -784,10 +892,26 @@ export function createMenus(root, opts = {}) {
     // mode + fill (leader, idle only)
     const idle = (v.state || 'idle') === 'idle' && !v.match;
     const canEdit = v.isLeader && idle;
+    const gameId = v.game === 'boxfights' ? 'boxfights' : 'br';
+    // Box Fights: no options here; PLAY opens the lobby browser (src/ui/boxLobby.js), which picks mode,
+    // bots and rounds. No party matchmaking for Box Fights from the title.
+    const box = gameId === 'boxfights';
+    T.pmode.hidden = box;
+    T.pfill.hidden = box || teamSize(v.mode) === 1; // fill means nothing in Solo
+    T.pgame.querySelectorAll('button').forEach((b) => {
+      const on = b.dataset.game === gameId;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-pressed', String(on));
+      // Box Fights teams are up to 3
+      b.disabled = !canEdit || (b.dataset.game === 'boxfights' && v.members.length > partyCap('boxfights'));
+    });
     T.pmode.querySelectorAll('button').forEach((b) => {
       const mode = b.dataset.mode;
+      const boxOnly = gameId === 'boxfights' && !BOX_MODE_LABELS[mode];
+      b.hidden = boxOnly;
+      b.textContent = modeLabel(gameId, mode);
       b.classList.toggle('is-on', mode === v.mode);
-      b.disabled = !canEdit || teamSize(mode) < v.members.length;
+      b.disabled = !canEdit || boxOnly || teamSize(mode) < v.members.length;
       b.setAttribute('aria-pressed', String(mode === v.mode));
     });
     T.pfill.querySelectorAll('button').forEach((b) => {
@@ -808,6 +932,8 @@ export function createMenus(root, opts = {}) {
     if (v.match || v.state === 'matched') {
       label = 'MATCH FOUND';
       disabled = true;
+    } else if (box && v.state !== 'queued') {
+      kind = 'boxfights'; // everyone (leader or not) opens the lobby browser
     } else if (v.isLeader) {
       if (v.state === 'queued') {
         label = 'CANCEL';
@@ -821,7 +947,7 @@ export function createMenus(root, opts = {}) {
     go.dataset.kind = kind;
     go.disabled = disabled;
     go.classList.toggle('is-disabled', disabled);
-    T.pstatus.textContent = partyStatus(v);
+    T.pstatus.textContent = box && idle ? (v.isLeader ? '' : 'PLAY opens Box Fights lobbies. Share a lobby code with your party.') : partyStatus(v);
     T.pstatus.classList.toggle('is-queued', v.state === 'queued' || !!v.match || v.state === 'matched');
 
     clearInterval(queueTimer);
@@ -832,6 +958,10 @@ export function createMenus(root, opts = {}) {
   function partyGo() {
     const v = partyView;
     if (!v || v.match || v.state === 'matched') return;
+    if (v.game === 'boxfights' && v.state !== 'queued') {
+      if (opts.onBoxLobbies) opts.onBoxLobbies();
+      return;
+    }
     if (v.isLeader) {
       if (v.state === 'queued') opts.onPartyCancel && opts.onPartyCancel();
       else opts.onPlay && opts.onPlay();
@@ -851,6 +981,30 @@ export function createMenus(root, opts = {}) {
     }
     const id = partyView && partyView.members.find((m) => String(m.id) === b.dataset.member);
     if (id) selectSlot(selectedSlot === id.id ? null : id.id);
+  });
+  // once Box Fights has been picked, drop its NEW pill and shimmer everywhere
+  const boxSeen = () => {
+    for (const b of wrap.querySelectorAll('button[data-game="boxfights"]')) b.classList.remove('is-fresh');
+  };
+  try {
+    if (localStorage.getItem(BOX_SEEN_KEY)) boxSeen();
+  } catch {
+    /* private mode: the badge just stays */
+  }
+  wrap.addEventListener('click', (e) => {
+    if (!(e.target.closest && e.target.closest('button[data-game="boxfights"]'))) return;
+    try {
+      localStorage.setItem(BOX_SEEN_KEY, '1');
+    } catch {
+      /* private mode */
+    }
+    boxSeen();
+  });
+  T.pgame.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-game]');
+    if (!b || b.disabled) return;
+    if (opts.onClick) opts.onClick();
+    if (opts.onPartyGame) opts.onPartyGame(b.dataset.game);
   });
   T.pmode.addEventListener('click', (e) => {
     const b = e.target.closest('button[data-mode]');
@@ -872,7 +1026,39 @@ export function createMenus(root, opts = {}) {
       screenHook = fn;
     },
     get current() {
+      if (external.has(current)) return external.get(current);
       return current === lobby ? 'lobby' : current === title ? 'title' : current === settingsEl ? 'settings' : current === loading ? 'loading' : current === pause ? 'pause' : current === result ? 'result' : null;
+    },
+    /** Adds another screen (a .mn-screen section) to the menus layer under `name`. */
+    mount(section, name) {
+      wrap.insertBefore(section, banner);
+      screens.push(section);
+      external.set(section, String(name));
+    },
+    /** Shows a mounted screen; withBg = the dusk backdrop behind it (off over a live 3D scene). */
+    showScreen(name, withBg = true) {
+      const s = [...external].find(([, n]) => n === name);
+      if (!s) return;
+      api.showDropBanner(false);
+      show(s[0], withBg);
+    },
+    setBackdrop(on) {
+      bg.classList.toggle('is-on', !!on);
+    },
+    /** Box Fights screens share the title's name field (same localStorage key and checks). */
+    setPlayerName(v) {
+      if (T.name.readOnly) return;
+      T.name.value = String(v || '').slice(0, 16);
+      T.name.dispatchEvent(new Event('change'));
+    },
+    nameLocked: () => !!T.name.readOnly,
+    /**
+     * Box Fights results from a custom lobby / Play with Bots: { host, offline, meId } shows BACK TO
+     * LOBBY (guests: disabled until the host goes back) and LEAVE; null = the normal buttons.
+     */
+    setResultLobby(v) {
+      resultLobby = v || null;
+      if (current === result) renderResultActions();
     },
     showTitle() {
       api.showDropBanner(false);
@@ -911,9 +1097,11 @@ export function createMenus(root, opts = {}) {
         T.name.value = String(name).slice(0, 16);
         T.name.readOnly = true;
         T.name.title = 'Your account name';
+        T.name.closest('.mn-name').hidden = true;
       } else {
         T.name.readOnly = false;
         T.name.title = '';
+        T.name.closest('.mn-name').hidden = false;
         T.name.value = savedName() || T.name.value;
       }
       if (partyView && !partyView.online) renderParty();
@@ -937,7 +1125,15 @@ export function createMenus(root, opts = {}) {
         li.classList.toggle('is-ready', !!p.ready);
         li.classList.toggle('is-host', !!p.host);
         const nm = document.createElement('span');
-        nm.textContent = p.name;
+        const plate = p.you ? nameplate(p.name) : { name: p.name, title: '', color: '' };
+        if (plate.title) {
+          const tag = document.createElement('em');
+          tag.className = 'br-title-tag';
+          tag.textContent = plate.title;
+          tag.style.color = plate.color;
+          nm.style.color = plate.color;
+          nm.append(tag, document.createTextNode(' ' + plate.name));
+        } else nm.textContent = p.name;
         li.appendChild(nm);
         const tags = [p.host ? 'HOST' : p.ready ? '\u2713 READY' : 'NOT READY', p.you ? 'YOU' : ''].filter(Boolean);
         const tag = document.createElement('em');
@@ -946,10 +1142,22 @@ export function createMenus(root, opts = {}) {
         LB.roster.appendChild(li);
       }
       const mode = info.mode || 'solo';
+      const gameId = info.game === 'boxfights' ? 'boxfights' : 'br';
+      LB.game.querySelectorAll('button').forEach((b) => {
+        const on = b.dataset.game === gameId;
+        b.classList.toggle('is-on', on);
+        b.setAttribute('aria-pressed', String(on));
+        b.disabled = !info.isHost;
+      });
+      LB.gameHint.textContent = gameId === 'boxfights' ? (mode === 'ffa' ? 'FFA indoor arena · 10 rounds, first to 15 elims' : `${modeLabel(gameId, mode)} indoor arena · first to 5 rounds`) : '';
+
       LB.mode.querySelectorAll('button').forEach((b) => {
+        const boxOnly = gameId === 'boxfights' && !BOX_MODE_LABELS[b.dataset.mode];
+        b.hidden = boxOnly;
+        b.textContent = modeLabel(gameId, b.dataset.mode);
         b.classList.toggle('is-on', b.dataset.mode === mode);
         b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
-        b.disabled = !info.isHost;
+        b.disabled = !info.isHost || boxOnly;
       });
       const readyBtn = lobby.querySelector('[data-act=lobby-ready]');
       readyBtn.hidden = !!info.isHost;
@@ -962,7 +1170,8 @@ export function createMenus(root, opts = {}) {
       LB.fill.disabled = !info.isHost;
       const humans = (info.players || []).length;
       // HostSession.prepareMatch: MATCH.bots + 1 slots, every human (host included) takes one
-      LB.fillHint.textContent = info.fill ? `${Math.max(0, MATCH.bots + 1 - humans)} bots join ${humans} player${humans === 1 ? '' : 's'}` : 'Humans only';
+      const slots = gameId === 'boxfights' ? 2 * teamSize(mode) : MATCH.bots + 1;
+      LB.fillHint.textContent = info.fill ? `${Math.max(0, slots - humans)} bots join ${humans} player${humans === 1 ? '' : 's'}` : 'Humans only';
       LB.status.textContent = info.status || '';
       LB.error.textContent = info.error || '';
       const start = lobby.querySelector('[data-act=lobby-start]');
@@ -1016,7 +1225,21 @@ export function createMenus(root, opts = {}) {
       const team = r.mode && r.mode !== 'solo' && r.teams > 0;
       const noun = { duo: 'duo', trio: 'trio', squad: 'squad' }[r.mode] || 'team';
       const left = r.placement - 1;
-      if (team) {
+      R.boxElo.hidden = true; // filled by showBoxElo when the account server answers
+      boxResultShown = !!r.boxFight;
+      resultShown = r;
+      if (!r.boxFight) {
+        R.bfTable.hidden = true;
+        R.bfTable.replaceChildren();
+      }
+      if (r.boxFight) {
+        // Box Fights: rounds won, not placement (copy built by BoxFights.boxResultCopy)
+        const bf = r.boxFight;
+        R.title.textContent = bf.title;
+        R.sub.textContent = bf.sub;
+        R.placement.textContent = bf.tile;
+        renderBoxTable(bf);
+      } else if (team) {
         R.title.textContent = r.victory ? 'LAST TEAM STANDING' : `YOUR ${noun.toUpperCase()} IS OUT`;
         R.sub.textContent = r.victory
           ? `Your ${noun} outlasted ${r.teams - 1} team${r.teams - 1 === 1 ? '' : 's'} in Bentonville.`
@@ -1053,8 +1276,7 @@ export function createMenus(root, opts = {}) {
           R.confetti.appendChild(c);
         }
       }
-      // multiplayer: no instant rematch; the host makes a new room
-      result.querySelector('[data-act=again]').hidden = !!r.mp;
+      renderResultActions();
       if (r.difficulty && !r.ranked) {
         const why = (r.bots | 0) > 0 ? `Unranked match (${String(r.difficulty).toUpperCase()} bots). ${RANKED_NOTE}` : 'No rewards. Bots were off, so you get no coins and this match does not count on the ranks.';
         R.sub.textContent += ` ${why}`;
@@ -1068,6 +1290,23 @@ export function createMenus(root, opts = {}) {
       R.adBtn.hidden = !show;
       R.adText.textContent = text;
       R.adBtn.disabled = !!disabled;
+    },
+    /** Box Fights: the Elo row on the result screen (only while a Box Fights result is showing). */
+    showBoxElo({ elo, delta, tier } = {}) {
+      if (!boxResultShown || current !== result || !Number.isFinite(elo)) return;
+      const d = Number.isFinite(delta) ? Math.round(delta) : 0;
+      // the tier comes from our own list (by the Elo), never from text the server sent
+      const t = tierOf(elo);
+      R.boxTier.textContent = t.name;
+      R.boxTier.dataset.tier = t.id;
+      R.boxTier.hidden = !R.boxTier.textContent;
+      R.boxEloNum.textContent = `${Math.round(elo)} ELO`;
+      // the sign is text (+ / −), never colour alone
+      R.boxDelta.textContent = `(${d >= 0 ? '+' : '−'}${Math.abs(d)})`;
+      R.boxDelta.classList.toggle('is-up', d > 0);
+      R.boxDelta.classList.toggle('is-down', d < 0);
+      R.boxDelta.setAttribute('aria-label', d >= 0 ? `up ${d}` : `down ${Math.abs(d)}`);
+      R.boxElo.hidden = false;
     },
     showReward(n) {
       if (!(n > 0) || !result.classList.contains('is-reveal')) return;

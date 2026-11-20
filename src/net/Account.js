@@ -11,11 +11,16 @@
 //   await acct.report(name, reason, note) -> confirmation text   private player report for the devs
 //   await acct.mod(op, body) -> lines[]     DEV panel actions (modBan, modTitle, ...); the server checks dev rights
 //   await acct.buy(id) / acct.equip({ skin, pickaxe, backbling, emotes })
-//   await acct.reward({ kills, placement, players, won, ranked }) -> { earned, saved, ranked, guest?, error? }
+//   acct.matchStart()  asks the server for a match ticket; reward() sends it back (one result per match)
+//   await acct.reward({ kills, placement, players, won, ranked }) -> { earned, saved, ranked, rankedReason, guest?, error? }
+//   await acct.boxResult({ won, size, oppElo, score:[us, them], forfeit, wins })   (wins: rounds to win, 1..9)
+//     -> { ok:true, elo, delta, tier:{id,name}, games } | { guest:true } | { ok:false, rateLimited:true } | { ok:false, error }
+//   profile.box = { elo, games, wins, peak, tier:{id,name} }   Box Fights Elo (client-reported results, not verified)
 //   await acct.friendAdd(name) / friendAccept / friendDecline / friendRemove / invite(name, partyCode)
 //   await acct.leaderboard() -> { online, wins:[{name,wins,kills}], kills:[...] }
 //   acct.setStatus('lobby'|'match', partyCode)
-//   await acct.feedbackList() / feedback(kind, text) / feedbackVote(id)   suggestions + bugs board
+//   await acct.feedbackList() / feedback(kind, text) / feedbackVote(id)
+//   await acct.feedbackReply(id, text) / feedbackDelete(id, replyId?)   suggestions + bugs board
 //   acct.on('change', fn(profile)) / on('friends', fn({list, incoming, outgoing})) / on('invite', fn({from, code}))
 //   acct.on('request', fn(from)) / on('online', fn(bool))
 //
@@ -23,7 +28,8 @@
 // require a signed-in account. Guest localStorage no longer stores a coin balance.
 
 import { partyHost, isLocal } from './Net.js';
-import { DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, SKINS, EMOTES, PICKAXES, BACKBLINGS } from '../game/Cosmetics.js';
+import { DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, SKINS, EMOTES, PICKAXES, BACKBLINGS, GLIDERS } from '../game/Cosmetics.js';
+import { ELO_START, clampElo, tierOf } from '../game/BoxElo.js';
 
 const TOKEN_KEY = 'bentonville-royale.account';
 const GUEST_KEY = 'bentonville-royale.guest';
@@ -82,9 +88,19 @@ async function api(op, body = {}) {
   if (!res.ok || !data || data.error) {
     const e = new Error((data && data.error) || 'Account server error.');
     e.status = res.status;
+    e.rateLimited = !!(data && data.rateLimited);
     throw e;
   }
   return data;
+}
+
+/** Box Fights ladder numbers from the server (or defaults), clamped; the tier follows the Elo. */
+export function boxProfile(b) {
+  const src = b && typeof b === 'object' ? b : {};
+  const n = (v) => (Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+  const elo = Number.isFinite(src.elo) ? clampElo(src.elo) : ELO_START;
+  const peak = Number.isFinite(src.peak) ? clampElo(src.peak) : elo;
+  return { elo, games: n(src.games), wins: n(src.wins), peak: Math.max(peak, elo), tier: tierOf(elo) };
 }
 
 function guestProfile() {
@@ -107,6 +123,7 @@ function guestProfile() {
       skin: owned.includes(eq.skin) && SKINS[eq.skin] ? eq.skin : DEFAULT_EQUIPPED.skin,
       pickaxe: owned.includes(eq.pickaxe) && PICKAXES[eq.pickaxe] ? eq.pickaxe : DEFAULT_EQUIPPED.pickaxe,
       backbling: owned.includes(eq.backbling) && BACKBLINGS[eq.backbling] ? eq.backbling : DEFAULT_EQUIPPED.backbling,
+      glider: owned.includes(eq.glider) && GLIDERS[eq.glider] ? eq.glider : DEFAULT_EQUIPPED.glider,
       emotes: Array.from({ length: EMOTE_SLOTS }, (_, i) => {
         const e = Array.isArray(eq.emotes) ? eq.emotes[i] : DEFAULT_EQUIPPED.emotes[i];
         return e && owned.includes(e) && EMOTES[e] ? e : null;
@@ -116,6 +133,7 @@ function guestProfile() {
     incoming: [],
     outgoing: [],
     stats: { matches: 0, wins: 0, kills: 0 },
+    box: boxProfile(null),
   };
 }
 
@@ -126,6 +144,7 @@ export function createAccount() {
   let ws = null;
   let wsTimer = 0;
   let status = { s: 'lobby', party: null };
+  let matchTicket = null; // Promise<matchId|null> from matchStart, used once by reward
   let friendsData = { list: [], incoming: [], outgoing: [] };
 
   const acct = {
@@ -247,22 +266,34 @@ export function createAccount() {
       return r.profile;
     },
 
-    async equip({ skin, emotes, pickaxe, backbling } = {}) {
+    async equip({ skin, emotes, pickaxe, backbling, glider } = {}) {
       const p = acct.profile;
       // optimistic: the locker updates at once, the server confirms
       if (skin && p.owned.includes(skin)) p.equipped.skin = skin;
       if (pickaxe && p.owned.includes(pickaxe)) p.equipped.pickaxe = pickaxe;
       if (backbling && p.owned.includes(backbling)) p.equipped.backbling = backbling;
+      if (glider && p.owned.includes(glider)) p.equipped.glider = glider;
       if (emotes) p.equipped.emotes = emotes.slice(0, EMOTE_SLOTS);
       emit('change', p);
       if (!acct.signedIn) {
         saveGuest();
         return p;
       }
-      const r = await api('equip', { token, skin, emotes, pickaxe, backbling });
+      const r = await api('equip', { token, skin, emotes, pickaxe, backbling, glider });
       setProfile(r.profile);
       if (skin) acct.setStatus(status.s, status.party);
       return r.profile;
+    },
+
+    /** A match began: ask the server for the ticket that reward() must send back. */
+    matchStart() {
+      if (!acct.signedIn) {
+        matchTicket = null;
+        return;
+      }
+      matchTicket = api('matchStart', { token })
+        .then((r) => (r && typeof r.matchId === 'string' ? r.matchId : null))
+        .catch(() => null);
     },
 
     /**
@@ -272,11 +303,46 @@ export function createAccount() {
     async reward({ kills = 0, placement = 1, players = 1, won = false, ranked = false } = {}) {
       if (!acct.signedIn) return { earned: 0, saved: false, guest: true };
       try {
-        const r = await api('reward', { token, kills, placement, players, won, ranked: !!ranked });
+        // Send the ticket when we have one; the server decides. An account server deployed before
+        // match tickets existed answers matchStart with "Unknown request." but still takes results,
+        // so a missing ticket must not stop the result from being sent.
+        const matchId = await matchTicket;
+        matchTicket = null;
+        const body = { token, kills, placement, players, won, ranked: !!ranked };
+        if (matchId) body.matchId = matchId;
+        const r = await api('reward', body);
         setProfile(r.profile);
-        return { earned: r.earned || 0, saved: true, rateLimited: !!r.rateLimited, ranked: r.ranked === true };
+        return { earned: r.earned || 0, saved: true, rateLimited: !!r.rateLimited, ranked: r.ranked === true, rankedReason: r.rankedReason || null };
       } catch (err) {
         return { earned: 0, saved: false, error: err && err.message ? err.message : 'Could not save match stats.' };
+      }
+    },
+
+    /**
+     * Box Fights result for the Elo ladder. The server computes the change from its stored rating;
+     * the result itself is reported by this browser and is not verified. Guests are never sent.
+     */
+    async boxResult({ won = false, size = 1, oppElo = ELO_START, score = [0, 0], forfeit = false, wins = 3 } = {}) {
+      if (!acct.signedIn) return { guest: true };
+      const sc = Array.isArray(score) ? [score[0] | 0, score[1] | 0] : [0, 0];
+      try {
+        // only the keys the server accepts (any other key is refused)
+        const w = Number.isInteger(wins) && wins >= 1 && wins <= 9 ? wins : 3;
+        // `wins` only when it is not the old fixed 3, so a not-yet-updated account server still takes first-to-3
+        const body = { token, won: !!won, size: size | 0, oppElo: clampElo(oppElo), score: sc, forfeit: !!forfeit };
+        if (w !== 3) body.wins = w;
+        const r = await api('boxResult', body);
+        if (!r || r.ok !== true || !Number.isFinite(r.elo)) return { ok: false, rateLimited: !!(r && r.rateLimited), error: 'Box Fights Elo is unavailable right now.' };
+        const elo = clampElo(r.elo);
+        const delta = Number.isFinite(r.delta) ? Math.round(r.delta) : 0;
+        const prev = boxProfile(acct.profile.box);
+        const games = Number.isFinite(r.games) ? r.games : prev.games + 1;
+        acct.profile = { ...acct.profile, box: boxProfile({ elo, games, wins: prev.wins + (won ? 1 : 0), peak: Math.max(prev.peak, elo) }) };
+        emit('change', acct.profile);
+        return { ok: true, elo, delta, tier: tierOf(elo), games };
+      } catch (err) {
+        if (err && (err.rateLimited || err.status === 429)) return { ok: false, rateLimited: true };
+        return { ok: false, error: err && err.message ? err.message : 'Box Fights Elo is unavailable right now.', status: err && err.status };
       }
     },
 
@@ -312,6 +378,13 @@ export function createAccount() {
     async feedbackVote(id) {
       return (await api('feedbackVote', { id, token: token || undefined, anon: anonId() })).item;
     },
+    async feedbackReply(id, text) {
+      return (await api('feedbackReply', { id, text, token: token || undefined, anon: anonId() })).item;
+    },
+    async feedbackDelete(id, replyId) {
+      const r = await api('feedbackDelete', { id, replyId: replyId || undefined, token });
+      return r.item || r;
+    },
 
     setStatus(s, party) {
       status = { s, party: party || null };
@@ -334,7 +407,7 @@ export function createAccount() {
   function setProfile(p) {
     // an older server may not send the newer loadout slots yet
     const eq = { ...DEFAULT_EQUIPPED, ...(p.equipped || {}) };
-    acct.profile = { ...p, owned: [...new Set([...(p.owned || []), ...DEFAULT_OWNED])], equipped: eq, guest: false };
+    acct.profile = { ...p, owned: [...new Set([...(p.owned || []), ...DEFAULT_OWNED])], equipped: eq, guest: false, box: boxProfile(p.box) };
     emit('change', acct.profile);
   }
 

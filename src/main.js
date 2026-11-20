@@ -7,6 +7,8 @@ import { sfx } from './audio/Sfx.js';
 import { createGoogleTilesController, hasGoogleTilesKey } from './render/GoogleTiles.js';
 import { inject as injectAnalytics } from '@vercel/analytics';
 import { teamSize, normalizeMode } from './game/Teams.js';
+import { normalizeGame, validGameMode, lobbyStartCheck } from './game/GameModes.js';
+import { boxMatchConfig } from './game/BoxFights.js';
 import { createAccount } from './net/Account.js';
 import { createMeta } from './ui/meta.js';
 import { RANKED_NOTE } from './core/config.js';
@@ -14,6 +16,8 @@ import { lookString, parseLook } from './game/Cosmetics.js';
 import { sameWorld } from './net/worldIdentity.js';
 import { createAds, pickPlatform } from './net/Ads.js';
 import { createReportForm } from './ui/reportForm.js';
+import { createBoxLobbyFlow } from './ui/boxLobbyFlow.js';
+import { keyLabel } from './ui/settings.js';
 
 // Ads (src/net/Ads.js): CrazyGames SDK in the portal build, AdSense H5 when VITE_ADSENSE_CLIENT is
 // set, else none. While an ad plays the game is muted and ignores input.
@@ -107,6 +111,7 @@ const menus = createMenus(uiRoot, {
   onPartyReady: (on) => party && party.ready(on),
   onPartyCancel: () => party && party.cancel(),
   onPartyMode: (mode) => partySetMode(mode),
+  onPartyGame: (g) => partySetGame(g),
   onPartyFill: (on) => partySetFill(on),
   onPartyKick: (id) => party && party.kick(id),
   onPartyPromote: (id) => party && party.promote(id),
@@ -126,27 +131,27 @@ const menus = createMenus(uiRoot, {
       menus.showTitle();
     }
   }),
-  onMuseum: unlessBanned(async () => {
-    try {
-      unreadyForSolo();
-      closeMultiplayer();
-      await ensureLoaded();
-      game.startMatch(undefined, { freeBuild: true, museum: true });
-    } catch (err) {
-      console.error(err);
-      showError('Could not open the museum: ' + (err && err.message ? err.message : err));
-      menus.showTitle();
-    }
-  }),
   onPlayAgain: unlessBanned(async () => {
     if (menus.current === 'result') await ads.interstitial('match-end'); // a natural break, on the player's click
-    playLocal(lastLocal.mode, lastLocal.fill);
+    // a Box Fight replays the same size; everything else replays the last local match
+    const bf = game && game.result && game.result.boxFight;
+    if (bf) playBoxFight({ mode: bf.mode, ffaPlayers: bf.ffaPlayers, winRounds: bf.winRounds });
+    else playLocal(lastLocal.mode, lastLocal.fill); // the match just played was a battle royale
   }),
+  // Box Fights custom lobbies (src/ui/boxLobbyFlow.js): title entry + results BACK TO LOBBY
+  onBoxLobbies: unlessBanned(() => boxFlow && boxFlow.openHome()),
+  onBoxBack: () => boxFlow && boxFlow.backToLobby(),
   onAdReward: () => watchAdForCoins('match-coins').then(() => setTimeout(refreshAdButton, 2500)),
   onResume: () => game && game.pause(false),
   onReport: () => reportForm.open(),
   onLeave: async () => {
     if (menus.current === 'result') await ads.interstitial('match-end');
+    if (boxFlow && boxFlow.owns()) {
+      // a Box Fights lobby match / Play with Bots: out of the match (and the lobby) to Box Fights home
+      boxFlow.leave();
+      renderParty();
+      return;
+    }
     if (game) game.leave();
     closeMultiplayer();
     sfx.playMusic('menu');
@@ -158,8 +163,9 @@ const menus = createMenus(uiRoot, {
   onLobbyFill: (on) => mp && mp.room && mp.room.setFill(on),
   onLobbyMode: (mode) => {
     if (!mp || !mp.room) return;
-    mp.room.setMode(normalizeMode(mode));
+    mp.room.setMode(gameMode(mp.room.game, mode));
   },
+  onLobbyGame: (g) => mp && mp.room && mp.room.setGame(normalizeGame(g)),
   onLobbyReady: (on) => mp && mp.conn && mp.conn.setReady(on),
   onLobbyLeave: () => {
     closeMultiplayer();
@@ -268,8 +274,10 @@ function errText(err, fallback) {
 
 function hostLobby(info, extra = {}) {
   const waiting = (info.players || []).filter((p) => !p.host && !p.ready).length;
-  const status = waiting ? `Waiting for ${waiting} to ready up.` : 'Share the code. Start when everyone is in.';
-  return { ...info, isHost: true, canStart: !waiting, status, ...extra };
+  // Box Fights: two teams of the mode's size, so too many players (or a lonely No Fill) can't start
+  const check = lobbyStartCheck({ game: info.game, mode: info.mode, fill: info.fill, humans: (info.players || []).length });
+  const status = !check.ok ? check.status : waiting ? `Waiting for ${waiting} to ready up.` : 'Share the code. Start when everyone is in.';
+  return { ...info, isHost: true, canStart: !waiting && check.ok, status, ...extra };
 }
 
 function clientLobby(info, extra = {}) {
@@ -321,13 +329,21 @@ async function hostMultiplayer(name) {
   }
 }
 
+/** A mode id for `game`: Box Fights keeps 'ffa'; everything else is a team size (Teams.normalizeMode). */
+function gameMode(game, mode) {
+  return normalizeGame(game) === 'boxfights' && mode === 'ffa' ? 'ffa' : normalizeMode(mode);
+}
+
 /** Private-match START (host): only when every guest is ready. */
 function startHostedMatch() {
   const me = mp;
   if (!me || me.role !== 'host' || !me.room || me.room.closed || me.room.started) return;
   if (!me.room.allReady()) return;
-  const mode = normalizeMode(me.room.mode);
-  return runHostedMatch(me, { fill: me.room.fill, mode, humanTeams: joinOrderTeams(me.room.players, mode) });
+  const kind = normalizeGame(me.room.game);
+  const mode = gameMode(kind, me.room.mode);
+  // checked again here: the lobby screen may be a beat behind the room
+  if (!lobbyStartCheck({ game: kind, mode, fill: me.room.fill, humans: me.room.players.length }).ok) return;
+  return runHostedMatch(me, { fill: me.room.fill, mode, game: kind, humanTeams: joinOrderTeams(me.room.players, mode) });
 }
 
 async function runHostedMatch(me, sessionOpts) {
@@ -392,7 +408,7 @@ async function joinMultiplayer(code, name, match = null) {
       if (mp !== me) return;
       mp = null;
       matchStatus = '';
-      if (game.state !== 'menu') game.leave();
+      if (game.state !== 'menu') game.leave({ connectionLost: true }); // the host left: not our forfeit
       sfx.playMusic('menu');
       menus.showNotice(reason);
       renderParty();
@@ -453,7 +469,7 @@ let partyMod = null;
 let partyGen = 0;
 let partyConnecting = false;
 let matchStatus = ''; // "Match found! ..." while handing off to the game room
-const lastLocal = { mode: 'solo', fill: true }; // offline mode / fill, and what the next party starts with
+const lastLocal = { mode: 'solo', fill: true, game: 'br' }; // offline game / mode / fill, and what the next party starts with
 // Who's online (src/net/Presence.js): every title screen reports its name and what it is doing,
 // so players can see each other and queue in the same mode at the same time.
 let presence = null;
@@ -523,6 +539,7 @@ function partyView() {
       isLeader: true,
       mode: lastLocal.mode,
       fill: lastLocal.fill,
+      game: lastLocal.game,
       state: 'idle',
       members: [{ id: 'me', name: menus.playerName(), ready: true, leader: true, you: true }],
       match: matchStatus,
@@ -537,6 +554,7 @@ function partyView() {
     isLeader: party.isLeader,
     mode: p.mode,
     fill: p.fill,
+    game: normalizeGame(p.game),
     state: p.state,
     queuedSince: p.queuedSince,
     members: p.members.map((m) => ({ ...m, you: m.id === party.you })),
@@ -560,6 +578,7 @@ const account = createAccount();
 // "Report a player": lobby ONLINE list + pause menu. Private reports for the devs (/reports in chat).
 const reportForm = createReportForm(menus.el, account, { onClick: () => sfx.play('ui_click') });
 let meta = null;
+let boxFlow = null; // Box Fights custom lobbies (created once the Game exists)
 
 // The party this tab is in survives a page refresh: rejoined with the same tab token, the
 // party server hands back our old slot (party/partyRoom.js keeps it ~20 s).
@@ -589,7 +608,7 @@ async function joinParty(code = null, quiet = false) {
   renderParty();
   try {
     partyMod = partyMod || (await import('./net/Party.js'));
-    const p = await partyMod.openParty({ name: menus.playerName(), code, mode: lastLocal.mode, fill: lastLocal.fill, skin: lookString(account.profile.equipped) });
+    const p = await partyMod.openParty({ name: menus.playerName(), code, game: lastLocal.game, mode: lastLocal.mode, fill: lastLocal.fill, skin: lookString(account.profile.equipped) });
     if (gen !== partyGen) return p.leave();
     partyConnecting = false;
     party = p;
@@ -602,6 +621,7 @@ async function joinParty(code = null, quiet = false) {
       if (party !== p) return;
       lastLocal.mode = st.mode;
       lastLocal.fill = st.fill;
+      lastLocal.game = normalizeGame(st.game);
       renderParty();
     };
     p.onNotice = (text, isError) => party === p && menus.partyNotice(text, isError);
@@ -633,10 +653,22 @@ async function joinParty(code = null, quiet = false) {
 
 function partySetMode(mode) {
   mode = normalizeMode(mode);
+  if (!validGameMode(lastLocal.game, mode)) return; // not a mode of the chosen game
   if (party) party.setMode(mode);
   else {
     lastLocal.mode = mode;
     if (mode === 'solo') lastLocal.fill = true;
+    renderParty();
+  }
+}
+
+/** BATTLE ROYALE | BOX FIGHTS for the party (the leader's choice; offline: the next PLAY). */
+function partySetGame(g) {
+  g = normalizeGame(g);
+  if (party && party.setGame) party.setGame(g);
+  else {
+    lastLocal.game = g;
+    if (!validGameMode(g, lastLocal.mode)) lastLocal.mode = 'solo';
     renderParty();
   }
 }
@@ -652,11 +684,17 @@ function partySetFill(on) {
 /** The big button for the leader: matchmaking online, a local match offline. */
 function partyPlay() {
   if (matchStatus) return;
+  // Box Fights: no matchmaking from the title; PLAY opens the custom lobby browser
+  const g = party && party.party ? normalizeGame(party.party.game) : lastLocal.game;
+  if (g === 'boxfights') {
+    if (boxFlow) boxFlow.openHome();
+    return;
+  }
   if (party && party.party) {
     if (party.isLeader) party.play();
     return;
   }
-  playLocal(lastLocal.mode, lastLocal.fill);
+  playLocal(lastLocal.mode, lastLocal.fill, lastLocal.game);
 }
 
 /** A party member who goes off to play alone is no longer ready for the party's match. */
@@ -665,6 +703,7 @@ function unreadyForSolo() {
 }
 
 function onMatchFound(plan) {
+  if (boxFlow && boxFlow.busy()) return; // in a Box Fights custom lobby
   const token = party.token;
   const mine = (plan.teams || []).some((t) => (t.tokens || []).includes(token));
   if (!mine) return;
@@ -700,7 +739,9 @@ async function hostMatch(plan, name, token) {
     const room = await hostRoom({ name, code: plan.code });
     if (mp !== me) return room.close();
     me.room = room;
-    room.mode = normalizeMode(plan.mode);
+    room.game = normalizeGame(plan.game);
+    room.mode = gameMode(room.game, plan.mode);
+    if (!validGameMode(room.game, room.mode)) throw new Error('This match type is not available.');
     preloadInLobby();
     room.onError = (text) => mp === me && console.warn('[net]', text);
     // wait for every expected player (or HOST_WAIT_MS; late joiners are turned away)
@@ -737,7 +778,7 @@ async function hostMatch(plan, name, token) {
       .map((t) => ({ ids: t.tokens.filter((tok) => slotOf.has(tok)).map((tok) => slotOf.get(tok)), allowBots: !!t.allowBots }))
       .filter((t) => t.ids.length);
     matchStatus = '';
-    await runHostedMatch(me, { fill: true, mode: room.mode, humanTeams });
+    await runHostedMatch(me, { fill: true, mode: room.mode, game: room.game, humanTeams });
   } catch (err) {
     console.error(err);
     if (mp !== me) return;
@@ -748,8 +789,28 @@ async function hostMatch(plan, name, token) {
   }
 }
 
+/**
+ * Box Fights vs bots in the indoor arena. opts: { mode: 'solo'|'duo'|'trio' (1v1..3v3, first to
+ * winRounds, default 5) | 'ffa' (ffaPlayers 2..6, default 6), winRounds?, botDifficulty? } — validated
+ * by boxMatchConfig (bot difficulty defaults to the local setting).
+ */
+async function playBoxFight(opts = {}) {
+  const cfg = boxMatchConfig(opts);
+  try {
+    unreadyForSolo();
+    closeMultiplayer();
+    await ensureLoaded();
+    game.startMatch(undefined, { boxFight: { mode: cfg.mode, ffaPlayers: cfg.sides, winRounds: cfg.winRounds, botDifficulty: cfg.botDifficulty } });
+  } catch (err) {
+    console.error(err);
+    showError('Could not start the box fight: ' + (err && err.message ? err.message : err));
+    menus.showTitle();
+  }
+}
+
 /** Local match with bots (offline, Free Build aside, and PLAY AGAIN after one). */
-async function playLocal(mode = 'solo', fill = true) {
+async function playLocal(mode = 'solo', fill = true, kind = 'br') {
+  if (normalizeGame(kind) === 'boxfights') return playBoxFight({ mode }); // 'squad' (no 4v4) falls back to 1v1
   lastLocal.mode = normalizeMode(mode);
   lastLocal.fill = fill;
   try {
@@ -787,7 +848,38 @@ try {
       if (party) party.setName(name);
     },
   });
+  boxFlow = createBoxLobbyFlow({
+    game,
+    menus,
+    sfx,
+    deps: {
+      account,
+      ensureLoaded,
+      loadGame,
+      closeMultiplayer,
+      unreadyForSolo,
+      playBoxFight,
+      onBack: () => {
+        menus.showTitle();
+        renderParty();
+      },
+      onClick: () => sfx.play('ui_click'),
+      onHover: () => sfx.play('ui_hover', { volume: 0.4 }),
+      keyLabel: (a) => keyLabel((settings.bindings || {})[a]),
+      onCosmetics: (c) => {
+        game.setCosmetics(c);
+        if (party && party.setSkin) party.setSkin(lookString(c));
+        if (meta) meta.refresh();
+      },
+    },
+  });
+  // Box Fights Elo we report to other players in a match (guests: the 1000 start)
+  const syncBoxElo = (p) => {
+    game.boxEloSelf = !p.guest && p.box && Number.isFinite(p.box.elo) ? p.box.elo : 1000;
+  };
+  syncBoxElo(account.profile);
   account.on('change', (p) => {
+    syncBoxElo(p);
     if (p.guest) menus.setAccountName(null);
     syncPresence();
   });
@@ -810,8 +902,38 @@ try {
     if (!p.guest) menus.setAccountName(p.name);
   };
   account.init().then(afterAuth);
+  // the server only saves a result that closes the ticket opened here (party/matchStats.js)
+  game.onMatchStart = () => account.matchStart();
   // coins + leaderboard stats for every finished match
+  // Box Fights hide the city: Google's real-world tiles go off with it and come back after
+  game.onBoxFightChange = (on) => googleTiles.setEnabled(!on && !!settings.googleTiles && !settings.performanceMode);
   game.onMatchEnd = async (r) => {
+    if (boxFlow) boxFlow.onGameMatchEnd(r); // a lobby host reports the score; results get BACK TO LOBBY
+    if (r.boxFight) {
+      // Box Fights: no coins; a Box Elo change computed by the account server from this browser's report
+      const bf = r.boxFight;
+      if (!account.signedIn) {
+        if (meta) meta.matchReward(0, 'Sign in to earn a Box Fights Elo.');
+        return;
+      }
+      if (bf.ffa) {
+        if (meta) meta.matchReward(0, 'Box Fights FFA is not rated.');
+        return;
+      }
+      if (!bf.rated) {
+        if (meta) meta.matchReward(0, 'No round was fought, so this Box Fight is not rated.');
+        return;
+      }
+      const out = await account.boxResult({ won: !!bf.won, size: bf.size, oppElo: bf.oppElo, score: bf.score, forfeit: !!bf.forfeit, wins: bf.winRounds });
+      if (!meta) return;
+      if (out.guest) meta.matchReward(0, 'Sign in to earn a Box Fights Elo.');
+      else if (out.ok) {
+        menus.showBoxElo({ elo: out.elo, delta: out.delta, tier: out.tier });
+        meta.matchReward(0, `Box Elo ${out.elo} (${out.delta >= 0 ? '+' : '−'}${Math.abs(out.delta)})`);
+      } else if (out.rateLimited) meta.matchReward(0, 'Too soon to rate another Box Fight.');
+      else meta.matchReward(0, 'Box Fights Elo is unavailable right now.');
+      return;
+    }
     // Humans-only private match: no coins, no rank, no match counted.
     if ((r.bots | 0) === 0) {
       if (meta) meta.matchReward(0, 'No rewards. Bots were off, so you get no coins and this match does not count.');
@@ -825,6 +947,7 @@ try {
     if (out.guest) meta.matchReward(0, 'Sign in to save eliminations and coins.');
     else if (out.saved && out.earned > 0) meta.matchReward(out.earned);
     else if (out.saved && !ranked) meta.matchReward(0, `Not ranked. ${RANKED_NOTE}`);
+    else if (out.saved && out.rankedReason === 'daily') meta.matchReward(0, 'Daily ranked limit reached. Ranked results count again tomorrow (UTC).');
     else if (out.saved && (r.kills | 0) > 0) meta.matchReward(0, `Saved ${r.kills | 0} elim${(r.kills | 0) === 1 ? '' : 's'} to the ranks.`);
     else if (!out.saved && out.error) meta.matchReward(0, out.error);
   };

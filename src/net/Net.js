@@ -22,12 +22,25 @@
 // ClientConn
 //   id (slot; host = 0), code, players, fill, mode, send(msg), sendRaw(buf), setReady(on), close()
 //   onLobby(info), onStart(msg), onMessage(msg), onRaw(buf), onClose(reason)
+//   onPromoted(promotion) -> true when the match was taken over (see HOST MIGRATION below)
+//
+// HOST MIGRATION (Box Fights lobby matches; party/server.js header): the relay can promote a
+// guest's socket to host with the control frame '@:' {t:'promoted', code, max, guests}. ClientConn
+// cleans it into conn.promotion = { code, max, guests: [{ id, name, token }] } and calls
+// conn.onPromoted(promotion) (ClientSession sets it). If nothing takes over (handler missing or
+// returns false) the guest leaves as if the host had left. To take over, call
+//   const room = hostRoomFromGuest(conn, { name, game, mode, fill })   -> HostRoom on the same socket
+// The room already lists the remaining guests (no welcome / lobby frames are sent) and is
+// `started`; conn is closed for client use and conn.close() closes the room instead.
+// Other guests get {t:'hostLost', graceMs} / {t:'newHost', id} through onMessage.
 //
 // Everything travels over one ordered, reliable WebSocket (no separate
 // unreliable channel); see party/server.js for the frame routing format.
 
 import { PROTO_VERSION, MAX_HUMANS, randomCode, normalizeCode, validCode, makeReassembler } from './protocol.js';
 import { nameIsClean } from './chatFilter.js';
+import { normalizeGame, validGameMode, boxFightSlots } from '../game/GameModes.js';
+import { normalizeMode } from '../game/Teams.js';
 
 const OPEN_MS = 12000;
 const CHUNK = 256 * 1024; // chars per text frame; PartyKit's frame limit is 1 MB
@@ -195,9 +208,11 @@ class HostRoom {
     this.name = name;
     this.fill = true;
     this.mode = 'solo';
+    this.game = 'br'; // 'br' | 'boxfights' (see src/game/GameModes.js)
     this._seq = 0;
     this._started = false;
     this.closed = false;
+    this.quietClose = false; // HostSession sets it for Box Fights (see close())
     this.clients = new Map(); // slot id -> client
     this._lobbyFns = [];
     this.onMessage = null;
@@ -213,6 +228,18 @@ class HostRoom {
       for (const c of [...this.clients.values()]) this._drop(c.id);
       if (this.onError) this.onError('Lost the connection to the multiplayer server.');
     };
+  }
+
+  /**
+   * Host migration: the guests the relay already holds for this room (promoted.guests). They are in
+   * the match, so no welcome / lobby frames go out; the room counts as started.
+   */
+  _adoptGuests(list) {
+    this._started = true; // the relay's room is already started; no control frame needed
+    for (const g of list || []) {
+      if (this.clients.has(g.id)) continue;
+      this.clients.set(g.id, { id: g.id, name: cleanName(g.name), token: g.token || null, ready: true, seq: ++this._seq, bytesOut: 0, bytesIn: 0, reasm: makeReassembler() });
+    }
   }
 
   /** Setting `started` (HostSession does at match start) closes the room to new joins. */
@@ -240,8 +267,13 @@ class HostRoom {
     return true;
   }
 
+  /** Most humans the chosen game takes (Box Fights: two teams of the mode's size). */
+  get capacity() {
+    return this.game === 'boxfights' ? boxFightSlots(this.mode) || 2 : MAX_HUMANS;
+  }
+
   lobbyInfo() {
-    return { code: this.code, link: this.link, players: this.players, fill: this.fill, mode: this.mode, max: MAX_HUMANS, started: this.started };
+    return { code: this.code, link: this.link, players: this.players, fill: this.fill, mode: this.mode, game: this.game, max: this.capacity, started: this.started };
   }
 
   onLobby(fn) {
@@ -251,7 +283,7 @@ class HostRoom {
   _lobbyChanged() {
     const info = this.lobbyInfo();
     for (const fn of this._lobbyFns) fn(info);
-    this.broadcast({ t: 'lobby', players: info.players, fill: info.fill, mode: info.mode, max: info.max });
+    this.broadcast({ t: 'lobby', players: info.players, fill: info.fill, mode: info.mode, game: info.game, max: info.max });
   }
 
   setFill(on) {
@@ -260,8 +292,17 @@ class HostRoom {
   }
 
   setMode(mode) {
-    if (typeof mode !== 'string' || mode === this.mode) return;
+    if (typeof mode !== 'string' || mode === this.mode || !validGameMode(this.game, mode)) return;
     this.mode = mode;
+    this._lobbyChanged();
+  }
+
+  /** 'br' or 'boxfights'; both games have every mode; keep the mode, else fall back to the smallest valid one. */
+  setGame(game) {
+    const g = normalizeGame(game);
+    if (g === this.game) return;
+    this.game = g;
+    if (!validGameMode(g, this.mode)) this.mode = 'solo';
     this._lobbyChanged();
   }
 
@@ -314,7 +355,7 @@ class HostRoom {
 
   _join(id, name, token) {
     if (this.started) return this._ctl({ t: 'kick', id, reason: 'started' });
-    if (this.clients.size >= MAX_HUMANS - 1) return this._ctl({ t: 'kick', id, reason: 'full' });
+    if (this.clients.size >= Math.min(MAX_HUMANS, this.capacity) - 1) return this._ctl({ t: 'kick', id, reason: 'full' });
     const c = { id, name: cleanName(name), token: token || null, ready: false, seq: ++this._seq, bytesOut: 0, bytesIn: 0, reasm: makeReassembler() };
     this.clients.set(id, c);
     this.sendTo(id, { t: 'welcome', id, code: this.code });
@@ -386,7 +427,9 @@ class HostRoom {
 
   close() {
     if (this.closed) return;
-    this.broadcast({ t: 'bye', reason: 'host-left' });
+    // A started Box Fight says no goodbye: in a lobby match the relay hands it to another player
+    // (host migration, party/server.js); elsewhere the relay sends the 'bye' when this socket closes.
+    if (!(this.quietClose && this._started)) this.broadcast({ t: 'bye', reason: 'host-left' });
     this.closed = true;
     const ws = this.ws;
     ws.onclose = null;
@@ -399,6 +442,22 @@ class HostRoom {
       }
     }, 150);
   }
+}
+
+/**
+ * Host migration: wrap a promoted guest connection (conn.promotion set by the relay's 'promoted'
+ * frame) as a HostRoom on the same socket. game / mode / fill describe the running match.
+ */
+export function hostRoomFromGuest(conn, { name, game = 'boxfights', mode = 'solo', fill = true } = {}) {
+  if (!conn || !conn.promotion || conn._room) throw new Error('not promoted');
+  const room = new HostRoom(conn.ws, conn.promotion.code || conn.code, cleanName(name));
+  room.game = normalizeGame(game);
+  room.mode = typeof mode === 'string' ? mode : 'solo';
+  room.fill = !!fill;
+  room._adoptGuests(conn.promotion.guests);
+  conn.closed = true; // no more client sends on this socket
+  conn._room = room;
+  return room;
 }
 
 // ------------------------------------------------------------------ client
@@ -453,6 +512,12 @@ function joinOnce(code, name, token) {
         return;
       }
       conn.bytesIn += ev.data.length;
+      if (ev.data.startsWith('@:')) {
+        // relay control to this socket: only 'promoted' (host migration), only mid-match
+        const ctl = parse(ev.data.slice(2));
+        if (settled && ctl && ctl.t === 'promoted') conn._promoted(ctl);
+        return;
+      }
       const msg = reasm(parse(ev.data));
       if (!msg) return;
       if (!settled) {
@@ -491,6 +556,37 @@ class ClientConn {
     this.onMessage = null;
     this.onRaw = null;
     this.onClose = null;
+    this.onPromoted = null;
+    this.promotion = null; // set when the relay made this socket the host (see hostRoomFromGuest)
+    this._room = null; // the HostRoom that took the socket over
+  }
+
+  /** The relay promoted this socket to host (Box Fights lobby host migration). */
+  _promoted(msg) {
+    if (this.closed || this.promotion) return;
+    const guests = [];
+    for (const g of Array.isArray(msg.guests) ? msg.guests.slice(0, MAX_HUMANS) : []) {
+      if (!g || !Number.isInteger(g.id) || g.id < 1 || g.id >= MAX_HUMANS || guests.some((x) => x.id === g.id)) continue;
+      guests.push({ id: g.id, name: cleanName(g.name), token: typeof g.token === 'string' ? g.token.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || null : null });
+    }
+    const max = Number.isInteger(msg.max) && msg.max >= 1 && msg.max <= MAX_HUMANS ? msg.max : MAX_HUMANS;
+    this.promotion = { code: this.code, max, guests };
+    let took = false;
+    try {
+      took = !!(this.onPromoted && this.onPromoted(this.promotion));
+    } catch (err) {
+      console.error(err);
+    }
+    if (took) return;
+    // nobody could take the match over: leave like before (guests get 'bye', the relay sees the close)
+    const room = this._room;
+    if (room) {
+      room.onError = room.onMessage = room.onState = room.onLeave = null;
+      room.close();
+      this._room = null;
+    }
+    this.closed = false;
+    this._closed(MSG.hostLeft);
   }
 
   _raw(buf) {
@@ -503,8 +599,9 @@ class ClientConn {
     if (msg.t === 'lobby') {
       this.players = msg.players || [];
       this.fill = !!msg.fill;
-      if (msg.mode) this.mode = msg.mode;
-      this.max = msg.max || MAX_HUMANS;
+      if (msg.mode) this.mode = normalizeMode(msg.mode);
+      this.game = normalizeGame(msg.game);
+      this.max = Number.isInteger(msg.max) && msg.max >= 1 && msg.max <= MAX_HUMANS ? msg.max : MAX_HUMANS;
       if (this.onLobby) this.onLobby(this.lobbyInfo());
     } else if (msg.t === 'start') {
       if (this.onStart) this.onStart(msg);
@@ -516,7 +613,7 @@ class ClientConn {
   }
 
   lobbyInfo() {
-    return { code: this.code, link: shareLink(this.code), players: this.players, fill: this.fill, mode: this.mode, max: this.max, you: this.id };
+    return { code: this.code, link: shareLink(this.code), players: this.players, fill: this.fill, mode: this.mode, game: this.game || 'br', max: this.max, you: this.id };
   }
 
   /** Private-match lobby: tell the host this player is ready (or not). */
@@ -559,8 +656,9 @@ class ClientConn {
     if (this.onClose) this.onClose(reason);
   }
 
-  /** Leave on purpose (no "host left" message). */
+  /** Leave on purpose (no "host left" message). After a takeover this closes the HostRoom. */
   close() {
+    if (this._room) return this._room.close();
     if (this.closed) return;
     this.closed = true;
     this.ws.onclose = null;

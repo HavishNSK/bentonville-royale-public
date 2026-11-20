@@ -1,0 +1,189 @@
+{
+  "name": "Primal Barbarian",
+  "model": "bot_b",
+  "rarity": "legendary",
+  "price": 7500,
+  "colors": {
+    "fur": "#f2841a",
+    "hat": "#f2841a",
+    "cape": "#f2841a",
+    "teeth": "#fff6e6",
+    "tunic": "#3a2418",
+    "leather": "#1b1d24",
+    "trim": "#1b1d24",
+    "hair": "#5a3418",
+    "pants": "#fff1d6",
+    "boots": "#1b1d24",
+    "gloves": "#fff1d6",
+    "metal": "#ffc21f"
+  },
+  "addons": [
+    {
+      "shape": "box",
+      "bone": "head",
+      "pos": [
+        0.13,
+        0.85,
+        0.02
+      ],
+      "rot": [
+        0,
+        0,
+        12
+      ],
+      "scale": [
+        0.05,
+        0.06,
+        0.42
+      ],
+      "color": "#15161b",
+      "mirror": true
+    },
+    {
+      "shape": "box",
+      "bone": "head",
+      "pos": [
+        0,
+        0.8,
+        0.3
+      ],
+      "rot": [
+        40,
+        0,
+        0
+      ],
+      "scale": [
+        0.05,
+        0.06,
+        0.2
+      ],
+      "color": "#15161b"
+    },
+    {
+      "shape": "box",
+      "bone": "head",
+      "pos": [
+        0.4,
+        0.62,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        -14
+      ],
+      "scale": [
+        0.05,
+        0.22,
+        0.08
+      ],
+      "color": "#15161b",
+      "mirror": true
+    },
+    {
+      "shape": "box",
+      "bone": "head",
+      "pos": [
+        0.395,
+        0.5,
+        -0.22
+      ],
+      "rot": [
+        0,
+        0,
+        -14
+      ],
+      "scale": [
+        0.05,
+        0.18,
+        0.08
+      ],
+      "color": "#15161b",
+      "mirror": true
+    },
+    {
+      "shape": "box",
+      "bone": "chest",
+      "pos": [
+        0.17,
+        -0.12,
+        -0.32
+      ],
+      "rot": [
+        0,
+        0,
+        28
+      ],
+      "scale": [
+        0.26,
+        0.055,
+        0.04
+      ],
+      "color": "#15161b",
+      "mirror": true
+    },
+    {
+      "shape": "box",
+      "bone": "chest",
+      "pos": [
+        0.17,
+        -0.33,
+        -0.335
+      ],
+      "rot": [
+        0,
+        0,
+        28
+      ],
+      "scale": [
+        0.26,
+        0.055,
+        0.04
+      ],
+      "color": "#15161b",
+      "mirror": true
+    },
+    {
+      "shape": "box",
+      "bone": "chest",
+      "pos": [
+        0.17,
+        -0.54,
+        -0.35
+      ],
+      "rot": [
+        0,
+        0,
+        28
+      ],
+      "scale": [
+        0.24,
+        0.055,
+        0.04
+      ],
+      "color": "#15161b",
+      "mirror": true
+    },
+    {
+      "shape": "torus",
+      "bone": "chest",
+      "pos": [
+        0,
+        0.2,
+        0.06
+      ],
+      "rot": [
+        80,
+        0,
+        0
+      ],
+      "scale": [
+        0.66,
+        0.66,
+        0.66
+      ],
+      "tube": 0.09,
+      "color": "#ffc21f"
+    }
+  ]
+}

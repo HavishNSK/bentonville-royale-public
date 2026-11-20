@@ -4,15 +4,18 @@
 // Uses the same relay host as Net.js (?party= / VITE_PARTYKIT_HOST / localhost:1999).
 // Party invite links use ?p=CODE (?party= is already the relay host override).
 //
-//   const p = await openParty({ name, code?, mode?, fill?, skin? })  // code: join that party; none: make one
-//   p.code, p.token, p.you, p.party = { code, leaderId, mode, fill, state, queuedFor, members:[{id,name,ready,leader}] }
+//   const p = await openParty({ name, code?, game?, mode?, fill?, skin? })  // code: join that party; none: make one
+//     game ('br' | 'boxfights', default 'br') is only sent when creating; a join takes the party's game.
+//   p.code, p.token, p.you, p.party = { code, leaderId, game, mode, fill, state, queuedFor, members:[{id,name,ready,leader}] }
+//     party.game is 'br' when an older server leaves it out.
 //   p.isLeader, p.me
-//   p.onState(party), p.onMatch({ code, hostToken, teams:[{tokens, allowBots}], mode }), p.onNotice(text, isError)
+//   p.onState(party), p.onMatch({ code, hostToken, teams:[{tokens, allowBots}], mode, game }), p.onNotice(text, isError)
 //   p.onClose(reason)   reason: 'kicked' | 'lost'
-//   p.ready(on), p.setName(n), p.setMode(m), p.setFill(on), p.kick(id), p.promote(id), p.play(), p.cancel(), p.leave()
+//   p.ready(on), p.setName(n), p.setGame(g), p.setMode(m), p.setFill(on), p.kick(id), p.promote(id), p.play(), p.cancel(), p.leave()
 
 import { partyUrl, cleanName } from './Net.js';
 import { randomCode, normalizeCode, validCode } from './protocol.js';
+import { normalizeGame } from '../game/GameModes.js';
 
 const OPEN_MS = 8000;
 const TOKEN_KEY = 'bentonville-royale.partyToken';
@@ -20,6 +23,7 @@ const TOKEN_KEY = 'bentonville-royale.partyToken';
 export const PARTY_MSG = {
   notFound: (c) => `No party with code ${c}.`,
   full: 'That party is full (4 players).',
+  fullBox: 'That Box Fights party is full (4 players).',
   busy: 'That party is in matchmaking. Try again in a moment.',
   badCode: 'Party codes are 4 letters, like ABCD.',
   offline: 'Could not reach the party server.',
@@ -63,7 +67,7 @@ export function inviteFromUrl() {
   }
 }
 
-export function openParty({ name, code = null, mode = 'solo', fill = true, skin = '' }) {
+export function openParty({ name, code = null, game = 'br', mode = 'solo', fill = true, skin = '' }) {
   const token = partyToken();
   if (code) {
     const c = normalizeCode(code);
@@ -72,7 +76,7 @@ export function openParty({ name, code = null, mode = 'solo', fill = true, skin 
   }
   let tries = 0;
   const attempt = () =>
-    connectOnce(randomCode(), { name: cleanName(name), token, skin: skin || '', create: '1', mode, fill: fill ? '1' : '0' }, true).catch((err) => {
+    connectOnce(randomCode(), { name: cleanName(name), token, skin: skin || '', create: '1', game: normalizeGame(game), mode, fill: fill ? '1' : '0' }, true).catch((err) => {
       if (err.reason === 'taken' && tries++ < 5) return attempt();
       throw err;
     });
@@ -159,12 +163,13 @@ class PartyConn {
       this.you = msg.you;
       // local clock for the matchmaking timer
       const p = msg.party;
+      p.game = normalizeGame(p.game); // older servers send no game
       p.queuedSince = p.state === 'queued' ? performance.now() - (p.queuedFor || 0) : 0;
       if (this.party && this.party.state === 'queued' && p.state === 'queued') p.queuedSince = this.party.queuedSince;
       this.party = p;
       if (this.onState) this.onState(p);
     } else if (msg.t === 'match') {
-      if (this.onMatch) this.onMatch({ code: msg.code, hostToken: msg.hostToken, teams: msg.teams || [], mode: msg.mode });
+      if (this.onMatch) this.onMatch({ code: msg.code, hostToken: msg.hostToken, teams: msg.teams || [], mode: msg.mode, game: normalizeGame(msg.game) });
     } else if (msg.t === 'notice' || msg.t === 'error') {
       if (this.onNotice) this.onNotice(msg.text, msg.t === 'error');
     } else if (msg.t === 'kicked') {
@@ -187,6 +192,9 @@ class PartyConn {
 
   setName(name) {
     return this._send({ t: 'name', name: cleanName(name) });
+  }
+  setGame(game) {
+    return this._send({ t: 'setGame', game: normalizeGame(game) });
   }
   setMode(mode) {
     return this._send({ t: 'setMode', mode });

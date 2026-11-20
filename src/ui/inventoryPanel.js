@@ -8,11 +8,13 @@
 //   panel.setKeyLabels((action) => 'TAB');
 //   panel.hovered()                           // slot index under the cursor, or -1
 //
-// Five big cards mirror the hotbar. Drag a card onto another one to swap them, or
-// drag a card / an ammo or material row out of the panel to drop it on the ground;
-// right-click an ammo / material row (or a stack of heals) to split off how many to drop
-// (pointer events, so mouse / pen / touch all work); a plain click equips that
-// slot. Ammo reserves and building materials are listed underneath. The panel
+// Five big cards mirror the hotbar. Drag a card onto another one to swap them, or click
+// one card and then another (click-to-swap; clicking the picked card again equips it; a
+// click on an empty card with nothing picked equips bare hands there). Drag a card / an
+// ammo or material row out of the panel to drop it on the ground; right-click an ammo /
+// material row (or a stack of heals) to split off how many to drop (pointer events, so
+// mouse / pen / touch all work; move / up are read on window so a lost pointer capture
+// never strands a drag). Ammo reserves and building materials are listed underneath. The panel
 // never mutates the inventory itself: Game.swapSlots() decides (and syncs it
 // to the host in multiplayer). Text goes through textContent; icon() is our
 // own static SVG.
@@ -106,7 +108,7 @@ export function createInventoryPanel(hudEl, opts = {}) {
   lower.append(ammoBox, matBox);
 
   const hint = h('div', 'br-inv-hint');
-  const hintText = h('span', null, 'DRAG TO REORDER · DRAG OUT TO DROP · RIGHT-CLICK TO SPLIT · ');
+  const hintText = h('span', null, 'DRAG OR CLICK TWO SLOTS TO SWAP · DRAG OUT TO DROP · RIGHT-CLICK TO SPLIT · ');
   const closeKey = h('kbd', 'br-key', 'TAB');
   const closeText = h('span', null, 'CLOSE');
   hint.append(hintText, closeKey, closeText);
@@ -211,10 +213,118 @@ export function createInventoryPanel(hudEl, opts = {}) {
     drag.out = on;
     root.classList.toggle('is-dropping', on);
   }
+  // ---- click-to-swap: click a card to pick it, then click another card to swap the two.
+  // Clicking the picked card again equips it. Works without any drag (trackpads, flaky
+  // pointer capture), and goes through the same onSwap() as a drag.
+  let picked = -1;
+  let pickedItem = null; // raw slot object the picked card showed (stale-swap check)
+  function setPicked(i) {
+    if (picked >= 0) cards[picked].el.classList.remove('is-picked');
+    picked = i;
+    pickedItem = i >= 0 ? shown[i] : null;
+    if (i >= 0) cards[i].el.classList.add('is-picked');
+    root.classList.toggle('is-picking', i >= 0);
+  }
+  function clickCard(i) {
+    if (picked < 0) {
+      // nothing picked: a filled card is picked, an empty one is equipped (bare hands)
+      if (shown[i]) setPicked(i);
+      else if (opts.onSelect) opts.onSelect(i);
+      return;
+    }
+    if (picked === i) {
+      setPicked(-1);
+      if (opts.onSelect) opts.onSelect(i);
+      return;
+    }
+    const a = picked;
+    const expect = [pickedItem, shown[i]];
+    setPicked(-1);
+    if (locked || !opts.onSwap) return;
+    flip = { a, b: i };
+    opts.onSwap(a, i, expect);
+    playFlip();
+  }
+
+  // ---- pointer tracking: move / up / cancel are read on window, not on the pressed card, so
+  // a drag keeps working when pointer capture is refused or lost (the browser releasing it, an
+  // element under the pointer changing) and a release anywhere always ends it.
+  const win = typeof window !== 'undefined' ? window : null;
+  function dragMove(e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    // the button came up without a pointerup reaching us (alt-tab, released outside the page)
+    if (e.pointerType === 'mouse' && e.buttons === 0) {
+      endDrag(false);
+      return;
+    }
+    if (!drag.moved) {
+      if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < DRAG_PX) return;
+      if (!liftDrag()) return;
+    }
+    placeGhost(e.clientX, e.clientY);
+    if (!drag.res) setTarget(cardAt(e.clientX, e.clientY));
+    setOut(outside(e.clientX, e.clientY));
+  }
+  function dragUp(e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    if (drag.moved) {
+      if (!drag.res) setTarget(cardAt(e.clientX, e.clientY));
+      setOut(outside(e.clientX, e.clientY));
+    }
+    endDrag(true);
+  }
+  function dragCancel(e) {
+    if (drag && (!e || e.pointerId == null || e.pointerId === drag.id)) endDrag(false); // blur has no pointerId
+  }
+  function listen(on) {
+    if (!win) return;
+    const f = on ? 'addEventListener' : 'removeEventListener';
+    win[f]('pointermove', dragMove);
+    win[f]('pointerup', dragUp);
+    win[f]('pointercancel', dragCancel);
+    win[f]('blur', dragCancel);
+  }
+  /** Starts tracking a press (card index `from`, or a resource row `res`). */
+  function beginDrag(el, e, from, res) {
+    if (drag) endDrag(false); // a press we never saw end must not block this one
+    drag = { from, res, id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, ghost: null, target: -1, out: false, items: shown.slice() };
+    listen(true);
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch (err) {
+      /* synthetic events have no active pointer; window listeners still track it */
+    }
+  }
+  /** The press turned into a drag: lift the card / row and show the ghost. False = nothing to carry. */
+  function liftDrag() {
+    const d = drag;
+    if (d.res) {
+      d.moved = true;
+      const g = h('div', 'br-inv-ghost is-res');
+      g.innerHTML = d.res.ico.innerHTML; // our own SVG markup
+      root.appendChild(g);
+      d.ghost = g;
+      d.res.el.classList.add('is-lifted');
+    } else {
+      const c = cards[d.from];
+      if (!shown[d.from] || locked) return false; // nothing to carry / swaps blocked
+      d.moved = true;
+      setPicked(-1);
+      const g = h('div', 'br-inv-ghost');
+      if (c.el.dataset.rarity) g.dataset.rarity = c.el.dataset.rarity;
+      g.innerHTML = c.ico.innerHTML; // our own SVG markup
+      root.appendChild(g);
+      d.ghost = g;
+      c.el.classList.add('is-lifted');
+    }
+    root.classList.add('is-dragging');
+    return true;
+  }
   function endDrag(commit) {
     if (!drag) return;
     const d = drag;
     drag = null;
+    listen(false);
     if (d.raf) cancelAnimationFrame(d.raf);
     if (d.ghost) d.ghost.remove();
     if (d.res) d.res.el.classList.remove('is-lifted');
@@ -234,7 +344,7 @@ export function createInventoryPanel(hudEl, opts = {}) {
         opts.onSwap(d.from, d.target, [d.items[d.from], d.items[d.target]]);
         playFlip();
       }
-    } else if (opts.onSelect) opts.onSelect(d.from);
+    } else clickCard(d.from);
   }
 
   cards.forEach((c, i) => {
@@ -243,45 +353,14 @@ export function createInventoryPanel(hudEl, opts = {}) {
       if (hover === i) hover = -1;
     });
     c.el.addEventListener('pointerdown', (e) => {
-      if (!open || drag || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      if (!open || (e.pointerType === 'mouse' && e.button !== 0)) return;
       e.preventDefault();
-      drag = { from: i, id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, ghost: null, target: -1, out: false, items: shown.slice() };
-      try {
-        c.el.setPointerCapture(e.pointerId);
-      } catch (err) {
-        /* synthetic events have no active pointer */
-      }
+      beginDrag(c.el, e, i, null);
     });
-    c.el.addEventListener('pointermove', (e) => {
-      if (!drag || drag.from !== i || e.pointerId !== drag.id) return;
-      if (!drag.moved) {
-        if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < DRAG_PX) return;
-        if (c.el.classList.contains('is-empty') || locked) return; // nothing to carry / swaps blocked
-        drag.moved = true;
-        const g = h('div', 'br-inv-ghost');
-        if (c.el.dataset.rarity) g.dataset.rarity = c.el.dataset.rarity;
-        g.innerHTML = c.ico.innerHTML; // our own SVG markup
-        root.appendChild(g);
-        drag.ghost = g;
-        c.el.classList.add('is-lifted');
-        root.classList.add('is-dragging');
-      }
-      placeGhost(e.clientX, e.clientY);
-      setTarget(cardAt(e.clientX, e.clientY));
-      setOut(outside(e.clientX, e.clientY));
-    });
-    c.el.addEventListener('pointerup', (e) => {
-      if (!drag || drag.from !== i || e.pointerId !== drag.id) return;
-      if (drag.moved) {
-        setTarget(cardAt(e.clientX, e.clientY));
-        setOut(outside(e.clientX, e.clientY));
-      }
-      endDrag(true);
-    });
-    c.el.addEventListener('pointercancel', () => endDrag(false));
-    c.el.addEventListener('lostpointercapture', () => {
-      if (drag && drag.from === i && !drag.res && drag.moved) endDrag(false);
-    });
+  });
+  // a click on the backdrop / frame (not a card) drops the pick
+  root.addEventListener('pointerdown', (e) => {
+    if (picked >= 0 && !(e.target && e.target.closest && e.target.closest('.br-inv-card'))) setPicked(-1);
   });
   root.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -377,37 +456,12 @@ export function createInventoryPanel(hudEl, opts = {}) {
   function bindRes(entry, what) {
     const el = entry.el;
     el.classList.add('is-draggable');
+    const res = { el, what, ico: el.querySelector('.br-inv-res-ico') };
     el.addEventListener('pointerdown', (e) => {
-      if (!open || drag || (e.pointerType === 'mouse' && e.button !== 0) || !entry.v) return;
+      if (!open || (e.pointerType === 'mouse' && e.button !== 0) || !entry.v) return;
       e.preventDefault();
-      drag = { from: -1, res: { el, what }, id: e.pointerId, x0: e.clientX, y0: e.clientY, moved: false, ghost: null, target: -1, out: false };
-      try {
-        el.setPointerCapture(e.pointerId);
-      } catch (err) {
-        /* synthetic events have no active pointer */
-      }
+      beginDrag(el, e, -1, res);
     });
-    el.addEventListener('pointermove', (e) => {
-      if (!drag || !drag.res || drag.res.el !== el || e.pointerId !== drag.id) return;
-      if (!drag.moved) {
-        if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < DRAG_PX) return;
-        drag.moved = true;
-        const g = h('div', 'br-inv-ghost is-res');
-        g.innerHTML = el.querySelector('.br-inv-res-ico').innerHTML; // our own SVG markup
-        root.appendChild(g);
-        drag.ghost = g;
-        el.classList.add('is-lifted');
-        root.classList.add('is-dragging');
-      }
-      placeGhost(e.clientX, e.clientY);
-      setOut(outside(e.clientX, e.clientY));
-    });
-    el.addEventListener('pointerup', (e) => {
-      if (!drag || !drag.res || drag.res.el !== el || e.pointerId !== drag.id) return;
-      if (drag.moved) setOut(outside(e.clientX, e.clientY));
-      endDrag(true);
-    });
-    el.addEventListener('pointercancel', () => endDrag(false));
   }
   for (const k of AMMO_KINDS) bindRes(ammoEls[k], { ammo: k });
   for (const m of MATERIALS) bindRes(matEls[m], { mat: m });
@@ -422,6 +476,7 @@ export function createInventoryPanel(hudEl, opts = {}) {
     if (!open || !s) return;
     const list = s.slots || [];
     for (let i = 0; i < SLOTS; i++) shown[i] = (s.items && s.items[i]) || null;
+    if (picked >= 0 && shown[picked] !== pickedItem) setPicked(-1); // the picked item moved / left
     for (let i = 0; i < SLOTS; i++) {
       const c = cards[i];
       const it = list[i] || null;
@@ -476,6 +531,7 @@ export function createInventoryPanel(hudEl, opts = {}) {
       status.textContent = reason;
       root.classList.toggle('is-locked', locked);
       if (locked && drag && drag.moved) endDrag(false);
+      if (locked) setPicked(-1);
     }
   }
 
@@ -485,6 +541,7 @@ export function createInventoryPanel(hudEl, opts = {}) {
     open = v;
     if (!v) {
       endDrag(false);
+      setPicked(-1);
       closeSplit();
       hover = -1;
     }
@@ -507,6 +564,8 @@ export function createInventoryPanel(hudEl, opts = {}) {
     isOpen: () => open,
     /** True while a card is lifted or pressed (the caller should hold inventory syncs). */
     isDragging: () => !!drag,
+    /** Card picked by click-to-swap, or -1. */
+    picked: () => picked,
     /** Raw slot object card i showed at the last update(). */
     shownItem: (i) => shown[i] || null,
     /** Slot index under the cursor (for "press a slot key to move the hovered item there"), or -1. */

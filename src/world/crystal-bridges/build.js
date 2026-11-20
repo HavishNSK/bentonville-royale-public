@@ -6,8 +6,14 @@
 //
 // Every architecture box is registered with world.addBox in a fixed order (same ids on every
 // client). Kinds / materials:
-//   kind 'museum'  walls, slabs, roofs, stairs: unbreakable, harvestable for stone or wood
-//                  (hp 1e9: Combat treats it as harvestable but it never falls)
+//   kind 'museum'  architecture, harvestable for stone or wood. Walls (outer walls, sill walls,
+//                  lintels, transfer walls, partitions, the enclosed rooms and their ceiling,
+//                  the bridge abutments) are breakable panels (`archPanel`, WALL_HP, at most
+//                  WALL_PANEL m wide): bullets, the pickaxe (which still yields mats) and
+//                  explosives break them, as do statue plinths and figures (a figure falls with
+//                  its plinth) and railings. Floors, stairs, landings, thresholds, berms, piers,
+//                  outdoor slabs and Walker Landing stay solid (hp 1e9: harvestable but they
+//                  never fall), so nobody drops into the ravine.
 //   kind 'glass'   floor-to-ceiling panes: breakable (shoot or swing them out), no mats
 //   kind 'prop'    benches, tables, shelves, display cases: breakable + harvestable (wood)
 
@@ -15,6 +21,7 @@ import { LEVEL, PAVILIONS, PADS, SLABS, DECKS, WALKER_LANDING, RESERVE, pondsFro
 import { ENTRANCES, createSiteNav, navClearance } from './nav.js';
 import { attachSiteDoors } from './doors.js';
 import { STATUES, STATUE_MODELS, plinthHalf } from './statues.js';
+import { BUILDING_WALL } from '../../core/config.js';
 
 export const WALL_T = 0.4; // concrete wall thickness
 const GLASS_T = 0.14;
@@ -23,9 +30,14 @@ const SLAB_T = 0.6;
 const DOOR_H = 3.0;
 const PANE_W = 2.6; // glass module (the "two paces" bay rhythm of the audio tour)
 const STEP_RISE = 0.4; // stair step (World step height is 0.62)
-const MUSEUM_HP = 1e9; // indestructible landmark, still harvestable
+const MUSEUM_HP = 1e9; // indestructible floors / stairs / plinths, still harvestable
+export const WALL_HP = BUILDING_WALL.hp.brick; // a concrete wall panel: as tough as a map building's brick panel
+export const WALL_PANEL = 3; // m: max width of a straight breakable wall panel (bowed walls keep 1.2 m pieces)
+const ABUTMENT_HP = WALL_HP * 2; // the bridges' cable anchors are one thick block each
 export const GLASS_HP = 70;
 const PROP_HP = 120;
+const RAIL_HP = 150; // a balcony / weir railing section
+const STATUE_HP = WALL_HP; // a statue figure: as tough as a wall panel
 export const ROOF_HP = 300; // a roof tile: ~10 rifle rounds, 6 pickaxe swings, one grenade
 const ROOF_GLASS_HP = 140; // the Garrison Lobby's glass dome
 const ROOF_TILE = 4; // m: roof tile size on a flat axis
@@ -46,6 +58,25 @@ export function roofTileLines(pv) {
     xs: lines(pv.x0 - bowMargin(pv, 'w'), pv.x1 + bowMargin(pv, 'e'), varies.x),
     zs: lines(pv.z0 - bowMargin(pv, 'n'), pv.z1 + bowMargin(pv, 's'), varies.z),
   };
+}
+
+/**
+ * Sides of pv that butt against another pavilion: { n, s, w, e } booleans. meshes.js draws no
+ * eave or fascia there, or the lower roof's overhang pokes through the taller room's joint wall
+ * (the green strip seen from inside the Great Hall over the South Lobby).
+ */
+export function roofNeighborSides(pv) {
+  const eps = 0.8;
+  const ov = (a0, a1, b0, b1) => Math.min(a1, b1) - Math.max(a0, b0) > 0.8;
+  const out = { n: false, s: false, w: false, e: false };
+  for (const o of PAVILIONS) {
+    if (o.id === pv.id) continue;
+    if (Math.abs(o.z1 - pv.z0) < eps && ov(pv.x0, pv.x1, o.x0, o.x1)) out.n = true;
+    if (Math.abs(o.z0 - pv.z1) < eps && ov(pv.x0, pv.x1, o.x0, o.x1)) out.s = true;
+    if (Math.abs(o.x1 - pv.x0) < eps && ov(pv.z0, pv.z1, o.z0, o.z1)) out.w = true;
+    if (Math.abs(o.x0 - pv.x1) < eps && ov(pv.z0, pv.z1, o.z0, o.z1)) out.e = true;
+  }
+  return out;
 }
 
 /** Roof underside (interior ceiling) of pavilion pv at (x, z). */
@@ -184,12 +215,13 @@ export function buildSite(world, mapData) {
       cx: o.cx, cz: o.cz, hx, hz, yaw: o.yaw || 0, y0: o.y0, y1: o.y1,
       kind: isGlass ? 'glass' : isProp ? 'prop' : 'museum',
       mat: isGlass ? 'glass' : o.mat === 'wood' || o.mat === 'oak' || isProp ? 'wood' : o.mat === 'steel' || o.mat === 'copper' || o.mat === 'metal' ? 'metal' : 'brick',
-      hp: isGlass || isFrame ? GLASS_HP : isProp ? PROP_HP : MUSEUM_HP,
+      hp: isGlass || isFrame ? GLASS_HP : isProp ? PROP_HP : o.archPanel ? o.panelHp || WALL_HP : MUSEUM_HP,
       ref: isGlass || isFrame ? null : [],
       passable: !!o.visOnly,
     });
     if (isGlass || isFrame) c.breakable = true;
     if (isFrame) c.frame = true;
+    if (o.archPanel && !isGlass && !isFrame && !isProp) c.archPanel = true; // breakable wall panel (harvestable: ref [])
     if (o.floorOf) c.walkable = true; // a floor: World.blockedAt (A*, spawn checks) treats it as open ground
     const part = { ...o, hx, hz, collider: c, role };
     c.part = part;
@@ -212,6 +244,15 @@ export function buildSite(world, mapData) {
     const len = Math.hypot(dx, dz);
     if (len < 0.05) return null;
     return box({ cx: (ax + bx) / 2, cz: (az + bz) / 2, hx: len / 2, hz: t / 2, yaw: Math.atan2(dz, dx), y0, y1, mat, ...(extra || {}) }, role);
+  };
+  /** A straight wall as breakable panels of at most WALL_PANEL m (archPanel boxes). */
+  const panelSeg = (ax, az, bx, bz, t, y0, y1, mat, extra) => {
+    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / WALL_PANEL - 1e-6));
+    for (let i = 0; i < n; i++) {
+      const f0 = i / n;
+      const f1 = (i + 1) / n;
+      seg(ax + (bx - ax) * f0, az + (bz - az) * f0, ax + (bx - ax) * f1, az + (bz - az) * f1, t, y0, y1, mat, 'arch', { ...(extra || {}), archPanel: true });
+    }
   };
   const minTerrain = (x0, x1, z0, z1) => {
     let m = Infinity;
@@ -266,7 +307,7 @@ export function buildSite(world, mapData) {
         const t = k / 4;
         nbCeil = Math.min(nbCeil, roofUnder(nb, ax + (bx - ax) * t, az + (bz - az) * t));
       }
-      const tag = { wall: true, transfer: true, pv: pv.id, side, nb: nb.id };
+      const tag = { wall: true, transfer: true, pv: pv.id, side, nb: nb.id, archPanel: true };
       if (top > nbCeil + 0.05) seg(ax, az, bx, bz, WALL_T, nbCeil - 0.05, top, 'concrete', 'arch', tag);
       // (no step face below a higher neighbour's floor: its solid floor plinth already closes it,
       // and a wall there would cut a stair that crosses the joint)
@@ -356,8 +397,9 @@ export function buildSite(world, mapData) {
           }
           hangLines.push({ type: 'side', pv: pv.id, wing: pv.wing, side, a: sp.a, b: sp.b, floor: pv.floor, top });
         }
-        // wall / door: cut into ~1.2 m pieces when the wall bows or the roof varies along it
-        const pieces = bowed || along ? Math.max(1, Math.ceil(len / 1.2)) : 1;
+        // wall / door: cut into ~1.2 m pieces when the wall bows or the roof varies along it, else
+        // into breakable panels of at most WALL_PANEL m
+        const pieces = Math.max(1, Math.ceil(len / (bowed || along ? 1.2 : WALL_PANEL) - 1e-6));
         for (let i = 0; i < pieces; i++) {
           const ua = sp.a + (len * i) / pieces;
           const ub = sp.a + (len * (i + 1)) / pieces;
@@ -383,13 +425,13 @@ export function buildSite(world, mapData) {
           const top = roofCapAlong(pv, ax, az, bx, bz);
           const mat = 'concrete';
           if (sp.t === 'wall') {
-            seg(ex0, ez0, ex1, ez1, WALL_T, pv.floor - 0.02, top, mat, 'arch', { wall: true, pv: pv.id, side });
+            seg(ex0, ez0, ex1, ez1, WALL_T, pv.floor - 0.02, top, mat, 'arch', { wall: true, pv: pv.id, side, archPanel: true });
           } else if (sp.t === 'door') {
             const sill = sp.sill !== undefined ? sp.sill : pv.floor;
             if (i === 0) threshold(pv, side, sp, sill);
             const head = Math.min(top, sill + (sp.head || DOOR_H));
-            if (sill > pv.floor + 0.05) seg(ex0, ez0, ex1, ez1, WALL_T, pv.floor - 0.02, sill, mat, 'arch', { wall: true, pv: pv.id, side });
-            if (top > head + 0.05) seg(ex0, ez0, ex1, ez1, WALL_T, head, top, mat, 'arch', { wall: true, lintel: true, pv: pv.id, side });
+            if (sill > pv.floor + 0.05) seg(ex0, ez0, ex1, ez1, WALL_T, pv.floor - 0.02, sill, mat, 'arch', { wall: true, pv: pv.id, side, archPanel: true });
+            if (top > head + 0.05) seg(ex0, ez0, ex1, ez1, WALL_T, head, top, mat, 'arch', { wall: true, lintel: true, pv: pv.id, side, archPanel: true });
             if (i === 0 && isEntrance(pv, side, sp)) entrance(pv, side, sp, sill, head);
             else if (i === 0 && !edgeHasNeighbor(pv, side, sp.a, sp.b)) glaze(pv, side, sp, sill, head, true);
           }
@@ -476,7 +518,7 @@ export function buildSite(world, mapData) {
       const h = pt.h || 3.8;
       const alongX = pt.z !== undefined;
       const [ax, az, bx, bz] = alongX ? [pt.x0, pt.z, pt.x1, pt.z] : [pt.x, pt.z0, pt.x, pt.z1];
-      seg(ax, az, bx, bz, 0.3, pv.floor - 0.02, pv.floor + h, 'concrete', 'arch', { wall: true, pv: pv.id, partition: true });
+      panelSeg(ax, az, bx, bz, 0.3, pv.floor - 0.02, pv.floor + h, 'concrete', { wall: true, pv: pv.id, partition: true });
       for (const sgn of [-1, 1]) {
         const nx = alongX ? 0 : sgn;
         const nz = alongX ? sgn : 0;
@@ -494,8 +536,9 @@ export function buildSite(world, mapData) {
       for (const e of ends) {
         for (const side of long ? [pv.z0, pv.z1] : [pv.x0, pv.x1]) {
           const out = side === (long ? pv.z0 : pv.x0) ? -1 : 1;
-          if (long) rect(e - 1.3, e + 1.3, side + (out < 0 ? -1.6 : 0), side + (out > 0 ? 1.6 : 0), pv.floor - 0.02, top, 'concrete', 'arch', { abutment: true });
-          else rect(side + (out < 0 ? -1.6 : 0), side + (out > 0 ? 1.6 : 0), e - 1.3, e + 1.3, pv.floor - 0.02, top, 'concrete', 'arch', { abutment: true });
+          const tag = { abutment: true, archPanel: true, panelHp: ABUTMENT_HP };
+          if (long) rect(e - 1.3, e + 1.3, side + (out < 0 ? -1.6 : 0), side + (out > 0 ? 1.6 : 0), pv.floor - 0.02, top, 'concrete', 'arch', tag);
+          else rect(side + (out < 0 ? -1.6 : 0), side + (out > 0 ? 1.6 : 0), e - 1.3, e + 1.3, pv.floor - 0.02, top, 'concrete', 'arch', tag);
         }
       }
     }
@@ -514,12 +557,12 @@ export function buildSite(world, mapData) {
       const mid = (rm.z0 + rm.z1) / 2;
       for (const [side, ax, az, bx, bz] of [['n', rm.x0, rm.z0, rm.x1, rm.z0], ['s', rm.x0, rm.z1, rm.x1, rm.z1], ['w', rm.x0, rm.z0, rm.x0, rm.z1], ['e', rm.x1, rm.z0, rm.x1, rm.z1]]) {
         if (side === doorSide) {
-          seg(ax, az, ax, mid - 0.9, t, y0, y1, 'darkwall', 'arch', { room: rm.id });
-          seg(bx, mid + 0.9, bx, bz, t, y0, y1, 'darkwall', 'arch', { room: rm.id });
-          seg(ax, mid - 0.9, bx, mid + 0.9, t, pv.floor + 2.4, y1, 'darkwall', 'arch', { room: rm.id, lintel: true });
-        } else seg(ax, az, bx, bz, t, y0, y1, 'darkwall', 'arch', { room: rm.id });
+          panelSeg(ax, az, ax, mid - 0.9, t, y0, y1, 'darkwall', { room: rm.id });
+          panelSeg(bx, mid + 0.9, bx, bz, t, y0, y1, 'darkwall', { room: rm.id });
+          seg(ax, mid - 0.9, bx, mid + 0.9, t, pv.floor + 2.4, y1, 'darkwall', 'arch', { room: rm.id, lintel: true, archPanel: true });
+        } else panelSeg(ax, az, bx, bz, t, y0, y1, 'darkwall', { room: rm.id });
       }
-      rect(rm.x0, rm.x1, rm.z0, rm.z1, y1, y1 + 0.2, 'darkwall', 'arch', { room: rm.id });
+      rect(rm.x0, rm.x1, rm.z0, rm.z1, y1, y1 + 0.2, 'darkwall', 'arch', { room: rm.id, archPanel: true });
     }
   }
 
@@ -623,9 +666,9 @@ export function buildSite(world, mapData) {
   for (const s of SLABS) {
     rect(s.x0, s.x1, s.z0, s.z1, s.from, s.y, s.mat, 'arch', { slab: s.id });
     if (s.rail) {
-      rect(s.x1 - 0.1, s.x1, s.z0, s.z1, s.y, s.y + 1.05, 'mullion', 'arch', { rail: true });
-      rect(s.x0, s.x1, s.z0, s.z0 + 0.1, s.y, s.y + 1.05, 'mullion', 'arch', { rail: true });
-      rect(s.x0, s.x1, s.z1 - 0.1, s.z1, s.y, s.y + 1.05, 'mullion', 'arch', { rail: true });
+      rect(s.x1 - 0.1, s.x1, s.z0, s.z1, s.y, s.y + 1.05, 'mullion', 'arch', { rail: true, archPanel: true, panelHp: RAIL_HP });
+      rect(s.x0, s.x1, s.z0, s.z0 + 0.1, s.y, s.y + 1.05, 'mullion', 'arch', { rail: true, archPanel: true, panelHp: RAIL_HP });
+      rect(s.x0, s.x1, s.z1 - 0.1, s.z1, s.y, s.y + 1.05, 'mullion', 'arch', { rail: true, archPanel: true, panelHp: RAIL_HP });
     }
   }
   const decks = [];
@@ -662,9 +705,12 @@ export function buildSite(world, mapData) {
     for (const [dx, dz] of [[0, 0], [-r, -r], [r, -r], [-r, r], [r, r]]) g = Math.max(g, world.groundHeight(st.x + dx, st.z + dz, hint + 0.5, STEP_RISE + 0.2));
     if (!Number.isFinite(g)) g = hint;
     const top = g + st.plinth;
-    if (st.plinth > 0) box({ cx: st.x, cz: st.z, hx: r, hz: r, y0: g - 0.5, y1: top, mat: 'stone', plinth: st.id }, 'arch');
+    // plinth and figure break like wall panels (and give mats); a broken plinth takes its
+    // figure with it (collider.dependents, Combat._destroyCollider) so nothing floats
+    const plinth = st.plinth > 0 ? box({ cx: st.x, cz: st.z, hx: r, hz: r, y0: g - 0.5, y1: top, mat: 'stone', plinth: st.id, archPanel: true }, 'arch') : null;
     const fr = model.r * st.s * 0.85;
-    box({ cx: st.x, cz: st.z, hx: fr, hz: fr, y0: top, y1: top + model.h * st.s, mat: 'stone', statue: st.id, hidden: true }, 'arch');
+    const figure = box({ cx: st.x, cz: st.z, hx: fr, hz: fr, y0: top, y1: top + model.h * st.s, mat: 'stone', statue: st.id, hidden: true, archPanel: true, panelHp: STATUE_HP }, 'arch');
+    if (plinth && figure) plinth.collider.dependents = [figure.collider];
     statues.push({ id: st.id, model: st.model, x: st.x, y: top, z: st.z, s: st.s, yaw: Math.atan2(st.face[0], st.face[1]), r, pv: st.near });
   }
   const clearOfStatues = (x, z, r) => statues.every((s) => Math.max(Math.abs(s.x - x), Math.abs(s.z - z)) > s.r + r);

@@ -162,13 +162,14 @@ export function ammoFor(weaponId) {
   const kind = WEAPONS[weaponId].ammo;
   return { type: 'ammo', ammo: kind, count: AMMO[kind].pickup };
 }
-export function rollConsumable(rng) {
+/** opts.noGas: never a gas can (chests: gas comes from floor loot and the gas stations). */
+export function rollConsumable(rng, opts = null) {
   if (rng() < LOOT.grenadeShare) {
     const id = rng() < 0.4 ? 'smoke' : 'grenade';
     return { type: 'consumable', id, count: CONSUMABLES[id].pickup };
   }
   // gas cans for the drivable cars: an occasional drop
-  if (rng() < LOOT.gasCanShare) return { type: 'consumable', id: 'gascan', count: 1 };
+  if (!(opts && opts.noGas) && rng() < LOOT.gasCanShare) return { type: 'consumable', id: 'gascan', count: 1 };
   const id = rng() < 0.55 ? 'medkit' : 'tonic';
   return { type: 'consumable', id, count: id === 'medkit' ? 1 : 1 + (rng() < 0.3 ? 1 : 0) };
 }
@@ -355,6 +356,31 @@ export class Loot {
     this.byId.set(id, rec);
     this._blipsDirty = true;
     return rec;
+  }
+
+  /**
+   * Collider c was just destroyed (already removed from the world): every unopened record resting on
+   * its top drops to the highest surface left below it. Returns the number of records moved.
+   */
+  dropFrom(c) {
+    if (!c || !this.world) return 0;
+    const top = c.h != null ? c.h : c.y1;
+    if (!Number.isFinite(top)) return 0;
+    const x0 = c.minX ?? (c.x != null ? c.x - (c.r || 0) : -Infinity);
+    const x1 = c.maxX ?? (c.x != null ? c.x + (c.r || 0) : Infinity);
+    const z0 = c.minZ ?? (c.z != null ? c.z - (c.r || 0) : -Infinity);
+    const z1 = c.maxZ ?? (c.z != null ? c.z + (c.r || 0) : Infinity);
+    let moved = 0;
+    for (const r of this.records) {
+      if (r.opened || Math.abs(r.y - top) > 0.2 || r.x < x0 || r.x > x1 || r.z < z0 || r.z > z1) continue;
+      const below = this.world.groundHeight(r.x, r.z, r.y - 0.1, 0);
+      if (!Number.isFinite(below) || below >= r.y - 0.05) continue;
+      r.y = below;
+      if (r.info && r.info.position) r.info.position.y = below;
+      moved++;
+    }
+    if (moved) this._blipsDirty = true;
+    return moved;
   }
 
   _remove(rec) {
@@ -901,6 +927,11 @@ export class Loot {
     for (const f of w.fixedLoot || []) {
       if (area && Math.hypot(f.x - area.x, f.z - area.z) > area.r) continue;
       if (f.kind === 'item') {
+        if (f.item && f.item.type) {
+          // a fixed item (a gas station's gas can): no roll
+          this._add('item', f.x, f.y, f.z, f.yaw || 0, { ...f.item });
+          continue;
+        }
         const mix = pickWeighted(rng, LOOT.floorMix);
         const item = mix === 'weapon' ? rollWeapon(rng, LOOT.floorRarity) : mix === 'consumable' ? rollConsumable(rng) : rollAmmo(rng);
         this._add('item', f.x, f.y, f.z, f.yaw || 0, item);
@@ -1003,7 +1034,7 @@ export class Loot {
     if (rec.kind === 'chest') {
       const wpn = rollWeapon(rng, rec.tier === 'high' ? LOOT.highChestRarity : LOOT.chestRarity);
       items.push(wpn, ammoFor(wpn.id));
-      items.push(rng() < 0.65 ? rollConsumable(rng) : rollAmmo(rng));
+      items.push(rng() < 0.65 ? rollConsumable(rng, { noGas: true }) : rollAmmo(rng)); // no gas cans from chests
       items.push({ type: 'material', mat: 'wood', count: LOOT.chestMats });
     } else {
       items.push(rollAmmo(rng), rollAmmo(rng));

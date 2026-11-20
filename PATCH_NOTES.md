@@ -1,5 +1,60 @@
 # Patch Notes
 
+## [2026-11-19] — v0.20.0: BHS and Box Fights
+Box Fights arrives as a second game mode with its own Elo rating, alongside the rebuilt Bentonville High, which leads the update flyer.
+
+- **Box Fights** (`src/game/BoxFights.js`, `src/render/BoxArena.js`): 1V1 to 4V4 via the party panel's BATTLE ROYALE | BOX FIGHTS switch or a private match; bots can fill empty spots.
+  - a two-storey indoor arena in the void (no storm, loot or bus)
+  - a middle wall hides each team for the 5 s countdown and slides up at FIGHT
+  - first to 3 rounds; full health and shield every round
+  - one kit: pump shotgun, assault rifle, SMG, 2 shield tonics, 2 medkits, 500 of each material
+- **Box Fights Elo** (`src/game/BoxElo.js`, `party/boxRating.js`): chess-style rating, start 1000; bots rated Easy 800 / Normal 1200 / Hard 1600; tiers Trail Rat, Creek Hopper, Square Regular, Bridge Walker, Ozark Legend, Mayor of Bentonville. Result-screen +/- row, account bar rating, Box Fights board under RANKS. Requires sign-in.
+- **Building:** one ramp per tap; a ramp is never placed under your own feet; nothing builds through the middle wall.
+- **Title screen:** the MUSEUM button and the key hints are removed (controls are in Settings).
+- **Update flyer:** "BHS and Box Fights" (`src/data/updateFlyer.js`, `tools/flyer/shots/0.20.0.mjs`).
+- **Notes:**
+  - Box Fights results are self-reported by each player's browser (like BR ranks): validated, rate-limited and flagged for review on the server, not verified. No anti-cheat.
+  - Online party Box Fights and online Elo need the PartyKit/Worker deploy (`party/`); local Box Fights vs bots works without it.
+  - `tests/box-fights-bots.test.mjs` has bot-aggression metric tests that do not pass yet.
+
+
+<!-- v0.19.5 (Bentonville High rebuilt): commented out; the co-developers write the release notes.
+## [2026-11-19] — v0.19.5: Back to School, Bentonville High rebuilt
+The biggest POI revamp yet. Bentonville High School is rebuilt from the ground up, inside and out, matched against real photos of the campus. It's packed with loot.
+
+- **Two real buildings, fully built out:** both school buildings are bespoke landmarks (`src/world/bhs/`) instead of generic map boxes:
+  - a building kit with real materials, glass, stairs and railings
+  - a plan engine that turns rooms, storeys, atria and facades into geometry
+  - recognisable from the parking lot and from the sky
+- **North Building**, U-shaped around a grass courtyard, 3 storeys:
+  - the west main entrance: glass doors under a canopy, a 2-storey curtain wall, the MAIN ENTRANCE sign band with a tiger emblem, and the light-block stair tower
+  - the lobby, with the 3-storey cafeteria atrium (glass-railed walkway, feature stair) on the left, the crosswalk entrance on the right, and the main hallway straight ahead, looping the whole building
+  - classrooms on every floor with glass onto the hallway and big windows onto the courtyard
+  - four big corner stairwells, a media center and a lecture hall
+- **Main Building:**
+  - the **Arend Arts Center**: a 1,798-seat auditorium with a balcony, a raised stage and a red curtain
+  - **Tiger Arena**: a painted court, 12-row bleachers and a running-track concourse; plus an auxiliary gym with a climbing wall
+  - a 2-storey **library** with a mezzanine
+  - a cafeteria with tables around the reboot van
+  - the entry court with its water channel and arch, and the arts center's stepped brick front
+  - a covered walkway and a crosswalk between the buildings
+- **101 unique classrooms:** subject-driven science labs, art rooms, computer labs, band and choir rooms, culinary, engineering and robotics. 8 seating layouts, posters, plants, backpacks and other lived-in clutter. No two neighbours alike.
+- **Loot:** chests in about one classroom in four, plus ammo boxes and floor loot in hallways, closets, stairwells, the stage, the gyms and the library.
+- **Everything breaks:** walls, glass, floors, roof tiles, stairs and bleachers at the school. Land on the roof, blast in, drop into class.
+- **New mechanic, vault:** jump at a thin obstacle (fence, railing, low wall) to vault over it (`Player._findVault`). This works everywhere on the map; solid walls and closed windows can't be vaulted.
+- **Loot drops:** a chest on a destroyed floor or ledge now falls to the surface below (`Loot.dropFrom`, called from `Combat._destroyCollider`, so it's the same on every client).
+- **"Now entering Bentonville High School"** banner, with the tiger emblem stamping onto it.
+- **Tiger Stadium:** the visitor stand was removed to open the North Building's entrance plaza. The scoreboard is now a lit display: TIGERS 28 / GUEST 14, clock, quarter, down and distance.
+- **Flag:** a large American flag on a 14 m pole on the North Building's entrance plaza.
+- **Fixed:** the chest prompt read "Open Open Chest".
+- **Notes:**
+  - The tiger emblem is an original drawing, not the school's logo artwork. Reference photos never enter the repo (`scripts/hooks/pre-commit`).
+  - Spaces without photos are approximate (`HACKATHON_NOTES.md`).
+  - BHS interiors cost more frame rate than the old empty shells. Other POIs are unaffected.
+  - Docs: `docs/bhs/STYLE_BIBLE.md`, `docs/bhs/BHS_CONTRACT.md`.
+  - Multiplayer: everyone needs to refresh (interior version 9).
+-->
+
 ## [2026-11-18] — Unreleased: moderation, player reports and security fixes
 - **Security:** the QA console hooks (`window.__game.debug`: teleport, give items, damage anyone) shipped in the production build, so a player, and especially a match host, could teleport or give themselves items mid-game. They now exist only in `vite` dev builds.
 - **Security:** the account `Rank_1_Kills`, used to exploit that, is permanently banned in the code (`PERMA_BANNED` in `party/moderation.js`). It can't be lifted with `/unban`. Signing in shows a permanent-ban notice that can't be closed, and the account can't start or join matches, chat, shop or use friends.

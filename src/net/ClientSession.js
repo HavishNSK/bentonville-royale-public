@@ -11,6 +11,19 @@
 //
 // Combat runs with `authoritative = false` here, so local shots and swings only
 // play effects; the pellets and what they appeared to hit are sent to the host.
+//
+// HOST MIGRATION (Box Fights lobby matches; relay side in party/server.js):
+// - this guest promoted (relay '@:' {t:'promoted'}, Net.js conn.onPromoted): _promoted() turns the
+//   client view into the host's state (src/net/hostTakeover.js), wraps the same socket as a HostRoom
+//   (Net.hostRoomFromGuest), builds a HostSession and calls game.takeOverAsHost(host, plan). From
+//   then on game.net is that HostSession (game.net.isHost) and Game calls game.onHostTakeover
+//   ({ room, session }) so the app can treat itself as the host (lobby result report etc.).
+//   Not taken over (BR, match not begun, any error): the guest leaves as if the host had left.
+// - other guests: {t:'hostLost', graceMs} -> a "switching host" notice, the world holds (puppets
+//   keep their last snapshot, our player keeps predicting); {t:'newHost', id} -> snapshot / seq /
+//   clock state reset so the new host's frames are accepted, our inventory reported once
+//   (action 'mig'); the new host's 'hm' event brings structures and the round state; {t:'bye'} as
+//   before.
 
 import * as THREE from 'three';
 import { WEAPONS, PLAYER, QUALITY, TAU, weaponStats } from '../core/config.js';
@@ -19,6 +32,12 @@ import { Inventory } from '../game/Inventory.js';
 import { SKINS, EMOTES, botLoadout } from '../game/Cosmetics.js';
 import { itemLabel } from '../game/Player.js';
 import { impactSound, placeOnShoulder } from '../game/Combat.js';
+import { reportedElo } from '../game/boxEloMatch.js';
+import { ELO_START } from '../game/BoxElo.js';
+import { sideOfTeam } from '../game/BoxFights.js';
+import { HostSession } from './HostSession.js';
+import { hostRoomFromGuest } from './Net.js';
+import { actorRow, takeoverPlan, takeoverRoundState, difficultyFromBotElo, cleanMigrationEvent } from './hostTakeover.js';
 import {
   STATE_HZ, INTERP_DELAY, FLAG, XFLAG, EQUIP, SURF, decodeSnapshot, encodeState, seqNewer, rnd, resolvePanelEvent,
 } from './protocol.js';
@@ -173,6 +192,7 @@ export class ClientSession {
     this.offset = null;
     this.lastSeq = -1;
     this._predicted = new Map(); // piece -> performance.now() it was placed locally
+    this._predictedEdits = new Map(); // piece key -> { piece, prev, at }: edits shown before the host's 'se'
     this.aliveCount = 0;
     this.started = false;
     this.ended = false;
@@ -187,8 +207,13 @@ export class ClientSession {
     this._stateAcc = 0;
     this._tpUntil = 0;
     this.stats = { t0: performance.now(), snaps: 0, snapBytes: 0, lost: 0 };
+    // host migration bookkeeping (see the header)
+    this._replaced = new Map(); // actor id -> name of the human a bot replaced ('rb')
+    this._spawns = new Map(); // actor id -> spawn of the last round start ('rs')
+    this._reAt = 0; // performance.now() of the last round end ('re')
     conn.onMessage = (msg) => (this.started ? this._message(msg) : this.queue.push(msg));
     conn.onRaw = (buf) => this._raw(buf);
+    conn.onPromoted = (promotion) => this._promoted(promotion);
   }
 
   // ---------------------------------------------------------------- start
@@ -196,6 +221,8 @@ export class ClientSession {
   /** Called by Game.startClientMatch once the scene is reset. */
   begin(game, start) {
     this.id = start.you;
+    // Box Fights: round events (rs / rf / re) and a rounds-aware `end`; ignored otherwise
+    this.boxFights = start.game === 'boxfights' && !!game.boxFight;
     const kits = game.kits;
     for (const info of start.roster) {
       if (info.id === this.id) {
@@ -204,10 +231,10 @@ export class ClientSession {
       }
       const kit = kits[info.k] || kits.player;
       // bots' pickaxe / back bling follow from their id; humans send theirs
-      const look = info.h ? { pickaxe: info.px || undefined, backbling: info.bb || undefined } : botLoadout(info.id);
+      const look = info.h ? { pickaxe: info.px || undefined, backbling: info.bb || undefined, glider: info.gl || undefined } : botLoadout(info.id);
       const ch =
         info.sk && SKINS[info.sk] && game.makeSkinCharacter
-          ? game.makeSkinCharacter(info.sk, info.c, look.pickaxe, look.backbling)
+          ? game.makeSkinCharacter(info.sk, info.c, look.pickaxe, look.backbling, look.glider)
           : kit
             ? new Character(kit, { weapons: game.weaponScenes, canopyColor: info.c, ...look })
             : null;
@@ -222,8 +249,14 @@ export class ClientSession {
       game.combat.register(pup);
     }
     this.aliveCount = start.roster.length;
+    if (game.pumps && start.pumps) game.pumps.applySnapshot(start.pumps); // gas pumps already hurt / gone
     // tell the host (and through it everyone) which outfit we wear
-    if (game.skin && SKINS[game.skin]) this.action({ k: 'sk', id: game.skin, px: game.pickaxe, bb: game.backbling });
+    if (game.skin && SKINS[game.skin]) this.action({ k: 'sk', id: game.skin, px: game.pickaxe, bb: game.backbling, gl: game.glider });
+    // Box Fights: our reported Box Elo (the host relays it; opponents use it for their result)
+    if (this.boxFights) {
+      const own = reportedElo(game.boxEloSelf);
+      this.action({ k: 'elo', v: own == null ? ELO_START : own });
+    }
     // Follow-up rounds of a burst gun are scheduled by Combat; forward each one like a trigger pull.
     game.combat.onBurstShot = (s, it, o, dirs, res) => {
       if (s === game.player) this.sendFire(s, it, o, dirs, res);
@@ -247,7 +280,31 @@ export class ClientSession {
   }
 
   /** Predicted pieces the host never confirmed (refused): taken back quietly. */
+  /**
+   * An edit this client applied ahead of the host (Player._confirmEdit): the host's 'se' echo
+   * confirms it; with no echo within PREDICT_MS the host refused it, and the piece goes back.
+   */
+  predictEdit(piece, prev) {
+    if (!piece || !piece.key) return;
+    const had = this._predictedEdits.get(piece.key);
+    this._predictedEdits.set(piece.key, { piece, prev: had ? had.prev : prev, at: performance.now() });
+  }
+
+  _expirePredictedEdits() {
+    if (!this._predictedEdits.size) return;
+    const now = performance.now();
+    const st = this.game.structures;
+    for (const [key, pe] of this._predictedEdits) {
+      if (!pe.piece.alive) this._predictedEdits.delete(key);
+      else if (now - pe.at > PREDICT_MS) {
+        this._predictedEdits.delete(key);
+        if (st && st.edit && st.editValue(pe.piece) !== pe.prev) st.edit(pe.piece, pe.prev);
+      }
+    }
+  }
+
   _expirePredicted() {
+    this._expirePredictedEdits();
     if (!this._predicted.size) return;
     const now = performance.now();
     const st = this.game.structures;
@@ -394,6 +451,8 @@ export class ClientSession {
   }
 
   _message(msg) {
+    if (msg.t === 'hostLost') return this._hostLost(msg);
+    if (msg.t === 'newHost') return this._newHost(msg);
     if (msg.t === 'ev') {
       for (const e of msg.l) {
         try {
@@ -464,6 +523,12 @@ export class ClientSession {
       case 'vf':
         if (g.vehicles) g.vehicles.applyEvent(e, (id) => this.actorById(id));
         return;
+      case 'pmd':
+      case 'pmf':
+      case 'pmx':
+      case 'pmn':
+        if (g.pumps) g.pumps.applyEvent(e, (id) => this.actorById(id));
+        return;
       case 'rcp':
         if (g.reboot) g.reboot.applyEvent(e);
         if (e.by === this.id && g.reboot) {
@@ -503,7 +568,19 @@ export class ClientSession {
       case 'sk': {
         if (e.a === this.id) return;
         const pup = this.puppets.get(e.a);
-        if (pup && g.reskinActor) g.reskinActor(pup, SKINS[e.id] ? e.id : null, e.px, e.bb);
+        if (pup && g.reskinActor) g.reskinActor(pup, SKINS[e.id] ? e.id : null, e.px, e.bb, e.gl);
+        return;
+      }
+      case 'elo': {
+        // a player's reported Box Elo (relayed by the host): clamped, only for known players
+        if (!this.boxFights || !Number.isInteger(e.a)) return;
+        const v = reportedElo(e.v);
+        if (v == null) return;
+        if (e.a === this.id) g.player.boxElo = v;
+        else {
+          const pup = this.puppets.get(e.a);
+          if (pup && pup.human) pup.boxElo = v;
+        }
         return;
       }
       case 'em': {
@@ -633,7 +710,8 @@ export class ClientSession {
       case 'se': {
         const st = g.structures;
         const piece = st && st.slots.get(e.key);
-        if (piece && st.edit) st.edit(piece, e.ed | 0);
+        this._predictedEdits.delete(e.key); // the host's word on it (ours confirmed, or replaced)
+        if (piece && st.edit && st.editValue(piece) !== (e.ed | 0)) st.edit(piece, e.ed | 0);
         return;
       }
       case 'sdr': {
@@ -660,12 +738,232 @@ export class ClientSession {
         return this._panelEvent(e);
       case 'left':
         return;
+      case 'rb': {
+        // Box Fights: a bot took over a player who left (same actor id): rename the puppet
+        const pup = this.boxFights && Number.isInteger(e.a) ? this.puppets.get(e.a) : null;
+        if (!pup) return;
+        const old = pup.name;
+        if (pup.human && !this._replaced.has(e.a)) this._replaced.set(e.a, old);
+        pup.name = typeof e.n === 'string' ? e.n.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 16) || 'Bot' : 'Bot';
+        pup.human = false;
+        pup.boxElo = undefined;
+        if (g.hud && g.hud.killFeed) g.hud.killFeed(`${old} left · ${pup.name} takes over`, 'elim', [old, pup.name], g.player.name);
+        return;
+      }
+      case 'rs':
+        if (this.boxFights) this._roundStart(e);
+        return;
+      case 'rf':
+        // the host's FIGHT: if our countdown is still running, end it now
+        if (this.boxFights && g.netFight) g.netFight();
+        return;
+      case 'hm':
+        if (this.boxFights) this._hostMigrated(e);
+        return;
+      case 're':
+        this._reAt = performance.now();
+        if (this.boxFights && g.netRoundEnd) g.netRoundEnd({ winnerSide: this._side(e.w), score: this._boxScore(e.sc), elims: this._boxScore(e.el) });
+        return;
       case 'end':
         this.ended = true;
+        if (this.boxFights) {
+          // a malformed winner still ends the match (as a loss) rather than leaving us stuck in it
+          if (g.netBoxEnd) g.netBoxEnd({ winnerSide: this._side(e.bw) ?? -1, score: this._boxScore(e.sc), elims: this._boxScore(e.el), forfeit: e.ff === 1, players: cleanStats(e.ps, this._sideCount()) });
+          return;
+        }
         if (e.w === this.id || (g.teamMode && e.tm != null && e.tm >= 0 && e.tm === g.player.team)) g.netWin();
         return;
       default:
     }
+  }
+
+  /** Box Fights: number of sides (2, or 2..6 in FFA). */
+  _sideCount() {
+    const bf = this.game.boxFight;
+    return bf && Array.isArray(bf.sides) ? bf.sides.length : 2;
+  }
+
+  /** A side index from the host, or null when it is not one of ours. */
+  _side(v) {
+    return Number.isInteger(v) && v >= 0 && v < this._sideCount() ? v : null;
+  }
+
+  _boxScore(sc) {
+    return cleanScore(sc, this._sideCount());
+  }
+
+  /**
+   * Box Fights round start: the host's structure list, everyone's spawn, a fresh countdown.
+   * Values are clamped into the arena (the host is another player's browser, not a server).
+   */
+  _roundStart(e) {
+    const g = this.game;
+    const bf = g.boxFight;
+    if (!bf) return;
+    const L = bf.layout;
+    const R = L.rect;
+    const spawns = new Map();
+    for (const row of Array.isArray(e.sp) ? e.sp.slice(0, 16) : []) {
+      if (!Array.isArray(row)) continue;
+      const [id, x, y, z, h] = row;
+      if (!Number.isInteger(id) || ![x, y, z, h].every(Number.isFinite)) continue;
+      if (id !== this.id && !this.puppets.has(id)) continue;
+      spawns.set(id, { x: clampN(x, R.minX, R.maxX), y: clampN(y, L.floorY, L.ceilY), z: clampN(z, R.minZ, R.maxZ), heading: h });
+    }
+    this._spawns = spawns;
+    this._importArena(e.bx);
+    if (g.loot) g.loot.clear();
+    this.snaps.length = 0;
+    this.pendingInv = null;
+    this._specAsk = -1;
+    for (const [id, sp] of spawns) {
+      if (id === this.id) continue;
+      const pup = this.puppets.get(id);
+      pup.revive();
+      pup.downed = false;
+      pup.carrying = pup.carriedBy = null;
+      pup.inBus = false;
+      pup.pos.set(sp.x, sp.y, sp.z);
+      pup._prev.copy(pup.pos);
+      pup.heading = sp.heading;
+      pup.seen = false; // snap to the next snapshot, no glide across the arena
+      if (pup.character) {
+        pup.character.root.visible = true;
+        pup.character.root.position.copy(pup.pos);
+      }
+    }
+    const rn = Number.isInteger(e.rn) ? Math.max(1, Math.min(99, e.rn)) : 1;
+    const fz = Number.isFinite(e.fz) ? clampN(e.fz, 0, 10) : 3;
+    g.netRoundStart({ round: rn, score: this._boxScore(e.sc), elims: this._boxScore(e.el), freeze: fz, me: spawns.get(this.id) || null });
+  }
+
+  /** Box Fights: the host's whole structure list, filtered into the arena (round start, host change). */
+  _importArena(bx) {
+    const g = this.game;
+    const st = g.structures;
+    const L = g.boxFight && g.boxFight.layout;
+    if (!st || !L) return;
+    const R = L.rect;
+    // [kind, mat, x, y, z, rot100, hp, key, ...]: finite numbers, inside the arena, string key
+    const inArena = (r) =>
+      [r[2], r[3], r[4], r[5], r[6]].every(Number.isFinite) &&
+      typeof r[7] === 'string' &&
+      r[2] >= R.minX - 1 && r[2] <= R.maxX + 1 && r[4] >= R.minZ - 1 && r[4] <= R.maxZ + 1 &&
+      r[3] >= L.floorY - 1 && r[3] <= L.ceilY;
+    const rows = (Array.isArray(bx) ? bx.slice(0, 400) : []).filter((r) => Array.isArray(r) && r.length >= 8 && inArena(r));
+    st.importNet(rows);
+    this._predicted.clear();
+  }
+
+  // ---------------------------------------------------------------- host migration
+
+  /** The host's socket closed; the relay waits a moment for the lobby to name a new host. */
+  _hostLost(msg) {
+    const g = this.game;
+    const ms = Number.isFinite(msg.graceMs) ? Math.max(1000, Math.min(15000, msg.graceMs)) : 10000;
+    this._hostLostAt = performance.now();
+    if (g.hud && g.hud.announce) g.hud.announce('HOST LEFT', 'Switching host…', ms);
+  }
+
+  /**
+   * Another guest is the host now (same socket for us, same slot id). Its snapshots start a new
+   * sequence and clock, so forget the old ones; report our inventory once (the new host only had
+   * our puppet). Structures and round state follow in its 'hm' event.
+   */
+  _newHost(msg) {
+    const g = this.game;
+    this.lastSeq = -1;
+    this.snaps.length = 0;
+    this.offset = null;
+    this.pendingInv = null;
+    this._specAsk = -1;
+    this._specInv = null;
+    this._specInvOf = -1;
+    this._hostLostAt = 0;
+    const host = Number.isInteger(msg.id) ? this.puppets.get(msg.id) : null;
+    if (g.hud && g.hud.announce) g.hud.announce('NEW HOST', host ? `${host.name} is hosting now` : 'The match goes on', 1800);
+    if (!this.started) return;
+    const inv = g.player && g.player.inventory;
+    if (inv) this.action({ k: 'mig', s: inv.slots.map((it) => (it ? { ...it } : null)), ammo: { ...inv.ammo }, mats: { ...inv.mats } }, true);
+  }
+
+  /** The new host's resync: its structure list and where the round stands. */
+  _hostMigrated(e) {
+    const g = this.game;
+    const bf = g.boxFight;
+    const m = bf ? cleanMigrationEvent(e, this._sideCount()) : null;
+    if (!m || bf.phase === 'over') return;
+    this._importArena(m.rows);
+    bf.round = m.round;
+    bf.score = m.score;
+    if (m.elims.length === bf.sides.length) bf.elims = m.elims;
+    if (m.phase === 'warmup' && bf.phase === 'warmup') bf.t = m.t;
+    else if (m.phase === 'fight' && bf.phase === 'warmup' && g.netFight) g.netFight();
+    if (g._boxHud) g._boxHud();
+  }
+
+  /**
+   * The relay made this socket the host (Net.js conn.onPromoted). Returns true when the match was
+   * taken over; false lets Net.js leave the match as before.
+   */
+  _promoted(promotion) {
+    const g = this.game;
+    const bf = g.boxFight;
+    if (!this.started || !this.boxFights || !bf || bf.client !== true || g.net !== this || typeof g.takeOverAsHost !== 'function') return false;
+    const p = g.player;
+    const actors = [...this.puppets.values()].map((pup) => actorRow(pup));
+    const plan = takeoverPlan({ myId: this.id, myName: p.name, actors, guests: promotion.guests, replaced: this._replaced });
+    const killsBySide = bf.sides.map(() => 0);
+    for (const a of [p, ...this.puppets.values()]) {
+      const side = sideOfTeam(bf.sides, a.team);
+      if (side >= 0) killsBySide[side] += a.kills | 0;
+    }
+    const state = takeoverRoundState({
+      phase: bf.phase,
+      t: bf.t,
+      round: bf.round,
+      score: bf.score,
+      elims: bf.elims,
+      winRounds: bf.state.winRounds,
+      ffa: bf.ffa,
+      sides: bf.sides.length,
+      sinceRoundEnd: this._reAt ? (performance.now() - this._reAt) / 1000 : 0,
+      killsBySide,
+    });
+    const difficulty = difficultyFromBotElo(bf.botElo);
+    const room = hostRoomFromGuest(this.conn, { name: p.name, game: 'boxfights', mode: bf.ffa ? 'solo' : bf.mode, fill: true });
+    const host = new HostSession(room, g, {
+      game: 'boxfights',
+      mode: bf.ffa ? 'solo' : bf.mode,
+      fill: true,
+      boxFight: { mode: bf.mode, ffaPlayers: bf.sides.length, winRounds: bf.state.winRounds, botDifficulty: difficulty },
+    });
+    // losing the relay as the new host ends the match for us exactly like losing it as a guest
+    const onClose = this.conn.onClose;
+    room.onError = (text) => onClose && onClose(text);
+    return !!g.takeOverAsHost(host, { ...plan, state, spawns: this._spawns, botDifficulty: difficulty, ended: this.ended || bf.phase === 'over' });
+  }
+
+  /**
+   * Game.takeOverAsHost: let go of the match without closing the socket (the HostRoom owns it now).
+   * Characters of puppets in `keep` (humans who stay) are handed back for their RemoteActors.
+   */
+  releaseForTakeover(game, keep) {
+    this.started = false;
+    this.promoted = true;
+    if (game.combat.onBurstShot) game.combat.onBurstShot = null;
+    game.combat.onProjectileHit = null;
+    const chars = new Map();
+    for (const pup of this.puppets.values()) {
+      game.combat.unregister(pup);
+      if (keep && keep.has(pup.id) && pup.character) {
+        chars.set(pup.id, pup.character);
+        pup.character = null;
+      } else pup.dispose();
+    }
+    this.puppets.clear();
+    this.conn.onMessage = this.conn.onRaw = this.conn.onPromoted = null;
+    return chars;
   }
 
   _shot(e) {
@@ -976,3 +1274,29 @@ export class ClientSession {
 }
 
 export { DEV };
+
+function clampN(v, lo, hi) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+/** A Box Fights score / elims list from the host: `len` small non-negative integers. */
+function cleanScore(sc, len = 2) {
+  const a = Array.isArray(sc) ? sc : [];
+  const n = (v) => (Number.isInteger(v) ? Math.max(0, Math.min(99, v)) : 0);
+  return Array.from({ length: Math.max(2, Math.min(6, len)) }, (_, i) => n(a[i]));
+}
+
+/** Box Fights end stats rows from the host ('ps'), clamped; names are plain text (textContent only). */
+function cleanStats(ps, sides) {
+  if (!Array.isArray(ps)) return null;
+  const txt = (v) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 16) : '');
+  const num = (v, hi) => (Number.isFinite(v) ? Math.max(0, Math.min(hi, Math.round(v))) : 0);
+  const out = [];
+  for (const r of ps.slice(0, 12)) {
+    if (!Array.isArray(r) || !Number.isInteger(r[0]) || !Number.isInteger(r[1]) || r[1] < 0 || r[1] >= sides) continue;
+    const row = { id: r[0], name: txt(r[6]) || '?', isBot: r[5] === 1, side: r[1], elims: num(r[2], 999), damage: num(r[3], 1e6), builds: num(r[4], 1e5) };
+    if (txt(r[7])) row.replaced = txt(r[7]);
+    out.push(row);
+  }
+  return out;
+}

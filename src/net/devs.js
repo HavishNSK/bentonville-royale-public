@@ -9,6 +9,11 @@ export function isDevName(name) {
   return DEV_SET.has(String(name || '').trim().toLowerCase());
 }
 
+/** A dev-given "JR DEV" / "JUNIOR DEV" title (/title; a name tag, it grants no powers). */
+export function isJrDevTitle(title) {
+  return /^(JR\.?\s*DEV|JUNIOR\s+DEV)$/i.test(String(title || '').trim());
+}
+
 // Dev moderation commands, typed in global chat. Parsing is shared; the presence server only
 // forwards them for a verified dev, and the account server checks the dev account again.
 const MOD_USAGE = {
@@ -98,6 +103,14 @@ export const PLAYER_TITLES = Object.freeze({
 
 export function titleForName(name) {
   return PLAYER_TITLES[String(name || '').trim().toLowerCase()] || null;
+}
+
+/** Local nameplate for a username we already trust (signed-in account, or you in the party). */
+export function nameplate(name) {
+  const n = String(name || '').trim().slice(0, 16);
+  const t = titleForName(n);
+  if (!t) return { name: n, title: '', color: '', label: n };
+  return { name: n, title: t.title, color: t.color, label: `[${t.title}] ${n}` };
 }
 
 /** A title from the network, shape-checked: { title, color } or null (rendered as text only). */

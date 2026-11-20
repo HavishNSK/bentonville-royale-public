@@ -95,36 +95,51 @@
   top: 0;
   right: 0;
   left: 0;
+  /* one row: tabs left, account cluster right, everything on the same centre line */
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
-  gap: calc(var(--u) * 8) calc(var(--u) * 16);
-  padding: calc(var(--u) * 10) 16px calc(var(--u) * 14);
+  gap: calc(var(--u) * 24);
+  min-height: calc(var(--u) * 64);
+  padding: calc(var(--u) * 8) 20px calc(var(--u) * 12);
   background: linear-gradient(180deg, rgba(21, 16, 58, 0.92), rgba(21, 16, 58, 0.55) 70%, rgba(21, 16, 58, 0));
   z-index: 5;
 }
 .mt-tabs,
 .mt-right {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: calc(var(--u) * 4);
+  gap: calc(var(--u) * 2);
+  min-width: 0;
+}
+.mt-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .mt-right {
+  flex: 0 0 auto;
   gap: calc(var(--u) * 10);
   margin-left: auto;
+}
+/* every control in the account cluster is the same height, so the row reads as one line */
+.mt-right > .mn-chip,
+.mt-right > .mt-coins {
+  height: calc(var(--u) * 34);
+  min-height: 0;
+  box-sizing: border-box;
 }
 .mt-tab {
   position: relative;
   display: inline-flex;
   align-items: center;
-  padding: calc(var(--u) * 6) calc(var(--u) * 12) calc(var(--u) * 9);
+  padding: calc(var(--u) * 6) calc(var(--u) * 11) calc(var(--u) * 9);
   border: 0;
   background: none;
   color: var(--br-cream);
   font-family: var(--br-display);
-  font-size: calc(var(--u) * 21);
+  font-size: calc(var(--u) * 19);
   letter-spacing: 0.03em;
   white-space: nowrap;
   text-shadow: 0 calc(var(--u) * 2) 0 var(--br-ink);
@@ -166,8 +181,9 @@
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  line-height: 1.05;
-  max-width: calc(var(--u) * 170);
+  gap: calc(var(--u) * 2);
+  line-height: 1.1;
+  max-width: calc(var(--u) * 240);
   min-width: 0;
 }
 .mt-who b {
@@ -183,17 +199,19 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: calc(var(--u) * 11);
-  opacity: 0.8;
+  font-size: calc(var(--u) * 12);
+  font-weight: 700;
+  opacity: 0.85;
 }
 .mt-coins {
   display: inline-flex;
   align-items: center;
   gap: calc(var(--u) * 6);
-  padding: calc(var(--u) * 4) calc(var(--u) * 12) calc(var(--u) * 4) calc(var(--u) * 6);
-  border: calc(var(--u) * 2.5) solid var(--br-ink);
+  padding: 0 calc(var(--u) * 12) 0 calc(var(--u) * 6);
+  border: calc(var(--u) * 2) solid var(--br-ink);
   border-radius: 999px;
   background: var(--br-panel);
+  box-shadow: 0 calc(var(--u) * 3) 0 var(--br-ink);
 }
 .mt-coins b {
   font-size: calc(var(--u) * 18);
@@ -480,6 +498,15 @@
   font-size: calc(var(--u) * 13);
   font-weight: 800;
 }
+.mt-board-wide {
+  grid-column: 1 / -1;
+}
+.mt-board-row-tier {
+  grid-template-columns: calc(var(--u) * 28) 1fr auto calc(var(--u) * 44);
+}
+.mt-board-row-tier .mt-board-stat {
+  text-align: right;
+}
 .mt-board-row.is-you {
   outline: 2px solid var(--br-sun);
   background: rgba(255, 194, 31, 0.12);
@@ -601,6 +628,21 @@
   object-fit: contain;
   filter: drop-shadow(0 calc(var(--u) * 4) 0 rgba(21, 16, 58, 0.35));
   animation: mt-pop 0.3s var(--br-spring);
+}
+/* bundles: a wide banner card (its art is one 16:9 poster drawn by Showcase.bundleArt) */
+.mt-item.is-bundle {
+  grid-column: span 2;
+}
+/* the FEATURED row: the bundle poster takes the whole row, its pieces sit underneath */
+.mt-grid.is-spotlight .mt-item.is-bundle {
+  grid-column: 1 / -1;
+}
+.mt-item.is-bundle .mt-item-art {
+  aspect-ratio: 16 / 9;
+}
+.mt-item.is-bundle .mt-item-art img {
+  object-fit: cover;
+  filter: none;
 }
 @keyframes mt-pop {
   from {
@@ -897,14 +939,19 @@
 .mt-toasts {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--u) * 24);
+  top: calc(var(--u) * 18);
+  bottom: auto;
   transform: translateX(-50%);
-  z-index: 30;
+  z-index: 40;
   display: flex;
   flex-direction: column;
   gap: calc(var(--u) * 8);
   width: min(calc(var(--u) * 520), calc(100% - 32px));
   pointer-events: none;
+}
+/* Title tab bar sits at the top; drop the invite below it. In a match there is no bar. */
+.br-menus:has(.mn-title.is-on) .mt-toasts {
+  top: calc(var(--u) * 84);
 }
 .mt-toast {
   display: flex;
@@ -925,7 +972,7 @@
 }
 @keyframes mt-in {
   from {
-    transform: translateY(calc(var(--u) * 20));
+    transform: translateY(calc(var(--u) * -16));
     opacity: 0;
   }
 }
@@ -953,6 +1000,7 @@
     order: 3;
   }
   .mt-bar {
+    flex-wrap: wrap;
     justify-content: center;
   }
   .mt-panel {
@@ -1027,6 +1075,15 @@
   font-size: calc(var(--u) * 11);
   opacity: 0.7;
 }
+.mt-note-staff {
+  margin-left: calc(var(--u) * 8);
+  padding: 0 calc(var(--u) * 6);
+  border-radius: calc(var(--u) * 4);
+  background: var(--br-sun, #ffc21f);
+  color: #15103a;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
 .mt-note-h {
   margin-top: calc(var(--u) * 4);
   font-size: calc(var(--u) * 11);
@@ -1074,6 +1131,19 @@
   gap: calc(var(--u) * 2);
   min-width: 0;
 }
+/* FEEDBACK tab: SUGGESTION / BUG REPORT switch on the form, ALL / IDEAS / BUGS list filter */
+.mt-seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--u) * 6);
+}
+.mt-seg-filter {
+  margin-bottom: calc(var(--u) * 6);
+}
+.mt-seg .mn-chip.is-on {
+  background: var(--br-sun);
+  color: var(--br-ink);
+}
 .mt-post-kind {
   align-self: flex-start;
   padding: 0 calc(var(--u) * 6);
@@ -1097,6 +1167,43 @@
 .mt-post-body small {
   font-size: calc(var(--u) * 10.5);
   opacity: 0.7;
+}
+.mt-post-head {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 8);
+}
+.mt-replies {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 6);
+  margin-top: calc(var(--u) * 6);
+  padding-left: calc(var(--u) * 10);
+  border-left: calc(var(--u) * 3) solid rgba(255, 246, 220, 0.25);
+}
+.mt-reply {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: calc(var(--u) * 6);
+}
+.mt-reply .mt-post-text {
+  flex: 1 1 12em;
+}
+.mt-reply-form {
+  display: flex;
+  gap: calc(var(--u) * 6);
+  margin-top: calc(var(--u) * 6);
+}
+.mt-reply-form .mn-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: calc(var(--u) * 36);
+}
+.mt-del {
+  flex: none;
+  color: var(--br-cream);
+  background: var(--br-coral);
 }
 /* panel content scrolls; nothing in it may shrink (tab bars collapsed to zero height) */
 .mt-panel-body > * {

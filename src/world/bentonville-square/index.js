@@ -126,6 +126,10 @@ export function createSquare(world, mapData) {
 
   // the park is the Square's own: no random trees, rocks, benches, market stalls, cars or loot
   if (world.reserve) world.reserve(park);
+  // ...and no reboot van parked on the lawn (src/game/Reboot.js). Other reserved landmarks (BHS)
+  // park theirs inside on purpose, so this is the Square's own opt-out, not reservedAt.
+  const prevNoVan = world.noVanAt;
+  world.noVanAt = (x, z) => pointInRing(park, x, z) || (prevNoVan ? prevNoVan(x, z) : false);
 
   // buildings the imagery shows but the OSM extract lacks (layout.json buildings.list)
   if (Array.isArray(mapData.buildings)) {

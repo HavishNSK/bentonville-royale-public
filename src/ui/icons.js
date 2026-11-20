@@ -2,6 +2,9 @@
 // Every icon is hand-drawn inline SVG (no image files, no third-party art).
 // Square icons use a 48x48 viewBox, weapon silhouettes a 96x48 viewBox.
 
+import { catfishSvg } from './catfishIcon.js';
+import { fuelSvg } from './fuelIcon.js';
+
 const INK = '#0a0a14';
 const S = `stroke="${INK}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"`;
 
@@ -20,6 +23,10 @@ const WOOD = '#c98a45';
 const GOLD = '#ffc21f';
 
 const SQUARE = {
+  // ---- map markers -----------------------------------------------------
+  catfish: catfishSvg(), // Catfish Ken's reboot van
+  fuel: fuelSvg(), // gas station (generic pump pictogram)
+
   // ---- materials -------------------------------------------------------
   wood:
     `<path d="M12 14h24v20H12a6 10 0 0 1 0-20z" fill="#b5722f" ${S}/>` +

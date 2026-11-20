@@ -16,7 +16,10 @@
 //   me {token}  logout {token}
 //   rename {token, name}  only while profile.mustRename (the current name has a swear word / slur)
 //   buy {token, item}   equip {token, skin?, emotes?}
-//   reward {token, kills, placement, players, won, ranked} -> {profile, earned, ranked}
+//   matchStart {token}                                    -> {matchId}  (opens a match ticket; see matchStats.js)
+//   reward {token, matchId, kills, placement, players, won, ranked} -> {profile, earned, ranked, rankedReason?}
+//     (closes the ticket: one result per match; kills / wins are capped by real match time)
+//   boxResult {token, size, won, score:[us,them], oppElo, forfeit?} -> {ok, elo, delta, tier, games} (429 {ok:false, rateLimited:true} when under 30 s apart)
 //   adReward {token}                                      -> {profile, earned}  (rewarded ad; AD_REWARD_DAILY a day)
 //     (wins/kills reach the boards only when ranked === true: a HARD match that includes bots)
 //   friendAdd {token, name}  friendAccept {token, name}  friendDecline {token, name}  friendRemove {token, name}
@@ -34,10 +37,13 @@
 //   report {token, name, reason, note}  any signed-in, unbanned player -> {ok}. Private: only devs see
 //     reports (reports:<lower>). One per reporter per player per day, REPORTS_PER_DAY per reporter.
 //   Every dev action is logged as modlog:<time> -> {by, cmd, target, reason?, duration?, at}.
-// Suggestion / bug board (no account needed; signed-in posts carry the account name):
+// Suggestion / bug board (no account needed; signed-in posts carry the account name).
+// Posts stay on fb:<id> so existing suggestions keep showing. Replies are an array on that record.
 //   feedback {kind: 'idea'|'bug', text, token?, anon?}   -> {item}   (one post per IP per 30 s)
 //   feedbackList {}                                       -> {items: newest first, max 60}
 //   feedbackVote {id, token?, anon}                       -> {item}   (one vote per voter)
+//   feedbackReply {id, text, token?, anon?}               -> {item}
+//   feedbackDelete {id, replyId?, token}                  -> {ok} or {item}  (DEV accounts only)
 // WebSocket: /parties/accounts/global?token=   presence + live friend updates
 //   client -> server  {t:'status', s:'lobby'|'match', party?:CODE, skin?}
 //   server -> client  {t:'friends', list:[{name, online, status, skin}], incoming:[names], outgoing:[names]}
@@ -45,10 +51,13 @@
 // The shop catalog's prices are mirrored here (PRICES) so a client cannot buy for free.
 
 import { Server, getServerByName } from 'partyserver';
-import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, PICKAXES, BACKBLINGS } from '../src/game/Cosmetics.js';
+import { PRICES, DEFAULT_OWNED, DEFAULT_EQUIPPED, EMOTE_SLOTS, EMOTES, SKINS, PICKAXES, BACKBLINGS, GLIDERS, BUNDLES, refundRetired, priceFor } from '../src/game/Cosmetics.js';
 import { verifyGoogleIdToken } from './googleIdToken.js';
-import { applyMatchStats } from './matchStats.js';
+import { applyMatchStats, openMatch, settleMatch } from './matchStats.js';
+import { boxStats, validateBoxResult, applyBoxResult, boxRateLimited, boxFlags } from './boxRating.js';
+import { tierOf } from '../src/game/BoxElo.js';
 import { nameIsClean } from '../src/net/chatFilter.js';
+import { publicItem, sanitizeFeedbackText, addReply, removeReply, canModerateFeedback, feedbackKind } from '../src/net/feedbackBoard.js';
 import { isDevName, customTitleProblem } from '../src/net/devs.js';
 import { createLimiter, passwordProblem, modAuthFresh, originAllowed, secLogEntry } from './authLimits.js';
 import {
@@ -78,10 +87,17 @@ const PBKDF2_ROUNDS = 100000;
 const MAX_SESSIONS = 10; // per account; the oldest is signed out when an 11th device signs in
 const SECLOG_KEEP = 500; // newest security-log rows kept (seclog:<time>)
 const MAX_FRIENDS = 100;
-const REWARD_GAP_MS = 60 * 1000; // at most one match reward per minute per account
+const BOX_BOARD_TOP = 25;
+const BOX_BOARD_MIN_GAMES = 10; // games needed to be listed on the Box Fights board
+const REWARD_GAP_MS = 2 * 60 * 1000; // at most one match reward per 2 minutes per account (was 1)
+// Match payout (made harder to earn on 2026-11-19; the old values are in brackets)
+export const REWARD_OUTLAST_MAX = 120; // coins for outlasting everyone, scaled by placement [250]
+export const REWARD_PER_KILL = 35; // [75]
+export const REWARD_WIN = 200; // [400]
+export const REWARD_MATCH_CAP = 600; // most coins one match can pay [1500]
 // Rewarded ads (src/net/Ads.js): coins for watching an ad to the end. The server can't see the
 // ad itself, so it caps how often the client may claim: AD_REWARD_DAILY per UTC day, one per gap.
-export const AD_REWARD_COINS = 100;
+export const AD_REWARD_COINS = 50; // [100]
 export const AD_REWARD_DAILY = 5;
 const AD_REWARD_GAP_MS = 20 * 1000;
 
@@ -141,11 +157,20 @@ function json(body, status = 200) {
 function upgradeAccount(acc) {
   for (const id of DEFAULT_OWNED) if (!acc.owned.includes(id)) acc.owned.push(id);
   const eq = (acc.equipped = acc.equipped || {});
-  if (!eq.skin) eq.skin = DEFAULT_EQUIPPED.skin;
+  if (!eq.skin || !SKINS[eq.skin] || !acc.owned.includes(eq.skin)) eq.skin = DEFAULT_EQUIPPED.skin;
   if (!Array.isArray(eq.emotes)) eq.emotes = DEFAULT_EQUIPPED.emotes.slice();
+  // emotes taken out of the shop (or no longer owned) leave their wheel slot empty
+  eq.emotes = eq.emotes.slice(0, EMOTE_SLOTS).map((e) => (e && EMOTES[e] && acc.owned.includes(e) ? e : null));
   if (!PICKAXES[eq.pickaxe] || !acc.owned.includes(eq.pickaxe)) eq.pickaxe = DEFAULT_EQUIPPED.pickaxe;
   if (!BACKBLINGS[eq.backbling] || !acc.owned.includes(eq.backbling)) eq.backbling = DEFAULT_EQUIPPED.backbling;
+  if (!GLIDERS[eq.glider] || !acc.owned.includes(eq.glider)) eq.glider = DEFAULT_EQUIPPED.glider;
   return acc;
+}
+
+/** Box Fights ladder numbers shown to the owner (defaults for accounts that never played). */
+function boxPublic(acc) {
+  const b = boxStats(acc);
+  return { elo: b.elo, games: b.games, wins: b.wins, peak: b.peak, tier: tierOf(b.elo) };
 }
 
 /** What the owner sees about their own account. */
@@ -160,6 +185,7 @@ function profileOf(acc) {
     incoming: acc.incoming.slice(),
     outgoing: acc.outgoing.slice(),
     stats: acc.stats,
+    box: boxPublic(acc),
     adRewardsLeft: adRewardsLeft(acc),
     // a name made before the username filter: the client blocks play until it is renamed
     mustRename: !nameIsClean(acc.name),
@@ -205,7 +231,13 @@ export class Accounts extends Server {
   // ---------------------------------------------------------------- storage
 
   async _acc(lower) {
-    return lower ? (await this.ctx.storage.get('user:' + lower)) || null : null;
+    const acc = lower ? (await this.ctx.storage.get('user:' + lower)) || null : null;
+    // shop items that were taken out: refund the owner once and save it straight away
+    if (acc && refundRetired(acc) > 0) {
+      upgradeAccount(acc);
+      await this._save(acc);
+    }
+    return acc;
   }
 
   async _save(acc) {
@@ -393,7 +425,7 @@ export class Accounts extends Server {
         return reply(`Unbanned ${target.name}. Their next ban still escalates (offences: ${next.offences | 0}).`, { target: lower, banned: false });
       }
       case 'modResetStats': {
-        const next = { ...target, stats: { ...target.stats, wins: 0, kills: 0 }, modTrack: undefined };
+        const next = { ...target, stats: { ...target.stats, wins: 0, kills: 0 }, modTrack: undefined, box: undefined };
         await this._save(next);
         await log('resetstats');
         return reply(`Reset ${target.name}'s ranked wins and kills to 0.`, { target: lower });
@@ -451,7 +483,7 @@ export class Accounts extends Server {
     const s = acc.stats || {};
     const lines = [
       `${acc.name}: ${b ? `BANNED (${b.permanent ? 'permanent' : `${timeLeft(b.until, now)} left`})` : 'not banned'}, ` +
-        `offences ${acc.offences | 0}, flags ${acc.flagCount | 0}, ranked ${s.wins | 0} wins / ${s.kills | 0} kills`,
+        `offences ${acc.offences | 0}, flags ${acc.flagCount | 0}, ranked ${s.wins | 0} wins / ${s.kills | 0} kills, box ${boxStats(acc).elo} elo / ${boxStats(acc).games} games`,
     ];
     for (const h of (acc.banHistory || []).slice(-5)) {
       const what = h.type === 'ban' ? `ban ${BAN_LABEL[h.duration] || ''}` : h.type;
@@ -534,6 +566,7 @@ export class Accounts extends Server {
   async _leaderboard() {
     const listed = await this.ctx.storage.list({ prefix: 'user:' });
     const rows = [];
+    const boxRows = [];
     const now = Date.now();
     for (const acc of listed.values()) {
       if (!acc || typeof acc !== 'object' || !acc.name || !acc.stats) continue;
@@ -542,7 +575,10 @@ export class Accounts extends Server {
       if (!nameIsClean(acc.name)) continue; // hidden from the boards until renamed
       if (isBanned(acc, now)) continue; // banned accounts are hidden while the ban lasts
       rows.push({ name: String(acc.name).slice(0, 16), wins, kills });
+      const bx = boxStats(acc);
+      if (bx.games >= BOX_BOARD_MIN_GAMES) boxRows.push({ name: String(acc.name).slice(0, 16), elo: bx.elo, games: bx.games, tier: tierOf(bx.elo) });
     }
+    const byElo = boxRows.sort((a, b) => b.elo - a.elo || b.games - a.games || a.name.localeCompare(b.name)).slice(0, BOX_BOARD_TOP);
     const byWins = rows
       .slice()
       .sort((a, b) => b.wins - a.wins || b.kills - a.kills || a.name.localeCompare(b.name))
@@ -555,6 +591,7 @@ export class Accounts extends Server {
       online: this.online.size + ONLINE_DISPLAY_PAD,
       wins: byWins,
       kills: byKills,
+      box: byElo,
     });
   }
 
@@ -601,19 +638,20 @@ export class Accounts extends Server {
   async _feedback(m, req) {
     const voterOf = async () => {
       const acc = m.token ? await this._session(m.token) : null;
-      if (acc) return { id: 'u:' + acc.name.toLowerCase(), name: acc.name };
+      if (acc) return { id: 'u:' + acc.name.toLowerCase(), name: acc.name, acc };
       const anon = String(m.anon || '').replace(/[^a-z0-9]/gi, '').slice(0, 32);
-      return anon.length >= 8 ? { id: 'a:' + anon, name: null } : null;
+      return anon.length >= 8 ? { id: 'a:' + anon, name: null, acc: null } : null;
     };
+    const fbKey = (id) => 'fb:' + String(id || '').replace(/[^a-z0-9]/gi, '').slice(0, 24);
     if (m.op === 'feedbackList') {
       const rows = await this.ctx.storage.list({ prefix: 'fb:', reverse: true, limit: 60 });
-      const items = [...rows.values()].map(({ voters, ip, ...pub }) => pub); // voters / IPs stay private
+      const items = [...rows.values()].map((row) => publicItem(row)).filter(Boolean);
       return json({ items });
     }
     if (m.op === 'feedback') {
-      const text = String(m.text || '').replace(/[\u0000-\u0008\u000b-\u001f<>]/g, '').trim().slice(0, 500);
-      if (text.length < 4) return err('Write a few words first.');
-      const kind = m.kind === 'bug' ? 'bug' : 'idea';
+      const clean = sanitizeFeedbackText(m.text);
+      if (!clean.ok) return err(clean.reason);
+      const kind = feedbackKind(m.kind); // enum: 'bug' or 'idea' (missing/unknown = suggestion)
       const ip = (req.headers.get('cf-connecting-ip') || 'local').slice(0, 64);
       const last = (await this.ctx.storage.get('fbip:' + ip)) || 0;
       if (Date.now() - last < 30000) return err('Thanks! Give it 30 seconds before posting again.', 429);
@@ -621,24 +659,54 @@ export class Accounts extends Server {
       const who = await voterOf();
       const at = Date.now();
       const id = String(at).padStart(14, '0') + Math.random().toString(36).slice(2, 6);
-      const item = { id, kind, text, by: who && who.name ? who.name : 'Guest', at, votes: 1, voters: who ? [who.id] : [] };
+      const item = { id, kind, text: clean.text, by: who && who.name ? who.name : 'Guest', at, votes: 1, voters: who ? [who.id] : [], replies: [] };
       await this.ctx.storage.put('fb:' + id, item);
-      const { voters, ...pub } = item;
-      return json({ item: pub });
+      return json({ item: publicItem(item) });
     }
     if (m.op === 'feedbackVote') {
-      const id = String(m.id || '').replace(/[^a-z0-9]/gi, '').slice(0, 24);
-      const item = await this.ctx.storage.get('fb:' + id);
+      const item = await this.ctx.storage.get(fbKey(m.id));
       if (!item) return err('That post is gone.', 404);
       const who = await voterOf();
       if (!who) return err('Could not count that vote.');
+      if (!Array.isArray(item.voters)) item.voters = [];
       if (!item.voters.includes(who.id)) {
         if (item.voters.length < 5000) item.voters.push(who.id);
         item.votes = item.voters.length;
-        await this.ctx.storage.put('fb:' + id, item);
+        await this.ctx.storage.put('fb:' + item.id, item);
       }
-      const { voters, ...pub } = item;
-      return json({ item: pub });
+      return json({ item: publicItem(item) });
+    }
+    if (m.op === 'feedbackReply') {
+      const item = await this.ctx.storage.get(fbKey(m.id));
+      if (!item) return err('That post is gone.', 404);
+      const clean = sanitizeFeedbackText(m.text);
+      if (!clean.ok) return err(clean.reason);
+      const ip = (req.headers.get('cf-connecting-ip') || 'local').slice(0, 64);
+      const last = (await this.ctx.storage.get('fbip:' + ip)) || 0;
+      if (Date.now() - last < 30000) return err('Thanks! Give it 30 seconds before posting again.', 429);
+      await this.ctx.storage.put('fbip:' + ip, Date.now());
+      const who = await voterOf();
+      const at = Date.now();
+      const rid = ('r' + String(at).slice(-10) + Math.random().toString(36).slice(2, 6)).replace(/[^a-z0-9]/gi, '').slice(0, 24);
+      const out = addReply(item, { id: rid, text: clean.text, by: who && who.name ? who.name : 'Guest', at });
+      if (out.error) return err(out.error);
+      await this.ctx.storage.put('fb:' + item.id, out.item);
+      return json({ item: publicItem(out.item) });
+    }
+    if (m.op === 'feedbackDelete') {
+      const who = await voterOf();
+      if (!who || !who.acc || !canModerateFeedback(who.acc.name)) return err('Only developers can delete posts.', 403);
+      const item = await this.ctx.storage.get(fbKey(m.id));
+      if (!item) return err('That post is gone.', 404);
+      const replyId = String(m.replyId || '').replace(/[^a-z0-9]/gi, '').slice(0, 24);
+      if (replyId) {
+        const out = removeReply(item, replyId);
+        if (out.error) return err(out.error, 404);
+        await this.ctx.storage.put('fb:' + item.id, out.item);
+        return json({ item: publicItem(out.item) });
+      }
+      await this.ctx.storage.delete('fb:' + item.id);
+      return json({ ok: true, id: item.id });
     }
     return err('Unknown request.');
   }
@@ -757,12 +825,15 @@ export class Accounts extends Server {
       }
       case 'buy': {
         const id = String(m.item || '');
-        const price = PRICES[id];
-        if (price == null) return err('That item is not in the shop.');
-        if (acc.owned.includes(id)) return err('You already own that.');
+        if (PRICES[id] == null) return err('That item is not in the shop.');
+        const price = priceFor(id, acc.owned); // bundles knock off the pieces you already own
+        const bundle = BUNDLES[id];
+        const grant = bundle ? bundle.items.filter((it) => !acc.owned.includes(it)) : [id];
+        if (bundle ? !grant.length : acc.owned.includes(id)) return err(bundle ? 'You already own everything in that bundle.' : 'You already own that.');
         if (acc.coins < price) return err('Not enough coins.');
         acc.coins -= price;
-        acc.owned.push(id);
+        acc.owned.push(...grant);
+        if (bundle && !acc.owned.includes(id)) acc.owned.push(id); // the shop shows the bundle as owned
         await this._save(acc);
         this._push(lower, { t: 'profile', profile: profileOf(acc) });
         return json({ profile: profileOf(acc) });
@@ -781,6 +852,10 @@ export class Accounts extends Server {
           if (!acc.owned.includes(m.backbling) || !BACKBLINGS[m.backbling]) return err('You do not own that back bling.');
           upgradeAccount(acc).equipped.backbling = m.backbling;
         }
+        if (m.glider != null) {
+          if (!acc.owned.includes(m.glider) || !GLIDERS[m.glider]) return err('You do not own that glider.');
+          upgradeAccount(acc).equipped.glider = m.glider;
+        }
         if (Array.isArray(m.emotes)) {
           const list = m.emotes.slice(0, EMOTE_SLOTS).map((e) => (e && acc.owned.includes(e) && String(e).startsWith('emote_') ? e : null));
           while (list.length < EMOTE_SLOTS) list.push(null);
@@ -790,32 +865,64 @@ export class Accounts extends Server {
         this._sendFriendsOf(lower);
         return json({ profile: profileOf(acc) });
       }
+      case 'matchStart': {
+        // A match ticket: `reward` only pays a result that closes one (party/matchStats.js).
+        const next = openMatch(acc, randHex(16), Date.now());
+        if (next !== acc) await this._save(next);
+        return json({ matchId: next.liveMatch.id });
+      }
       case 'reward': {
-        // match payout: outlasted (scaled), 75 per elimination, 400 for a win
-        // Coin payout is rate-limited; wins/kills still count so the boards stay honest after quick rematches.
+        // match payout: outlasted (scaled), per elimination and a win bonus, capped (REWARD_* above)
+        // Results are client-reported. Each one must close the ticket from matchStart, so a script
+        // cannot post results in a loop; settleMatch caps kills / wins by real match time and the
+        // ranked count per day. Coin payout is also rate-limited.
         const now = Date.now();
         const players = Math.max(1, Math.min(100, m.players | 0));
         const placement = Math.max(1, Math.min(players, m.placement | 0 || players));
-        const kills = Math.max(0, Math.min(40, m.kills | 0));
-        const won = !!m.won && placement === 1;
-        const rateLimited = now - (acc.lastReward || 0) < REWARD_GAP_MS;
+        const reqKills = Math.max(0, Math.min(40, m.kills | 0));
+        const reqWon = !!m.won && placement === 1;
+        const reqRanked = m.ranked === true;
+        const settled = settleMatch(acc, typeof m.matchId === 'string' ? m.matchId : undefined, { kills: reqKills, players, won: reqWon, ranked: reqRanked }, now);
+        // Flag results that look impossible or unlikely so a dev can review them (never an auto-ban).
+        // Flags use the requested numbers, so a refused or capped claim still shows up in /flags.
+        let flagged = settled.acc || acc;
+        for (const f of rewardFlags({ kills: reqKills, players, placement, won: reqWon, ranked: reqRanked }, acc, now)) flagged = addFlag(flagged, f, now);
+        if (settled.error) {
+          if (flagged !== acc) {
+            await this._save(flagged);
+            if (flagged.flagCount !== acc.flagCount) await this.ctx.storage.put('flagged:' + lower, { at: now });
+          }
+          return err('This match result could not be saved. Play a new match to earn coins and ranks.', 409);
+        }
+        const { kills, won, ranked } = settled;
+        let next = flagged;
+        const rateLimited = now - (next.lastReward || 0) < REWARD_GAP_MS;
         let earned = 0;
         if (!rateLimited) {
-          const outlasted = Math.round(((players - placement) / Math.max(1, players - 1)) * 250);
-          earned = Math.min(1500, outlasted + kills * 75 + (won ? 400 : 0));
-          acc.coins += earned;
-          acc.lastReward = now;
+          const outlasted = Math.round(((players - placement) / Math.max(1, players - 1)) * REWARD_OUTLAST_MAX);
+          earned = Math.min(REWARD_MATCH_CAP, outlasted + kills * REWARD_PER_KILL + (won ? REWARD_WIN : 0));
+          next = { ...next, coins: next.coins + earned, lastReward: now };
         }
         // Leaderboard stats only for HARD bot-difficulty matches (client-reported, like kills).
-        const ranked = m.ranked === true;
-        acc.stats = applyMatchStats(acc.stats, { kills, won, ranked });
-        // Flag results that look impossible or unlikely so a dev can review them (never an auto-ban).
-        const flags = rewardFlags({ kills, players, placement, won, ranked }, acc, now);
-        let next = trackRanked(acc, { ranked, won, now });
-        for (const f of flags) next = addFlag(next, f, now);
+        next = { ...next, stats: applyMatchStats(next.stats, { kills, won, ranked }) };
+        next = trackRanked(next, { ranked, won, now });
         if (next.flagCount !== acc.flagCount) await this.ctx.storage.put('flagged:' + lower, { at: now });
         await this._save(next);
-        return json({ profile: profileOf(next), earned, rateLimited, ranked });
+        return json({ profile: profileOf(next), earned, rateLimited, ranked, rankedReason: settled.reason || null });
+      }
+      case 'boxResult': {
+        // Box Fights ladder: client-reported (not verifiable), rate-limited, flagged for review.
+        const now = Date.now();
+        const result = validateBoxResult(m);
+        if (!result.ok) return err(result.error);
+        const stats = boxStats(acc);
+        if (boxRateLimited(stats, now)) return json({ ok: false, rateLimited: true, error: 'One rated result at a time: try again in a few seconds.' }, 429);
+        const applied = applyBoxResult(stats, result, now);
+        let next = { ...acc, box: applied.stats };
+        for (const kind of boxFlags(stats, result, now)) next = addFlag(next, { kind, why: `box ${result.size}v${result.size} ${result.won ? 'win' : 'loss'} (${result.score.join('-')}${result.forfeit ? ', forfeit' : ''}) vs ${result.oppElo}, elo ${stats.elo}` }, now);
+        if (next.flagCount !== acc.flagCount) await this.ctx.storage.put('flagged:' + lower, { at: now });
+        await this._save(next);
+        return json({ ok: true, elo: applied.stats.elo, delta: applied.delta, tier: applied.tier, games: applied.stats.games });
       }
       case 'adReward': {
         // watched a rewarded ad to the end (client-reported; capped per day, see AD_REWARD_*)

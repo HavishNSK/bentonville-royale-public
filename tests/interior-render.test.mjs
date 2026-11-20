@@ -8,6 +8,7 @@ import { World } from '../src/world/World.js';
 
 // Catalog from the interior contract: kind -> [w, d, h, lift]. "sized" kinds use a room-ish size.
 const CATALOG = {
+  commons_table:[1.36,2.05,0.82],
   bed:[1.6,2.1,0.55], nightstand:[0.5,0.45,0.55], dresser:[1.2,0.5,0.95], wardrobe:[1.2,0.6,2.0],
   sofa:[2.0,0.85,0.8], armchair:[0.85,0.85,0.8], coffee_table:[1.1,0.6,0.42], tv_stand:[1.6,0.45,0.55],
   rug:[3.0,2.0,0.02], dining_table:[1.8,0.95,0.75], chair:[0.45,0.45,0.9], stool:[0.4,0.4,0.75],
@@ -162,9 +163,11 @@ test('partition panels keep contiguous, non-overlapping index ranges that includ
   const R = chunk.panelRanges;
   assert.ok(R.length >= 3, 'building has breakable panels');
   const spans = [];
+  assert.ok(R.some((p, i) => i % 3 === 0 && p.kind === 'roof'), 'top storey ceiling carries breakable roof tile ranges');
   for (let i = 0; i < R.length; i += 3) {
     const start = R[i + 1], count = R[i + 2];
     assert.ok(count > 0 && count % 6 === 0 && start % 3 === 0, 'whole quads');
+    if (R[i].kind !== 'inner') continue; // roof tiles (shellPanels.js) carry their own ceiling quads
     const quads = count / 6;
     assert.ok(quads >= 7 && quads <= 8, `faces + caps + skirting (+ top bands): ${quads}`);
     // every quad in the range is a recorded quad and lies along one wall (all vertical)

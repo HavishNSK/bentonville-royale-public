@@ -755,6 +755,8 @@ export class Grenades {
 
     // ---- drivable cars
     if (this.vehicles) this.vehicles.blast(c, R + 1, rk ? CAR.rocketDamage : CAR.grenadeDamage, { source: g.owner, weapon: rk ? 'rocket_launcher' : 'grenade' });
+    // ---- gas pumps (GasPumps.js): a blast in range can set one on fire or blow it up
+    if (this.pumps) this.pumps.blast(c, R + 1, rk ? CAR.rocketDamage : CAR.grenadeDamage, { source: g.owner, weapon: rk ? 'rocket_launcher' : 'grenade' });
 
     // ---- built pieces
     const st = this.structures;
@@ -817,7 +819,8 @@ export class Grenades {
       for (const k of cell.boxes) {
         if (hits.has(k) || !k.alive) continue;
         if (k.passable && !k.frame) continue;
-        const smash = combat._isBreakable(k) || (k.kind === 'prop' && k.hp > 0);
+        // museum wall panels (archPanel: harvestable, finite hp) break like map wall panels
+        const smash = combat._isBreakable(k) || (k.kind === 'prop' && k.hp > 0) || (k.archPanel && k.hp > 0);
         if (!smash) continue;
         const px = Math.max(k.minX, Math.min(c.x, k.maxX));
         const pz = Math.max(k.minZ, Math.min(c.z, k.maxZ));

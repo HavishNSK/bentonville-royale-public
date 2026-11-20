@@ -147,6 +147,15 @@
   outline: calc(var(--u) * 3) solid var(--br-sun);
   outline-offset: calc(var(--u) * 3);
 }
+/* click-to-swap: the first card clicked waits (sun outline) for the second click */
+.br-inv-card.is-picked {
+  transform: translateY(calc(var(--u) * -6));
+  outline: calc(var(--u) * 3) dashed var(--br-sun);
+  outline-offset: calc(var(--u) * 3);
+}
+.br-inv.is-picking .br-inv-card:not(.is-picked) {
+  cursor: copy;
+}
 .br-inv.is-locked .br-inv-card:not(.is-empty) {
   cursor: not-allowed;
 }
@@ -355,6 +364,7 @@
   .br-inv-card,
   .br-inv-card:hover,
   .br-inv-card.is-target,
+  .br-inv-card.is-picked,
   .br-inv-card.is-lifted {
     transform: none !important;
     transition: none !important;
